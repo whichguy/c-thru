@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# c-thru installer: symlinks router/proxy + helpers into ~/.claude/tools/
+# and seeds a user-level model-map on first run.
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+TOOLS_SRC="$REPO_DIR/tools"
+TOOLS_DEST="$CLAUDE_DIR/tools"
+
+echo -e "${YELLOW}🔧 Installing c-thru (claude-router) from ${REPO_DIR}${NC}"
+
+if [ ! -d "$TOOLS_SRC" ]; then
+    echo -e "${RED}❌ Missing ${TOOLS_SRC}${NC}" >&2
+    exit 1
+fi
+
+chmod +x "$TOOLS_SRC/claude-router" "$TOOLS_SRC/claude-proxy" 2>/dev/null || true
+chmod +x "$TOOLS_SRC"/*.js 2>/dev/null || true
+chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
+
+mkdir -p "$TOOLS_DEST"
+
+link_tool() {
+    local src="$1" dest_name="$2"
+    if [ -x "$TOOLS_SRC/$src" ]; then
+        ln -sfn "$TOOLS_SRC/$src" "$TOOLS_DEST/$dest_name"
+        echo -e "${GREEN}✅ Installed tool: ${dest_name}${NC}"
+    fi
+}
+
+link_tool claude-router claude-router
+link_tool claude-proxy claude-proxy
+link_tool llm-capabilities-mcp.js llm-capabilities-mcp
+link_tool model-map-validate.js model-map-validate
+link_tool model-map-sync.js model-map-sync
+link_tool model-map-edit.js model-map-edit
+link_tool verify-llm-capabilities-mcp.sh verify-llm-capabilities-mcp
+
+# Seed user-level model-map on first install
+USER_MAP="$CLAUDE_DIR/model-map.json"
+if [ ! -f "$USER_MAP" ] && [ -f "$REPO_DIR/config/model-map.json" ]; then
+    cp "$REPO_DIR/config/model-map.json" "$USER_MAP"
+    echo -e "${GREEN}✅ Seeded user model-map: ${USER_MAP}${NC}"
+else
+    echo -e "${YELLOW}ℹ️  User model-map already present: ${USER_MAP}${NC}"
+fi
+
+echo ""
+echo -e "${YELLOW}Next steps:${NC}"
+echo "  • ~/.claude/tools/claude-router --list  — list routes / local models"
+echo "  • ~/.claude/tools/model-map-validate    — validate profile/project model-map configs"
+echo "  • ~/.claude/tools/llm-capabilities-mcp  — local MCP server for logical-LLM tools"
+echo "  • tail ~/.claude/proxy.*.log            — troubleshoot proxy startup or routing"
+echo "  • pkill -f claude-proxy                 — restart proxy after config edits"
+echo "  • CLAUDE_PROXY_BYPASS=1 claude ...      — bypass proxy for direct Anthropic access"
+echo ""
+echo -e "${GREEN}✅ Done.${NC}"

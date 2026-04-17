@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.DS_Store
+proxy-usage-stats.json
+proxy-health.json
+ollama-prep-state.json

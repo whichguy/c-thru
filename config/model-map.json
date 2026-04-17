@@ -1,0 +1,229 @@
+{
+  "backends": {
+    "anthropic": {
+      "kind": "anthropic",
+      "url": "https://api.anthropic.com",
+      "auth_env": "ANTHROPIC_API_KEY"
+    },
+    "openrouter": {
+      "kind": "anthropic",
+      "url": "https://openrouter.ai/api/v1",
+      "auth_env": "OPENROUTER_API_KEY"
+    },
+    "ollama_local": {
+      "kind": "ollama",
+      "url": "http://localhost:11434"
+    },
+    "ollama_cloud": {
+      "kind": "ollama",
+      "url": "http://localhost:11434",
+      "prep_policy": "skip"
+    }
+  },
+  "llm_active_profile": "auto",
+  "llm_connectivity_mode": "connected",
+  "llm_profiles": {
+    "16gb": {
+      "default": {
+        "connected_model": "glm-5.1:cloud",
+        "disconnect_model": "qwen3:1.7b"
+      },
+      "classifier": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b"
+      },
+      "explorer": {
+        "connected_model": "gemma4:e2b",
+        "disconnect_model": "qwen3:1.7b"
+      },
+      "reviewer": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b"
+      },
+      "workhorse": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b"
+      },
+      "coder": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b"
+      }
+    },
+    "32gb": {
+      "default": {
+        "connected_model": "glm-5.1:cloud",
+        "disconnect_model": "gemma4:e2b"
+      },
+      "classifier": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b"
+      },
+      "explorer": {
+        "connected_model": "gemma4:e2b",
+        "disconnect_model": "gemma4:e2b"
+      },
+      "reviewer": {
+        "connected_model": "deepseek-r1:14b",
+        "disconnect_model": "gemma4:e2b"
+      },
+      "workhorse": {
+        "connected_model": "gemma4:e2b",
+        "disconnect_model": "gemma4:e2b"
+      },
+      "coder": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b"
+      }
+    },
+    "48gb": {
+      "default": {
+        "connected_model": "glm-5.1:cloud",
+        "disconnect_model": "gemma4:e4b"
+      },
+      "classifier": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b"
+      },
+      "explorer": {
+        "connected_model": "gemma4:e2b",
+        "disconnect_model": "gemma4:e2b"
+      },
+      "reviewer": {
+        "connected_model": "gemma4:e4b",
+        "disconnect_model": "gemma4:e4b"
+      },
+      "workhorse": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b"
+      },
+      "coder": {
+        "connected_model": "gemma4:e4b",
+        "disconnect_model": "gemma4:e4b"
+      }
+    },
+    "64gb": {
+      "default": {
+        "connected_model": "glm-5.1:cloud",
+        "disconnect_model": "gemma4:26b"
+      },
+      "classifier": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b"
+      },
+      "explorer": {
+        "connected_model": "gemma4:e2b",
+        "disconnect_model": "gemma4:e2b"
+      },
+      "reviewer": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b"
+      },
+      "workhorse": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b"
+      },
+      "coder": {
+        "connected_model": "qwen3-coder:30b",
+        "disconnect_model": "qwen3-coder:30b"
+      }
+    },
+    "128gb": {
+      "default": {
+        "connected_model": "glm-5.1:cloud",
+        "disconnect_model": "gemma4:26b"
+      },
+      "classifier": {
+        "connected_model": "qwen3.6:35b-a3b-q4_K_M",
+        "disconnect_model": "qwen3.6:35b-a3b-q4_K_M"
+      },
+      "explorer": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b"
+      },
+      "reviewer": {
+        "connected_model": "deepseek-r1:14b",
+        "disconnect_model": "deepseek-r1:14b"
+      },
+      "workhorse": {
+        "connected_model": "gemma4:31b",
+        "disconnect_model": "gemma4:26b"
+      },
+      "coder": {
+        "connected_model": "qwen3.6:35b-a3b-q4_K_M",
+        "disconnect_model": "qwen3.6:35b-a3b-q4_K_M"
+      }
+    }
+  },
+  "model_routes": {
+    "claude-sonnet-4-6": "anthropic",
+    "claude-opus-4-6": "anthropic",
+    "re:^claude-.*$": "anthropic",
+    "glm-5.1:cloud": "openrouter",
+    "qwen3:1.7b": "ollama_local",
+    "gemma4:e2b": "ollama_local",
+    "mistral-small3.1:24b": "ollama_local",
+    "deepseek-r1:14b": "ollama_local",
+    "qwen3-coder:30b": "ollama_local",
+    "gemma4:26b": "ollama_local",
+    "qwen3-coder:480b-cloud": "ollama_cloud",
+    "deepseek/deepseek-v3": "openrouter",
+    "qwen3-coder-next:cloud": "ollama_cloud",
+    "qwen3.6:35b-a3b-q4_K_M": "ollama_local",
+    "gemma4:e4b": "ollama_local",
+    "gemma4:31b": "ollama_local"
+  },
+  "routes": {
+    "default": "general-default",
+    "medium-model": "workhorse",
+    "high-model": "general-default",
+    "background": "workhorse",
+    "cloud_background": "qwen3-coder-next:cloud",
+    "think": "general-default",
+    "longContext": "claude-sonnet-4-6",
+    "claude-sonnet-4-6": "qwen3.6:35b-a3b-q4_K_M"
+  },
+  "llm_capabilities": {
+    "default": {
+      "model": "general-default"
+    },
+    "classify_intent": {
+      "model": "classifier"
+    },
+    "explore_local": {
+      "model": "explorer"
+    },
+    "explore_web": {
+      "model": "explorer"
+    },
+    "review_quality": {
+      "model": "reviewer"
+    },
+    "critique_plan": {
+      "model": "reviewer"
+    },
+    "detect_bugs": {
+      "model": "workhorse"
+    },
+    "navigate_codebase": {
+      "model": "workhorse"
+    },
+    "generate_tests": {
+      "model": "coder"
+    },
+    "deep_review": {
+      "model": "workhorse"
+    },
+    "heavy_coder": {
+      "model": "general-default"
+    },
+    "review_plan": {
+      "model": "workhorse"
+    },
+    "review_code": {
+      "model": "general-default"
+    }
+  },
+  "ollama_defaults": {
+    "num_ctx": 65536
+  }
+}
