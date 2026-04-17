@@ -83,8 +83,12 @@ function main() {
     const nextOverrides = computeOverrideDiff(defaults, nextEffective) || {};
     fs.mkdirSync(path.dirname(overridesPath), { recursive: true });
     fs.mkdirSync(path.dirname(effectivePath), { recursive: true });
-    fs.writeFileSync(overridesPath, `${JSON.stringify(nextOverrides, null, 2)}\n`);
-    fs.writeFileSync(effectivePath, `${JSON.stringify(nextEffective, null, 2)}\n`);
+    const overridesTmp = `${overridesPath}.tmp.${process.pid}`;
+    const effectiveTmp = `${effectivePath}.tmp.${process.pid}`;
+    fs.writeFileSync(overridesTmp, `${JSON.stringify(nextOverrides, null, 2)}\n`);
+    fs.writeFileSync(effectiveTmp, `${JSON.stringify(nextEffective, null, 2)}\n`);
+    fs.renameSync(effectiveTmp, effectivePath);
+    fs.renameSync(overridesTmp, overridesPath);
     process.stdout.write(`${JSON.stringify({
       ok: true,
       defaults_path: defaultsPath,

@@ -34,10 +34,10 @@ function isObject(value) {
 function expectObject(parent, key, required = false) {
   const value = parent[key];
   if (value == null) {
-    if (required) fail(`missing required object '${key}'`);
+    if (required) throw new Error(`missing required object '${key}'`);
     return null;
   }
-  if (!isObject(value)) fail(`'${key}' must be an object`);
+  if (!isObject(value)) throw new Error(`'${key}' must be an object`);
   return value;
 }
 
@@ -60,12 +60,12 @@ function resolveRoute(routes, start) {
   let current = start;
   while (isObject(routes) && Object.prototype.hasOwnProperty.call(routes, current)) {
     if (seen.has(current)) {
-      fail(`route cycle detected involving '${current}'`);
+      throw new Error(`route cycle detected involving '${current}'`);
     }
     seen.add(current);
     current = routes[current];
     if (typeof current !== 'string' || !current.trim()) {
-      fail(`routes entry for '${start}' resolves to an empty value`);
+      throw new Error(`routes entry for '${start}' resolves to an empty value`);
     }
   }
   return current;
@@ -80,16 +80,16 @@ function normalizeFallbackGraph(config) {
     const source = resolveRoute(routes, modelName);
     const targets = graph.get(source) || new Set();
     if (strategy.on != null) {
-      if (!isObject(strategy.on)) fail(`'fallback_strategies.${modelName}.on' must be an object`);
+      if (!isObject(strategy.on)) throw new Error(`'fallback_strategies.${modelName}.on' must be an object`);
       for (const candidates of Object.values(strategy.on)) {
-        if (!Array.isArray(candidates)) fail(`'fallback_strategies.${modelName}.on' entries must be arrays`);
+        if (!Array.isArray(candidates)) throw new Error(`'fallback_strategies.${modelName}.on' entries must be arrays`);
         for (const candidate of candidates) {
           if (typeof candidate !== 'string' || !candidate.trim()) {
-            fail(`fallback candidate for '${modelName}' must be a non-empty string`);
+            throw new Error(`fallback candidate for '${modelName}' must be a non-empty string`);
           }
           const target = resolveRoute(routes, candidate);
           if (target === source) {
-            fail(`fallback strategy for '${modelName}' cycles back to itself via '${candidate}'`);
+            throw new Error(`fallback strategy for '${modelName}' cycles back to itself via '${candidate}'`);
           }
           targets.add(target);
         }
@@ -111,7 +111,7 @@ function validateFallbackGraph(config) {
     if (visiting.has(node)) {
       const cycleStart = trail.indexOf(node);
       const cycle = cycleStart >= 0 ? trail.slice(cycleStart).concat(node) : trail.concat(node);
-      fail(`fallback strategy cycle detected: ${cycle.join(' -> ')}`);
+      throw new Error(`fallback strategy cycle detected: ${cycle.join(' -> ')}`);
     }
 
     visiting.add(node);
@@ -128,63 +128,82 @@ function validateFallbackGraph(config) {
   }
 }
 
-function validateConfig(config) {
-  if (!isObject(config)) fail('top-level config must be an object');
+function validateConfig(config, _errors) {
+  const report = _errors
+    ? (msg) => _errors.push(msg)
+    : (msg) => fail(msg);
+
+  if (!isObject(config)) { report('top-level config must be an object'); return; }
 
   for (const key of ['backends', 'model_routes', 'routes']) {
     if (config[key] != null && !isObject(config[key])) {
-      fail(`'${key}' must be an object when present`);
+      report(`'${key}' must be an object when present`);
     }
   }
 
   if (config.routes) {
     for (const routeName of Object.keys(config.routes)) {
-      resolveRoute(config.routes, routeName);
+      try { resolveRoute(config.routes, routeName); } catch (e) { report(e.message); }
     }
   }
 
   if (config.llm_connectivity_mode != null && !CONNECTIVITY_MODES.has(config.llm_connectivity_mode)) {
-    fail("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
+    report("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
   }
 
   if (config.llm_active_profile != null) {
     if (typeof config.llm_active_profile !== 'string' || !config.llm_active_profile.trim()) {
-      fail("'llm_active_profile' must be a non-empty string");
+      report("'llm_active_profile' must be a non-empty string");
     }
   }
 
-  const profiles = expectObject(config, 'llm_profiles', false);
+  let profiles = null;
+  try { profiles = expectObject(config, 'llm_profiles', false); } catch (e) { report(e.message); }
   if (profiles) {
     for (const [profileName, profileValue] of Object.entries(profiles)) {
-      if (!isObject(profileValue)) fail(`'llm_profiles.${profileName}' must be an object`);
+      if (!isObject(profileValue)) { report(`'llm_profiles.${profileName}' must be an object`); continue; }
       for (const aliasName of PROFILE_KEYS) {
-        validateProfileEntry(profileName, aliasName, profileValue[aliasName]);
+        if (profileValue[aliasName] != null) {
+          if (!isObject(profileValue[aliasName])) {
+            report(`'llm_profiles.${profileName}.${aliasName}' must be an object`);
+          } else {
+            if (typeof profileValue[aliasName].connected_model !== 'string' || !profileValue[aliasName].connected_model.trim()) {
+              report(`'llm_profiles.${profileName}.${aliasName}.connected_model' must be a non-empty string`);
+            }
+            if (typeof profileValue[aliasName].disconnect_model !== 'string' || !profileValue[aliasName].disconnect_model.trim()) {
+              report(`'llm_profiles.${profileName}.${aliasName}.disconnect_model' must be a non-empty string`);
+            }
+          }
+        }
       }
     }
 
     const active = config.llm_active_profile || 'auto';
     if (active !== 'auto' && !profiles[active]) {
-      fail(`'llm_active_profile' references unknown profile '${active}'`);
+      report(`'llm_active_profile' references unknown profile '${active}'`);
     }
   }
 
-  const capabilities = expectObject(config, 'llm_capabilities', false);
+  let capabilities = null;
+  try { capabilities = expectObject(config, 'llm_capabilities', false); } catch (e) { report(e.message); }
   if (capabilities) {
     for (const [capabilityName, entry] of Object.entries(capabilities)) {
       if (!CAPABILITY_KEYS.has(capabilityName)) {
-        fail(`unsupported llm_capabilities entry '${capabilityName}'`);
+        report(`unsupported llm_capabilities entry '${capabilityName}'`);
       }
-      if (!isObject(entry)) fail(`'llm_capabilities.${capabilityName}' must be an object`);
-      expectNonEmptyString(entry, 'model', `llm_capabilities.${capabilityName}`);
+      if (!isObject(entry)) { report(`'llm_capabilities.${capabilityName}' must be an object`); continue; }
+      if (typeof entry.model !== 'string' || !entry.model.trim()) {
+        report(`'llm_capabilities.${capabilityName}.model' must be a non-empty string`);
+      }
     }
   }
 
   if (config.fallback_strategies != null) {
-    if (!isObject(config.fallback_strategies)) fail("'fallback_strategies' must be an object");
+    if (!isObject(config.fallback_strategies)) { report("'fallback_strategies' must be an object"); return; }
     for (const [modelName, strategy] of Object.entries(config.fallback_strategies)) {
-      if (!isObject(strategy)) fail(`'fallback_strategies.${modelName}' must be an object`);
+      if (!isObject(strategy)) report(`'fallback_strategies.${modelName}' must be an object`);
     }
-    validateFallbackGraph(config);
+    try { validateFallbackGraph(config); } catch (e) { report(e.message); }
   }
 }
 
@@ -198,7 +217,12 @@ function main() {
   } catch (error) {
     fail(`failed to read '${absolutePath}': ${error.message}`);
   }
-  validateConfig(parsed);
+  const errors = [];
+  validateConfig(parsed, errors);
+  if (errors.length > 0) {
+    for (const e of errors) console.error(`model-map-validate: ${e}`);
+    process.exit(1);
+  }
 }
 
 if (require.main === module) {
