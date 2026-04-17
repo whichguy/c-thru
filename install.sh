@@ -51,9 +51,60 @@ else
 fi
 link_tool verify-llm-capabilities-mcp.sh verify-llm-capabilities-mcp
 
+# Migrate legacy providers schema if present
+migrate_providers_schema() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+    jq -e '.providers' "$file" >/dev/null 2>&1 || return 0
+
+    local timestamp
+    timestamp=$(date '+%Y%m%d_%H%M%S')
+    local backup="${file}.bak.${timestamp}"
+    cp "$file" "$backup"
+    echo -e "${YELLOW}⚠️  Migrating legacy 'providers' schema in ${file}${NC}"
+    echo -e "${YELLOW}    Backup saved to: ${backup}${NC}"
+
+    # Warn about fields that cannot be mapped
+    local dropped
+    dropped=$(jq -r '.providers | to_entries[] | select(.value | has("config_dir") or has("env") or has("auth_token") and .auth_token != "ollama") | .key' "$file" 2>/dev/null || true)
+    if [ -n "$dropped" ]; then
+        echo -e "${YELLOW}    ⚠️  The following provider entries have fields (config_dir, env, auth_token) that cannot be automatically migrated — review the output manually:${NC}"
+        echo "$dropped" | while IFS= read -r k; do echo -e "${YELLOW}       - ${k}${NC}"; done
+    fi
+
+    local migrated tmp
+    migrated=$(jq '
+      .providers as $prov |
+      . + {
+        backends: (
+          (.backends // {}) + (
+            $prov | to_entries | map(
+              .key as $k | .value as $v |
+              if ($v.auth_token == "ollama")
+              then {key: $k, value: {kind: "ollama", url: ($v.base_url // "")}}
+              else {key: $k, value: {kind: "anthropic", url: ($v.base_url // ""), auth_env: "ANTHROPIC_API_KEY"}}
+              end
+            ) | from_entries
+          )
+        ),
+        model_routes: (
+          (.model_routes // {}) + ($prov | keys | map({key: ., value: .}) | from_entries)
+        )
+      } | del(.providers)
+    ' "$file")
+    tmp="${file}.tmp.$$"
+    printf '%s\n' "$migrated" > "$tmp"
+    mv "$tmp" "$file"
+
+    local count
+    count=$(printf '%s' "$migrated" | jq '.backends | length')
+    echo -e "${GREEN}✅ Migrated ${count} provider(s) → backends + model_routes${NC}"
+}
+
 # Seed user-level model-map on first install
 USER_MAP="$CLAUDE_DIR/model-map.json"
 if [ -f "$USER_MAP" ]; then
+    migrate_providers_schema "$USER_MAP"
     echo -e "${YELLOW}ℹ️  User model-map already present: ${USER_MAP}${NC}"
 elif [ -f "$REPO_DIR/config/model-map.json" ]; then
     cp "$REPO_DIR/config/model-map.json" "$USER_MAP"
