@@ -773,6 +773,11 @@ async function ensureProxy(configPath) {
       });
       return spawnedProxyBaseUrl;
     }
+    debugLog('mcp.proxy.ensure.respawn_unresponsive', {
+      config_path: configPath,
+      base_url: spawnedProxyBaseUrl,
+    });
+    await stopOwnedProxy();
   }
 
   const explicitPort = process.env.CLAUDE_PROXY_PORT ? Number(process.env.CLAUDE_PROXY_PORT) : null;

@@ -158,7 +158,9 @@ function validateConfig(config) {
     for (const [profileName, profileValue] of Object.entries(profiles)) {
       if (!isObject(profileValue)) fail(`'llm_profiles.${profileName}' must be an object`);
       for (const aliasName of PROFILE_KEYS) {
-        validateProfileEntry(profileName, aliasName, profileValue[aliasName]);
+        if (profileValue[aliasName] != null) {
+          validateProfileEntry(profileName, aliasName, profileValue[aliasName]);
+        }
       }
     }
 
