@@ -14,12 +14,18 @@ cd c-thru
 
 The installer symlinks `claude-router`, `claude-proxy`, and the `model-map-*` helpers into `~/.claude/tools/`, and seeds `~/.claude/model-map.json` from `config/model-map.json` on first run.
 
+Add `~/.claude/tools` to your `PATH` so the commands are available without the full path:
+
+```sh
+export PATH="$HOME/.claude/tools:$PATH"   # add to ~/.zshrc or ~/.bashrc
+```
+
 ## Usage
 
 ```sh
 claude-router                           # use routes.default if present, else transparent fallback
 claude-router --route background        # named route → --model (see model-map routes)
-claude-router --model gemma4:26b        # Ollama (auto-detected)
+claude-router --model gemma3:27b        # Ollama (auto-detected)
 claude-router --model bedrock-opus      # Bedrock (from model-map.json)
 claude-router --model opus              # Ollama if not in model-map (name passed through)
 claude-router --list                    # show all available models

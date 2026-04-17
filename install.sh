@@ -29,27 +29,37 @@ mkdir -p "$TOOLS_DEST"
 
 link_tool() {
     local src="$1" dest_name="$2"
+    local dest="$TOOLS_DEST/$dest_name"
     if [ -x "$TOOLS_SRC/$src" ]; then
-        ln -sfn "$TOOLS_SRC/$src" "$TOOLS_DEST/$dest_name"
+        if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+            echo -e "${YELLOW}⚠️  ${dest} exists and is not a symlink — overwriting with symlink${NC}"
+        fi
+        ln -sfn "$TOOLS_SRC/$src" "$dest"
         echo -e "${GREEN}✅ Installed tool: ${dest_name}${NC}"
     fi
 }
 
 link_tool claude-router claude-router
 link_tool claude-proxy claude-proxy
-link_tool llm-capabilities-mcp.js llm-capabilities-mcp
-link_tool model-map-validate.js model-map-validate
-link_tool model-map-sync.js model-map-sync
-link_tool model-map-edit.js model-map-edit
+if command -v node >/dev/null 2>&1; then
+    link_tool llm-capabilities-mcp.js llm-capabilities-mcp
+    link_tool model-map-validate.js model-map-validate
+    link_tool model-map-sync.js model-map-sync
+    link_tool model-map-edit.js model-map-edit
+else
+    echo -e "${YELLOW}⚠️  node not found — skipping JS helper symlinks (install Node.js to enable them)${NC}"
+fi
 link_tool verify-llm-capabilities-mcp.sh verify-llm-capabilities-mcp
 
 # Seed user-level model-map on first install
 USER_MAP="$CLAUDE_DIR/model-map.json"
-if [ ! -f "$USER_MAP" ] && [ -f "$REPO_DIR/config/model-map.json" ]; then
+if [ -f "$USER_MAP" ]; then
+    echo -e "${YELLOW}ℹ️  User model-map already present: ${USER_MAP}${NC}"
+elif [ -f "$REPO_DIR/config/model-map.json" ]; then
     cp "$REPO_DIR/config/model-map.json" "$USER_MAP"
     echo -e "${GREEN}✅ Seeded user model-map: ${USER_MAP}${NC}"
 else
-    echo -e "${YELLOW}ℹ️  User model-map already present: ${USER_MAP}${NC}"
+    echo -e "${YELLOW}ℹ️  No config/model-map.json found; skipping seed. Copy manually if needed.${NC}"
 fi
 
 echo ""
