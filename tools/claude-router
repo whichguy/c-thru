@@ -1,6 +1,6 @@
 #!/bin/bash
 # claude-router — route Claude Code to any model provider
-# Provider lookup: 1) model-map.json providers  2) local Ollama tag match  3) assume Ollama (name passthrough)
+# Model lookup: 1) model-map.json model_routes+backends  2) local Ollama tag match  3) assume Ollama (passthrough)
 # Supports: Ollama (local), OpenRouter, LiteLLM, Bedrock, Vertex, any custom endpoint.
 #
 # Installed as ~/.claude/bin/claude (first on PATH): locates the real claude binary
@@ -1324,27 +1324,6 @@ resolve_ollama_backend_for_model() {
   [[ -f "$CONFIG" ]] || return 1
   [[ -n "$model" ]] || return 1
 
-  local provider=""
-  provider="$(jq -c --arg m "$model" '.providers[$m] // empty' "$CONFIG" 2>/dev/null || true)"
-  if [[ -n "$provider" && "$provider" != "null" ]]; then
-    local provider_base provider_auth provider_key provider_host explicit_auth local_flag
-    provider_base="$(jq -r '.base_url // empty' <<< "$provider" 2>/dev/null)"
-    provider_auth="$(jq -r '.auth_token // empty' <<< "$provider" 2>/dev/null)"
-    if [[ "$provider_auth" == "ollama" ]]; then
-      provider_host="$(ollama_cli_host "$provider_base")"
-      provider_key="$(jq -r 'if has("api_key") then .api_key else "" end' <<< "$provider" 2>/dev/null)"
-      if [[ -z "$provider_key" && -n "${OLLAMA_API_KEY:-}" ]]; then
-        provider_key="${OLLAMA_API_KEY}"
-      fi
-      explicit_auth=0
-      [[ -n "$provider_key" ]] && explicit_auth=1
-      local_flag=0
-      is_local_ollama_host "$provider_host" && local_flag=1
-      printf '%s\t%s\t%s\t%s\t%s\n' "$provider_host" "$provider_key" "__provider__" "$explicit_auth" "$local_flag"
-      return 0
-    fi
-  fi
-
   local backend_id=""
   backend_id="$(jq -r --arg m "$model" '.model_routes[$m] // empty' "$CONFIG" 2>/dev/null || true)"
   [[ -n "$backend_id" ]] || backend_id="$(lookup_model_pattern_value "model_routes" "$model")"
@@ -2059,9 +2038,6 @@ show_models() {
   # Configured routes
   print_config_section "routes" "Configured routes (model-map.json)"
 
-  # Configured providers
-  print_config_section "providers" "Configured providers (model-map.json)"
-
   # Local Ollama
   local ollama_http_base="${OLLAMA_URL%/api}"
   local ollama_models
@@ -2069,11 +2045,7 @@ show_models() {
   if [[ -n "$ollama_models" ]]; then
     echo "Local Ollama ($ollama_http_base):"
     while read -r m; do
-      if [[ -f "$CONFIG" ]] && jq -e --arg m "$m" '.providers[$m]' "$CONFIG" >/dev/null 2>&1; then
-        echo "  $m  (custom config)"
-      else
-        echo "  $m"
-      fi
+      echo "  $m"
     done <<< "$ollama_models"
     echo ""
   fi
@@ -2244,41 +2216,12 @@ apply_resolved_backend() {
   fi
 }
 
-# --- Provider lookup chain ---
-# Priority: 1a old-schema .providers  →  1b new-schema .model_routes+.backends
-#           →  2 Ollama tag auto-detect  →  3 assume Ollama (passthrough)
+# --- Backend lookup chain ---
+# Priority: 1) .model_routes+.backends (exact) → 2) .model_routes+.backends (pattern)
+#           → 3) claude-* auto-anthropic → 4) Ollama tag auto-detect → 5) assume Ollama
 OLLAMA_HTTP_BASE="${OLLAMA_URL%/api}"
-PROVIDER=""
-if [[ -n "$MODEL" && -f "$CONFIG" ]]; then
-  PROVIDER=$(jq -r --arg m "$MODEL" '.providers[$m] // empty' "$CONFIG" 2>/dev/null)
-  if [[ -z "$PROVIDER" || "$PROVIDER" == "null" ]]; then
-    PROVIDER="$(lookup_model_pattern_value "providers" "$MODEL")"
-  fi
-fi
 
-if [[ -n "$PROVIDER" && "$PROVIDER" != "null" ]]; then
-  # 1a) Old schema: explicit .providers[$MODEL] object
-  # Note: do not use `read a b c < <(jq -r 'a,b,c')` — bash read consumes only one line.
-  BASE_URL=$(jq -r '.base_url // empty' <<< "$PROVIDER")
-  AUTH_TOKEN=$(jq -r '.auth_token // empty' <<< "$PROVIDER")
-  API_KEY=$(jq -r 'if has("api_key") then .api_key else "" end' <<< "$PROVIDER")
-  CONFIG_DIR=$(jq -r '.config_dir // empty' <<< "$PROVIDER")
-  ENV_JSON=$(jq -c '.env // {}' <<< "$PROVIDER")
-  if [[ "$AUTH_TOKEN" == "ollama" ]]; then
-    OLLAMA_BACKEND_URL="$BASE_URL"
-    ensure_proxy_http_base || exit 1
-    apply_ollama_client_block "$ENSURED_PROXY_HTTP_BASE" "$CONFIG_DIR" "$ENV_JSON"
-    ensure_ollama_running "$EFFECTIVE_MODEL" "$OLLAMA_BACKEND_URL" "$API_KEY"
-    [[ "$OLLAMA_PREP_SWEEP_STARTED" != "1" ]] && run_background_ollama_prep_sweep "$EFFECTIVE_MODEL" "$(ollama_cli_host "$OLLAMA_BACKEND_URL")" "$API_KEY"
-  else
-    if final_model_has_fallback_strategy "$EFFECTIVE_MODEL"; then
-      apply_proxy_fallback_client_block "$CONFIG_DIR" "$ENV_JSON"
-    else
-      apply_provider_block "$BASE_URL" "$AUTH_TOKEN" "$API_KEY" "$CONFIG_DIR" "$ENV_JSON"
-    fi
-  fi
-
-elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE_MODEL" '.model_routes[$m] // empty' "$CONFIG" 2>/dev/null) && [[ -n "$BACKEND_ID" ]]; then
+if [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE_MODEL" '.model_routes[$m] // empty' "$CONFIG" 2>/dev/null) && [[ -n "$BACKEND_ID" ]]; then
   # 1b) New schema: .model_routes[$EFFECTIVE_MODEL] → .backends[$id]
   BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
