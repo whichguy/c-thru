@@ -227,6 +227,7 @@ try {
 
 function resolveRouteModel(model) {
   const routes = CONFIG.routes || {};
+  const maxDepth = Math.min(CONFIG.routes_max_depth || 32, 256);
   const seen = new Set();
   let cur = model;
   let steps = 0;
@@ -235,7 +236,7 @@ function resolveRouteModel(model) {
     seen.add(cur);
     cur = routes[cur];
     steps++;
-    if (steps >= 32) return cur;
+    if (steps >= maxDepth) return cur;
   }
   return cur;
 }
@@ -1362,6 +1363,8 @@ function handleRequestWithFallback(req, res, body, resolved) {
   const endpoint = req.url;
 
   const doForward = (b, em, fwdBody) => {
+    res._statsBackend = b;
+    res._statsEffectiveModel = em || fwdBody.model || clientModel;
     const requestMeta = {
       endpoint,
       clientModel,
@@ -1781,10 +1784,12 @@ const server = http.createServer(async (req, res) => {
     startedAtMs: nowMs(),
   };
 
-  // Track status via response wrapper
+  // Track status via response wrapper; use mutable refs so fallback paths update attribution.
+  res._statsBackend = backend;
+  res._statsEffectiveModel = effectiveModel || model;
   const originalWriteHead = res.writeHead.bind(res);
   res.writeHead = function(statusCode, ...args) {
-    recordStats(req.url, backend, clientModel, effectiveModel, statusCode);
+    recordStats(req.url, res._statsBackend, clientModel, res._statsEffectiveModel, statusCode);
     stats.currentInFlight = Math.max(0, stats.currentInFlight - 1);
     return originalWriteHead(statusCode, ...args);
   };
