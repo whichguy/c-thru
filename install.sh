@@ -40,6 +40,7 @@ link_tool() {
 }
 
 link_tool claude-router claude-router
+link_tool claude-router c-thru
 link_tool claude-proxy claude-proxy
 if command -v node >/dev/null 2>&1; then
     link_tool llm-capabilities-mcp.js llm-capabilities-mcp
