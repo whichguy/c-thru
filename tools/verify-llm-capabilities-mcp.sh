@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eo pipefail
 
-SCRIPT_REAL="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_REAL="$(readlink -f "$0" 2>/dev/null || python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
 TOOLS_DIR="$(dirname "$SCRIPT_REAL")"
 REPO_DIR="$(dirname "$TOOLS_DIR")"
 CLAUDE_DIR="${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
