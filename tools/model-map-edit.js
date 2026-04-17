@@ -87,8 +87,8 @@ function main() {
     const effectiveTmp = `${effectivePath}.tmp.${process.pid}`;
     fs.writeFileSync(overridesTmp, `${JSON.stringify(nextOverrides, null, 2)}\n`);
     fs.writeFileSync(effectiveTmp, `${JSON.stringify(nextEffective, null, 2)}\n`);
-    fs.renameSync(overridesTmp, overridesPath);
     fs.renameSync(effectiveTmp, effectivePath);
+    fs.renameSync(overridesTmp, overridesPath);
     process.stdout.write(`${JSON.stringify({
       ok: true,
       defaults_path: defaultsPath,

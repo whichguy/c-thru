@@ -88,7 +88,7 @@ migrate_providers_schema() {
           )
         ),
         model_routes: (
-          (.model_routes // {}) + ($prov | keys | map({key: ., value: .}) | from_entries)
+          ($prov | keys | map({key: ., value: .}) | from_entries) + (.model_routes // {})
         )
       } | del(.providers)
     ' "$file")
