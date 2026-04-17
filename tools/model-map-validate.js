@@ -128,12 +128,16 @@ function validateFallbackGraph(config) {
   }
 }
 
-function validateConfig(config) {
-  if (!isObject(config)) fail('top-level config must be an object');
+function validateConfig(config, _errors) {
+  const report = _errors
+    ? (msg) => _errors.push(msg)
+    : (msg) => fail(msg);
+
+  if (!isObject(config)) { report('top-level config must be an object'); return; }
 
   for (const key of ['backends', 'model_routes', 'routes']) {
     if (config[key] != null && !isObject(config[key])) {
-      fail(`'${key}' must be an object when present`);
+      report(`'${key}' must be an object when present`);
     }
   }
 
@@ -144,29 +148,38 @@ function validateConfig(config) {
   }
 
   if (config.llm_connectivity_mode != null && !CONNECTIVITY_MODES.has(config.llm_connectivity_mode)) {
-    fail("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
+    report("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
   }
 
   if (config.llm_active_profile != null) {
     if (typeof config.llm_active_profile !== 'string' || !config.llm_active_profile.trim()) {
-      fail("'llm_active_profile' must be a non-empty string");
+      report("'llm_active_profile' must be a non-empty string");
     }
   }
 
   const profiles = expectObject(config, 'llm_profiles', false);
   if (profiles) {
     for (const [profileName, profileValue] of Object.entries(profiles)) {
-      if (!isObject(profileValue)) fail(`'llm_profiles.${profileName}' must be an object`);
+      if (!isObject(profileValue)) { report(`'llm_profiles.${profileName}' must be an object`); continue; }
       for (const aliasName of PROFILE_KEYS) {
         if (profileValue[aliasName] != null) {
-          validateProfileEntry(profileName, aliasName, profileValue[aliasName]);
+          if (!isObject(profileValue[aliasName])) {
+            report(`'llm_profiles.${profileName}.${aliasName}' must be an object`);
+          } else {
+            if (typeof profileValue[aliasName].connected_model !== 'string' || !profileValue[aliasName].connected_model.trim()) {
+              report(`'llm_profiles.${profileName}.${aliasName}.connected_model' must be a non-empty string`);
+            }
+            if (typeof profileValue[aliasName].disconnect_model !== 'string' || !profileValue[aliasName].disconnect_model.trim()) {
+              report(`'llm_profiles.${profileName}.${aliasName}.disconnect_model' must be a non-empty string`);
+            }
+          }
         }
       }
     }
 
     const active = config.llm_active_profile || 'auto';
     if (active !== 'auto' && !profiles[active]) {
-      fail(`'llm_active_profile' references unknown profile '${active}'`);
+      report(`'llm_active_profile' references unknown profile '${active}'`);
     }
   }
 
@@ -174,17 +187,19 @@ function validateConfig(config) {
   if (capabilities) {
     for (const [capabilityName, entry] of Object.entries(capabilities)) {
       if (!CAPABILITY_KEYS.has(capabilityName)) {
-        fail(`unsupported llm_capabilities entry '${capabilityName}'`);
+        report(`unsupported llm_capabilities entry '${capabilityName}'`);
       }
-      if (!isObject(entry)) fail(`'llm_capabilities.${capabilityName}' must be an object`);
-      expectNonEmptyString(entry, 'model', `llm_capabilities.${capabilityName}`);
+      if (!isObject(entry)) { report(`'llm_capabilities.${capabilityName}' must be an object`); continue; }
+      if (typeof entry.model !== 'string' || !entry.model.trim()) {
+        report(`'llm_capabilities.${capabilityName}.model' must be a non-empty string`);
+      }
     }
   }
 
   if (config.fallback_strategies != null) {
-    if (!isObject(config.fallback_strategies)) fail("'fallback_strategies' must be an object");
+    if (!isObject(config.fallback_strategies)) { report("'fallback_strategies' must be an object"); return; }
     for (const [modelName, strategy] of Object.entries(config.fallback_strategies)) {
-      if (!isObject(strategy)) fail(`'fallback_strategies.${modelName}' must be an object`);
+      if (!isObject(strategy)) report(`'fallback_strategies.${modelName}' must be an object`);
     }
     validateFallbackGraph(config);
   }
@@ -200,7 +215,12 @@ function main() {
   } catch (error) {
     fail(`failed to read '${absolutePath}': ${error.message}`);
   }
-  validateConfig(parsed);
+  const errors = [];
+  validateConfig(parsed, errors);
+  if (errors.length > 0) {
+    for (const e of errors) console.error(`model-map-validate: ${e}`);
+    process.exit(1);
+  }
 }
 
 if (require.main === module) {
