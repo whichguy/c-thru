@@ -39,14 +39,18 @@ Partial progress:
   `CLAUDE_PROXY_OLLAMA_KEEP_ALIVE`). Honors the backend URL instead of
   relying on `$OLLAMA_HOST`.
 
+- ✅ `ensureOllamaModelLoaded` migrated from `spawnSync('ollama', …)` to
+  async HTTP (`/api/tags`, `/api/pull` streaming NDJSON, `/api/ps`,
+  `/api/generate`). No more event-loop stall in the request path; no
+  `ollama` CLI on `$PATH` required. Pull ceiling 30m (override via
+  `CLAUDE_PROXY_OLLAMA_PULL_TIMEOUT_MS`); concurrent pulls dedup via
+  `pullInFlight` map. Caveat: `options.num_ctx` on `/api/generate` does
+  not persist to subsequent `/api/chat` calls — follow-up if observed.
+
 Still to do:
-- `ensureOllamaModelLoaded` still spawns `ollama run --options num_ctx=…`
-  because the CLI is currently the path that sets `num_ctx` on load. HTTP
-  equivalent: pass `options: {num_ctx}` in the `/api/generate` body.
 - Platform-aware auto-start (launchctl / systemctl) when Ollama is
   unreachable, replacing the "is 'ollama serve' running?" error.
-- Model pre-pull via `POST /api/pull` when a referenced model isn't
-  present in `/api/tags`.
-- Adopt `GET /api/ps` for smarter warm/unload decisions (prerequisite
-  for the logical-role exclusivity work — see
-  `TODO-logical-role-exclusivity.md`).
+- Model pre-pull via `POST /api/pull` at startup from model-map.
+- Adopt `GET /api/ps` for smarter warm/unload decisions beyond
+  "is model X loaded" (prerequisite for logical-role exclusivity —
+  see `TODO-logical-role-exclusivity.md`).
