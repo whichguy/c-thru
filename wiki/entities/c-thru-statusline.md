@@ -65,6 +65,9 @@ Both hooks and the overlay:
 The Stop hook uses `~/.claude/.c-thru-stop-hook-last-ts` (a single epoch-ms
 integer) to dedupe — only NEW fallback events produce a `systemMessage`.
 
+- **From Session b50c3df0:** Critical correlation bug: the Stop hook reads both `terminal_model` and the fallback model from the same `candidate_success` log line to pair "what should have served" with "what actually served". Originally `terminal_model` was only logged in `chain_start`, causing stale/missing correlation when the hook parsed `candidate_success` alone. Fix: proxy now logs `terminal_model` directly into the `candidate_success` event (PR #7).
+- **From Session b50c3df0:** Design decision: `~/.claude/proxy.log` is the single source of truth, not a separate `proxy-status.json` snapshot. This eliminates atomic-write complexity in the proxy hot path and unifies the event stream. The Stop hook and statusline both tail the log; the `/hooks/context` extension reads the in-memory `fallbackEvents` ring buffer directly. An earlier draft used a snapshot file but the log-as-event-stream approach removed one file and one atomic-write dance.
+
 ## Why these channels
 
 - Custom HTTP response headers (`x-claude-proxy-*`) — Claude Code ignores them.
@@ -74,3 +77,13 @@ integer) to dedupe — only NEW fallback events produce a `systemMessage`.
 
 `Stop` fires exactly once per assistant response and `systemMessage` is
 documented as "Warning message shown to the user" — designed for this.
+
+## TODO: Proxy health false-positive in SessionStart
+
+`c-thru-session-start.sh` reports `☁️  Proxy health: cloud backend unhealthy` at session start even when the proxy is not genuinely degraded (label shown: `recovering`). Investigate:
+
+- What triggers the `recovering` label? Is it a transient HTTP timeout before the proxy warms up?
+- Should the hook apply a grace period (e.g. retry once after 1–2 s) before reporting unhealthy?
+- Should the hook suppress the warning entirely if the proxy process was just spawned (compare PID start time vs hook invocation time)?
+
+→ See also: [[claude-code-hook-channels]], [[ollama-http-api-migration]], [[hook-safety-posture]], [[load-bearing-invariant]], [[fallback-event-system]]
