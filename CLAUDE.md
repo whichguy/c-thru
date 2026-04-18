@@ -37,6 +37,7 @@ tools/
   c-thru-session-start.sh # SessionStart/PostCompact hook — proxy+Ollama health check, silent on happy path
   c-thru-proxy-health.sh  # UserPromptSubmit hook — asyncRewake (exit 2, stderr) on proxy down
   c-thru-map-changed.sh   # FileChanged/PostToolUse hook — validates model-map.json on edit
+  c-thru-classify.sh      # UserPromptSubmit hook — sends prompt to /hooks/context (port 9998) for classify_intent context injection
 config/
   model-map.json          # shipped defaults (JSON5 — comments allowed)
 ```
