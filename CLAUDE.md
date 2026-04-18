@@ -34,6 +34,9 @@ tools/
   model-map-edit.js       # interactive map editor; calls validate + layered
   llm-capabilities-mcp.js # MCP server exposing list_models + classify_intent tools
   verify-llm-capabilities-mcp.sh  # shell smoke-test for the MCP server
+  c-thru-session-start.sh # SessionStart/PostCompact hook — proxy+Ollama health check, silent on happy path
+  c-thru-proxy-health.sh  # UserPromptSubmit hook — asyncRewake (exit 2, stderr) on proxy down
+  c-thru-map-changed.sh   # FileChanged/PostToolUse hook — validates model-map.json on edit
 config/
   model-map.json          # shipped defaults (JSON5 — comments allowed)
 ```
@@ -79,6 +82,7 @@ MCP server (stdio transport). Exposes two tools: `list_models` and `classify_int
 | `CLAUDE_PROFILE_DIR` | Override `~/.claude` location |
 | `CLAUDE_MODEL_MAP_DEFAULTS_PATH` | Override shipped `config/model-map.json` path |
 | `CLAUDE_MODEL_MAP_OVERRIDES_PATH` | Override `~/.claude/model-map.overrides.json` path |
+| `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for Phase 2 HTTP hooks listener (default `9998`) |
 
 ## No External Node Dependencies
 
