@@ -94,8 +94,16 @@ function resolveConfigPath() {
 
 // ── Config loading & reload ────────────────────────────────────────────
 
+// ── CLI args: --port <n> and --hooks-port <n> ──────────────────────────
+const _args = process.argv.slice(2);
+for (let i = 0; i < _args.length; i++) {
+  if (_args[i] === '--port' && _args[i + 1]) process.env.CLAUDE_PROXY_PORT = _args[++i];
+  if (_args[i] === '--hooks-port' && _args[i + 1]) process.env.CLAUDE_PROXY_HOOKS_PORT = _args[++i];
+}
+
 const EXPLICIT_PORT = process.env.CLAUDE_PROXY_PORT;
 const INITIAL_PORT = EXPLICIT_PORT ? Number(EXPLICIT_PORT) : 0;
+const HOOKS_PORT = Number(process.env.CLAUDE_PROXY_HOOKS_PORT || 9998);
 const SKIP_WARMUP = process.env.CLAUDE_PROXY_SKIP_OLLAMA_WARMUP === '1';
 const ANNOTATE_MODEL = process.env.CLAUDE_PROXY_ANNOTATE_MODEL === '1';
 function numberFromEnv(name, fallback) {
@@ -1808,10 +1816,77 @@ const server = http.createServer(async (req, res) => {
 
 });
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`claude-proxy: port ${err.port || INITIAL_PORT} in use — singleton already running`);
+    process.exit(0);
+  }
+  throw err;
+});
+
 server.listen(INITIAL_PORT, '127.0.0.1', () => {
   const actualPort = server.address().port;
   if (!EXPLICIT_PORT) process.stdout.write(`READY ${actualPort}\n`);
   console.error(`claude-proxy listening on 127.0.0.1:${actualPort} (pid=${process.pid})`);
+});
+
+// ── Hooks listener (fixed port for HTTP hooks) ─────────────────────────
+// ARCH: dual-listener — API port dynamic, hooks port fixed (CLAUDE_PROXY_HOOKS_PORT);
+// hooks listener is singleton-guarded via EADDRINUSE exit-0
+
+const hooksServer = require('http').createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/ping') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, role: 'hooks' }));
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/hooks/context') {
+    (async () => {
+      try {
+        const issues = [];
+
+        // Check backend health from live in-memory state
+        for (const [id, s] of Object.entries(stats.byBackendId || {})) {
+          if (s.state === 'degraded' || s.state === 'disconnected') {
+            const alternatives = Object.keys(CONFIG.routes || {}).filter(r => r !== id);
+            const alt = alternatives[0] ? ` Alternative: --route ${alternatives[0]}` : '';
+            issues.push(`⚠️ Backend ${id} ${s.state} (${s.ewmaMs || 0}ms ewma, ${s.failures || 0} failures).${alt}`);
+          }
+        }
+
+        // Check Ollama reachability via config (no classify_intent — see spike #3)
+        // classify_intent integration deferred until llm-capabilities-mcp.js extraction
+
+        if (issues.length > 0) {
+          const additionalContext = issues.join('\n');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ hookSpecificOutput: { additionalContext } }));
+        } else {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end('{}');
+        }
+      } catch (err) {
+        console.error('claude-proxy: /hooks/context error:', err.message);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{}');
+      }
+    })();
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+});
+
+hooksServer.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`claude-proxy: hooks port ${HOOKS_PORT} in use — singleton already running`);
+    process.exit(0);
+  }
+  throw err;
+});
+
+hooksServer.listen(HOOKS_PORT, '127.0.0.1', () => {
+  console.error(`claude-proxy: hooks listener bound on :${HOOKS_PORT}`);
 });
 
 function shutdown() {
@@ -1820,7 +1895,10 @@ function shutdown() {
     usagePersistTimer = null;
   }
   flushPersistentUsageNowSync();
-  server.close(() => process.exit(0));
+  Promise.all([
+    new Promise(r => server.close(r)),
+    new Promise(r => hooksServer.close(r)),
+  ]).then(() => process.exit(0));
 }
 
 process.on('SIGTERM', shutdown);
