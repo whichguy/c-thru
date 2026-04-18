@@ -4,6 +4,7 @@
 
 | Page | Summary | Last Updated |
 |------|---------|--------------|
+| [c-thru-statusline](entities/c-thru-statusline.md) | Stop hook + statusline overlay that surface proxy fallback state to the user (log-tail based) | 2026-04-18 |
 
 ## About
 
