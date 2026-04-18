@@ -8,6 +8,54 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const { Transform } = require('stream');
+
+// ── Rolling log ───────────────────────────────────────────────────────
+// Fixed path, 10 MB limit, 3 generations. Intercepts process.stderr so
+// all console.error calls land here without touching existing call sites.
+
+const PROXY_LOG_FILE = path.join(process.env.HOME || os.homedir(), '.claude', 'proxy.log');
+const PROXY_LOG_MAX_BYTES = 10 * 1024 * 1024;
+const PROXY_LOG_GENERATIONS = 3;
+// Check rotation every N writes to amortise the statSync cost.
+// At typical stderr line sizes (100-500 B) worst-case overshoot is ~100 KB.
+const PROXY_LOG_ROTATION_CHECK_INTERVAL = 200;
+let _proxyLogWrites = 0;
+
+function rotateProxyLog() {
+  // Drop oldest, shift remaining up, then move current → .1
+  try { fs.unlinkSync(`${PROXY_LOG_FILE}.${PROXY_LOG_GENERATIONS}`); } catch {}
+  for (let i = PROXY_LOG_GENERATIONS - 1; i >= 1; i--) {
+    try { fs.renameSync(`${PROXY_LOG_FILE}.${i}`, `${PROXY_LOG_FILE}.${i + 1}`); } catch {}
+  }
+  try { fs.renameSync(PROXY_LOG_FILE, `${PROXY_LOG_FILE}.1`); } catch {}
+}
+
+function checkProxyLogRotation() {
+  try {
+    const stat = fs.statSync(PROXY_LOG_FILE, { throwIfNoEntry: false });
+    if (stat && stat.size >= PROXY_LOG_MAX_BYTES) rotateProxyLog();
+  } catch {}
+}
+
+(function installProxyLogInterceptor() {
+  try { fs.mkdirSync(path.dirname(PROXY_LOG_FILE), { recursive: true }); } catch {}
+  checkProxyLogRotation();
+  const _orig = process.stderr.write.bind(process.stderr);
+  process.stderr.write = function(chunk, encoding, callback) {
+    try {
+      const str = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      const ts = new Date().toISOString();
+      const lines = str.split('\n');
+      const trailingNewline = str.endsWith('\n');
+      const body = (trailingNewline ? lines.slice(0, -1) : lines);
+      const stamped = body.map(l => l ? `${ts} ${l}` : l).join('\n') + (trailingNewline ? '\n' : '');
+      fs.appendFileSync(PROXY_LOG_FILE, stamped);
+      if (++_proxyLogWrites % PROXY_LOG_ROTATION_CHECK_INTERVAL === 0) checkProxyLogRotation();
+    } catch {}
+    return _orig(chunk, encoding, callback);
+  };
+})();
 
 // ── Config resolution ──────────────────────────────────────────────────
 
@@ -153,6 +201,10 @@ function debugLog(event, fields = {}) {
     ts: nowIso(),
     ...fields,
   })}`);
+}
+
+function proxyLog(event, fields = {}) {
+  console.error(`claude-proxy [${event}] ${JSON.stringify({ pid: process.pid, ts: nowIso(), ...fields })}`);
 }
 
 function loadConfig() {
@@ -356,6 +408,7 @@ let usageLogChain = Promise.resolve();
 const persistentUsage = loadPersistentUsageStats();
 
 const HEALTH_STATE_FILE = path.join(process.env.HOME || os.homedir(), '.claude', 'proxy-health.json');
+const PID_FILE = path.join(process.env.HOME || os.homedir(), '.claude', 'proxy.pid');
 const HEALTH_SLOW_THRESHOLD_MS = numberFromEnv('CLAUDE_PROXY_HEALTH_SLOW_THRESHOLD_MS', 8000);
 const HEALTH_DEGRADE_FAILURES = numberFromEnv('CLAUDE_PROXY_HEALTH_DEGRADE_FAILURES', 2);
 const HEALTH_DISCONNECT_FAILURES = numberFromEnv('CLAUDE_PROXY_HEALTH_DISCONNECT_FAILURES', 3);
@@ -365,7 +418,15 @@ const HEALTH_RECOVERY_PROBE_MS = numberFromEnv('CLAUDE_PROXY_HEALTH_RECOVERY_PRO
 const HEALTH_EWMA_ALPHA = numberFromEnv('CLAUDE_PROXY_HEALTH_EWMA_ALPHA', 0.3);
 const HEALTH_LATENCY_WINDOW = numberFromEnv('CLAUDE_PROXY_HEALTH_LATENCY_WINDOW', 20);
 const HEALTH_EVENT_LOG_LIMIT = numberFromEnv('CLAUDE_PROXY_HEALTH_EVENT_LOG_LIMIT', 20);
-const FATAL_CALL_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_FATAL_CALL_TIMEOUT_MS', 40 * 60 * 1000);
+const FATAL_CALL_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_FATAL_CALL_TIMEOUT_MS', 15 * 60 * 1000);
+// Socket-level connect timeout for cloud backends — fires if no bytes received within this window.
+// Keeps fallback latency bounded when wifi drops mid-session (OS TCP retransmit can take 1-2 min).
+const CLOUD_CONNECT_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_CLOUD_CONNECT_TIMEOUT_MS', 15000);
+// Inactivity timeout once streaming has started — fires if no bytes arrive for this window.
+// 5 min allows extended thinking / long tool calls while still detecting a dropped wifi mid-stream.
+const CLOUD_STREAM_INACTIVITY_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_CLOUD_STREAM_INACTIVITY_MS', 5 * 60 * 1000);
+const STARTUP_PROBE_ENABLED = process.env.CLAUDE_PROXY_STARTUP_PROBE !== '0';
+const STARTUP_PROBE_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_STARTUP_PROBE_TIMEOUT_MS', 15000);
 
 const healthMeta = {
   version: 1,
@@ -594,8 +655,54 @@ function recordStats(endpoint, backend, clientModel, effectiveModel, statusCode)
 
 // ── Fallback strategies ───────────────────────────────────────────────
 
-const VALID_FAILURE_CLASSES = new Set(['network', 'rate_limit', 'account_quota', 'context_limit']);
+const VALID_FAILURE_CLASSES = new Set(['network_failure', 'rate_limit', 'account_quota', 'context_limit']);
 const cooldowns = new Map(); // model -> { untilMs, failureClass }
+
+// In-memory ring buffer of recent fallback events. Consumed by the
+// /hooks/context endpoint so Claude can explain "why was that slow?" on
+// the next user turn. Out-of-process readers (Stop hook, statusline) use
+// ~/.claude/proxy.log as the source of truth — no file snapshot is written.
+const fallbackEvents = [];
+const FALLBACK_EVENTS_MAX = 10;
+
+function recordFallbackEvent(primary, served_by, reason) {
+  fallbackEvents.unshift({ at: Date.now(), primary, served_by, reason });
+  if (fallbackEvents.length > FALLBACK_EVENTS_MAX) fallbackEvents.length = FALLBACK_EVENTS_MAX;
+  fireDesktopNotification(primary, served_by);
+}
+
+function fireDesktopNotification(primary, served_by) {
+  if (process.platform !== 'darwin') return;
+  if (process.env.CLAUDE_PROXY_NOTIFY !== '1') return;
+  const msg = `Primary ${primary} is unreachable. Serving from ${served_by}.`;
+  const script = `display notification "${msg.replace(/"/g, '\\"')}" with title "c-thru proxy" sound name "Tink"`;
+  try {
+    const child = spawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
+    child.unref();
+  } catch {}
+}
+
+// Debounce Ollama warm-up spawns to avoid spawn storm on repeated fallbacks.
+// `ollama run <model>` is safe to call repeatedly — the spawned process does
+// not own the loaded model; Ollama keeps it resident independently.
+const ollamaWarmLastMs = new Map(); // model -> last spawn timestamp
+const OLLAMA_WARM_DEBOUNCE_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_WARM_DEBOUNCE_MS', 30000);
+function warmOllamaModel(model, backendId) {
+  if (!model) return;
+  const last = ollamaWarmLastMs.get(model) || 0;
+  if (Date.now() - last < OLLAMA_WARM_DEBOUNCE_MS) return;
+  ollamaWarmLastMs.set(model, Date.now());
+  proxyLog('fallback.warm_spawn', { candidate: model, backend_id: backendId });
+  try {
+    const child = spawn('ollama', ['run', model, ''], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.on('error', () => {});
+    child.unref();
+  } catch { /* ollama CLI may not be installed; ignore */ }
+}
 
 function recordFailureClass(failureClass) {
   stats.byFailureClass[failureClass] = (stats.byFailureClass[failureClass] || 0) + 1;
@@ -809,7 +916,7 @@ function noteBackendFailure(backend, effectiveModel, failureClass, latencyMs, re
   entry.last_failure_at_ms = atMs;
   if (Number.isFinite(latencyMs)) updateLatency(entry, latencyMs);
 
-  if (failureClass === 'network') {
+  if (failureClass === 'network_failure') {
     if (entry.state === 'recovering' || entry.consecutive_failures >= HEALTH_DISCONNECT_FAILURES) {
       transitionBackendState(entry, 'disconnected', reason || 'network_failure');
     } else if (entry.consecutive_failures >= HEALTH_DEGRADE_FAILURES) {
@@ -835,7 +942,7 @@ function classifyError(statusCode, headers, bodyText = '') {
   if (statusCode === 429) return 'rate_limit';
   if (statusCode === 402 || statusCode === 403) return 'account_quota';
   if (statusCode === 413) return 'context_limit';
-  if (statusCode >= 500) return 'network';
+  if (statusCode >= 500) return 'network_failure';
   return null;
 }
 
@@ -875,33 +982,12 @@ function clearCooldown(model) {
 }
 
 function setCooldown(model, failureClass, statusCode, headers) {
-  const strategies = CONFIG.fallback_strategies || {};
-  const strategy = strategies[model];
-  if (!strategy) return;
-  const cooldown = (strategy.cooldown || {})[failureClass];
-  if (!cooldown) return;
-  let ms = 0;
-  if (cooldown.mode === 'header_or_max') {
-    const retryAfter = headers?.['retry-after'];
-    if (retryAfter) {
-      ms = Number(retryAfter) * 1000;
-    }
-    ms = ms || (cooldown.max_seconds || 0) * 1000;
-  } else if (cooldown.mode === 'fixed') {
-    ms = (cooldown.seconds || 0) * 1000;
-  }
-  // mode === 'none' → no cooldown
-  if (ms > 0) {
-    const untilMs = Date.now() + ms;
-    debugLog('proxy.cooldown.set', {
-      model,
-      failure_class: failureClass,
-      status_code: statusCode,
-      cooldown_ms: ms,
-      until_ms: untilMs,
-    });
-    cooldowns.set(model, { untilMs, failureClass });
-  }
+  // Liveness semantics: first error marks the model dead. It stays dead until
+  // the background liveness prober (see startLivenessProbeLoop) successfully
+  // probes the backend and calls clearCooldown. No time-based expiry.
+  const untilMs = Number.POSITIVE_INFINITY;
+  proxyLog('liveness.mark_dead', { model, failure_class: failureClass, status_code: statusCode });
+  cooldowns.set(model, { untilMs, failureClass, markedDeadAtMs: Date.now() });
 }
 
 function shouldBypassCooldownForRecoveryProbe(backend, effectiveModel) {
@@ -914,8 +1000,9 @@ function shouldBypassCooldownForRecoveryProbe(backend, effectiveModel) {
 function resolveFallbackModel(model, failureClass) {
   const strategies = CONFIG.fallback_strategies || {};
   const strategy = strategies[model];
-  if (!strategy || !strategy.on) return null;
-  const candidates = strategy.on[failureClass];
+  if (!strategy || !strategy.event) return null;
+  if (failureClass && !VALID_FAILURE_CLASSES.has(failureClass)) return null;
+  const candidates = strategy.event[failureClass];
   if (!Array.isArray(candidates) || candidates.length === 0) return null;
   for (const candidate of candidates) {
     const resolved = resolveLogicalAlias(resolveRouteModel(candidate));
@@ -1188,6 +1275,53 @@ function addAnnotationHeaders(res, effectiveModel, backend) {
 // ── Anthropic passthrough ──────────────────────────────────────────────
 // Forwards the request body verbatim; replaces x-api-key with the real
 // backend key from env. Streams SSE through untouched via pipe().
+// ── SSE patcher ───────────────────────────────────────────────────────
+// Some OpenRouter models (e.g. GLM) omit usage in message_start events.
+// Claude Code crashes with "undefined is not an object (evaluating '_.input_tokens')".
+// Patch the SSE stream inline to ensure usage fields are always present.
+function patchSseBlock(block) {
+  const lines = block.split('\n');
+  let dataIdx = -1;
+  let payload = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith('data:')) {
+      try {
+        const p = JSON.parse(lines[i].slice(5).trim());
+        if (p && p.type === 'message_start') { payload = p; dataIdx = i; }
+      } catch {}
+    }
+  }
+  if (dataIdx < 0 || !payload) return block;
+  if (!payload.message) payload.message = {};
+  if (!payload.message.usage || typeof payload.message.usage !== 'object') {
+    payload.message.usage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+  } else {
+    if (payload.message.usage.input_tokens == null) payload.message.usage.input_tokens = 0;
+    if (payload.message.usage.output_tokens == null) payload.message.usage.output_tokens = 0;
+  }
+  lines[dataIdx] = 'data: ' + JSON.stringify(payload);
+  return lines.join('\n');
+}
+
+function createSsePatcher() {
+  let buf = '';
+  return new Transform({
+    transform(chunk, _enc, cb) {
+      buf += chunk.toString('utf8');
+      const blocks = buf.split('\n\n');
+      buf = blocks.pop();
+      let out = '';
+      for (const block of blocks) out += patchSseBlock(block) + '\n\n';
+      if (out) this.push(out);
+      cb();
+    },
+    flush(cb) {
+      if (buf.trim()) this.push(patchSseBlock(buf));
+      cb();
+    },
+  });
+}
+
 function forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta = null) {
   const targetUrl = new URL(backend.url);
   const authKey = backend.auth_env ? process.env[backend.auth_env] : '';
@@ -1254,7 +1388,12 @@ function forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta =
         finalizeTrackedUsage(requestMeta, { status_code: upRes.statusCode, input_tokens: 0, output_tokens: 0 });
       }
     });
-    upRes.pipe(res);
+    const isSse = String(upRes.headers['content-type'] || '').includes('text/event-stream');
+    if (isSse) {
+      upRes.pipe(createSsePatcher()).pipe(res);
+    } else {
+      upRes.pipe(res);
+    }
   });
   attachFatalCallTimeout(up, res, targetUrl.origin, FATAL_CALL_TIMEOUT_MS, timeoutState);
   up.on('error', e => {
@@ -1423,6 +1562,111 @@ function handleRequestWithFallback(req, res, body, resolved) {
     return doForward(backend, effectiveModel, body);
   }
 
+  // Chain fallback: iterate all candidates in strategy.event[failureClass],
+  // skipping dead ones, marking each failure as dead and continuing.
+  const tryFallbackChain = (candidates, failureClass, startIdx = 0) => {
+    for (let i = startIdx; i < candidates.length; i++) {
+      const rawCandidate = candidates[i];
+      const candidateModel = resolveLogicalAlias(resolveRouteModel(rawCandidate));
+      if (isCooledDown(candidateModel)) {
+        proxyLog('fallback.skip_dead', { candidate: candidateModel, index: i });
+        continue;
+      }
+      const cResolved = resolveBackend(candidateModel);
+      if (cResolved.error) {
+        proxyLog('fallback.skip_unresolvable', { candidate: candidateModel, error: cResolved.error });
+        continue;
+      }
+      return attemptCandidate(candidateModel, cResolved, candidates, failureClass, i);
+    }
+    proxyLog('fallback.chain_exhausted', { terminal_model: terminalModel, count: candidates.length });
+    if (!res.headersSent) send(res, 502, { error: `all ${candidates.length} fallback candidates exhausted or dead` });
+    else res.end();
+  };
+
+  const attemptCandidate = (candidateModel, cResolved, candidates, failureClass, currentIdx) => {
+    const cBackend = cResolved.backend;
+    const cBody = { ...body, model: candidateModel };
+    const cBodyStr = JSON.stringify(cBody);
+    const cUrl = new URL(cBackend.url);
+    const cHeaders = {
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(cBodyStr),
+      'accept': req.headers['accept'] || 'application/json',
+    };
+    if (cBackend.kind === 'ollama') {
+      const k = cBackend.auth_env ? process.env[cBackend.auth_env] : (req.headers['x-api-key'] || '');
+      if (k) cHeaders.authorization = `Bearer ${k}`;
+    } else {
+      const k = cBackend.auth_env ? process.env[cBackend.auth_env] : '';
+      cHeaders['anthropic-version'] = req.headers['anthropic-version'] || '2023-06-01';
+      if (req.headers['anthropic-beta']) cHeaders['anthropic-beta'] = req.headers['anthropic-beta'];
+      if (k) cHeaders['x-api-key'] = k;
+    }
+    const cLib = cUrl.protocol === 'https:' ? https : http;
+    const cStart = nowMs();
+    proxyLog('fallback.attempt', { candidate: candidateModel, backend_id: cBackend.id, index: currentIdx });
+
+    const cUp = cLib.request({
+      hostname: cUrl.hostname,
+      port: cUrl.port || (cUrl.protocol === 'https:' ? 443 : 80),
+      path: req.url,
+      method: req.method,
+      headers: cHeaders,
+    }, (upRes) => {
+      const isOllamaCloud = cBackend.kind === 'ollama' && isManagedCloudBackend(cBackend, candidateModel);
+      if (!isOllamaCloud) {
+        cUp.setTimeout(0);
+        if (isManagedCloudBackend(cBackend, candidateModel)) {
+          cUp.setTimeout(CLOUD_STREAM_INACTIVITY_TIMEOUT_MS, () => cUp.destroy(new Error('stream inactivity')));
+        }
+      }
+      const cChunks = [];
+      let firstChunk = true;
+      upRes.on('data', c => {
+        if (isOllamaCloud && firstChunk) {
+          firstChunk = false;
+          cUp.setTimeout(0);
+          cUp.setTimeout(CLOUD_STREAM_INACTIVITY_TIMEOUT_MS, () => cUp.destroy(new Error('stream inactivity')));
+        }
+        cChunks.push(c);
+      });
+      upRes.on('end', () => {
+        cUp.setTimeout(0);
+        const cRaw = Buffer.concat(cChunks).toString();
+        const cFailureClass = classifyError(upRes.statusCode, upRes.headers, cRaw);
+        if (cFailureClass) {
+          proxyLog('fallback.candidate_failed', { candidate: candidateModel, status_code: upRes.statusCode, failure_class: cFailureClass });
+          setCooldown(candidateModel, cFailureClass, upRes.statusCode, upRes.headers);
+          return tryFallbackChain(candidates, failureClass, currentIdx + 1);
+        }
+        proxyLog('fallback.candidate_success', { candidate: candidateModel, status_code: upRes.statusCode, elapsed_ms: nowMs() - cStart });
+        recordFallbackEvent(terminalModel, candidateModel, 'chain_success');
+        const respHeaders = { ...upRes.headers };
+        if (ANNOTATE_MODEL) respHeaders['x-claude-proxy-served-by'] = candidateModel;
+        respHeaders['x-claude-proxy-fallback-from'] = terminalModel;
+        res.writeHead(upRes.statusCode, respHeaders);
+        res.end(cRaw);
+      });
+    });
+    if (isManagedCloudBackend(cBackend, candidateModel)) {
+      cUp.setTimeout(CLOUD_CONNECT_TIMEOUT_MS, () => {
+        proxyLog('fallback.candidate_ttfb_timeout', { candidate: candidateModel });
+        cUp.destroy(new Error(`connect timeout after ${CLOUD_CONNECT_TIMEOUT_MS}ms`));
+      });
+    }
+    cUp.on('error', e => {
+      proxyLog('fallback.candidate_error', { candidate: candidateModel, error: e.message });
+      setCooldown(candidateModel, 'network_failure', 502, {});
+      return tryFallbackChain(candidates, failureClass, currentIdx + 1);
+    });
+    // For Ollama candidates, fire-and-forget a warm-up so a cold local model
+    // loads into memory in parallel with the first request. Debounced per-model.
+    if (cBackend.kind === 'ollama') warmOllamaModel(candidateModel, cBackend.id);
+    cUp.write(cBodyStr);
+    cUp.end();
+  };
+
   const healthEntry = ensureBackendHealthEntry(backend, terminalModel);
   const recoveryProbeDue = shouldBypassCooldownForRecoveryProbe(backend, terminalModel);
   const cooldownActive = isCooledDown(terminalModel);
@@ -1439,7 +1683,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
   });
 
   if (shouldPreferFallbackForHealth(backend, terminalModel)) {
-    const fallbackModel = resolveFallbackModel(terminalModel, healthEntry?.last_failure_class || 'network');
+    const fallbackModel = resolveFallbackModel(terminalModel, healthEntry?.last_failure_class || 'network_failure');
     if (fallbackModel) {
       const fallbackResolved = resolveBackend(fallbackModel);
       if (!fallbackResolved.error) {
@@ -1515,34 +1759,52 @@ function handleRequestWithFallback(req, res, body, resolved) {
     method: req.method,
     headers: fwdHeaders,
   }, (upRes) => {
+    // For Ollama backends, headers arrive before data (Ollama accepts requests before cloud responds).
+    // Keep the TTFB timer alive until the first data chunk. For anthropic-kind, headers = connected.
+    const isOllamaCloud = backend.kind === 'ollama' && isManagedCloudBackend(backend, effectiveModel || clientModel);
+    proxyLog('fallback.upstream_headers', {
+      terminal_model: terminalModel,
+      backend_id: backend.id,
+      status_code: upRes.statusCode,
+      is_ollama_cloud: isOllamaCloud,
+      elapsed_ms: nowMs() - startedAt,
+    });
+    if (!isOllamaCloud) {
+      up.setTimeout(0); // cancel TTFB — response headers are sufficient signal for anthropic-kind
+      if (isManagedCloudBackend(backend, effectiveModel || clientModel)) {
+        up.setTimeout(CLOUD_STREAM_INACTIVITY_TIMEOUT_MS, () => {
+          proxyLog('fallback.inactivity_timeout', { terminal_model: terminalModel, backend_id: backend.id, elapsed_ms: nowMs() - startedAt });
+          up.destroy(new Error(`stream inactivity timeout after ${CLOUD_STREAM_INACTIVITY_TIMEOUT_MS}ms`));
+        });
+      }
+    }
     timeoutState.upstreamResponse = upRes;
     const errChunks = [];
-    upRes.on('data', c => errChunks.push(c));
+    let ollamaCloudFirstChunk = true;
+    upRes.on('data', c => {
+      if (isOllamaCloud && ollamaCloudFirstChunk) {
+        ollamaCloudFirstChunk = false;
+        proxyLog('fallback.first_chunk', { terminal_model: terminalModel, backend_id: backend.id, elapsed_ms: nowMs() - startedAt });
+        up.setTimeout(0); // first real data arrived — cancel TTFB timer
+        up.setTimeout(CLOUD_STREAM_INACTIVITY_TIMEOUT_MS, () => {
+          proxyLog('fallback.inactivity_timeout', { terminal_model: terminalModel, backend_id: backend.id, elapsed_ms: nowMs() - startedAt });
+          up.destroy(new Error(`stream inactivity timeout after ${CLOUD_STREAM_INACTIVITY_TIMEOUT_MS}ms`));
+        });
+      }
+      errChunks.push(c);
+    });
     upRes.on('end', () => {
+      up.setTimeout(0); // cancel inactivity timer — response complete
       const raw = Buffer.concat(errChunks).toString();
       const failureClass = classifyError(upRes.statusCode, upRes.headers, raw);
       if (failureClass) {
         noteBackendFailure(backend, terminalModel, failureClass, nowMs() - startedAt, `status_${upRes.statusCode}`);
         recordFailureClass(failureClass);
-        const fallbackModel = resolveFallbackModel(terminalModel, failureClass);
-        if (fallbackModel) {
-          setCooldown(terminalModel, failureClass, upRes.statusCode, upRes.headers);
-          const fallbackResolved = resolveBackend(fallbackModel);
-          if (!fallbackResolved.error) {
-            debugLog('proxy.remap.selected', {
-              terminal_model: terminalModel,
-              reason: `classified-${failureClass}`,
-              fallback_model: fallbackModel,
-              fallback_backend_id: fallbackResolved.backend.id,
-              fallback_effective_model: fallbackResolved.effectiveModel,
-              status_code: upRes.statusCode,
-            });
-            const fwdBody = { ...body, model: fallbackModel };
-            if (failureClass === 'account_quota') {
-              res.setHeader('x-claude-proxy-fallback-reason', 'quota-fallback');
-            }
-            return doForward(fallbackResolved.backend, fallbackResolved.effectiveModel, fwdBody);
-          }
+        setCooldown(terminalModel, failureClass, upRes.statusCode, upRes.headers);
+        const candidates = (CONFIG.fallback_strategies?.[terminalModel]?.event?.[failureClass]) || [];
+        if (candidates.length > 0) {
+          proxyLog('fallback.chain_start', { terminal_model: terminalModel, failure_class: failureClass, trigger: 'classified_error', candidate_count: candidates.length });
+          return tryFallbackChain(candidates, failureClass, 0);
         }
       } else if (upRes.statusCode < 400) {
         noteBackendSuccess(backend, terminalModel, nowMs() - startedAt);
@@ -1570,10 +1832,41 @@ function handleRequestWithFallback(req, res, body, resolved) {
   });
   attachFatalCallTimeout(up, res, targetUrl.origin, FATAL_CALL_TIMEOUT_MS, timeoutState);
 
+  // TTFB timeout for cloud backends: fires if no response headers arrive within
+  // CLOUD_CONNECT_TIMEOUT_MS. Cancelled on first response byte so slow-streaming
+  // responses (extended thinking, long tool calls) are not affected.
+  const isCloudManaged = isManagedCloudBackend(backend, effectiveModel || clientModel);
+  proxyLog('fallback.request', {
+    terminal_model: terminalModel,
+    backend_id: backend.id,
+    backend_kind: backend.kind,
+    is_cloud_managed: isCloudManaged,
+    ttfb_timeout_ms: isCloudManaged ? CLOUD_CONNECT_TIMEOUT_MS : null,
+  });
+  if (isCloudManaged) {
+    up.setTimeout(CLOUD_CONNECT_TIMEOUT_MS, () => {
+      proxyLog('fallback.ttfb_timeout', {
+        terminal_model: terminalModel,
+        backend_id: backend.id,
+        elapsed_ms: nowMs() - startedAt,
+        timeout_ms: CLOUD_CONNECT_TIMEOUT_MS,
+      });
+      up.destroy(new Error(`connect timeout after ${CLOUD_CONNECT_TIMEOUT_MS}ms`));
+    });
+  }
+
   up.on('error', e => {
+    proxyLog('fallback.upstream_error', {
+      terminal_model: terminalModel,
+      backend_id: backend.id,
+      error_code: e.code,
+      error_msg: e.message,
+      elapsed_ms: nowMs() - startedAt,
+      is_fatal_timeout: isFatalCallTimeout(e),
+    });
     if (isFatalCallTimeout(e)) {
-      noteBackendFailure(backend, terminalModel, 'network', nowMs() - startedAt, 'fatal_call_timeout');
-      recordFailureClass('network');
+      noteBackendFailure(backend, terminalModel, 'network_failure', nowMs() - startedAt, 'fatal_call_timeout');
+      recordFailureClass('network_failure');
       finalizeTrackedUsage({
         endpoint,
         clientModel,
@@ -1586,25 +1879,20 @@ function handleRequestWithFallback(req, res, body, resolved) {
       else res.end();
       return;
     }
-    const failureClass = 'network';
+    const failureClass = 'network_failure';
     noteBackendFailure(backend, terminalModel, failureClass, nowMs() - startedAt, e.message || 'network_error');
     recordFailureClass(failureClass);
-    const fallbackModel = resolveFallbackModel(terminalModel, failureClass);
-    if (fallbackModel) {
-      setCooldown(terminalModel, failureClass, 502, {});
-      const fwdBody = { ...body, model: fallbackModel };
-      const fallbackResolved = resolveBackend(fallbackModel);
-      if (!fallbackResolved.error) {
-        debugLog('proxy.remap.selected', {
-          terminal_model: terminalModel,
-          reason: 'network-error',
-          fallback_model: fallbackModel,
-          fallback_backend_id: fallbackResolved.backend.id,
-          fallback_effective_model: fallbackResolved.effectiveModel,
-          error: e.message,
-        });
-        return doForward(fallbackResolved.backend, fallbackResolved.effectiveModel, fwdBody);
-      }
+    setCooldown(terminalModel, failureClass, 502, {});
+    const candidates = (CONFIG.fallback_strategies?.[terminalModel]?.event?.[failureClass]) || [];
+    proxyLog('fallback.chain_start', {
+      terminal_model: terminalModel,
+      failure_class: failureClass,
+      trigger: 'network_error',
+      candidate_count: candidates.length,
+      has_strategy: !!(CONFIG.fallback_strategies?.[terminalModel]),
+    });
+    if (candidates.length > 0) {
+      return tryFallbackChain(candidates, failureClass, 0);
     }
     finalizeTrackedUsage({
       endpoint,
@@ -1624,6 +1912,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
 
 const server = http.createServer(async (req, res) => {
   refreshConfigIfChanged();
+  proxyLog('request', { method: req.method, url: req.url });
   // ── /ping ──────────────────────────────────────────────────────────
   if (req.url === '/ping') {
     return send(res, 200, {
@@ -1759,8 +2048,10 @@ const server = http.createServer(async (req, res) => {
     return send(res, 400, { error: 'failed to read request body' });
   }
 
-  // POST /v1/messages/count_tokens and other model-scoped endpoints
-  if (req.url !== '/v1/messages') {
+  // POST /v1/messages/count_tokens and other model-scoped endpoints.
+  // Strip query string so /v1/messages?beta=true still takes the main path below.
+  const pathOnly = req.url.split('?')[0];
+  if (pathOnly !== '/v1/messages') {
     // Model-scoped JSON endpoints: route by model field
     const model = body.model;
     if (model) {
@@ -1830,6 +2121,7 @@ const server = http.createServer(async (req, res) => {
   // Use fallback-aware forwarding for models with strategies
   const terminalModel = effectiveModel || model;
   const strategies = CONFIG.fallback_strategies || {};
+  proxyLog('dispatch', { terminal_model: terminalModel, has_strategy: !!strategies[terminalModel], backend_kind: backend.kind });
   if (strategies[terminalModel]) {
     handleRequestWithFallback(req, res, fwdBody, resolved);
   } else {
@@ -1849,10 +2141,184 @@ server.on('error', (err) => {
   throw err;
 });
 
+// ── Startup probes ────────────────────────────────────────────────────
+// Pre-populate cooldowns before the first real request arrives.
+// Probes every primary model in fallback_strategies, then conditionally
+// probes fallback candidates when their primary is unreachable.
+
+function probeUrlForBackend(backend) {
+  if (!backend || !backend.url) return null;
+  if (backend.kind === 'ollama') return `${backend.url.replace(/\/$/, '')}/api/tags`;
+  if ((backend.kind || 'anthropic') === 'anthropic') {
+    const base = backend.url.replace(/\/$/, '');
+    // If URL already contains a versioned path (e.g. /api/v1), append /models directly.
+    // Otherwise prepend the standard /v1 segment (e.g. https://api.anthropic.com → /v1/models).
+    const suffix = /\/v\d+(\/|$)/.test(base) ? '/models' : '/v1/models';
+    return `${base}${suffix}`;
+  }
+  return null;
+}
+
+function httpProbe(url, headers, timeoutMs) {
+  return new Promise(resolve => {
+    const isHttps = url.startsWith('https:');
+    const lib = isHttps ? https : http;
+    let settled = false;
+    const settle = v => { if (!settled) { settled = true; resolve(v); } };
+    try {
+      const u = new URL(url);
+      const req = lib.request({
+        hostname: u.hostname,
+        port: u.port || (isHttps ? 443 : 80),
+        path: u.pathname + u.search,
+        method: 'GET',
+        headers,
+      }, res => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => { clearTimeout(timer); settle({ ok: res.statusCode < 400, statusCode: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString() }); });
+        res.on('error', () => { clearTimeout(timer); settle({ ok: false, statusCode: 0, headers: {}, body: '' }); });
+      });
+      const timer = setTimeout(() => { clearTimeout(timer); req.destroy(); settle({ ok: false, statusCode: 0, headers: {}, body: '' }); }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+      req.on('error', () => { clearTimeout(timer); settle({ ok: false, statusCode: 0, headers: {}, body: '' }); });
+      req.end();
+    } catch {
+      settle({ ok: false, statusCode: 0, headers: {}, body: '' });
+    }
+  });
+}
+
+async function probeModel(model, failureClassHint) {
+  const resolved = resolveBackend(model);
+  if (resolved.error) return;
+  const { backend } = resolved;
+  const probeUrl = probeUrlForBackend(backend);
+  if (!probeUrl) return;
+
+  const probeHeaders = {};
+  if ((backend.kind || 'anthropic') === 'anthropic') {
+    const apiKey = backend.auth_env ? process.env[backend.auth_env] : '';
+    if (apiKey) probeHeaders['x-api-key'] = apiKey;
+  } else if (backend.kind === 'ollama' && backend.auth_env) {
+    const apiKey = process.env[backend.auth_env] || '';
+    if (apiKey) probeHeaders['authorization'] = `Bearer ${apiKey}`;
+  }
+
+  const result = await httpProbe(probeUrl, probeHeaders, STARTUP_PROBE_TIMEOUT_MS);
+  if (result.ok) {
+    // Probe succeeded — if model was marked dead, bring it back alive.
+    if (cooldowns.has(model)) {
+      proxyLog('liveness.mark_alive', { model });
+      clearCooldown(model);
+    }
+    return;
+  }
+  if (result.statusCode === 401) return; // key not configured — not a network problem
+
+  const failureClass = classifyError(result.statusCode, result.headers, result.body) || failureClassHint || 'network_failure';
+  debugLog('proxy.startup.probe.failure', { model, probe_url: probeUrl, status_code: result.statusCode, failure_class: failureClass });
+  console.error(`claude-proxy: startup probe: '${model}' → ${failureClass} (status=${result.statusCode || 'no-response'})`);
+  setCooldown(model, failureClass, result.statusCode, result.headers);
+  return failureClass;
+}
+
+// Shared probe dispatcher — used by both the periodic liveness loop and the
+// network-interface watcher. Debounced to 500ms to collapse rapid triggers
+// (e.g., DHCP lease races during WiFi reconnect).
+let lastDeadProbeMs = 0;
+async function triggerDeadModelProbes(reason) {
+  const deadModels = [...cooldowns.keys()];
+  if (deadModels.length === 0) return;
+  const now = Date.now();
+  if (now - lastDeadProbeMs < 500) {
+    proxyLog('liveness.probe_debounced', { reason, dead_count: deadModels.length });
+    return;
+  }
+  lastDeadProbeMs = now;
+  proxyLog('liveness.probe_triggered', { reason, dead_count: deadModels.length });
+  for (const model of deadModels) {
+    try { await probeModel(model, cooldowns.get(model)?.failureClass || 'network_failure'); } catch {}
+  }
+}
+
+// Periodic liveness prober. Backstop for cases the interface watcher misses
+// (e.g., backend-side failures with local network intact).
+const LIVENESS_PROBE_INTERVAL_MS = numberFromEnv('CLAUDE_PROXY_LIVENESS_PROBE_INTERVAL_MS', 30000);
+function startLivenessProbeLoop() {
+  setInterval(() => {
+    if (cooldowns.size === 0) return;
+    proxyLog('liveness.probe_cycle', { dead_count: cooldowns.size });
+    triggerDeadModelProbes('periodic').catch(() => {});
+  }, LIVENESS_PROBE_INTERVAL_MS).unref();
+}
+
+// Network interface watcher. Polls os.networkInterfaces() every
+// NETWORK_WATCH_INTERVAL_MS. On link-UP transition (interface count grew or
+// digest changed with non-zero current count), triggers an immediate probe
+// of all dead models — so WiFi reconnect recovers in a few seconds rather
+// than waiting up to 30s for the periodic loop.
+const NETWORK_WATCH_INTERVAL_MS = numberFromEnv('CLAUDE_PROXY_NETWORK_WATCH_INTERVAL_MS', 3000);
+function computeNetworkDigest() {
+  const ifaces = os.networkInterfaces();
+  const lines = [];
+  for (const [name, entries] of Object.entries(ifaces)) {
+    if (!Array.isArray(entries)) continue;
+    for (const e of entries) {
+      if (!e || e.internal) continue;
+      // Skip IPv6 link-local (fe80::*) — flaps during reconnect, not useful.
+      if (e.family === 'IPv6' && typeof e.address === 'string' && e.address.toLowerCase().startsWith('fe80:')) continue;
+      lines.push(`${name}|${e.family}|${e.address}`);
+    }
+  }
+  return lines.sort().join('\n');
+}
+function startNetworkInterfaceWatcher() {
+  let lastDigest = computeNetworkDigest();
+  let lastCount = lastDigest ? lastDigest.split('\n').filter(Boolean).length : 0;
+  proxyLog('network.watcher_init', { interface_count: lastCount, interval_ms: NETWORK_WATCH_INTERVAL_MS });
+  setInterval(() => {
+    const cur = computeNetworkDigest();
+    if (cur === lastDigest) return;
+    const curCount = cur ? cur.split('\n').filter(Boolean).length : 0;
+    proxyLog('network.interface_change', { prev_count: lastCount, cur_count: curCount });
+    const wasLinkUp = curCount > 0 && curCount >= lastCount;
+    lastDigest = cur;
+    lastCount = curCount;
+    // Only probe on link-UP transitions. Link-DOWN is caught by next request failure.
+    if (wasLinkUp) triggerDeadModelProbes('interface_change').catch(() => {});
+  }, NETWORK_WATCH_INTERVAL_MS).unref();
+}
+
+async function runStartupProbes() {
+  const strategies = CONFIG.fallback_strategies || {};
+  const primaryModels = Object.keys(strategies);
+  if (primaryModels.length === 0) return;
+
+  debugLog('proxy.startup.probe.start', { models: primaryModels });
+
+  await Promise.all(primaryModels.map(async model => {
+    const failureClass = await probeModel(model, 'network_failure');
+    if (!failureClass) return;
+
+    const candidates = (strategies[model]?.event?.[failureClass] || []);
+    await Promise.all(candidates.map(async fallback => {
+      if (isCooledDown(fallback)) return;
+      await probeModel(fallback, 'network_failure');
+    }));
+  }));
+
+  debugLog('proxy.startup.probe.done', {});
+}
+
 server.listen(INITIAL_PORT, '127.0.0.1', () => {
   proxyApiPort = server.address().port;
   if (!EXPLICIT_PORT) process.stdout.write(`READY ${proxyApiPort}\n`);
   console.error(`claude-proxy listening on 127.0.0.1:${proxyApiPort} (pid=${process.pid})`);
+  try { fs.writeFileSync(PID_FILE, String(process.pid)); } catch {}
+  if (STARTUP_PROBE_ENABLED) setImmediate(() => runStartupProbes().catch(() => {}));
+  startLivenessProbeLoop();
+  startNetworkInterfaceWatcher();
 });
 
 // ── Hooks listener (fixed port for HTTP hooks) ─────────────────────────
@@ -1883,6 +2349,12 @@ const hooksServer = require('http').createServer((req, res) => {
               const alt = alternatives[0] ? ` Alternative: --route ${alternatives[0]}` : '';
               issues.push(`⚠️ Backend ${id} ${s.state} (${s.ewma_latency_ms || 0}ms ewma, ${s.failure_count || 0} failures).${alt}`);
             }
+          }
+
+          // Check 1b: recent fallback event — give Claude context to explain if asked
+          const recentFallback = fallbackEvents.find(e => Date.now() - e.at < 120_000);
+          if (recentFallback) {
+            issues.push(`(c-thru) Last turn was served by ${recentFallback.served_by} (primary ${recentFallback.primary} is currently unreachable).`);
           }
 
           // Check 2: classify_intent for low-confidence routing (UserPromptSubmit only — prompt required)
@@ -1922,28 +2394,32 @@ const hooksServer = require('http').createServer((req, res) => {
   res.end();
 });
 
+let hooksListening = false;
+
 hooksServer.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`claude-proxy: hooks port ${HOOKS_PORT} in use — singleton already running`);
-    process.exit(0);
+    // Port busy — degrade gracefully. Core proxy continues; hooks features unavailable.
+    console.error(`claude-proxy: hooks port ${HOOKS_PORT} in use — hooks listener disabled (core proxy unaffected)`);
+    return;
   }
-  throw err;
+  console.error(`claude-proxy: hooks listener error: ${err.message}`);
 });
 
 hooksServer.listen(HOOKS_PORT, '127.0.0.1', () => {
+  hooksListening = true;
   console.error(`claude-proxy: hooks listener bound on :${HOOKS_PORT}`);
 });
 
 function shutdown() {
+  try { fs.unlinkSync(PID_FILE); } catch {}
   if (usagePersistTimer) {
     clearTimeout(usagePersistTimer);
     usagePersistTimer = null;
   }
   flushPersistentUsageNowSync();
-  Promise.all([
-    new Promise(r => server.close(r)),
-    new Promise(r => hooksServer.close(r)),
-  ]).then(() => process.exit(0));
+  const closers = [new Promise(r => server.close(r))];
+  if (hooksListening) closers.push(new Promise(r => hooksServer.close(r)));
+  Promise.all(closers).then(() => process.exit(0)).catch(() => process.exit(0));
 }
 
 process.on('SIGTERM', shutdown);
