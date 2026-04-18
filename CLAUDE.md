@@ -78,7 +78,7 @@ Top-level keys: `backends`, `routes`, `models` (models is sparse — most resolu
 
 ### llm-capabilities-mcp.js
 
-MCP server (stdio transport). Exposes tools for all `llm_capabilities` entries. Called by Claude Code as a local MCP server — registered in `~/.claude.json` by `install.sh`.
+MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including all `llm_capabilities` entries plus `ask_model` and `list_models`). Called by Claude Code as a local MCP server — registered in `~/.claude.json` by `install.sh`.
 
 ## Key Environment Variables
 
@@ -92,7 +92,6 @@ MCP server (stdio transport). Exposes tools for all `llm_capabilities` entries. 
 | `CLAUDE_MODEL_MAP_DEFAULTS_PATH` | Override shipped `config/model-map.json` path |
 | `CLAUDE_MODEL_MAP_OVERRIDES_PATH` | Override `~/.claude/model-map.overrides.json` path |
 | `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for Phase 2 HTTP hooks listener (default `9998`) |
-| `FLAGSHIP` | Concrete model name to use as the primary for all capability requests (overrides profile resolution) |
 
 ## No External Node Dependencies
 
@@ -100,7 +99,7 @@ MCP server (stdio transport). Exposes tools for all `llm_capabilities` entries. 
 
 ## Proxy Observability
 
-`claude-proxy` emits `x-c-thru-resolved-via` on capability responses (model alias requests): `{"capability","profile","served_by"}`. Absent on non-capability requests. Consumed by hooks and statusline without log-parsing.
+`claude-proxy` emits `x-c-thru-resolved-via` on capability responses (model alias requests): `{"capability": "workhorse", "profile": "workhorse", "served_by": "claude-sonnet-4-6"}`. Absent on non-capability requests. Consumed by hooks and statusline without log-parsing.
 
 Per-profile `on_failure` field in `llm_profiles[hw][profile]`: `"cascade"` (default) walks the fallback chain; `"hard_fail"` returns null immediately so the proxy returns a clean error instead of a non-equivalent substitute.
 
