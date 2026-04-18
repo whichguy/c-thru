@@ -294,5 +294,6 @@
   },
   "ollama_defaults": {
     "num_ctx": 65536
-  }
+  },
+  "model_overrides": {}
 }

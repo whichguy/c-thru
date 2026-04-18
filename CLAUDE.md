@@ -68,6 +68,7 @@ claude-router (bash)
 Top-level keys: `backends`, `routes`, `models` (models is sparse — most resolution is done via backends + routes).
 - `backends`: connection metadata (kind, url, auth strategy). `kind` defaults to `anthropic` when absent.
 - `routes`: named presets → `{model, backend, env, …}`. `routes.default` is used when no flag is passed.
+- `model_overrides` (optional): flat `{"concrete-model": "replacement"}` map applied before route/alias resolution. Example: `{"gemma4:26b": "gemma4:31b"}` redirects all uses of the 26b model. Unconditional — covers primary requests and fallback candidates.
 - Model resolution order: `--route` flag → `routes.default` → `--model` flag → Ollama passthrough.
 
 ### 3-tier model-map lookup (model-map-layered.js)
@@ -102,6 +103,8 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 `claude-proxy` emits `x-c-thru-resolved-via` on capability responses (model alias requests): `{"capability": "workhorse", "profile": "workhorse", "served_by": "claude-sonnet-4-6"}`. Absent on non-capability requests. Consumed by hooks and statusline without log-parsing.
 
 Per-profile `on_failure` field in `llm_profiles[hw][profile]`: `"cascade"` (default) walks the fallback chain; `"hard_fail"` returns null immediately so the proxy returns a clean error instead of a non-equivalent substitute.
+
+Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3) `Authorization` header, (4) SSE `usage` injection, (5) protocol translation (gated on `kind: "openai"`), (6) `x-c-thru-resolved-via` response header, (7) `model_overrides` unconditional name substitution before route graph traversal.
 
 ## Proxy Lifecycle
 
