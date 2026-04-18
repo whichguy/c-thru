@@ -224,41 +224,103 @@ SKILL_EOF
     echo -e "  ${GREEN}✅ installed skill: /c-thru-status${NC}"
 }
 
-# --- Hook: UserPromptSubmit proxy health check ---
-register_hook() {
+# --- Hooks: SessionStart, PostCompact, UserPromptSubmit ---
+register_hooks() {
     if [ "$JQ_AVAILABLE" -eq 0 ]; then
-        echo -e "  ${YELLOW}⚠️  jq not found — skipping hook${NC}"
+        echo -e "  ${YELLOW}⚠️  jq not found — skipping hooks${NC}"
         return 0
     fi
 
     local settings="$CLAUDE_DIR/settings.json"
-    local hook_cmd="$TOOLS_DEST/c-thru-proxy-health"
+    local session_cmd="$TOOLS_DEST/c-thru-session-start"
+    local health_cmd="$TOOLS_DEST/c-thru-proxy-health"
 
     if [ ! -f "$settings" ]; then
         echo '{}' > "$settings"
     fi
 
-    local exists
-    exists=$(jq -r --arg cmd "$hook_cmd" \
-        '(.hooks.UserPromptSubmit // []) | [.[].hooks[]?.command // ""] | map(select(contains($cmd))) | length' \
-        "$settings" 2>/dev/null || echo 0)
+    local tmp
 
-    if [ "${exists:-0}" -gt 0 ]; then
-        echo -e "  ${GRAY}✓  UserPromptSubmit c-thru-proxy-health${NC}"
-        return 0
+    # --- SessionStart ---
+    local ss_exists
+    ss_exists=$(jq -r --arg cmd "$session_cmd" \
+        '(.hooks.SessionStart // []) | [.[].hooks[]?.command // ""] | map(select(contains($cmd))) | length' \
+        "$settings" 2>/dev/null || echo 0)
+    if [ "${ss_exists:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  SessionStart c-thru-session-start${NC}"
+    else
+        tmp="${settings}.tmp.$$"
+        jq --arg cmd "$session_cmd" '
+            if .hooks == null then .hooks = {} else . end |
+            if .hooks.SessionStart == null then .hooks.SessionStart = [] else . end |
+            .hooks.SessionStart += [{
+                "hooks": [{"type": "command", "command": $cmd, "timeout": 5}]
+            }]
+        ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+        echo -e "  ${GREEN}✅ registered hook: SessionStart c-thru-session-start${NC}"
     fi
 
-    local tmp="${settings}.tmp.$$"
-    jq --arg cmd "$hook_cmd" '
-        if .hooks == null then .hooks = {} else . end |
-        if .hooks.UserPromptSubmit == null then .hooks.UserPromptSubmit = [] else . end |
-        .hooks.UserPromptSubmit += [{
-            "matcher": "*",
-            "hooks": [{"type": "command", "command": $cmd, "timeout": 3}]
-        }]
-    ' "$settings" > "$tmp"
-    mv "$tmp" "$settings"
-    echo -e "  ${GREEN}✅ registered hook: UserPromptSubmit c-thru-proxy-health${NC}"
+    # --- PostCompact ---
+    local pc_exists
+    pc_exists=$(jq -r --arg cmd "$session_cmd" \
+        '(.hooks.PostCompact // []) | [.[].hooks[]?.command // ""] | map(select(contains($cmd))) | length' \
+        "$settings" 2>/dev/null || echo 0)
+    if [ "${pc_exists:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  PostCompact c-thru-session-start${NC}"
+    else
+        tmp="${settings}.tmp.$$"
+        jq --arg cmd "$session_cmd" '
+            if .hooks == null then .hooks = {} else . end |
+            if .hooks.PostCompact == null then .hooks.PostCompact = [] else . end |
+            .hooks.PostCompact += [{
+                "hooks": [{"type": "command", "command": $cmd, "timeout": 5}]
+            }]
+        ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+        echo -e "  ${GREEN}✅ registered hook: PostCompact c-thru-session-start${NC}"
+    fi
+
+    # --- UserPromptSubmit (asyncRewake upgrade) ---
+    # Detect old format (entry present, .async absent) → patch in-place
+    local old_entry
+    old_entry=$(jq -r --arg cmd "$health_cmd" \
+        '(.hooks.UserPromptSubmit // []) | [.[].hooks[]? | select((.command // "") | contains($cmd))] | .[0] // null' \
+        "$settings" 2>/dev/null)
+    local has_async
+    has_async=$(printf '%s' "$old_entry" | jq -r '.async // false' 2>/dev/null || echo "false")
+
+    if [ "$old_entry" != "null" ] && [ "$has_async" = "true" ]; then
+        echo -e "  ${GRAY}✓  UserPromptSubmit c-thru-proxy-health (asyncRewake)${NC}"
+    elif [ "$old_entry" != "null" ]; then
+        # Old format present — remove and re-add with asyncRewake
+        tmp="${settings}.tmp.$$"
+        jq --arg cmd "$health_cmd" '
+            (.hooks.UserPromptSubmit // []) |= map(
+                .hooks |= map(select((.command // "") | contains($cmd) | not))
+            ) | (.hooks.UserPromptSubmit // []) |= map(select(.hooks | length > 0))
+        ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+        tmp="${settings}.tmp.$$"
+        jq --arg cmd "$health_cmd" '
+            if .hooks == null then .hooks = {} else . end |
+            if .hooks.UserPromptSubmit == null then .hooks.UserPromptSubmit = [] else . end |
+            .hooks.UserPromptSubmit += [{
+                "matcher": "*",
+                "hooks": [{"type": "command", "command": $cmd, "timeout": 3, "async": true, "asyncRewake": true}]
+            }]
+        ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+        echo -e "  ${GREEN}✅ upgraded hook: UserPromptSubmit c-thru-proxy-health → asyncRewake${NC}"
+    else
+        # No entry — fresh install
+        tmp="${settings}.tmp.$$"
+        jq --arg cmd "$health_cmd" '
+            if .hooks == null then .hooks = {} else . end |
+            if .hooks.UserPromptSubmit == null then .hooks.UserPromptSubmit = [] else . end |
+            .hooks.UserPromptSubmit += [{
+                "matcher": "*",
+                "hooks": [{"type": "command", "command": $cmd, "timeout": 3, "async": true, "asyncRewake": true}]
+            }]
+        ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+        echo -e "  ${GREEN}✅ registered hook: UserPromptSubmit c-thru-proxy-health (asyncRewake)${NC}"
+    fi
 }
 
 # --- User model-map: seed or validate ---
@@ -299,7 +361,7 @@ install_skill
 
 echo ""
 echo "Hooks:"
-register_hook
+register_hooks
 
 echo ""
 echo -e "${YELLOW}Quick reference:${NC}"

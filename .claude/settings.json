@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "FileChanged": [
+      {
+        "matcher": "model-map.json",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/tools/c-thru-map-changed.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Edit(*/model-map.json)|Write(*/model-map.json)",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/tools/c-thru-map-changed.sh",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

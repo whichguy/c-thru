@@ -7,4 +7,5 @@ if [ -z "$PORT" ] && [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
 fi
 [ -n "$PORT" ] || exit 0
 curl -sf --max-time 1 "http://127.0.0.1:$PORT/ping" >/dev/null 2>&1 && exit 0
-echo "c-thru: ⚠️  claude-proxy unreachable on :${PORT} — run: pkill -f claude-proxy"
+echo "c-thru: proxy unreachable on :${PORT} — run: pkill -f claude-proxy" >&2
+exit 2
