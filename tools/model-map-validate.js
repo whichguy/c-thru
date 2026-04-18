@@ -79,10 +79,10 @@ function normalizeFallbackGraph(config) {
   for (const [modelName, strategy] of Object.entries(strategies)) {
     const source = resolveRoute(routes, modelName);
     const targets = graph.get(source) || new Set();
-    if (strategy.on != null) {
-      if (!isObject(strategy.on)) throw new Error(`'fallback_strategies.${modelName}.on' must be an object`);
-      for (const candidates of Object.values(strategy.on)) {
-        if (!Array.isArray(candidates)) throw new Error(`'fallback_strategies.${modelName}.on' entries must be arrays`);
+    if (strategy.event != null) {
+      if (!isObject(strategy.event)) throw new Error(`'fallback_strategies.${modelName}.event' must be an object`);
+      for (const candidates of Object.values(strategy.event)) {
+        if (!Array.isArray(candidates)) throw new Error(`'fallback_strategies.${modelName}.event' entries must be arrays`);
         for (const candidate of candidates) {
           if (typeof candidate !== 'string' || !candidate.trim()) {
             throw new Error(`fallback candidate for '${modelName}' must be a non-empty string`);

@@ -119,8 +119,8 @@
         "disconnect_model": "gemma4:26b"
       },
       "workhorse": {
-        "connected_model": "gemma4:26b",
-        "disconnect_model": "gemma4:26b"
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "gemma4:26b-a4b"
       },
       "coder": {
         "connected_model": "qwen3-coder:30b",
@@ -133,8 +133,8 @@
         "disconnect_model": "gemma4:26b"
       },
       "classifier": {
-        "connected_model": "qwen3.6:35b-a3b-q4_K_M",
-        "disconnect_model": "qwen3.6:35b-a3b-q4_K_M"
+        "connected_model": "gemma4:26b-a4b",
+        "disconnect_model": "gemma4:26b-a4b"
       },
       "explorer": {
         "connected_model": "gemma4:26b",
@@ -149,8 +149,8 @@
         "disconnect_model": "gemma4:26b"
       },
       "coder": {
-        "connected_model": "qwen3.6:35b-a3b-q4_K_M",
-        "disconnect_model": "qwen3.6:35b-a3b-q4_K_M"
+        "connected_model": "gemma4:26b-a4b",
+        "disconnect_model": "gemma4:26b-a4b"
       }
     }
   },
@@ -158,7 +158,7 @@
     "claude-sonnet-4-6": "anthropic",
     "claude-opus-4-6": "anthropic",
     "re:^claude-.*$": "anthropic",
-    "glm-5.1:cloud": "openrouter",
+    "glm-5.1:cloud": "ollama_cloud",
     "qwen3:1.7b": "ollama_local",
     "gemma4:e2b": "ollama_local",
     "mistral-small3.1:24b": "ollama_local",
@@ -168,7 +168,7 @@
     "qwen3-coder:480b-cloud": "ollama_cloud",
     "deepseek/deepseek-v3": "openrouter",
     "qwen3-coder-next:cloud": "ollama_cloud",
-    "qwen3.6:35b-a3b-q4_K_M": "ollama_local",
+    "gemma4:26b-a4b": "ollama_local",
     "gemma4:e4b": "ollama_local",
     "gemma4:31b": "ollama_local"
   },
@@ -179,8 +179,7 @@
     "background": "workhorse",
     "cloud_background": "qwen3-coder-next:cloud",
     "think": "general-default",
-    "longContext": "claude-sonnet-4-6",
-    "claude-sonnet-4-6": "qwen3.6:35b-a3b-q4_K_M"
+    "longContext": "claude-sonnet-4-6"
   },
   "llm_capabilities": {
     "default": {
@@ -221,6 +220,34 @@
     },
     "review_code": {
       "model": "general-default"
+    }
+  },
+  "fallback_strategies": {
+    "glm-5.1:cloud": {
+      "event": {
+        "network_failure": ["gemma4:26b-a4b"],
+        "rate_limit":      ["gemma4:26b-a4b"],
+        "account_quota":   ["gemma4:26b-a4b"],
+        "context_limit":   ["gemma4:26b-a4b"]
+      },
+      "cooldown": {
+        "network_failure": { "mode": "fixed",      "seconds": 60 },
+        "rate_limit":      { "mode": "header_or_max", "max_seconds": 120 },
+        "account_quota":   { "mode": "fixed",      "seconds": 3600 }
+      }
+    },
+    "claude-sonnet-4-6": {
+      "event": {
+        "network_failure": ["glm-5.1:cloud", "gemma4:26b-a4b"],
+        "rate_limit":      ["glm-5.1:cloud", "gemma4:26b-a4b"],
+        "account_quota":   ["glm-5.1:cloud", "gemma4:26b-a4b"],
+        "context_limit":   ["glm-5.1:cloud", "gemma4:26b-a4b"]
+      },
+      "cooldown": {
+        "network_failure": { "mode": "fixed",      "seconds": 60 },
+        "rate_limit":      { "mode": "header_or_max", "max_seconds": 120 },
+        "account_quota":   { "mode": "fixed",      "seconds": 3600 }
+      }
     }
   },
   "ollama_defaults": {
