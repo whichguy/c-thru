@@ -222,14 +222,20 @@ function loadConfig() {
     console.error(`claude-proxy: failed to load ${CONFIG_PATH}: ${e.message}`);
     process.exit(1);
   }
-  // Validate no cycles in routes
-  validateRouteGraph();
-  // Validate with external validator if available
-  validateWithNode();
+  // Validate no cycles in routes — throws on error; exit on startup failure.
+  try { validateRouteGraph(); } catch (e) {
+    console.error(`claude-proxy: ${e.message}`);
+    process.exit(1);
+  }
+  // Validate with external validator if available — exits on startup failure.
+  if (!validateWithNode()) process.exit(1);
 }
 
-function validateRouteGraph() {
-  const routes = CONFIG.routes || {};
+// validateRouteGraph accepts an explicit config object so callers can validate
+// before swapping the global CONFIG. Throws on error (never calls process.exit)
+// so it is safe to call from hot-reload paths.
+function validateRouteGraph(cfg) {
+  const routes = (cfg || CONFIG).routes || {};
   const seen = new Set();
   for (const start of Object.keys(routes)) {
     seen.clear();
@@ -237,30 +243,31 @@ function validateRouteGraph() {
     let steps = 0;
     while (routes[cur] !== undefined) {
       if (seen.has(cur)) {
-        console.error(`claude-proxy: route cycle detected involving '${cur}' in ${CONFIG_PATH}`);
-        process.exit(1);
+        throw new Error(`route cycle detected involving '${cur}' in ${CONFIG_PATH}`);
       }
       seen.add(cur);
       cur = routes[cur];
       steps++;
       if (steps > 256) {
-        console.error(`claude-proxy: route resolution limit hit starting at '${start}'`);
-        process.exit(1);
+        throw new Error(`route resolution limit hit starting at '${start}'`);
       }
     }
   }
 }
 
+// validateWithNode shells out to model-map-validate.js and returns false on
+// failure (never calls process.exit) so it is safe to call from hot-reload paths.
 function validateWithNode() {
   const validator = path.join(path.dirname(process.argv[1] || ''), 'model-map-validate.js');
-  if (!fs.existsSync(validator)) return;
+  if (!fs.existsSync(validator)) return true;
   try {
     const result = spawnSync(process.execPath, [validator, CONFIG_PATH], { encoding: 'utf8', timeout: 5000 });
     if (result.status !== 0) {
       console.error(`claude-proxy: invalid model-map config: ${CONFIG_PATH}`);
-      process.exit(1);
+      return false;
     }
   } catch { /* validator not critical */ }
+  return true;
 }
 
 loadConfig();
@@ -268,10 +275,11 @@ loadConfig();
 function reloadConfigFromDisk() {
   try {
     const nextConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    // Validate before swapping so a bad config never replaces a good one.
+    validateRouteGraph(nextConfig);
+    if (!validateWithNode()) throw new Error('schema validation failed');
     CONFIG = nextConfig;
     CONFIG_MTIME_MS = fs.statSync(CONFIG_PATH).mtimeMs;
-    validateRouteGraph();
-    validateWithNode();
     return true;
   } catch (e) {
     console.error(`claude-proxy: config reload failed, keeping old config: ${e.message}`);
