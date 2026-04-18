@@ -702,6 +702,7 @@ function fireDesktopNotification(primary, served_by) {
 const ollamaWarmLastMs = new Map(); // model -> last warm timestamp
 const OLLAMA_WARM_DEBOUNCE_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_WARM_DEBOUNCE_MS', 30000);
 const OLLAMA_WARM_KEEP_ALIVE = process.env.CLAUDE_PROXY_OLLAMA_KEEP_ALIVE || '30m';
+const OLLAMA_WARM_HTTP_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_WARM_TIMEOUT_MS', 5000);
 function warmOllamaModel(model, backendId, backendUrl) {
   if (!model) return;
   const last = ollamaWarmLastMs.get(model) || 0;
@@ -714,7 +715,8 @@ function warmOllamaModel(model, backendId, backendUrl) {
     const body = JSON.stringify({ model, prompt: '', keep_alive: OLLAMA_WARM_KEEP_ALIVE });
     // Pick http/https by protocol — backendUrl comes from model-map config
     // and may be HTTPS for a remote Ollama reverse-proxy setup.
-    const transport = urlStr.startsWith('https:') ? https : http;
+    // URL schemes are case-insensitive per RFC 3986 §3.1 — normalize before checking.
+    const transport = urlStr.toLowerCase().startsWith('https:') ? https : http;
     const req = transport.request(urlStr, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
@@ -723,10 +725,10 @@ function warmOllamaModel(model, backendId, backendUrl) {
       res.resume();
       // Belt-and-suspenders: if Ollama streams a slow chunked body, don't
       // leave the socket half-open past our timeout.
-      res.setTimeout(5000, () => res.destroy());
+      res.setTimeout(OLLAMA_WARM_HTTP_TIMEOUT_MS, () => res.destroy());
     });
     req.on('error', () => {}); // Ollama unreachable — actual request will surface it
-    req.setTimeout(5000, () => req.destroy());
+    req.setTimeout(OLLAMA_WARM_HTTP_TIMEOUT_MS, () => req.destroy());
     req.write(body);
     req.end();
   } catch { /* malformed URL, etc. — ignore */ }
