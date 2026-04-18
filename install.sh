@@ -241,42 +241,54 @@ register_hooks() {
 
     local tmp
 
-    # --- SessionStart ---
-    local ss_exists
-    ss_exists=$(jq -r --arg cmd "$session_cmd" \
+    local hooks_url="http://127.0.0.1:${CLAUDE_PROXY_HOOKS_PORT:-9998}/hooks/context"
+
+    # --- SessionStart (HTTP hook + command fallback) ---
+    local ss_http_exists ss_cmd_exists
+    ss_http_exists=$(jq -r --arg url "$hooks_url" \
+        '(.hooks.SessionStart // []) | [.[].hooks[]?.url // ""] | map(select(contains($url))) | length' \
+        "$settings" 2>/dev/null || echo 0)
+    ss_cmd_exists=$(jq -r --arg cmd "$session_cmd" \
         '(.hooks.SessionStart // []) | [.[].hooks[]?.command // ""] | map(select(contains($cmd))) | length' \
         "$settings" 2>/dev/null || echo 0)
-    if [ "${ss_exists:-0}" -gt 0 ]; then
-        echo -e "  ${GRAY}✓  SessionStart c-thru-session-start${NC}"
+
+    if [ "${ss_http_exists:-0}" -gt 0 ] && [ "${ss_cmd_exists:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  SessionStart (HTTP + command)${NC}"
     else
         tmp="${settings}.tmp.$$"
-        jq --arg cmd "$session_cmd" '
+        jq --arg url "$hooks_url" --arg cmd "$session_cmd" '
             if .hooks == null then .hooks = {} else . end |
             if .hooks.SessionStart == null then .hooks.SessionStart = [] else . end |
-            .hooks.SessionStart += [{
-                "hooks": [{"type": "command", "command": $cmd, "timeout": 5}]
-            }]
+            .hooks.SessionStart += [
+                {"hooks": [{"type": "http", "url": $url, "timeout": 3}]},
+                {"hooks": [{"type": "command", "command": $cmd, "timeout": 5}]}
+            ]
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
-        echo -e "  ${GREEN}✅ registered hook: SessionStart c-thru-session-start${NC}"
+        echo -e "  ${GREEN}✅ registered hook: SessionStart (HTTP + command)${NC}"
     fi
 
-    # --- PostCompact ---
-    local pc_exists
-    pc_exists=$(jq -r --arg cmd "$session_cmd" \
+    # --- PostCompact (HTTP hook + command fallback) ---
+    local pc_http_exists pc_cmd_exists
+    pc_http_exists=$(jq -r --arg url "$hooks_url" \
+        '(.hooks.PostCompact // []) | [.[].hooks[]?.url // ""] | map(select(contains($url))) | length' \
+        "$settings" 2>/dev/null || echo 0)
+    pc_cmd_exists=$(jq -r --arg cmd "$session_cmd" \
         '(.hooks.PostCompact // []) | [.[].hooks[]?.command // ""] | map(select(contains($cmd))) | length' \
         "$settings" 2>/dev/null || echo 0)
-    if [ "${pc_exists:-0}" -gt 0 ]; then
-        echo -e "  ${GRAY}✓  PostCompact c-thru-session-start${NC}"
+
+    if [ "${pc_http_exists:-0}" -gt 0 ] && [ "${pc_cmd_exists:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  PostCompact (HTTP + command)${NC}"
     else
         tmp="${settings}.tmp.$$"
-        jq --arg cmd "$session_cmd" '
+        jq --arg url "$hooks_url" --arg cmd "$session_cmd" '
             if .hooks == null then .hooks = {} else . end |
             if .hooks.PostCompact == null then .hooks.PostCompact = [] else . end |
-            .hooks.PostCompact += [{
-                "hooks": [{"type": "command", "command": $cmd, "timeout": 5}]
-            }]
+            .hooks.PostCompact += [
+                {"hooks": [{"type": "http", "url": $url, "timeout": 3}]},
+                {"hooks": [{"type": "command", "command": $cmd, "timeout": 5}]}
+            ]
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
-        echo -e "  ${GREEN}✅ registered hook: PostCompact c-thru-session-start${NC}"
+        echo -e "  ${GREEN}✅ registered hook: PostCompact (HTTP + command)${NC}"
     fi
 
     # --- UserPromptSubmit (asyncRewake upgrade) ---
