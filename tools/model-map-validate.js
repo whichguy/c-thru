@@ -209,6 +209,20 @@ function validateConfig(config, _errors) {
     }
     try { validateFallbackGraph(config); } catch (e) { report(e.message); }
   }
+
+  if (config.model_overrides != null) {
+    if (!isObject(config.model_overrides)) {
+      report("'model_overrides' must be an object");
+    } else {
+      for (const [from, to] of Object.entries(config.model_overrides)) {
+        if (typeof to !== 'string' || !to) {
+          report(`'model_overrides.${from}' must be a non-empty string`);
+        } else if (from === to) {
+          report(`'model_overrides.${from}' maps to itself — remove or change`);
+        }
+      }
+    }
+  }
 }
 
 function main() {

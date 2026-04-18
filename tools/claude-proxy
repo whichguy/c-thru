@@ -327,6 +327,14 @@ try {
 // ── Route resolution ───────────────────────────────────────────────────
 
 function resolveRouteModel(model) {
+  // model_overrides: unconditional name substitution applied before routes graph traversal.
+  // No separate cycle guard needed — the downstream routes traversal already has one;
+  // the override's output becomes input to that traversal.
+  const overrideTarget = CONFIG.model_overrides?.[model];
+  if (typeof overrideTarget === 'string' && overrideTarget && overrideTarget !== model) {
+    debugLog('proxy.model_overrides.remap', { from: model, to: overrideTarget });
+    model = overrideTarget;
+  }
   const routes = CONFIG.routes || {};
   const maxDepth = Math.min(CONFIG.routes_max_depth || 32, 256);
   const seen = new Set();
