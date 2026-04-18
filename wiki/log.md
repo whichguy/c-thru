@@ -233,3 +233,132 @@ Valid types: INIT, INGEST, QUERY, LINT, SESSION_START, SESSION_END, EXTRACT
 [2026-04-18 07:49] SESSION_START session:de29a5de: opened in c-thru
 [2026-04-18 07:50] PERIODIC session:de29a5de: probabilistic trigger fired (mod=17)
 [2026-04-18 07:51] SESSION_START session:140e0375: opened in c-thru
+[2026-04-18 07:52] SESSION_START session:98852d63: opened in c-thru
+[2026-04-18 07:54] SESSION_START session:bd6d8c29: opened in c-thru
+[2026-04-18 07:54] SESSION_START session:175bd9c2: opened in c-thru
+[2026-04-18 07:54] SESSION_START session:be297e50: opened in c-thru
+[2026-04-18 07:54] SESSION_CLEAR session:be297e50: /clear boundary in c-thru
+[2026-04-18 07:59] SESSION_START session:7a7bb4a0: opened in c-thru
+[2026-04-18 08:02] SESSION_END session:be297e50: closed in c-thru
+[2026-04-18 08:02] PERIODIC session:be297e50: probabilistic trigger fired (mod=17)
+[2026-04-18 08:02] SESSION_START session:29d31200: opened in c-thru
+[2026-04-18 08:02] SESSION_START session:7d4ac348: opened in c-thru
+[2026-04-18 08:06] SESSION_START session:93b03e11: opened in c-thru
+[2026-04-18 08:07] SESSION_START session:ed761c3c: opened in c-thru
+[2026-04-18 08:07] SESSION_CLEAR session:ed761c3c: /clear boundary in c-thru
+[2026-04-18 08:07] SESSION_START session:e190de67: opened in c-thru
+[2026-04-18 08:07] SESSION_START session:28a43e6f: opened in c-thru
+[2026-04-18 08:07] PERIODIC session:28a43e6f: probabilistic trigger fired (mod=17)
+[2026-04-18 08:10] SESSION_END session:ed761c3c: closed in c-thru
+[2026-04-18 08:10] SESSION_START session:021658f9: opened in c-thru
+[2026-04-18 08:10] SESSION_START session:fb7b8a38: opened in c-thru
+[2026-04-18 08:10] PERIODIC session:021658f9: probabilistic trigger fired (mod=17)
+[2026-04-18 08:16] PERIODIC session:ed761c3c: probabilistic trigger fired (mod=17)
+[2026-04-18 08:16] SESSION_START session:469e105a: opened in c-thru
+[2026-04-18 08:16] SESSION_START session:7f7a8db5: opened in c-thru
+[2026-04-18 08:16] SESSION_START session:61d114ef: opened in c-thru
+[2026-04-18 08:17] SESSION_START session:dbe2ddc6: opened in c-thru
+[2026-04-18 08:17] SESSION_START session:76c5d7f8: opened in c-thru
+[2026-04-18 08:17] PERIODIC session:ed761c3c: probabilistic trigger fired (mod=17)
+[2026-04-18 08:20] EXTRACT session:b50c3df0: ollama-http-api-migration (created), logical-role-exclusivity (created), fallback-event-system (created), c-thru-statusline (updated); cross-links updated
+[2026-04-18 08:18] SESSION_START session:f346297a: opened in c-thru
+[2026-04-18 08:18] SESSION_START session:6c7951e0: opened in c-thru
+[2026-04-18 08:19] PERIODIC session:be297e50: probabilistic trigger fired (mod=17)
+[2026-04-18 08:19] SESSION_START session:c3a18b52: opened in c-thru
+[2026-04-18 08:20] SESSION_START session:b89dc6ab: opened in c-thru
+[2026-04-18 08:22] SESSION_START session:f62520ed: opened in c-thru
+[2026-04-18 08:22] SESSION_START session:da902b71: opened in c-thru
+[2026-04-18 08:22] SESSION_START session:ed761c3c: opened in c-thru
+[2026-04-18 08:23] SESSION_START session:b449d8bd: opened in c-thru
+[2026-04-18 08:28] SESSION_START session:386b8e16: opened in c-thru
+[2026-04-18 08:28] SESSION_CLEAR session:386b8e16: /clear boundary in c-thru
+[2026-04-18 08:28] SESSION_START session:8341bff8: opened in c-thru
+[2026-04-18 08:28] SESSION_START session:0e173863: opened in c-thru
+[2026-04-18 08:29] PERIODIC session:8341bff8: probabilistic trigger fired (mod=17)
+[2026-04-18 08:30] EXTRACT session:be297e50: declared-rewrites, load-bearing-invariant, hook-safety-posture, sse-buffer-sizing, release-roadmap (created); c-thru-statusline (updated cross-links)
+[2026-04-18 08:32] SESSION_END session:386b8e16: closed in c-thru
+[2026-04-18 08:35] EXTRACT session:386b8e16: capability-profile-model-layers (created), declared-rewrites (updated), logical-role-exclusivity (already updated), hook-model-rewriting-removal (already updated)
+[2026-04-18 08:50] SESSION_START session:80ddf545: opened in c-thru
+[2026-04-18 08:53] SESSION_START session:de60c6c6: opened in c-thru
+[2026-04-18 08:55] SESSION_START session:9e4f0e86: opened in c-thru
+[2026-04-18 08:58] SESSION_START session:0a89aea8: opened in c-thru
+[2026-04-18 09:15] EXTRACT session:ed761c3c: ollama-http-api-migration (updated), hook-model-rewriting-removal (created)
+[2026-04-18 09:03] SESSION_START session:d1135e5a: opened in c-thru
+[2026-04-18 09:03] SESSION_START session:b6a8ca0c: opened in c-thru
+[2026-04-18 09:03] WIKI_LOAD session:: /wiki-load fallback model profile capability routing
+[2026-04-18 09:04] SESSION_START session:afeaf5be: opened in c-thru
+[2026-04-18 09:04] EXTRACT session:b50c3df0: fallback-event-system (created), c-thru-statusline + ollama-http-api-migration (updated cross-links)
+[2026-04-18 09:12] SESSION_START session:aedb725e: opened in c-thru
+[2026-04-18 09:16] SESSION_START session:6d09913f: opened in c-thru
+[2026-04-18 09:16] SESSION_CLEAR session:6d09913f: /clear boundary in c-thru
+[2026-04-18 09:16] SESSION_START session:c1305bd2: opened in c-thru
+[2026-04-18 09:16] SESSION_START session:ca002ca8: opened in c-thru
+[2026-04-18 09:05] EXTRACT session:be297e50: router-lock-handshake, narrow-threat-model, kind-anthropic-invariant, claude-code-hook-channels, hook-model-rewriting-removal (added to index by parallel extract); load-bearing-invariant, declared-rewrites, hook-safety-posture (updated cross-links to canonical slugs); threat-model, proxy-lock-coordination (removed — duplicates of narrow-threat-model, router-lock-handshake)
+[2026-04-18 09:17] EXTRACT session:b50c3df0: re-verified — already extracted at 08:20; added cross-links logical-role-exclusivity ↔ fallback-event-system
+[2026-04-18 09:20] EXTRACT session:b50c3df0: claude-code-hook-channels (created), c-thru-statusline (updated: log-as-event-stream design decision + cross-links), hook-safety-posture (updated cross-link)
+[2026-04-18 09:24] SESSION_START session:b8f0466a: opened in c-thru
+[2026-04-18 09:24] SESSION_CLEAR session:b8f0466a: /clear boundary in c-thru
+[2026-04-18 09:24] SESSION_START session:4a1c4cdc: opened in c-thru
+[2026-04-18 09:24] SESSION_START session:799d7fb7: opened in c-thru
+[2026-04-18 09:24] SESSION_START session:92292709: opened in c-thru
+[2026-04-18 09:28] SESSION_END session:b8f0466a: closed in c-thru
+[2026-04-18 09:34] PERIODIC session:b8f0466a: probabilistic trigger fired (mod=17)
+[2026-04-18 09:34] SESSION_START session:49e01344: opened in c-thru
+[2026-04-18 09:34] SESSION_START session:7612851f: opened in c-thru
+[2026-04-18 09:34] SESSION_START session:549b3ecd: opened in c-thru
+[2026-04-18 09:34] WIKI_LOAD session:: /wiki-load SIGHUP config reload proxy lifecycle reloadConfigFromDisk
+[2026-04-18 15:30] EXTRACT session:ed761c3c: no new pages needed — all content already captured in ollama-http-api-migration (settled/settle guard, \0 key), declared-rewrites (model-router dead code), hook-model-rewriting-scope (proxy-only rule)
+[2026-04-18 09:45] EXTRACT session:386b8e16: compaction — 2 queue entries written
+[2026-04-18 09:46] PERIODIC session:b8f0466a: probabilistic trigger fired (mod=17)
+[2026-04-18 09:46] SESSION_START session:c3cf315f: opened in c-thru
+[2026-04-18 09:47] WIKI_LOAD session:: /wiki-load validateWithNode reloadConfigFromDisk config validation proxy
+[2026-04-18 09:47] SESSION_START session:386b8e16: opened in c-thru
+[2026-04-18 09:48] SESSION_START session:8960efc2: opened in c-thru
+[2026-04-18 09:48] SESSION_START session:e243fb06: opened in c-thru
+[2026-04-18 09:49] SESSION_START session:0a18c44e: opened in c-thru
+[2026-04-18 09:49] SESSION_CLEAR session:0a18c44e: /clear boundary in c-thru
+[2026-04-18 09:43] EXTRACT session:ed761c3c: ollama-http-api-migration (fixed stale cross-link to consolidated page), index (updated)
+[2026-04-18 09:50] EXTRACT session:be297e50: router-lock-handshake, narrow-threat-model, kind-anthropic-invariant (verified intact after parallel extract); declared-rewrites (fixed broken link hook-model-rewriting-scope→hook-model-rewriting-removal); load-bearing-invariant, release-roadmap (updated cross-links); index.md (fixed hook-model-rewriting-scope→hook-model-rewriting-removal)
+[2026-04-18 09:53] SESSION_END session:0a18c44e: closed in c-thru
+[2026-04-18 09:54] SESSION_START session:2d295294: opened in c-thru
+[2026-04-18 09:54] SESSION_START session:8a55296d: opened in c-thru
+[2026-04-18 09:55] SESSION_START session:65a29e71: opened in c-thru
+[2026-04-18 09:55] WIKI_LOAD session:: /wiki-load pending tasks TODO backlog
+[2026-04-18 08:10] EXTRACT session:ed761c3c: readme-installer-alignment (created), hook-model-rewriting-removal (cross-link added)
+[2026-04-18 16:30] EXTRACT session:ed761c3c: re-verified — 4 entities hold all content (declared-rewrites, ollama-http-api-migration, hook-model-rewriting-removal, readme-installer-alignment). No new pages needed.
+[2026-04-18 17:00] EXTRACT session:386b8e16: capability-profile-model-layers (created), logical-role-exclusivity (updated with implementation details), declared-rewrites (updated with proxy-only rule), hook-model-rewriting-removal (updated with corrected finding + TODO closures). No new pages needed — all session content already captured.
+[2026-04-18 10:21] EXTRACT session:386b8e16: logical-role-exclusivity (updated — implementation, design decisions resolved), hook-model-rewriting-removal (updated — plugin was live, TODOs closed), declared-rewrites (updated — CLAUDE.md codification), ollama-http-api-migration (updated — TODO closed, migration complete), capability-profile-model-layers (updated — added config-layer mapping)
+[2026-04-18 14:49] SESSION_START session:9d601210: opened in c-thru
+[2026-04-18 14:49] SESSION_CLEAR session:9d601210: /clear boundary in c-thru
+[2026-04-18 14:49] SESSION_START session:32ed44d1: opened in c-thru
+[2026-04-18 14:49] SESSION_START session:50501f5f: opened in c-thru
+[2026-04-18 14:49] SESSION_START session:0df32003: opened in c-thru
+[2026-04-18 14:49] SESSION_START session:56bc3a7c: opened in c-thru
+[2026-04-18 14:50] SESSION_END session:9d601210: closed in c-thru
+[2026-04-18 14:52] PERIODIC session:9d601210: probabilistic trigger fired (mod=17)
+[2026-04-18 14:52] SESSION_START session:67a065da: opened in c-thru
+[2026-04-18 14:52] SESSION_START session:2f63c875: opened in c-thru
+[2026-04-18 14:52] PERIODIC session:2f63c875: probabilistic trigger fired (mod=17)
+[2026-04-18 14:53] SESSION_START session:a07e1a84: opened in c-thru
+[2026-04-18 14:53] PERIODIC session:9d601210: probabilistic trigger fired (mod=17)
+[2026-04-18 14:53] SESSION_START session:86614951: opened in c-thru
+[2026-04-18 14:53] SESSION_START session:00884ade: opened in c-thru
+[2026-04-18 14:55] SESSION_START session:997eacb2: opened in c-thru
+[2026-04-18 14:58] EXTRACT session:9d601210: capability-profile-model-layers (updated — v1.2 schema plan, dual-gate activation, walkEquivalentsChain, role-exclusivity profile-name injection), declared-rewrites (updated — resolved_via header), release-roadmap (updated — 1.2 phased plan), connectivity-vs-cascade (created), schema-v12-dual-gate (created)
+[2026-04-18 15:02] SESSION_START session:92fd8378: opened in c-thru
+[2026-04-18 15:02] SESSION_START session:d6023115: opened in c-thru
+[2026-04-18 15:02] SESSION_CLEAR session:d6023115: /clear boundary in c-thru
+[2026-04-18 15:03] SESSION_END session:d6023115: closed in c-thru
+[2026-04-18 16:30] EXTRACT session:0a18c44e: proxy-health-function-semantics (created — cross-consumer constraint between proxy_health_unhealthy_summary and proxy_health_is_unhealthy_transition), c-thru-statusline (updated — SessionStart label mismatch root cause and planned fix)
+[2026-04-18 15:08] PERIODIC session:9d601210: probabilistic trigger fired (mod=17)
+[2026-04-18 15:08] SESSION_START session:74a5c69d: opened in c-thru
+[2026-04-18 15:08] SESSION_START session:a9ffc681: opened in c-thru
+[2026-04-18 15:08] SESSION_START session:f09242da: opened in c-thru
+[2026-04-18 15:08] PERIODIC session:f09242da: probabilistic trigger fired (mod=17)
+[2026-04-18 15:09] SESSION_START session:7e83d79e: opened in c-thru
+[2026-04-18 15:10] SESSION_START session:60740a97: opened in c-thru
+[2026-04-18 15:14] SESSION_START session:fe6b9d38: opened in c-thru
+[2026-04-18 15:14] SESSION_START session:48948541: opened in c-thru
+[2026-04-18 15:14] SESSION_CLEAR session:48948541: /clear boundary in c-thru
+[2026-04-18 15:14] WIKI_LOAD session:: /wiki-load capability-profile-model-layers
+[2026-04-18 15:23] SESSION_END session:48948541: closed in c-thru
