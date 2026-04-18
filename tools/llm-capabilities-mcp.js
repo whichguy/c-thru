@@ -14,6 +14,15 @@ const REQUEST_TIMEOUT_MS = Number(process.env.CLAUDE_LLM_PROXY_TIMEOUT_MS || 300
 const STARTUP_TIMEOUT_MS = Number(process.env.CLAUDE_LLM_PROXY_STARTUP_TIMEOUT_MS || 5000);
 const DEBUG = Number(process.env.CLAUDE_LLM_CAPABILITIES_DEBUG || '0');
 
+const {
+  CLASSIFY_INTENT_DEF,
+  resolveCapabilityModel,
+  parseTextResponse,
+  tryParseJsonText,
+  normalizeClassifyResult,
+  classifyIntent,
+} = require('./llm-capabilities-shared');
+
 const TOOL_DEFS = {
   ask_model: {
     description: 'Best when you already know the exact model you want. Use it to send a direct prompt to a named model through the proxy while still getting a normalized JSON result back.',
@@ -36,16 +45,7 @@ const TOOL_DEFS = {
       },
     },
   },
-  classify_intent: {
-    description: 'Best first tool for a raw prompt. Use it when the request is ambiguous, underspecified, or needs routing. It takes a prompt and returns an intent classification, confidence, recommended next tool, and clarification questions.',
-    category: 'classifier',
-    supportsPromptAlias: true,
-    responseGuidance: 'Classify the prompt, recommend the most appropriate next tool when one is clear, and ask only the minimum clarification questions needed to unblock progress.',
-    extraOutput: {
-      recommended_tool: { type: ['string', 'null'] },
-      clarification_questions: { type: 'array', items: { type: 'string' } },
-    },
-  },
+  classify_intent: CLASSIFY_INTENT_DEF,
   explore_local: {
     description: 'Best for analyzing supplied local workspace context before deeper reasoning. Use it when the prompt or context already includes file excerpts, logs, screenshots, environment details, or repository notes and you want grounded synthesis.',
     category: 'explorer',
@@ -339,14 +339,10 @@ function listTools() {
   }));
 }
 
-function resolveCapabilityModel(config, toolName) {
+// resolveCapabilityModel imported from llm-capabilities-shared (also handles ask_model: null)
+function resolveCapabilityModelLocal(config, toolName) {
   if (toolName === 'ask_model') return null;
-  const capabilities = config.llm_capabilities || {};
-  const entry = capabilities[toolName] || capabilities.default;
-  if (!entry || typeof entry.model !== 'string' || !entry.model.trim()) {
-    throw new Error(`No llm_capabilities model configured for ${toolName}`);
-  }
-  return entry.model.trim();
+  return resolveCapabilityModel(config, toolName);
 }
 
 function buildPrompt(toolName, args, modelName) {
@@ -405,42 +401,16 @@ function normalizeModelList(body) {
   };
 }
 
-function parseTextResponse(body) {
-  const textBlocks = Array.isArray(body?.content)
-    ? body.content.filter(part => part && part.type === 'text').map(part => part.text || '')
-    : [];
-  return textBlocks.join('\n').trim();
-}
-
-function tryParseJsonText(text) {
-  if (typeof text !== 'string') return { parsed: null, kind: 'not_string' };
-  const trimmed = text.trim();
-  if (!trimmed) return { parsed: null, kind: 'empty' };
-
-  try {
-    return { parsed: JSON.parse(trimmed), kind: 'strict_json' };
-  } catch {}
-
-  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fencedMatch) {
-    try {
-      return { parsed: JSON.parse(fencedMatch[1].trim()), kind: 'fenced_json' };
-    } catch {}
-  }
-
-  const firstBrace = trimmed.indexOf('{');
-  const lastBrace = trimmed.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    try {
-      return { parsed: JSON.parse(trimmed.slice(firstBrace, lastBrace + 1)), kind: 'embedded_json' };
-    } catch {}
-  }
-
-  return { parsed: null, kind: 'unparsed_text' };
-}
+// parseTextResponse and tryParseJsonText imported from llm-capabilities-shared
 
 function normalizeResult(toolName, parsed, rawText) {
   const tool = TOOL_DEFS[toolName];
+
+  if (toolName === 'classify_intent') {
+    // Delegate to shared normalizer
+    return normalizeClassifyResult(parsed, rawText);
+  }
+
   const parsedConfidence = Number.isInteger(parsed?.confidence) ? parsed.confidence : 0;
   const base = {
     result: typeof parsed?.result === 'string' ? parsed.result : rawText || '',
@@ -448,14 +418,6 @@ function normalizeResult(toolName, parsed, rawText) {
     recuse_reason: typeof parsed?.recuse_reason === 'string' ? parsed.recuse_reason : null,
     dynamic_hints: Array.isArray(parsed?.dynamic_hints) ? parsed.dynamic_hints.map(String) : [],
   };
-
-  if (toolName === 'classify_intent') {
-    return {
-      ...base,
-      recommended_tool: typeof parsed?.recommended_tool === 'string' ? parsed.recommended_tool : null,
-      clarification_questions: Array.isArray(parsed?.clarification_questions) ? parsed.clarification_questions.map(String) : [],
-    };
-  }
 
   if (tool.category === 'review') {
     return {
@@ -861,7 +823,7 @@ async function callTool(toolName, rawArgs) {
     ? args.model
     : toolName === 'list_models'
       ? null
-      : resolveCapabilityModel(config, toolName);
+      : resolveCapabilityModelLocal(config, toolName);
   debugLog('mcp.tool.call.before', {
     tool: toolName,
     config_path: configPath,

@@ -101,6 +101,31 @@ for (let i = 0; i < _args.length; i++) {
   if (_args[i] === '--hooks-port' && _args[i + 1]) process.env.CLAUDE_PROXY_HOOKS_PORT = _args[++i];
 }
 
+const { classifyIntent } = require('./llm-capabilities-shared');
+let proxyApiPort = null; // set after server.listen — used by /hooks/context classify path
+
+function postJsonLocal(port, pathName, payload) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const req = http.request(
+      { hostname: '127.0.0.1', port, path: pathName, method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+      res => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+          catch (e) { reject(new Error('postJsonLocal: invalid JSON: ' + e.message)); }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.setTimeout(10000, () => req.destroy(new Error('postJsonLocal: timeout')));
+    req.write(body);
+    req.end();
+  });
+}
+
 const EXPLICIT_PORT = process.env.CLAUDE_PROXY_PORT;
 const INITIAL_PORT = EXPLICIT_PORT ? Number(EXPLICIT_PORT) : 0;
 const HOOKS_PORT = Number(process.env.CLAUDE_PROXY_HOOKS_PORT || 9998);
@@ -1825,9 +1850,9 @@ server.on('error', (err) => {
 });
 
 server.listen(INITIAL_PORT, '127.0.0.1', () => {
-  const actualPort = server.address().port;
-  if (!EXPLICIT_PORT) process.stdout.write(`READY ${actualPort}\n`);
-  console.error(`claude-proxy listening on 127.0.0.1:${actualPort} (pid=${process.pid})`);
+  proxyApiPort = server.address().port;
+  if (!EXPLICIT_PORT) process.stdout.write(`READY ${proxyApiPort}\n`);
+  console.error(`claude-proxy listening on 127.0.0.1:${proxyApiPort} (pid=${process.pid})`);
 });
 
 // ── Hooks listener (fixed port for HTTP hooks) ─────────────────────────
@@ -1841,36 +1866,56 @@ const hooksServer = require('http').createServer((req, res) => {
     return;
   }
   if (req.method === 'POST' && req.url === '/hooks/context') {
-    (async () => {
-      try {
-        const issues = [];
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      (async () => {
+        try {
+          const issues = [];
+          let body = {};
+          try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+          const prompt = typeof body.prompt === 'string' ? body.prompt : null;
 
-        // Check backend health from live in-memory state
-        for (const [id, s] of Object.entries(stats.byBackendId || {})) {
-          if (s.state === 'degraded' || s.state === 'disconnected') {
-            const alternatives = Object.keys(CONFIG.routes || {}).filter(r => r !== id);
-            const alt = alternatives[0] ? ` Alternative: --route ${alternatives[0]}` : '';
-            issues.push(`⚠️ Backend ${id} ${s.state} (${s.ewmaMs || 0}ms ewma, ${s.failures || 0} failures).${alt}`);
+          // Check 1: backend health from live in-memory state
+          for (const [id, s] of Object.entries(stats.byBackendId || {})) {
+            if (s.state === 'degraded' || s.state === 'disconnected') {
+              const alternatives = Object.keys(CONFIG.routes || {}).filter(r => r !== id);
+              const alt = alternatives[0] ? ` Alternative: --route ${alternatives[0]}` : '';
+              issues.push(`⚠️ Backend ${id} ${s.state} (${s.ewmaMs || 0}ms ewma, ${s.failures || 0} failures).${alt}`);
+            }
           }
-        }
 
-        // Check Ollama reachability via config (no classify_intent — see spike #3)
-        // classify_intent integration deferred until llm-capabilities-mcp.js extraction
+          // Check 2: classify_intent for low-confidence routing (UserPromptSubmit only — prompt required)
+          if (prompt && proxyApiPort && CONFIG && CONFIG.llm_capabilities?.classify_intent) {
+            try {
+              const postToMessages = payload => postJsonLocal(proxyApiPort, '/v1/messages', payload);
+              const result = await classifyIntent(prompt, CONFIG, postToMessages);
+              if (result.confidence < 60 && result.recommended_tool) {
+                // Log for offline pattern analysis (non-blocking, fire-and-forget with .catch)
+                const logLine = JSON.stringify({ ts: new Date().toISOString(), prompt: prompt.slice(0, 120), result }) + '\n';
+                const logPath = require('path').join(process.env.HOME || require('os').homedir(), '.claude', 'classify-intent-signals.log');
+                require('fs').appendFile(logPath, logLine, () => {}); // async, non-blocking
+                issues.push(`Note: lightweight model active — this task may benefit from --route default (confidence: ${result.confidence}%)`);
+              }
+            } catch (classifyErr) {
+              console.error('claude-proxy: classify_intent error (skipped):', classifyErr.message);
+            }
+          }
 
-        if (issues.length > 0) {
-          const additionalContext = issues.join('\n');
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ hookSpecificOutput: { additionalContext } }));
-        } else {
+          if (issues.length > 0) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ hookSpecificOutput: { additionalContext: issues.join('\n') } }));
+          } else {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end('{}');
+          }
+        } catch (err) {
+          console.error('claude-proxy: /hooks/context error:', err.message);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end('{}');
         }
-      } catch (err) {
-        console.error('claude-proxy: /hooks/context error:', err.message);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end('{}');
-      }
-    })();
+      })();
+    });
     return;
   }
   res.writeHead(404);
