@@ -2,8 +2,13 @@
 # ARCH: UserPromptSubmit hook — reads prompt from stdin JSON, calls /hooks/context
 # on the hooks listener (port 9998) for classify_intent-based context injection.
 # Silent on healthy/unclassified path. Does NOT block — exits 0 always.
+# A13: `-u` catches unset-var bugs. `-e` is intentionally off because the
+# hook uses command failures as flow control (exit 0 on anything unexpected).
+set -uo pipefail
 
 HOOKS_PORT="${CLAUDE_PROXY_HOOKS_PORT:-9998}"
+prompt=""
+context=""
 
 # Only fire when c-thru is active (port in ANTHROPIC_BASE_URL)
 PORT="${CLAUDE_PROXY_PORT:-}"

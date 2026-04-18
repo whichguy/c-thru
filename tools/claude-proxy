@@ -497,7 +497,7 @@ function schedulePersistentUsageFlush() {
     usagePersistTimer = null;
     if (!usagePersistPending) return;
     usagePersistPending = false;
-    const tmpPath = `${USAGE_STATS_FILE}.tmp`;
+    const tmpPath = `${USAGE_STATS_FILE}.tmp.${crypto.randomUUID()}`;
     fs.promises.mkdir(path.dirname(USAGE_STATS_FILE), { recursive: true })
       .then(() => fs.promises.writeFile(tmpPath, `${JSON.stringify(persistentUsage, null, 2)}\n`))
       .then(() => fs.promises.rename(tmpPath, USAGE_STATS_FILE))
@@ -512,7 +512,7 @@ function flushPersistentUsageNowSync() {
   if (!usagePersistPending && !fs.existsSync(USAGE_STATS_FILE)) return;
   try {
     fs.mkdirSync(path.dirname(USAGE_STATS_FILE), { recursive: true });
-    const tmpPath = `${USAGE_STATS_FILE}.tmp`;
+    const tmpPath = `${USAGE_STATS_FILE}.tmp.${crypto.randomUUID()}`;
     fs.writeFileSync(tmpPath, `${JSON.stringify(persistentUsage, null, 2)}\n`);
     fs.renameSync(tmpPath, USAGE_STATS_FILE);
     usagePersistPending = false;
@@ -734,6 +734,161 @@ function warmOllamaModel(model, backendId, backendUrl) {
   } catch { /* malformed URL, etc. — ignore */ }
 }
 
+// ── Ollama HTTP helpers (async, stdlib only) ───────────────────────────
+// Replace spawnSync('ollama', …) with native HTTP so the request path
+// never blocks the event loop. All helpers pick http/https by lowercased
+// scheme per RFC 3986 §3.1.
+
+const OLLAMA_PULL_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_PULL_TIMEOUT_MS', 30 * 60 * 1000);
+const pullInFlight = new Map(); // key: backendUrl+'|'+model → Promise
+
+function _ollamaUrl(backendUrl, suffix) {
+  return (backendUrl || DEFAULT_OLLAMA_URL).replace(/\/$/, '') + suffix;
+}
+function _ollamaTransport(urlStr) {
+  return urlStr.toLowerCase().startsWith('https:') ? https : http;
+}
+
+function ollamaListTags(backendUrl) {
+  const urlStr = _ollamaUrl(backendUrl, '/api/tags');
+  return new Promise((resolve, reject) => {
+    const transport = _ollamaTransport(urlStr);
+    const req = transport.request(urlStr, { method: 'GET' }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return reject(new Error(`ollama /api/tags status ${res.statusCode}`));
+        }
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          const names = (body && Array.isArray(body.models)) ? body.models.map(m => m.name).filter(Boolean) : [];
+          resolve(names);
+        } catch (e) { reject(new Error('ollama /api/tags invalid JSON: ' + e.message)); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(OLLAMA_WARM_HTTP_TIMEOUT_MS, () => req.destroy(new Error('ollama /api/tags timeout')));
+    req.end();
+  });
+}
+
+function ollamaPs(backendUrl) {
+  const urlStr = _ollamaUrl(backendUrl, '/api/ps');
+  return new Promise((resolve, reject) => {
+    const transport = _ollamaTransport(urlStr);
+    const req = transport.request(urlStr, { method: 'GET' }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return reject(new Error(`ollama /api/ps status ${res.statusCode}`));
+        }
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          const models = (body && Array.isArray(body.models)) ? body.models : [];
+          resolve(models.map(m => ({ name: m.name, size_vram: m.size_vram, expires_at: m.expires_at })));
+        } catch (e) { reject(new Error('ollama /api/ps invalid JSON: ' + e.message)); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(OLLAMA_WARM_HTTP_TIMEOUT_MS, () => req.destroy(new Error('ollama /api/ps timeout')));
+    req.end();
+  });
+}
+
+function ollamaPull(backendUrl, model) {
+  const urlStr = _ollamaUrl(backendUrl, '/api/pull');
+  return new Promise((resolve, reject) => {
+    const transport = _ollamaTransport(urlStr);
+    const body = JSON.stringify({ model, stream: true });
+    const ac = new AbortController();
+    const start = Date.now();
+    const timer = setTimeout(() => ac.abort(), OLLAMA_PULL_TIMEOUT_MS);
+    let settled = false;
+    const settle = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); fn(arg); };
+
+    const req = transport.request(urlStr, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      signal: ac.signal,
+    }, res => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        return settle(reject, new Error(`ollama /api/pull status ${res.statusCode}`));
+      }
+      let buf = '';
+      let lastLogMs = 0;
+      res.setEncoding('utf8');
+      res.on('data', chunk => {
+        buf += chunk;
+        let idx;
+        while ((idx = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line) continue;
+          let evt;
+          try { evt = JSON.parse(line); } catch { continue; }
+          if (evt.error) return settle(reject, new Error(evt.error));
+          if (evt.status === 'success') return settle(resolve);
+          const now = Date.now();
+          if (now - lastLogMs >= 500) {
+            lastLogMs = now;
+            proxyLog('ollama.pull.progress', {
+              model, backend_url: backendUrl, status: evt.status || null,
+              completed: evt.completed || null, total: evt.total || null,
+            });
+          }
+        }
+      });
+      res.on('end', () => settle(resolve));
+      res.on('error', e => settle(reject, e));
+    });
+    req.on('error', e => {
+      if (ac.signal.aborted) {
+        const err = new Error(`ollama /api/pull timed out after ${Date.now() - start}ms`);
+        err.code = 'ETIMEDOUT';
+        return settle(reject, err);
+      }
+      settle(reject, e);
+    });
+    req.write(body);
+    req.end();
+  });
+}
+
+function ollamaLoad(backendUrl, model, opts) {
+  const urlStr = _ollamaUrl(backendUrl, '/api/generate');
+  const { numCtx, keepAlive } = opts || {};
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn, arg) => { if (settled) return; settled = true; fn(arg); };
+    const payload = { model, prompt: '', keep_alive: keepAlive || OLLAMA_WARM_KEEP_ALIVE };
+    if (numCtx) payload.options = { num_ctx: numCtx };
+    const body = JSON.stringify(payload);
+    const transport = _ollamaTransport(urlStr);
+    const req = transport.request(urlStr, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, res => {
+      res.resume();
+      res.setTimeout(OLLAMA_WARM_HTTP_TIMEOUT_MS, () => {
+        res.destroy();
+        settle(reject, new Error('ollama /api/generate response timeout'));
+      });
+      res.on('end', () => settle(resolve));
+      res.on('error', e => settle(reject, e));
+    });
+    req.on('error', e => settle(reject, e));
+    req.setTimeout(OLLAMA_WARM_HTTP_TIMEOUT_MS, () => {
+      req.destroy();
+      settle(reject, new Error('ollama /api/generate timeout'));
+    });
+    req.write(body);
+    req.end();
+  });
+}
+
 function recordFailureClass(failureClass) {
   stats.byFailureClass[failureClass] = (stats.byFailureClass[failureClass] || 0) + 1;
 }
@@ -804,7 +959,8 @@ function ensureBackendHealthEntry(backend, effectiveModel) {
 function persistHealthState() {
   try {
     fs.mkdirSync(path.dirname(HEALTH_STATE_FILE), { recursive: true });
-    const tmpPath = `${HEALTH_STATE_FILE}.tmp.${process.pid}`;
+    // A8: use a UUID so two proxy instances can't collide on pid reuse.
+    const tmpPath = `${HEALTH_STATE_FILE}.tmp.${crypto.randomUUID()}`;
     fs.writeFileSync(tmpPath, JSON.stringify({
       version: healthMeta.version,
       generated_at: nowIso(),
@@ -1043,15 +1199,6 @@ function resolveFallbackModel(model, failureClass) {
 
 // ── Backend resolution ─────────────────────────────────────────────────
 
-function ollamaHostEnvFromUrl(urlStr) {
-  try {
-    const u = new URL(urlStr);
-    return `${u.protocol}//${u.host}`;
-  } catch {
-    return 'http://127.0.0.1:11434';
-  }
-}
-
 function isLocalOllamaBackend(model, backendUrl) {
   if (String(model || '').endsWith(':cloud')) return false;
   try {
@@ -1062,118 +1209,67 @@ function isLocalOllamaBackend(model, backendUrl) {
   }
 }
 
-function ensureOllamaModelLoaded(model, backendUrl) {
-  if (SKIP_WARMUP) return;
-  if (!isLocalOllamaBackend(model, backendUrl)) return;
-  const ollamaHost = ollamaHostEnvFromUrl(backendUrl);
-  debugLog('proxy.ollama.prepare.start', {
-    model,
-    ollama_host: ollamaHost,
-    backend_url: backendUrl,
-  });
-  const run = args =>
-    spawnSync('ollama', args, {
-      env: { ...process.env, OLLAMA_HOST: ollamaHost },
-      encoding: 'utf8',
-      timeout: args[0] === 'pull' ? 15 * 60 * 1000 : 3000,
-    });
+async function ensureOllamaModelLoaded(model, backendUrl) {
+  if (SKIP_WARMUP) return null;
+  if (!isLocalOllamaBackend(model, backendUrl)) return null;
+  debugLog('proxy.ollama.prepare.start', { model, backend_url: backendUrl });
 
-  const list = run(['list']);
-  if (list.error && list.error.code === 'ENOENT') {
-    debugLog('proxy.ollama.prepare.skip_cli_missing', {
-      model,
-      ollama_host: ollamaHost,
-    });
-    return;
+  // 1) Is the model present?
+  let tags;
+  try { tags = await ollamaListTags(backendUrl); }
+  catch (e) {
+    debugLog('proxy.ollama.prepare.list.error', { model, backend_url: backendUrl, error: e.message });
+    return null; // Ollama unreachable — mirror today's ENOENT branch (skip warm-up, let request surface it)
   }
-  if (list.status !== 0) {
-    debugLog('proxy.ollama.prepare.list.error', {
-      model,
-      ollama_host: ollamaHost,
-      status: list.status,
-      error: list.error?.message || null,
-    });
-    console.error(`claude-proxy: cannot reach Ollama on ${ollamaHost} — is 'ollama serve' running? Skipping warm-up.`);
-    return;
-  }
-  const cached = list.stdout.split('\n').slice(1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
   debugLog('proxy.ollama.prepare.list.result', {
-    model,
-    ollama_host: ollamaHost,
-    cached: cached.includes(model),
-    cached_count: cached.length,
+    model, backend_url: backendUrl, cached: tags.includes(model), cached_count: tags.length,
   });
-  if (!cached.includes(model)) {
-    debugLog('proxy.ollama.prepare.pull.start', {
-      model,
-      ollama_host: ollamaHost,
-    });
-    console.error(`claude-proxy: '${model}' not cached on ${ollamaHost} — pulling now...`);
-    const pulled = run(['pull', model]);
-    if (pulled.status !== 0) {
-      const detail = (pulled.stderr || pulled.stdout || '').trim();
-      debugLog('proxy.ollama.prepare.pull.failure', {
-        model,
-        ollama_host: ollamaHost,
-        status: pulled.status,
-        detail,
-      });
-      return {
-        type: 'api_error',
-        message: `Failed to pull '${model}' from ${ollamaHost}${detail ? `: ${detail}` : ''}`,
-      };
+
+  // 2) Pull if missing (dedup concurrent pulls on same model+backend)
+  if (!tags.includes(model)) {
+    const key = backendUrl + '\0' + model;
+    let pending = pullInFlight.get(key);
+    if (!pending) {
+      proxyLog('ollama.pull.start', { model, backend_url: backendUrl });
+      console.error(`claude-proxy: '${model}' not cached on ${backendUrl} — pulling now...`);
+      pending = ollamaPull(backendUrl, model).finally(() => pullInFlight.delete(key));
+      pullInFlight.set(key, pending);
     }
-    debugLog('proxy.ollama.prepare.pull.success', {
-      model,
-      ollama_host: ollamaHost,
-    });
+    try { await pending; }
+    catch (e) {
+      const isTimeout = e && e.code === 'ETIMEDOUT';
+      proxyLog('ollama.pull.failure', {
+        model, backend_url: backendUrl, error: e.message, timeout: !!isTimeout,
+      });
+      const msg = isTimeout
+        ? `Pull timed out: ${e.message}`
+        : `Failed to pull '${model}' from ${backendUrl}: ${e.message}`;
+      return { type: 'api_error', message: msg };
+    }
+    proxyLog('ollama.pull.success', { model, backend_url: backendUrl });
   }
-  const ps = run(['ps']);
-  if (ps.status !== 0) {
-    debugLog('proxy.ollama.prepare.ps.error', {
-      model,
-      ollama_host: ollamaHost,
-      status: ps.status,
-      error: ps.error?.message || null,
-    });
-    return;
+
+  // 3) Already loaded?
+  let loaded = [];
+  try { loaded = await ollamaPs(backendUrl); }
+  catch (e) {
+    debugLog('proxy.ollama.prepare.ps.error', { model, backend_url: backendUrl, error: e.message });
+    return null;
   }
-  const loaded = ps.stdout.split('\n').slice(1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
-  debugLog('proxy.ollama.prepare.ps.result', {
-    model,
-    ollama_host: ollamaHost,
-    loaded: loaded.includes(model),
-    loaded_count: loaded.length,
-  });
-  if (loaded.includes(model)) {
-    debugLog('proxy.ollama.prepare.loaded', {
-      model,
-      ollama_host: ollamaHost,
-    });
-    return;
+  if (loaded.some(m => m.name === model)) {
+    debugLog('proxy.ollama.prepare.loaded', { model, backend_url: backendUrl });
+    return null;
   }
+
+  // 4) Trigger load (fire-and-forget — the actual request will also load it, this just pre-warms)
   const numCtx = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
-  debugLog('proxy.ollama.prepare.warm.start', {
-    model,
-    ollama_host: ollamaHost,
-    num_ctx: numCtx,
-  });
-  console.error(`claude-proxy: warming '${model}' on ${ollamaHost} (background)...`);
-  const child = spawn('ollama', ['run', model, '--options', `num_ctx=${numCtx}`], {
-    env: { ...process.env, OLLAMA_HOST: ollamaHost },
-    detached: true,
-    stdio: 'ignore',
-  });
-  child.unref();
-  debugLog('proxy.ollama.prepare.warm.started', {
-    model,
-    ollama_host: ollamaHost,
-    pid: child.pid,
-  });
+  debugLog('proxy.ollama.prepare.warm.start', { model, backend_url: backendUrl, num_ctx: numCtx });
+  ollamaLoad(backendUrl, model, { numCtx, keepAlive: OLLAMA_WARM_KEEP_ALIVE }).catch(() => {});
+  return null;
 }
 
-function ensureOllamaReadyOrSend(res, model, backendUrl) {
-  const error = ensureOllamaModelLoaded(model, backendUrl);
+async function ensureOllamaReadyOrSend(res, model, backendUrl) {
+  const error = await ensureOllamaModelLoaded(model, backendUrl);
   if (!error) return true;
   if (!res.headersSent) send(res, 502, { error });
   return false;
@@ -1333,6 +1429,12 @@ function patchSseBlock(block) {
   return lines.join('\n');
 }
 
+// A3: cap the pending-frame buffer so a backend that never emits `\n\n`
+// can't grow it unbounded. Legitimate Anthropic SSE frames are <10KB;
+// the cap is deliberately enormous (512 MiB) to catch only pathological
+// runaway streams and never truncate real traffic.
+const SSE_BUFFER_MAX_BYTES = 512 * 1024 * 1024;
+
 function createSsePatcher() {
   let buf = '';
   return new Transform({
@@ -1343,6 +1445,9 @@ function createSsePatcher() {
       let out = '';
       for (const block of blocks) out += patchSseBlock(block) + '\n\n';
       if (out) this.push(out);
+      if (Buffer.byteLength(buf, 'utf8') > SSE_BUFFER_MAX_BYTES) {
+        return cb(new Error(`SSE frame exceeded ${SSE_BUFFER_MAX_BYTES} bytes without delimiter`));
+      }
       cb();
     },
     flush(cb) {
@@ -1575,9 +1680,16 @@ function handleRequestWithFallback(req, res, body, resolved) {
       stream: Boolean(fwdBody && fwdBody.stream),
       startedAtMs: nowMs(),
     };
-    if (b.kind === 'ollama' && !ensureOllamaReadyOrSend(res, em || clientModel, b.url)) return;
+    if (b.kind === 'ollama') {
+      (async () => {
+        if (!(await ensureOllamaReadyOrSend(res, em || clientModel, b.url))) return;
+        return forwardOllama(req, res, fwdBody, b, em, requestMeta);
+      })().catch(err => {
+        if (!res.headersSent) send(res, 500, { error: err.message });
+      });
+      return;
+    }
     if (b.kind === 'anthropic') return forwardAnthropic(req, res, fwdBody, b, em, requestMeta);
-    if (b.kind === 'ollama') return forwardOllama(req, res, fwdBody, b, em, requestMeta);
     return send(res, 500, { error: `unknown backend kind: ${b.kind}` });
   };
 
@@ -2103,7 +2215,7 @@ const server = http.createServer(async (req, res) => {
         startedAtMs: nowMs(),
       };
       if (backend.kind === 'ollama') {
-        if (!ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url)) return;
+        if (!(await ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url))) return;
         // For Ollama: forward to Ollama's /v1/messages/count_tokens equivalent
         return forwardOllamaPassthrough(req, res, fwdBody, backend, effectiveModel, requestMeta);
       }
@@ -2155,7 +2267,7 @@ const server = http.createServer(async (req, res) => {
   if (strategies[terminalModel]) {
     handleRequestWithFallback(req, res, fwdBody, resolved);
   } else {
-    if (backend.kind === 'ollama' && !ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url)) return;
+    if (backend.kind === 'ollama' && !(await ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url))) return;
     if (backend.kind === 'anthropic') return forwardAnthropic(req, res, fwdBody, backend, effectiveModel, requestMeta);
     if (backend.kind === 'ollama') return forwardOllama(req, res, fwdBody, backend, effectiveModel, requestMeta);
     return send(res, 500, { error: `unknown backend kind: ${backend.kind}` });
@@ -2393,10 +2505,23 @@ const hooksServer = require('http').createServer((req, res) => {
               const postToMessages = payload => postJsonLocal(proxyApiPort, '/v1/messages', payload);
               const result = await classifyIntent(prompt, CONFIG, postToMessages);
               if (result.confidence < 60 && result.recommended_tool) {
-                // Log for offline pattern analysis (non-blocking, fire-and-forget with .catch)
-                const logLine = JSON.stringify({ ts: new Date().toISOString(), prompt: prompt.slice(0, 120), result }) + '\n';
-                const logPath = require('path').join(process.env.HOME || require('os').homedir(), '.claude', 'classify-intent-signals.log');
-                require('fs').appendFile(logPath, logLine, () => {}); // async, non-blocking
+                // Log for offline pattern analysis (non-blocking, fire-and-forget).
+                // A6: create with mode 0600 (owner r/w only) and let users opt out entirely
+                // via CLAUDE_PROXY_LOG_PROMPTS=0. `appendFile` alone would leave perms at
+                // the umask default (usually 0644), so we fs.open with an explicit mode.
+                if (process.env.CLAUDE_PROXY_LOG_PROMPTS !== '0') {
+                  const logLine = JSON.stringify({ ts: new Date().toISOString(), prompt: prompt.slice(0, 120), result }) + '\n';
+                  const logPath = require('path').join(process.env.HOME || require('os').homedir(), '.claude', 'classify-intent-signals.log');
+                  require('fs').open(logPath, 'a', 0o600, (openErr, fd) => {
+                    if (openErr) return;
+                    require('fs').appendFile(fd, logLine, () => {
+                      // Pre-existing logs may have been created with umask perms
+                      // before A6 landed; chmod is idempotent and cheap.
+                      require('fs').chmod(logPath, 0o600, () => {});
+                      require('fs').close(fd, () => {});
+                    });
+                  });
+                }
                 issues.push(`Note: lightweight model active — this task may benefit from --route default (confidence: ${result.confidence}%)`);
               }
             } catch (classifyErr) {
