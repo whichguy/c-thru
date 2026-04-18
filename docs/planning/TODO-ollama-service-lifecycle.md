@@ -33,4 +33,20 @@ A focused plan document (separate from this TODO) that:
 
 ## Status
 
-Queued. Not yet started.
+Partial progress:
+- ✅ `warmOllamaModel` migrated from `spawn('ollama', ['run', m, ''])` to
+  HTTP `POST /api/generate` with `keep_alive: 30m` (configurable via
+  `CLAUDE_PROXY_OLLAMA_KEEP_ALIVE`). Honors the backend URL instead of
+  relying on `$OLLAMA_HOST`.
+
+Still to do:
+- `ensureOllamaModelLoaded` still spawns `ollama run --options num_ctx=…`
+  because the CLI is currently the path that sets `num_ctx` on load. HTTP
+  equivalent: pass `options: {num_ctx}` in the `/api/generate` body.
+- Platform-aware auto-start (launchctl / systemctl) when Ollama is
+  unreachable, replacing the "is 'ollama serve' running?" error.
+- Model pre-pull via `POST /api/pull` when a referenced model isn't
+  present in `/api/tags`.
+- Adopt `GET /api/ps` for smarter warm/unload decisions (prerequisite
+  for the logical-role exclusivity work — see
+  `TODO-logical-role-exclusivity.md`).
