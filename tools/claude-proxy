@@ -675,9 +675,15 @@ function fireDesktopNotification(primary, served_by) {
   if (process.platform !== 'darwin') return;
   if (process.env.CLAUDE_PROXY_NOTIFY !== '1') return;
   const msg = `Primary ${primary} is unreachable. Serving from ${served_by}.`;
-  const script = `display notification "${msg.replace(/"/g, '\\"')}" with title "c-thru proxy" sound name "Tink"`;
+  // Pass msg as a positional arg to an AppleScript handler rather than interpolating —
+  // avoids any quoting/escape pitfalls if a model name contains "/`/\/newlines.
   try {
-    const child = spawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' });
+    const child = spawn('osascript', [
+      '-e', 'on run argv',
+      '-e', 'display notification (item 1 of argv) with title "c-thru proxy" sound name "Tink"',
+      '-e', 'end run',
+      '--', msg,
+    ], { detached: true, stdio: 'ignore' });
     child.on('error', () => {});
     child.unref();
   } catch {}
@@ -1640,7 +1646,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
           setCooldown(candidateModel, cFailureClass, upRes.statusCode, upRes.headers);
           return tryFallbackChain(candidates, failureClass, currentIdx + 1);
         }
-        proxyLog('fallback.candidate_success', { candidate: candidateModel, status_code: upRes.statusCode, elapsed_ms: nowMs() - cStart });
+        proxyLog('fallback.candidate_success', { candidate: candidateModel, terminal_model: terminalModel, status_code: upRes.statusCode, elapsed_ms: nowMs() - cStart });
         recordFallbackEvent(terminalModel, candidateModel, 'chain_success');
         const respHeaders = { ...upRes.headers };
         if (ANNOTATE_MODEL) respHeaders['x-claude-proxy-served-by'] = candidateModel;
