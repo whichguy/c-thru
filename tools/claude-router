@@ -31,6 +31,11 @@ LAUNCH_CWD="$(pwd -P 2>/dev/null || pwd)"
 LAUNCH_PROJECT_DIR=""
 CLAUDE_PROFILE_DIR="${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 OLLAMA_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
+# Default to a fixed proxy port so concurrent router invocations (main session,
+# classify hook, background subprocesses) converge on a single proxy via flock
+# coordination in ensure_proxy_running, instead of each starting its own.
+: "${CLAUDE_PROXY_PORT:=9997}"
+export CLAUDE_PROXY_PORT
 ROUTER_STARTED_PROXY_PID=""
 CLAUDE_CHILD_PID=""
 ROUTER_CLEANUP_ARMED=0
@@ -1494,7 +1499,7 @@ run_background_ollama_prep_sweep() {
       ensure_ollama_running "$model" "$cli_host" "$cli_key" "sweep" "$backend_id" "$capabilities"
     done <<< "$grouped_sweep"
     claude_router_debug_event "ollama sweep result count=$count"
-  ) >/dev/null &
+  ) >/dev/null 2>&1 &
   disown 2>/dev/null || true
 }
 
