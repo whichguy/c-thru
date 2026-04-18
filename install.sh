@@ -31,7 +31,7 @@ fi
 chmod +x "$TOOLS_SRC/claude-router" "$TOOLS_SRC/claude-proxy" 2>/dev/null || true
 chmod +x "$TOOLS_SRC"/*.js 2>/dev/null || true
 chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
-chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" 2>/dev/null || true
 
 mkdir -p "$TOOLS_DEST"
 
@@ -78,6 +78,9 @@ else
 fi
 link_tool verify-llm-capabilities-mcp.sh verify-llm-capabilities-mcp
 link_tool c-thru-proxy-health.sh c-thru-proxy-health
+link_tool c-thru-session-start.sh c-thru-session-start
+link_tool c-thru-map-changed.sh c-thru-map-changed
+link_tool c-thru-classify.sh c-thru-classify
 
 # --- Migrate legacy providers schema ---
 # Guard: jq -e '.providers' is a no-op if key is absent — idempotent by design.
@@ -234,6 +237,7 @@ register_hooks() {
     local settings="$CLAUDE_DIR/settings.json"
     local session_cmd="$TOOLS_DEST/c-thru-session-start"
     local health_cmd="$TOOLS_DEST/c-thru-proxy-health"
+    local classify_cmd="$TOOLS_DEST/c-thru-classify"
 
     if [ ! -f "$settings" ]; then
         echo '{}' > "$settings"
@@ -332,6 +336,26 @@ register_hooks() {
             }]
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
         echo -e "  ${GREEN}✅ registered hook: UserPromptSubmit c-thru-proxy-health (asyncRewake)${NC}"
+    fi
+
+    # --- UserPromptSubmit classify (async context injection via hooks listener) ---
+    local cl_exists
+    cl_exists=$(jq -r --arg cmd "$classify_cmd" \
+        '(.hooks.UserPromptSubmit // []) | [.[].hooks[]?.command // ""] | map(select(contains($cmd))) | length' \
+        "$settings" 2>/dev/null || echo 0)
+    if [ "${cl_exists:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  UserPromptSubmit c-thru-classify${NC}"
+    else
+        tmp="${settings}.tmp.$$"
+        jq --arg cmd "$classify_cmd" '
+            if .hooks == null then .hooks = {} else . end |
+            if .hooks.UserPromptSubmit == null then .hooks.UserPromptSubmit = [] else . end |
+            .hooks.UserPromptSubmit += [{
+                "matcher": "*",
+                "hooks": [{"type": "command", "command": $cmd, "timeout": 5, "async": true}]
+            }]
+        ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+        echo -e "  ${GREEN}✅ registered hook: UserPromptSubmit c-thru-classify${NC}"
     fi
 }
 
