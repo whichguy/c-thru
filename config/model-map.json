@@ -26,131 +26,161 @@
     "16gb": {
       "default": {
         "connected_model": "glm-5.1:cloud",
-        "disconnect_model": "qwen3:1.7b"
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
       },
       "classifier": {
         "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b"
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
       },
       "explorer": {
         "connected_model": "gemma4:e2b",
-        "disconnect_model": "qwen3:1.7b"
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
       },
       "reviewer": {
         "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b"
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
       },
       "workhorse": {
         "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b"
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
       },
       "coder": {
         "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b"
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
       }
     },
     "32gb": {
       "default": {
         "connected_model": "glm-5.1:cloud",
-        "disconnect_model": "gemma4:e2b"
+        "disconnect_model": "gemma4:e2b",
+        "on_failure": "cascade"
       },
       "classifier": {
         "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b"
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
       },
       "explorer": {
         "connected_model": "gemma4:e2b",
-        "disconnect_model": "gemma4:e2b"
+        "disconnect_model": "gemma4:e2b",
+        "on_failure": "cascade"
       },
       "reviewer": {
         "connected_model": "deepseek-r1:14b",
-        "disconnect_model": "gemma4:e2b"
+        "disconnect_model": "gemma4:e2b",
+        "on_failure": "cascade"
       },
       "workhorse": {
         "connected_model": "gemma4:e2b",
-        "disconnect_model": "gemma4:e2b"
+        "disconnect_model": "gemma4:e2b",
+        "on_failure": "cascade"
       },
       "coder": {
         "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b"
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
       }
     },
     "48gb": {
       "default": {
         "connected_model": "glm-5.1:cloud",
-        "disconnect_model": "gemma4:e4b"
+        "disconnect_model": "gemma4:e4b",
+        "on_failure": "cascade"
       },
       "classifier": {
         "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b"
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
       },
       "explorer": {
         "connected_model": "gemma4:e2b",
-        "disconnect_model": "gemma4:e2b"
+        "disconnect_model": "gemma4:e2b",
+        "on_failure": "cascade"
       },
       "reviewer": {
         "connected_model": "gemma4:e4b",
-        "disconnect_model": "gemma4:e4b"
+        "disconnect_model": "gemma4:e4b",
+        "on_failure": "cascade"
       },
       "workhorse": {
         "connected_model": "gemma4:26b",
-        "disconnect_model": "gemma4:26b"
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "cascade"
       },
       "coder": {
         "connected_model": "gemma4:e4b",
-        "disconnect_model": "gemma4:e4b"
+        "disconnect_model": "gemma4:e4b",
+        "on_failure": "cascade"
       }
     },
     "64gb": {
       "default": {
         "connected_model": "glm-5.1:cloud",
-        "disconnect_model": "gemma4:26b"
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "cascade"
       },
       "classifier": {
         "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b"
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "hard_fail"
       },
       "explorer": {
         "connected_model": "gemma4:e2b",
-        "disconnect_model": "gemma4:e2b"
+        "disconnect_model": "gemma4:e2b",
+        "on_failure": "cascade"
       },
       "reviewer": {
         "connected_model": "gemma4:26b",
-        "disconnect_model": "gemma4:26b"
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "cascade"
       },
       "workhorse": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gemma4:26b-a4b"
+        "disconnect_model": "gemma4:26b-a4b",
+        "on_failure": "cascade"
       },
       "coder": {
         "connected_model": "qwen3-coder:30b",
-        "disconnect_model": "qwen3-coder:30b"
+        "disconnect_model": "qwen3-coder:30b",
+        "on_failure": "cascade"
       }
     },
     "128gb": {
       "default": {
         "connected_model": "glm-5.1:cloud",
-        "disconnect_model": "gemma4:26b"
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "cascade"
       },
       "classifier": {
         "connected_model": "gemma4:26b-a4b",
-        "disconnect_model": "gemma4:26b-a4b"
+        "disconnect_model": "gemma4:26b-a4b",
+        "on_failure": "hard_fail"
       },
       "explorer": {
         "connected_model": "gemma4:26b",
-        "disconnect_model": "gemma4:26b"
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "cascade"
       },
       "reviewer": {
         "connected_model": "deepseek-r1:14b",
-        "disconnect_model": "deepseek-r1:14b"
+        "disconnect_model": "deepseek-r1:14b",
+        "on_failure": "cascade"
       },
       "workhorse": {
         "connected_model": "gemma4:31b",
-        "disconnect_model": "gemma4:26b"
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "cascade"
       },
       "coder": {
         "connected_model": "gemma4:26b-a4b",
-        "disconnect_model": "gemma4:26b-a4b"
+        "disconnect_model": "gemma4:26b-a4b",
+        "on_failure": "cascade"
       }
     }
   },
@@ -215,11 +245,23 @@
     "heavy_coder": {
       "model": "general-default"
     },
-    "review_plan": {
+    "code_review_lint": {
+      "model": "classifier"
+    },
+    "summarize_light": {
+      "model": "classifier"
+    },
+    "code_fix": {
       "model": "workhorse"
     },
-    "review_code": {
-      "model": "general-default"
+    "plan_review": {
+      "model": "workhorse"
+    },
+    "review_code_full": {
+      "model": "reviewer"
+    },
+    "hard_reasoning": {
+      "model": "reviewer"
     }
   },
   "fallback_strategies": {
