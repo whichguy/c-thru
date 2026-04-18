@@ -275,11 +275,13 @@ loadConfig();
 function reloadConfigFromDisk() {
   try {
     const nextConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    // Capture mtime before validation so that if statSync throws, CONFIG is never swapped.
+    const nextMtime = fs.statSync(CONFIG_PATH).mtimeMs;
     // Validate before swapping so a bad config never replaces a good one.
     validateRouteGraph(nextConfig);
     if (!validateWithNode()) throw new Error('schema validation failed');
     CONFIG = nextConfig;
-    CONFIG_MTIME_MS = fs.statSync(CONFIG_PATH).mtimeMs;
+    CONFIG_MTIME_MS = nextMtime;
     return true;
   } catch (e) {
     console.error(`claude-proxy: config reload failed, keeping old config: ${e.message}`);
