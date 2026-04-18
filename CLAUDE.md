@@ -5,6 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Wiki
 WIKI: /wiki-load <search> or browse wiki/index.md before answering project-domain questions. /wiki-query for synthesis.
 
+## Model rewriting: proxy-only
+
+Model-field rewriting (logical → concrete, route aliasing, fallback
+remap) is the proxy's responsibility — see `wiki/entities/declared-rewrites.md`.
+Claude Code hooks may observe (log, inject context) or gate (refuse to
+proceed) but must not modify `tool_input.model` or `body.model`. A second
+rewriting path creates a silent source of drift from `config/model-map.json`.
+
 ## What This Repo Is
 
 **c-thru** is the router/proxy layer that lets Claude Code talk to alternative model providers (Ollama, OpenRouter, Bedrock, Vertex, LiteLLM) without changing the vendor CLI. It was extracted from `claude-craft` as a standalone public repo.
