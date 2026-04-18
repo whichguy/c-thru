@@ -257,16 +257,20 @@ function validateRouteGraph(cfg) {
 
 // validateWithNode shells out to model-map-validate.js and returns false on
 // failure (never calls process.exit) so it is safe to call from hot-reload paths.
-function validateWithNode() {
+// pathToValidate defaults to CONFIG_PATH; pass a temp file to avoid TOCTOU.
+function validateWithNode(pathToValidate) {
+  pathToValidate = pathToValidate || CONFIG_PATH;
   const validator = path.join(path.dirname(process.argv[1] || ''), 'model-map-validate.js');
   if (!fs.existsSync(validator)) return true;
   try {
-    const result = spawnSync(process.execPath, [validator, CONFIG_PATH], { encoding: 'utf8', timeout: 5000 });
+    const result = spawnSync(process.execPath, [validator, pathToValidate], { encoding: 'utf8', timeout: 5000 });
     if (result.status !== 0) {
-      console.error(`claude-proxy: invalid model-map config: ${CONFIG_PATH}`);
+      console.error(`claude-proxy: invalid model-map config: ${pathToValidate}`);
       return false;
     }
-  } catch { /* validator not critical */ }
+  } catch (e) {
+    console.error(`claude-proxy: validator spawn failed: ${e.message}`);
+  }
   return true;
 }
 
@@ -279,7 +283,13 @@ function reloadConfigFromDisk() {
     const nextMtime = fs.statSync(CONFIG_PATH).mtimeMs;
     // Validate before swapping so a bad config never replaces a good one.
     validateRouteGraph(nextConfig);
-    if (!validateWithNode()) throw new Error('schema validation failed');
+    const tmpPath = path.join(os.tmpdir(), `claude-proxy-validate-${process.pid}.json`);
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(nextConfig));
+      if (!validateWithNode(tmpPath)) throw new Error('schema validation failed');
+    } finally {
+      try { fs.unlinkSync(tmpPath); } catch {}
+    }
     CONFIG = nextConfig;
     CONFIG_MTIME_MS = nextMtime;
     return true;
@@ -305,12 +315,8 @@ try {
     if (filename === path.basename(CONFIG_PATH)) {
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => {
-        try {
-          if (reloadConfigFromDisk()) {
-            console.error(`claude-proxy: reloaded config from ${CONFIG_PATH}`);
-          }
-        } catch (e) {
-          console.error(`claude-proxy: config reload failed, keeping old config: ${e.message}`);
+        if (reloadConfigFromDisk()) {
+          console.error(`claude-proxy: reloaded config from ${CONFIG_PATH}`);
         }
       }, 50);
     }
