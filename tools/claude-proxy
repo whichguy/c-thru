@@ -889,6 +889,48 @@ function ollamaLoad(backendUrl, model, opts) {
   });
 }
 
+// ── Logical-role exclusivity ───────────────────────────────────────────
+// Ensures at most one physical model is loaded per logical alias role.
+// Swap is lazy (triggered on next request) and serialized per-role.
+// Unload happens after M_new is confirmed pullable; no rollback on failure.
+const roleBindings = new Map();   // role → { model: string, backendUrl: string }
+const roleSwapLocks = new Map();  // role → Promise (serialize concurrent swaps)
+
+function ollamaUnloadModel(backendUrl, model) {
+  const urlStr = _ollamaUrl(backendUrl, '/api/generate');
+  return new Promise((resolve) => {
+    const body = JSON.stringify({ model, keep_alive: 0 });
+    const transport = _ollamaTransport(urlStr);
+    const req = transport.request(urlStr, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, res => { res.resume(); resolve(); });
+    req.on('error', () => resolve()); // best-effort — if Ollama is gone, nothing to unload
+    req.setTimeout(10000, () => { req.destroy(); resolve(); });
+    req.write(body);
+    req.end();
+  });
+}
+
+async function enforceRoleExclusivity(logicalRole, newModel, backendUrl) {
+  const prev = roleBindings.get(logicalRole);
+  roleBindings.set(logicalRole, { model: newModel, backendUrl });
+  if (!prev || prev.model === newModel) return;
+
+  // Binding changed — serialize the swap so concurrent reqs for this role queue up
+  const lock = roleSwapLocks.get(logicalRole) || Promise.resolve();
+  const next = lock.then(async () => {
+    const current = roleBindings.get(logicalRole);
+    if (!current || current.model === newModel) return; // a concurrent req already swapped
+    proxyLog('role_exclusivity.swap', { role: logicalRole, old: prev.model, new: newModel });
+    await ollamaUnloadModel(prev.backendUrl || backendUrl, prev.model);
+  }).finally(() => {
+    if (roleSwapLocks.get(logicalRole) === next) roleSwapLocks.delete(logicalRole);
+  });
+  roleSwapLocks.set(logicalRole, next);
+  await next;
+}
+
 function recordFailureClass(failureClass) {
   stats.byFailureClass[failureClass] = (stats.byFailureClass[failureClass] || 0) + 1;
 }
@@ -1209,10 +1251,10 @@ function isLocalOllamaBackend(model, backendUrl) {
   }
 }
 
-async function ensureOllamaModelLoaded(model, backendUrl) {
+async function ensureOllamaModelLoaded(model, backendUrl, logicalRole = null) {
   if (SKIP_WARMUP) return null;
   if (!isLocalOllamaBackend(model, backendUrl)) return null;
-  debugLog('proxy.ollama.prepare.start', { model, backend_url: backendUrl });
+  debugLog('proxy.ollama.prepare.start', { model, backend_url: backendUrl, logical_role: logicalRole });
 
   // 1) Is the model present?
   let tags;
@@ -1249,7 +1291,11 @@ async function ensureOllamaModelLoaded(model, backendUrl) {
     proxyLog('ollama.pull.success', { model, backend_url: backendUrl });
   }
 
-  // 3) Already loaded?
+  // 3) Enforce role exclusivity — unload previous model for this role if binding changed.
+  //    Runs after pull so M_new is confirmed available before M_old is evicted.
+  if (logicalRole) await enforceRoleExclusivity(logicalRole, model, backendUrl);
+
+  // 4) Already loaded?
   let loaded = [];
   try { loaded = await ollamaPs(backendUrl); }
   catch (e) {
@@ -1261,15 +1307,15 @@ async function ensureOllamaModelLoaded(model, backendUrl) {
     return null;
   }
 
-  // 4) Trigger load (fire-and-forget — the actual request will also load it, this just pre-warms)
+  // 5) Trigger load (fire-and-forget — the actual request will also load it, this just pre-warms)
   const numCtx = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
   debugLog('proxy.ollama.prepare.warm.start', { model, backend_url: backendUrl, num_ctx: numCtx });
   ollamaLoad(backendUrl, model, { numCtx, keepAlive: OLLAMA_WARM_KEEP_ALIVE }).catch(() => {});
   return null;
 }
 
-async function ensureOllamaReadyOrSend(res, model, backendUrl) {
-  const error = await ensureOllamaModelLoaded(model, backendUrl);
+async function ensureOllamaReadyOrSend(res, model, backendUrl, logicalRole = null) {
+  const error = await ensureOllamaModelLoaded(model, backendUrl, logicalRole);
   if (!error) return true;
   if (!res.headersSent) send(res, 502, { error });
   return false;
@@ -1333,14 +1379,16 @@ function resolveBackend(model) {
   const backends = CONFIG.backends || {};
 
   // 1. Follow route graph first
-  const terminalModel = resolveLogicalAlias(resolveRouteModel(model));
+  const afterRoute = resolveRouteModel(model);
+  const terminalModel = resolveLogicalAlias(afterRoute);
+  const logicalRole = LLM_PROFILE_ALIASES.has(afterRoute) ? afterRoute : null;
 
   // 2. Try exact match in model_routes
   if (modelRoutes[terminalModel] !== undefined) {
     const id = modelRoutes[terminalModel];
     const backend = backends[id];
     if (!backend) return { error: `backend '${id}' not defined for model '${terminalModel}'`, status: 500, extra: { terminal_model: terminalModel } };
-    return { backend: { id, ...backend }, effectiveModel: terminalModel };
+    return { backend: { id, ...backend }, effectiveModel: terminalModel, logicalRole };
   }
 
   // 3. Try pattern match in model_routes
@@ -1348,7 +1396,7 @@ function resolveBackend(model) {
   if (patternBackend) {
     const backend = backends[patternBackend];
     if (!backend) return { error: `backend '${patternBackend}' not defined for pattern-matched model '${terminalModel}'`, status: 500, extra: { terminal_model: terminalModel } };
-    return { backend: { id: patternBackend, ...backend }, effectiveModel: terminalModel };
+    return { backend: { id: patternBackend, ...backend }, effectiveModel: terminalModel, logicalRole };
   }
 
   // 4. If model was routed but terminal not in model_routes, try original model
@@ -1356,7 +1404,7 @@ function resolveBackend(model) {
     const id = modelRoutes[model];
     const backend = backends[id];
     if (!backend) return { error: `backend '${id}' not defined for model '${model}'`, status: 500 };
-    return { backend: { id, ...backend }, effectiveModel: model };
+    return { backend: { id, ...backend }, effectiveModel: model, logicalRole };
   }
 
   // 5. Default: unknown claude-* → anthropic, everything else → ollama fallback
@@ -1365,7 +1413,7 @@ function resolveBackend(model) {
     const anthroEntry = Object.entries(backends).find(([, v]) => (v.kind || 'anthropic') === 'anthropic');
     if (anthroEntry) {
       const [id, backend] = anthroEntry;
-      return { backend: { id, ...backend }, effectiveModel: terminalModel };
+      return { backend: { id, ...backend }, effectiveModel: terminalModel, logicalRole };
     }
   }
 
@@ -1374,6 +1422,7 @@ function resolveBackend(model) {
   return {
     backend: { id: '__ollama_fallback__', kind: 'ollama', url: DEFAULT_OLLAMA_URL, _ollamaFallback: true },
     effectiveModel: terminalModel,
+    logicalRole,
   };
 }
 
@@ -1665,7 +1714,7 @@ async function readBody(req) {
 }
 
 function handleRequestWithFallback(req, res, body, resolved) {
-  const { backend, effectiveModel } = resolved;
+  const { backend, effectiveModel, logicalRole } = resolved;
   const clientModel = body.model;
   const endpoint = req.url;
 
@@ -1682,7 +1731,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
     };
     if (b.kind === 'ollama') {
       (async () => {
-        if (!(await ensureOllamaReadyOrSend(res, em || clientModel, b.url))) return;
+        if (!(await ensureOllamaReadyOrSend(res, em || clientModel, b.url, logicalRole))) return;
         return forwardOllama(req, res, fwdBody, b, em, requestMeta);
       })().catch(err => {
         if (!res.headersSent) send(res, 500, { error: err.message });
@@ -2204,7 +2253,7 @@ const server = http.createServer(async (req, res) => {
         if (resolved.extra) Object.assign(payload, resolved.extra);
         return send(res, code, payload);
       }
-      const { backend, effectiveModel } = resolved;
+      const { backend, effectiveModel, logicalRole: countTokRole } = resolved;
       const fwdBody = { ...body, model: effectiveModel || model };
       const requestMeta = {
         endpoint: req.url,
@@ -2215,7 +2264,7 @@ const server = http.createServer(async (req, res) => {
         startedAtMs: nowMs(),
       };
       if (backend.kind === 'ollama') {
-        if (!(await ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url))) return;
+        if (!(await ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url, countTokRole))) return;
         // For Ollama: forward to Ollama's /v1/messages/count_tokens equivalent
         return forwardOllamaPassthrough(req, res, fwdBody, backend, effectiveModel, requestMeta);
       }
@@ -2238,7 +2287,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   stats.currentInFlight++;
-  const { backend, effectiveModel } = resolved;
+  const { backend, effectiveModel, logicalRole } = resolved;
   const clientModel = model;
   const fwdBody = { ...body, model: effectiveModel || model };
   const requestMeta = {
@@ -2267,7 +2316,7 @@ const server = http.createServer(async (req, res) => {
   if (strategies[terminalModel]) {
     handleRequestWithFallback(req, res, fwdBody, resolved);
   } else {
-    if (backend.kind === 'ollama' && !(await ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url))) return;
+    if (backend.kind === 'ollama' && !(await ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url, logicalRole))) return;
     if (backend.kind === 'anthropic') return forwardAnthropic(req, res, fwdBody, backend, effectiveModel, requestMeta);
     if (backend.kind === 'ollama') return forwardOllama(req, res, fwdBody, backend, effectiveModel, requestMeta);
     return send(res, 500, { error: `unknown backend kind: ${backend.kind}` });
