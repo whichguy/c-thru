@@ -225,7 +225,7 @@ SKILL_EOF
 }
 
 # --- Hook: UserPromptSubmit proxy health check ---
-register_hook() {
+register_hooks() {
     if [ "$JQ_AVAILABLE" -eq 0 ]; then
         echo -e "  ${YELLOW}⚠️  jq not found — skipping hook${NC}"
         return 0
@@ -299,7 +299,7 @@ install_skill
 
 echo ""
 echo "Hooks:"
-register_hook
+register_hooks
 
 echo ""
 echo -e "${YELLOW}Quick reference:${NC}"
