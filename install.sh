@@ -16,6 +16,11 @@ CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 TOOLS_SRC="$REPO_DIR/tools"
 TOOLS_DEST="$CLAUDE_DIR/tools"
 
+JQ_AVAILABLE=0
+if command -v jq >/dev/null 2>&1; then
+    JQ_AVAILABLE=1
+fi
+
 echo -e "${YELLOW}🔧 c-thru installer — ${REPO_DIR}${NC}"
 
 if [ ! -d "$TOOLS_SRC" ]; then
@@ -26,6 +31,7 @@ fi
 chmod +x "$TOOLS_SRC/claude-router" "$TOOLS_SRC/claude-proxy" 2>/dev/null || true
 chmod +x "$TOOLS_SRC"/*.js 2>/dev/null || true
 chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" 2>/dev/null || true
 
 mkdir -p "$TOOLS_DEST"
 
@@ -71,6 +77,7 @@ else
     echo -e "  ${YELLOW}⚠️  node not found — skipping JS helper symlinks${NC}"
 fi
 link_tool verify-llm-capabilities-mcp.sh verify-llm-capabilities-mcp
+link_tool c-thru-proxy-health.sh c-thru-proxy-health
 
 # --- Migrate legacy providers schema ---
 # Guard: jq -e '.providers' is a no-op if key is absent — idempotent by design.
@@ -122,6 +129,138 @@ migrate_providers_schema() {
     echo -e "  ${GREEN}✅ Migrated ${count} provider(s) → backends + model_routes${NC}"
 }
 
+# --- MCP server registration in ~/.claude.json ---
+register_mcp_server() {
+    if [ "$JQ_AVAILABLE" -eq 0 ]; then
+        echo -e "  ${YELLOW}⚠️  jq not found — skipping MCP registration${NC}"
+        return 0
+    fi
+
+    local server_name="llm-capabilities"
+    local mcp_js="$TOOLS_DEST/llm-capabilities-mcp"
+    local claude_json="$HOME/.claude.json"
+
+    if [ ! -f "$claude_json" ]; then
+        echo '{}' > "$claude_json"
+    fi
+
+    local current_arg
+    current_arg=$(jq -r --arg n "$server_name" '.mcpServers[$n].args[0] // empty' "$claude_json" 2>/dev/null || true)
+
+    if [ "$current_arg" = "$mcp_js" ]; then
+        echo -e "  ${GRAY}✓  llm-capabilities registered${NC}"
+        return 0
+    fi
+
+    local tmp="${claude_json}.tmp.$$"
+    jq --arg n "$server_name" --arg path "$mcp_js" \
+        'if .mcpServers == null then .mcpServers = {} else . end |
+         .mcpServers[$n] = {"type": "stdio", "command": "node", "args": [$path]}' \
+        "$claude_json" > "$tmp"
+    mv "$tmp" "$claude_json"
+
+    if [ -n "$current_arg" ]; then
+        echo -e "  ${GREEN}✅ updated (was: ${current_arg})${NC}"
+    else
+        echo -e "  ${GREEN}✅ registered llm-capabilities${NC}"
+    fi
+}
+
+# --- Permission allow-list entry in ~/.claude/settings.json ---
+add_permission() {
+    if [ "$JQ_AVAILABLE" -eq 0 ]; then
+        echo -e "  ${YELLOW}⚠️  jq not found — skipping permission${NC}"
+        return 0
+    fi
+
+    local perm="mcp__llm-capabilities__*"
+    local settings="$CLAUDE_DIR/settings.json"
+
+    if [ ! -f "$settings" ]; then
+        echo '{"permissions":{"allow":[]}}' > "$settings"
+    fi
+
+    local exists
+    exists=$(jq -r --arg p "$perm" '(.permissions.allow // []) | map(select(. == $p)) | length' "$settings" 2>/dev/null || echo 0)
+
+    if [ "${exists:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  ${perm} allowed${NC}"
+        return 0
+    fi
+
+    local tmp="${settings}.tmp.$$"
+    jq --arg p "$perm" '
+        if .permissions == null then .permissions = {} else . end |
+        if .permissions.allow == null then .permissions.allow = [] else . end |
+        .permissions.allow += [$p]
+    ' "$settings" > "$tmp"
+    mv "$tmp" "$settings"
+    echo -e "  ${GREEN}✅ added permission: ${perm}${NC}"
+}
+
+# --- Skill: /c-thru-status command file ---
+install_skill() {
+    local commands_dir="$CLAUDE_DIR/commands"
+    local skill_file="$commands_dir/c-thru-status.md"
+    local canonical_line='Run: ~/.claude/tools/claude-router --list $ARGUMENTS'
+
+    mkdir -p "$commands_dir"
+
+    if [ -f "$skill_file" ] && grep -qF "$canonical_line" "$skill_file" 2>/dev/null; then
+        echo -e "  ${GRAY}✓  /c-thru-status${NC}"
+        return 0
+    fi
+
+    cat > "$skill_file" << 'SKILL_EOF'
+---
+description: "Show c-thru routes, models, and backend health"
+allowed-tools: "Bash"
+---
+
+# c-thru Status
+
+Run: ~/.claude/tools/claude-router --list $ARGUMENTS
+SKILL_EOF
+    echo -e "  ${GREEN}✅ installed skill: /c-thru-status${NC}"
+}
+
+# --- Hook: UserPromptSubmit proxy health check ---
+register_hook() {
+    if [ "$JQ_AVAILABLE" -eq 0 ]; then
+        echo -e "  ${YELLOW}⚠️  jq not found — skipping hook${NC}"
+        return 0
+    fi
+
+    local settings="$CLAUDE_DIR/settings.json"
+    local hook_cmd="$TOOLS_DEST/c-thru-proxy-health"
+
+    if [ ! -f "$settings" ]; then
+        echo '{}' > "$settings"
+    fi
+
+    local exists
+    exists=$(jq -r --arg cmd "$hook_cmd" \
+        '(.hooks.UserPromptSubmit // []) | [.[].hooks[]?.command // ""] | map(select(contains($cmd))) | length' \
+        "$settings" 2>/dev/null || echo 0)
+
+    if [ "${exists:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  UserPromptSubmit c-thru-proxy-health${NC}"
+        return 0
+    fi
+
+    local tmp="${settings}.tmp.$$"
+    jq --arg cmd "$hook_cmd" '
+        if .hooks == null then .hooks = {} else . end |
+        if .hooks.UserPromptSubmit == null then .hooks.UserPromptSubmit = [] else . end |
+        .hooks.UserPromptSubmit += [{
+            "matcher": "*",
+            "hooks": [{"type": "command", "command": $cmd, "timeout": 3}]
+        }]
+    ' "$settings" > "$tmp"
+    mv "$tmp" "$settings"
+    echo -e "  ${GREEN}✅ registered hook: UserPromptSubmit c-thru-proxy-health${NC}"
+}
+
 # --- User model-map: seed or validate ---
 echo ""
 echo "Model-map (${CLAUDE_DIR}/model-map.json):"
@@ -145,6 +284,22 @@ elif [ -f "$REPO_DIR/config/model-map.json" ]; then
 else
     echo -e "  ${YELLOW}⚠️  No config/model-map.json found; skipping seed. Copy manually if needed.${NC}"
 fi
+
+echo ""
+echo "MCP server:"
+register_mcp_server
+
+echo ""
+echo "Permissions:"
+add_permission
+
+echo ""
+echo "Skills:"
+install_skill
+
+echo ""
+echo "Hooks:"
+register_hook
 
 echo ""
 echo -e "${YELLOW}Quick reference:${NC}"
