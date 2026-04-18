@@ -25,7 +25,12 @@ last_ms=$((last_ms * 1000))
 served_by=$(printf '%s' "$json_payload" | jq -r '.candidate // empty' 2>/dev/null)
 [[ -n "$served_by" ]] || exit 0
 
-primary=$(tail -c 50000 "$log_file" 2>/dev/null | grep '\[fallback\.chain_start\]' | tail -1 | grep -oE '\{.*\}$' | jq -r '.terminal_model // empty' 2>/dev/null)
+# Prefer terminal_model from the same event line (authoritative correlation).
+# Fall back to scanning chain_start only if older proxy log format lacks it.
+primary=$(printf '%s' "$json_payload" | jq -r '.terminal_model // empty' 2>/dev/null)
+if [[ -z "$primary" ]]; then
+  primary=$(tail -c 50000 "$log_file" 2>/dev/null | grep '\[fallback\.chain_start\]' | tail -1 | grep -oE '\{.*\}$' | jq -r '.terminal_model // empty' 2>/dev/null)
+fi
 [[ -n "$primary" ]] || primary="primary"
 
 last_reported=0

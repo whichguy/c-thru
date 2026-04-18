@@ -45,10 +45,12 @@ Append overlay to your existing statusline:
 printf '%s%s' "$your_existing_output" "$(sh ~/.claude/tools/c-thru-statusline-overlay 2>/dev/null)"
 ```
 
-Register Stop hook (append to `hooks.Stop` in `~/.claude/settings.json`):
+Register Stop hook (append to `hooks.Stop` in `~/.claude/settings.json`).
+Note: `command` is not shell-expanded, so `~` will not resolve — use an
+absolute path:
 
 ```json
-{"hooks":[{"type":"command","command":"~/.claude/tools/c-thru-stop-hook","timeout":3}]}
+{"hooks":[{"type":"command","command":"/Users/<you>/.claude/tools/c-thru-stop-hook","timeout":3}]}
 ```
 
 ## Session-safety contract
