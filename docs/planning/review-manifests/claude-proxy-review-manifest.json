@@ -1,0 +1,10 @@
+{
+  "target_file": "tools/claude-proxy",
+  "task_name": "cloud-connect-timeout",
+  "dryrun": "false",
+  "approval_status": "APPROVED_WITH_NOTES",
+  "critical_count": 0,
+  "advisory_count": 2,
+  "reviewer": "code-reviewer-agent",
+  "reviewed_at": "2026-04-17T00:00:00.000Z"
+}
