@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# c-thru proxy health check — UserPromptSubmit hook
+# Derive port from explicit env var or from ANTHROPIC_BASE_URL set by claude-router.
+PORT="${CLAUDE_PROXY_PORT:-}"
+if [ -z "$PORT" ] && [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
+    PORT=$(printf '%s' "$ANTHROPIC_BASE_URL" | sed -nE 's#^https?://[^/:]+:([0-9]+).*$#\1#p')
+fi
+[ -n "$PORT" ] || exit 0
+curl -sf --max-time 1 "http://127.0.0.1:$PORT/ping" >/dev/null 2>&1 && exit 0
+echo "c-thru: ⚠️  claude-proxy unreachable on :${PORT} — run: pkill -f claude-proxy"
