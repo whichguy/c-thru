@@ -712,14 +712,20 @@ function warmOllamaModel(model, backendId, backendUrl) {
   proxyLog('fallback.warm_http', { candidate: model, backend_id: backendId, keep_alive: OLLAMA_WARM_KEEP_ALIVE });
   try {
     const body = JSON.stringify({ model, prompt: '', keep_alive: OLLAMA_WARM_KEEP_ALIVE });
-    const req = http.request(urlStr, {
+    // Pick http/https by protocol — backendUrl comes from model-map config
+    // and may be HTTPS for a remote Ollama reverse-proxy setup.
+    const transport = urlStr.startsWith('https:') ? https : http;
+    const req = transport.request(urlStr, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     }, res => {
-      // Drain the response so the socket can be reused; body content is irrelevant.
+      // Drain so the socket can be reused; body content is irrelevant.
       res.resume();
+      // Belt-and-suspenders: if Ollama streams a slow chunked body, don't
+      // leave the socket half-open past our timeout.
+      res.setTimeout(5000, () => res.destroy());
     });
-    req.on('error', () => {}); // Ollama unreachable — rely on the actual request to surface it
+    req.on('error', () => {}); // Ollama unreachable — actual request will surface it
     req.setTimeout(5000, () => req.destroy());
     req.write(body);
     req.end();
