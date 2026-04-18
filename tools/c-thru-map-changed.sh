@@ -23,11 +23,8 @@ case "$file_path" in
 esac
 
 # Locate validator
-validator="${CLAUDE_MODEL_MAP_DEFAULTS_PATH:-}"
-if [ -z "$validator" ]; then
-    script_dir="$(cd "$(dirname "$0")" && pwd)"
-    validator="${script_dir}/model-map-validate.js"
-fi
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+validator="${script_dir}/model-map-validate.js"
 
 if ! command -v node >/dev/null 2>&1 || [ ! -f "$validator" ]; then
     exit 0  # validator unavailable — skip silently

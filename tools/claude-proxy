@@ -1881,7 +1881,7 @@ const hooksServer = require('http').createServer((req, res) => {
             if (s.state === 'degraded' || s.state === 'disconnected') {
               const alternatives = Object.keys(CONFIG.routes || {}).filter(r => r !== id);
               const alt = alternatives[0] ? ` Alternative: --route ${alternatives[0]}` : '';
-              issues.push(`⚠️ Backend ${id} ${s.state} (${s.ewmaMs || 0}ms ewma, ${s.failures || 0} failures).${alt}`);
+              issues.push(`⚠️ Backend ${id} ${s.state} (${s.ewma_latency_ms || 0}ms ewma, ${s.failure_count || 0} failures).${alt}`);
             }
           }
 
