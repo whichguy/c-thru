@@ -13,9 +13,9 @@ last_line=$(tail -c 50000 "$log_file" 2>/dev/null | grep '\[fallback\.candidate_
 [[ -n "$last_line" ]] || exit 0
 
 ts_iso=$(printf '%s' "$last_line" | awk '{print $1}')
-last_ms=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "${ts_iso%.*}" +%s 2>/dev/null)
+# Portable ISO-8601 → epoch-ms via node (avoids BSD-vs-GNU `date` divergence).
+last_ms=$(node -e 'const t=Date.parse(process.argv[1]);if(Number.isFinite(t))process.stdout.write(String(t))' "$ts_iso" 2>/dev/null)
 [[ "$last_ms" =~ ^[0-9]+$ ]] || exit 0
-last_ms=$((last_ms * 1000))
 
 now_ms=$(($(date +%s) * 1000))
 age=$((now_ms - last_ms))

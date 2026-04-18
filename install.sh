@@ -438,8 +438,10 @@ detect_user_config() {
     [ -f "$settings" ] || echo '{}' > "$settings"
 
     local sl_state stop_state
-    sl_state=$(node -e "try{const s=require('$settings');process.stdout.write(s.statusLine?'yes':'no')}catch(e){process.stdout.write('unknown')}" 2>/dev/null)
-    stop_state=$(node -e "try{const s=require('$settings');process.stdout.write(s.hooks&&s.hooks.Stop?'yes':'no')}catch(e){process.stdout.write('unknown')}" 2>/dev/null)
+    # Pass settings path as argv[1] to avoid shell-quoting issues if the path
+    # contains single quotes or backslashes (e.g. /home/o'brien/.claude).
+    sl_state=$(node -e "try{const s=require(process.argv[1]);process.stdout.write(s.statusLine?'yes':'no')}catch(e){process.stdout.write('unknown')}" "$settings" 2>/dev/null)
+    stop_state=$(node -e "try{const s=require(process.argv[1]);process.stdout.write(s.hooks&&s.hooks.Stop?'yes':'no')}catch(e){process.stdout.write('unknown')}" "$settings" 2>/dev/null)
 
     echo ""
     echo "Statusline (fallback badge):"
