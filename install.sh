@@ -255,11 +255,13 @@ register_hooks() {
     # --- SessionStart (HTTP hook + command fallback) ---
     # Each sub-hook is registered independently to avoid duplication on re-runs.
     local ss_http_exists ss_cmd_exists
+    # A12: exact match, not substring. A substring check re-registers (or
+    # silently keeps a stale sibling) whenever the install prefix changes.
     ss_http_exists=$(jq -r --arg url "$hooks_url" \
-        '(.hooks.SessionStart // []) | [.[].hooks[]?.url // ""] | map(select(contains($url))) | length' \
+        '(.hooks.SessionStart // []) | [.[].hooks[]?.url // ""] | map(select(. == $url)) | length' \
         "$settings" 2>/dev/null || echo 0)
     ss_cmd_exists=$(jq -r --arg cmd "$session_cmd" \
-        '(.hooks.SessionStart // []) | [.[].hooks[]?.command // ""] | map(select(contains($cmd))) | length' \
+        '(.hooks.SessionStart // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
         "$settings" 2>/dev/null || echo 0)
 
     local ss_changed=0
@@ -290,10 +292,10 @@ register_hooks() {
     # --- PostCompact (HTTP hook + command fallback) ---
     local pc_http_exists pc_cmd_exists
     pc_http_exists=$(jq -r --arg url "$hooks_url" \
-        '(.hooks.PostCompact // []) | [.[].hooks[]?.url // ""] | map(select(contains($url))) | length' \
+        '(.hooks.PostCompact // []) | [.[].hooks[]?.url // ""] | map(select(. == $url)) | length' \
         "$settings" 2>/dev/null || echo 0)
     pc_cmd_exists=$(jq -r --arg cmd "$session_cmd" \
-        '(.hooks.PostCompact // []) | [.[].hooks[]?.command // ""] | map(select(contains($cmd))) | length' \
+        '(.hooks.PostCompact // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
         "$settings" 2>/dev/null || echo 0)
 
     local pc_changed=0
@@ -325,7 +327,7 @@ register_hooks() {
     # Detect old format (entry present, .async absent) → patch in-place
     local old_entry
     old_entry=$(jq -r --arg cmd "$health_cmd" \
-        '(.hooks.UserPromptSubmit // []) | [.[].hooks[]? | select((.command // "") | contains($cmd))] | .[0] // null' \
+        '(.hooks.UserPromptSubmit // []) | [.[].hooks[]? | select((.command // "") == $cmd)] | .[0] // null' \
         "$settings" 2>/dev/null)
     local has_async
     has_async=$(printf '%s' "$old_entry" | jq -r '.async // false' 2>/dev/null || echo "false")
@@ -337,7 +339,7 @@ register_hooks() {
         tmp="${settings}.tmp.$$"
         jq --arg cmd "$health_cmd" '
             (.hooks.UserPromptSubmit // []) |= map(
-                .hooks |= map(select((.command // "") | contains($cmd) | not))
+                .hooks |= map(select((.command // "") != $cmd))
             ) | (.hooks.UserPromptSubmit // []) |= map(select(.hooks | length > 0))
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
         tmp="${settings}.tmp.$$"
@@ -367,7 +369,7 @@ register_hooks() {
     # --- UserPromptSubmit classify (async context injection via hooks listener) ---
     local cl_exists
     cl_exists=$(jq -r --arg cmd "$classify_cmd" \
-        '(.hooks.UserPromptSubmit // []) | [.[].hooks[]?.command // ""] | map(select(contains($cmd))) | length' \
+        '(.hooks.UserPromptSubmit // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
         "$settings" 2>/dev/null || echo 0)
     if [ "${cl_exists:-0}" -gt 0 ]; then
         echo -e "  ${GRAY}✓  UserPromptSubmit c-thru-classify${NC}"

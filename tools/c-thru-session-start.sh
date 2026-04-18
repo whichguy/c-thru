@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # ARCH: SessionStart/PostCompact hook — collects proxy/Ollama issues; injects additionalContext only on error (silent on happy path). See also c-thru-map-changed.sh, c-thru-proxy-health.sh
+# A13: `-u` catches unset-var bugs. `-e` off — failed curls are flow control.
+set -uo pipefail
 
 PORT="${CLAUDE_PROXY_PORT:-}"
 if [ -z "$PORT" ] && [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
