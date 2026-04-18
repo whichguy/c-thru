@@ -689,25 +689,41 @@ function fireDesktopNotification(primary, served_by) {
   } catch {}
 }
 
-// Debounce Ollama warm-up spawns to avoid spawn storm on repeated fallbacks.
-// `ollama run <model>` is safe to call repeatedly — the spawned process does
-// not own the loaded model; Ollama keeps it resident independently.
-const ollamaWarmLastMs = new Map(); // model -> last spawn timestamp
+// Debounce Ollama warm-ups to avoid a flood on repeated fallbacks.
+// Uses Ollama's HTTP /api/generate with an empty prompt — this triggers
+// model load and respects `keep_alive` (how long the model stays resident
+// after this call). Fire-and-forget; errors are swallowed.
+//
+// Why HTTP instead of `ollama run`:
+//   - no CLI process dependency (Ollama may be installed as a service only)
+//   - `keep_alive` controls residency cleanly; CLI doesn't
+//   - no stdin-wait quirk (`ollama run <m> ''` waits for stdin EOF)
+//   - honors the backend URL (CLI uses $OLLAMA_HOST which may be wrong)
+const ollamaWarmLastMs = new Map(); // model -> last warm timestamp
 const OLLAMA_WARM_DEBOUNCE_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_WARM_DEBOUNCE_MS', 30000);
-function warmOllamaModel(model, backendId) {
+const OLLAMA_WARM_KEEP_ALIVE = process.env.CLAUDE_PROXY_OLLAMA_KEEP_ALIVE || '30m';
+function warmOllamaModel(model, backendId, backendUrl) {
   if (!model) return;
   const last = ollamaWarmLastMs.get(model) || 0;
   if (Date.now() - last < OLLAMA_WARM_DEBOUNCE_MS) return;
   ollamaWarmLastMs.set(model, Date.now());
-  proxyLog('fallback.warm_spawn', { candidate: model, backend_id: backendId });
+
+  const urlStr = (backendUrl || DEFAULT_OLLAMA_URL).replace(/\/$/, '') + '/api/generate';
+  proxyLog('fallback.warm_http', { candidate: model, backend_id: backendId, keep_alive: OLLAMA_WARM_KEEP_ALIVE });
   try {
-    const child = spawn('ollama', ['run', model, ''], {
-      detached: true,
-      stdio: 'ignore',
+    const body = JSON.stringify({ model, prompt: '', keep_alive: OLLAMA_WARM_KEEP_ALIVE });
+    const req = http.request(urlStr, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, res => {
+      // Drain the response so the socket can be reused; body content is irrelevant.
+      res.resume();
     });
-    child.on('error', () => {});
-    child.unref();
-  } catch { /* ollama CLI may not be installed; ignore */ }
+    req.on('error', () => {}); // Ollama unreachable — rely on the actual request to surface it
+    req.setTimeout(5000, () => req.destroy());
+    req.write(body);
+    req.end();
+  } catch { /* malformed URL, etc. — ignore */ }
 }
 
 function recordFailureClass(failureClass) {
@@ -1668,7 +1684,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
     });
     // For Ollama candidates, fire-and-forget a warm-up so a cold local model
     // loads into memory in parallel with the first request. Debounced per-model.
-    if (cBackend.kind === 'ollama') warmOllamaModel(candidateModel, cBackend.id);
+    if (cBackend.kind === 'ollama') warmOllamaModel(candidateModel, cBackend.id, cBackend.url);
     cUp.write(cBodyStr);
     cUp.end();
   };
