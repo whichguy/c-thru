@@ -33,6 +33,7 @@ chmod +x "$TOOLS_SRC/claude-proxy" "$TOOLS_SRC/llm-capabilities-mcp.js" "$TOOLS_
 # llm-capabilities-shared.js is a library, not executable
 chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TOOLS_SRC/c-thru-statusline-overlay.sh" 2>/dev/null || true
 
 mkdir -p "$TOOLS_DEST"
 
@@ -82,6 +83,9 @@ link_tool c-thru-proxy-health.sh c-thru-proxy-health
 link_tool c-thru-session-start.sh c-thru-session-start
 link_tool c-thru-map-changed.sh c-thru-map-changed
 link_tool c-thru-classify.sh c-thru-classify
+link_tool c-thru-stop-hook.sh c-thru-stop-hook
+link_tool c-thru-statusline.sh c-thru-statusline
+link_tool c-thru-statusline-overlay.sh c-thru-statusline-overlay
 
 # --- Migrate legacy providers schema ---
 # Guard: jq -e '.providers' is a no-op if key is absent — idempotent by design.
@@ -420,6 +424,60 @@ install_skill
 echo ""
 echo "Hooks:"
 register_hooks
+
+# --- Non-clobbering detection for statusline + Stop hook ---
+# Probes settings.json via stdlib-only node (no jq dep) and prints
+# manual-integration hints. Never auto-writes these entries.
+detect_user_config() {
+    local settings="$CLAUDE_DIR/settings.json"
+    if ! command -v node >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}⚠️  node not available — cannot detect statusLine / Stop hook state${NC}"
+        echo -e "  ${YELLOW}   Manual integration: see wiki/entities/c-thru-statusline.md${NC}"
+        return 0
+    fi
+    [ -f "$settings" ] || echo '{}' > "$settings"
+
+    local sl_state stop_state
+    sl_state=$(node -e "try{const s=require(process.env.HOME+'/.claude/settings.json');process.stdout.write(s.statusLine?'yes':'no')}catch(e){process.stdout.write('unknown')}" 2>/dev/null)
+    stop_state=$(node -e "try{const s=require(process.env.HOME+'/.claude/settings.json');process.stdout.write(s.hooks&&s.hooks.Stop?'yes':'no')}catch(e){process.stdout.write('unknown')}" 2>/dev/null)
+
+    echo ""
+    echo "Statusline (fallback badge):"
+    case "$sl_state" in
+        yes)
+            echo -e "  ${GRAY}✓  existing statusLine detected — NOT modifying settings${NC}"
+            echo -e "  ${YELLOW}   To add the fallback badge, append this to your statusline's output:${NC}"
+            echo "       \$(sh ~/.claude/tools/c-thru-statusline-overlay 2>/dev/null)"
+            ;;
+        no)
+            echo -e "  ${GRAY}✓  no statusLine configured — overlay installed${NC}"
+            echo -e "  ${YELLOW}   To enable the default wrapper (model | cwd + fallback badge):${NC}"
+            echo "       /statusline and point it at: ~/.claude/tools/c-thru-statusline"
+            ;;
+        *)
+            echo -e "  ${YELLOW}⚠️  could not probe settings.json — leaving statusLine untouched${NC}"
+            echo -e "  ${YELLOW}   Manual integration: ~/.claude/tools/c-thru-statusline-overlay${NC}"
+            ;;
+    esac
+
+    echo ""
+    echo "Stop hook (in-terminal fallback notice):"
+    case "$stop_state" in
+        yes)
+            echo -e "  ${GRAY}✓  existing Stop hook detected — NOT modifying settings${NC}"
+            echo -e "  ${YELLOW}   To include the c-thru notice, append this entry to hooks.Stop manually:${NC}"
+            echo "       {\"hooks\":[{\"type\":\"command\",\"command\":\"$TOOLS_DEST/c-thru-stop-hook\",\"timeout\":3}]}"
+            ;;
+        no)
+            echo -e "  ${YELLOW}   Stop hook not auto-registered (opt-in). To enable, add to settings.json:${NC}"
+            echo "       hooks.Stop += [{\"hooks\":[{\"type\":\"command\",\"command\":\"$TOOLS_DEST/c-thru-stop-hook\",\"timeout\":3}]}]"
+            ;;
+        *)
+            echo -e "  ${YELLOW}⚠️  could not probe settings.json — Stop hook left unregistered${NC}"
+            ;;
+    esac
+}
+detect_user_config
 
 echo ""
 echo -e "${YELLOW}Quick reference:${NC}"
