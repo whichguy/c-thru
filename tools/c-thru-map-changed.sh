@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # ARCH: FileChanged/PostToolUse hook — validates model-map.json on edit; exits 0 silently if file_path not model-map.json
+# A13: `-u` catches unset-var bugs. `-e` off — flow-control via `|| exit 0`.
+set -uo pipefail
+file_path=""
 
 # Parse file_path from stdin JSON safely
 if command -v jq >/dev/null 2>&1; then

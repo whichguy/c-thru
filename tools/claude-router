@@ -788,16 +788,43 @@ proxy_listener_pid() {
   lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n1
 }
 
+# A7: probe a stored PID before signaling. Between when we captured $! and
+# now, the process may have exited and its PID been recycled by something
+# unrelated (shells, another `node`, the user's editor). `kill -0` checks
+# that the process still exists and is still ours to signal, and the
+# `ps comm=` check verifies it's still node/claude-proxy (not a PID-
+# reuse impostor). Best-effort: failures fall through to the original
+# kill-and-ignore-errors behavior.
+router_pid_looks_like_proxy() {
+  local pid="$1"
+  [[ -z "$pid" ]] && return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  local comm
+  comm="$(ps -p "$pid" -o comm= 2>/dev/null | awk '{print $1}')"
+  case "$(basename "$comm" 2>/dev/null)" in
+    node|claude-proxy|node*) return 0 ;;
+    # Empty comm: kill -0 already confirmed the PID exists, so the process
+    # is real — we just couldn't read its name (ps missing, kernel thread,
+    # transient exec state). Allow the signal rather than leaking a zombie.
+    "") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 cleanup_router_children() {
   local ec="${1:-$?}"
   if [[ -n "${CLAUDE_CHILD_PID:-}" ]]; then
-    kill "$CLAUDE_CHILD_PID" >/dev/null 2>&1 || true
-    wait "$CLAUDE_CHILD_PID" >/dev/null 2>&1 || true
+    if kill -0 "$CLAUDE_CHILD_PID" 2>/dev/null; then
+      kill "$CLAUDE_CHILD_PID" >/dev/null 2>&1 || true
+      wait "$CLAUDE_CHILD_PID" >/dev/null 2>&1 || true
+    fi
     CLAUDE_CHILD_PID=""
   fi
   if [[ -n "${ROUTER_STARTED_PROXY_PID:-}" ]]; then
-    kill "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
-    wait "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
+    if router_pid_looks_like_proxy "$ROUTER_STARTED_PROXY_PID"; then
+      kill "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
+      wait "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
+    fi
     ROUTER_STARTED_PROXY_PID=""
   fi
   return "$ec"
@@ -827,8 +854,9 @@ arm_router_child_cleanup() {
 # Start claude-proxy when ANTHROPIC_BASE_URL targets it and /ping fails.
 proxy_port_from_base_url() {
   local url="$1"
-  # Extract explicit port if present, else empty
-  echo "$url" | sed -nE 's#^https?://[^/:]+:([0-9]+).*$#\1#p'
+  # Extract explicit port if present, else empty.
+  # A11: grep -oE is portable to BusyBox/Alpine; `sed -nE` isn't.
+  echo "$url" | grep -oE '^https?://[^/:]+:[0-9]+' | grep -oE '[0-9]+$'
 }
 
 is_local_http_base_url() {
@@ -1025,24 +1053,61 @@ ensure_proxy_running() {
   local start_ec=0
   local lock_fd=""
   local lock_dir=""
+  # A1: when a concurrent router already holds the lock, wait for its proxy
+  # to come up via /ping. If that wait times out the holder probably died
+  # without bringing up a proxy — block on the lock so we can take over
+  # and spawn one ourselves, rather than returning "success" with nothing
+  # listening.
   if command -v flock >/dev/null 2>&1; then
     exec {lock_fd}>"$CLAUDE_PROFILE_DIR/proxy.$port.lock"
     if ! flock -n "$lock_fd"; then
-      wait_proxy_ping_ready "$port" 50 || \
-        echo "claude-router: timed out waiting for claude-proxy on :$port (another launcher may have failed)" >&2
-      eval "exec ${lock_fd}>&-"
-      return 0
+      if wait_proxy_ping_ready "$port" 50; then
+        eval "exec ${lock_fd}>&-"
+        return 0
+      fi
+      echo "claude-router: prior claude-proxy launch on :$port appears to have failed — retrying under blocking lock" >&2
+      flock "$lock_fd"
+      # Double-check: the previous holder may have finally succeeded while
+      # we were blocked. If /ping answers now, we're done.
+      if curl -sf --max-time 0.3 "http://127.0.0.1:$port/ping" >/dev/null 2>&1; then
+        eval "exec ${lock_fd}>&-"
+        return 0
+      fi
     fi
   else
     lock_dir="$CLAUDE_PROFILE_DIR/proxy.$port.lock.d"
+    # Clean up obviously stale lockdirs (older than 30s).
     if [[ -d "$lock_dir" ]]; then
+      local lock_age
       lock_age=$(( $(date +%s) - $(stat -f %m "$lock_dir" 2>/dev/null || stat -c %Y "$lock_dir" 2>/dev/null || echo 0) ))
       [[ "$lock_age" -gt 30 ]] && rmdir "$lock_dir" 2>/dev/null || true
     fi
-    if ! mkdir "$lock_dir" 2>/dev/null; then
-      wait_proxy_ping_ready "$port" 50 || \
-        echo "claude-router: timed out waiting for claude-proxy on :$port (another launcher may have failed)" >&2
-      return 0
+    # Distinguish EEXIST (lock held) from other mkdir failures (EROFS/EACCES
+    # etc.), where we'd otherwise silently run with no lock at all.
+    local mkdir_err_file="${TMPDIR:-/tmp}/claude-router-mkdir-err.$$.$RANDOM"
+    if ! mkdir "$lock_dir" 2>"$mkdir_err_file"; then
+      local mkdir_err
+      mkdir_err="$(cat "$mkdir_err_file" 2>/dev/null || true)"
+      rm -f "$mkdir_err_file" 2>/dev/null || true
+      if [[ -d "$lock_dir" ]]; then
+        if wait_proxy_ping_ready "$port" 50; then
+          return 0
+        fi
+        echo "claude-router: prior claude-proxy launch on :$port appears to have failed — retrying" >&2
+        # Take over the stale lockdir and fall through.
+        rmdir "$lock_dir" 2>/dev/null || true
+        if ! mkdir "$lock_dir" 2>/dev/null; then
+          echo "claude-router: unable to acquire proxy lockdir on :$port after takeover attempt" >&2
+          return 1
+        fi
+      else
+        echo "claude-router: cannot create proxy lockdir ($lock_dir): ${mkdir_err:-unknown error}" >&2
+        return 1
+      fi
+    else
+      # mkdir succeeded; the 2>"$mkdir_err_file" redirection still created
+      # an empty file, so clean it up.
+      rm -f "$mkdir_err_file" 2>/dev/null || true
     fi
   fi
 
@@ -1068,8 +1133,11 @@ ensure_proxy_running() {
     arm_router_child_cleanup
     if ! wait_proxy_ping_ready "$port" 20; then
       start_ec=1
-      kill "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
-      wait "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
+      # A7: only signal if the PID still belongs to our spawned node proxy.
+      if router_pid_looks_like_proxy "$ROUTER_STARTED_PROXY_PID"; then
+        kill "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
+        wait "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
+      fi
       ROUTER_STARTED_PROXY_PID=""
       ROUTER_PROXY_LOG_PATH=""
       [[ -n "$temp_log" ]] && rm -f "$temp_log"
@@ -1551,19 +1619,37 @@ ollama_cloud_auth_probe() {
     timeout_cmd=(gtimeout "$OLLAMA_CLOUD_AUTH_TIMEOUT_SECONDS")
   fi
 
+  # A9: capture stdout only; let stderr stream to the user's terminal so we
+  # don't persist whatever Ollama happens to emit to stderr (which could
+  # include its own API key on failure). We still need the text for
+  # classification, so we also tee stderr into a private temp file that we
+  # read back and delete immediately.
   local output=""
   local status=0
-  if output="$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama pull "$model" 2>&1)"; then
+  local stderr_file=""
+  stderr_file="$(mktemp -t claude-router-ollama-stderr.XXXXXX 2>/dev/null || echo "/tmp/claude-router-ollama-stderr.$$.$RANDOM")"
+  : > "$stderr_file"
+  chmod 0600 "$stderr_file" 2>/dev/null || true
+  # Belt-and-braces: cleanup on any subshell exit (SIGKILL to parent still
+  # leaks, but any normal ERR/EXIT path removes the temp).
+  trap 'rm -f "$stderr_file" 2>/dev/null || true' RETURN
+  if output="$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama pull "$model" 2>"$stderr_file")"; then
     claude_router_debug_event "ollama cloud auth probe model=$model host=$cli_host status=ok"
+    rm -f "$stderr_file"
     printf 'ok\t\n'
     return 0
   fi
   status=$?
+  local stderr_text=""
+  stderr_text="$(cat "$stderr_file" 2>/dev/null || true)"
+  rm -f "$stderr_file"
+  # Combine for classification only — not persisted anywhere.
+  local combined="${output}"$'\n'"${stderr_text}"
 
   local summary=""
-  summary="$(printf '%s\n' "$output" | awk 'NF {sub(/^[[:space:]]+/, "", $0); print; exit}')"
+  summary="$(printf '%s\n' "$combined" | awk 'NF {sub(/^[[:space:]]+/, "", $0); print; exit}')"
   local lowered=""
-  lowered="$(printf '%s' "$output" | tr '[:upper:]' '[:lower:]')"
+  lowered="$(printf '%s' "$combined" | tr '[:upper:]' '[:lower:]')"
 
   if [[ "$lowered" == *"sign in"* || "$lowered" == *"signin"* || "$lowered" == *"unauthorized"* || "$lowered" == *"forbidden"* || "$lowered" == *"authentication"* || "$lowered" == *"not logged in"* ]]; then
     claude_router_debug_event "ollama cloud auth probe model=$model host=$cli_host status=auth_required"
@@ -2054,7 +2140,7 @@ show_models() {
   # Local Ollama
   local ollama_http_base="${OLLAMA_URL%/api}"
   local ollama_models
-  ollama_models=$(curl -sf "$ollama_http_base/api/tags" 2>/dev/null | jq -r '.models[].name' 2>/dev/null) || true
+  ollama_models=$(curl -sf --max-time 3 "$ollama_http_base/api/tags" 2>/dev/null | jq -r '.models[].name' 2>/dev/null) || true
   if [[ -n "$ollama_models" ]]; then
     echo "Local Ollama ($ollama_http_base):"
     while read -r m; do
@@ -2286,7 +2372,7 @@ elif [[ "$EFFECTIVE_MODEL" == claude-* ]] && [[ -f "$CONFIG" ]] && BACKEND_ID="$
   fi
   apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
 
-elif curl -sf "$OLLAMA_HTTP_BASE/api/tags" 2>/dev/null | jq -e --arg m "$EFFECTIVE_MODEL" '.models[] | select(.name == $m)' >/dev/null 2>&1; then
+elif curl -sf --max-time 3 "$OLLAMA_HTTP_BASE/api/tags" 2>/dev/null | jq -e --arg m "$EFFECTIVE_MODEL" '.models[] | select(.name == $m)' >/dev/null 2>&1; then
   # 2) Listed in local Ollama /api/tags — client speaks to claude-proxy; proxy forwards to Ollama
   ensure_proxy_http_base || exit 1
   apply_ollama_client_block "$ENSURED_PROXY_HTTP_BASE" "" "{}"

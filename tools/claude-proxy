@@ -497,7 +497,7 @@ function schedulePersistentUsageFlush() {
     usagePersistTimer = null;
     if (!usagePersistPending) return;
     usagePersistPending = false;
-    const tmpPath = `${USAGE_STATS_FILE}.tmp`;
+    const tmpPath = `${USAGE_STATS_FILE}.tmp.${crypto.randomUUID()}`;
     fs.promises.mkdir(path.dirname(USAGE_STATS_FILE), { recursive: true })
       .then(() => fs.promises.writeFile(tmpPath, `${JSON.stringify(persistentUsage, null, 2)}\n`))
       .then(() => fs.promises.rename(tmpPath, USAGE_STATS_FILE))
@@ -512,7 +512,7 @@ function flushPersistentUsageNowSync() {
   if (!usagePersistPending && !fs.existsSync(USAGE_STATS_FILE)) return;
   try {
     fs.mkdirSync(path.dirname(USAGE_STATS_FILE), { recursive: true });
-    const tmpPath = `${USAGE_STATS_FILE}.tmp`;
+    const tmpPath = `${USAGE_STATS_FILE}.tmp.${crypto.randomUUID()}`;
     fs.writeFileSync(tmpPath, `${JSON.stringify(persistentUsage, null, 2)}\n`);
     fs.renameSync(tmpPath, USAGE_STATS_FILE);
     usagePersistPending = false;
@@ -804,7 +804,8 @@ function ensureBackendHealthEntry(backend, effectiveModel) {
 function persistHealthState() {
   try {
     fs.mkdirSync(path.dirname(HEALTH_STATE_FILE), { recursive: true });
-    const tmpPath = `${HEALTH_STATE_FILE}.tmp.${process.pid}`;
+    // A8: use a UUID so two proxy instances can't collide on pid reuse.
+    const tmpPath = `${HEALTH_STATE_FILE}.tmp.${crypto.randomUUID()}`;
     fs.writeFileSync(tmpPath, JSON.stringify({
       version: healthMeta.version,
       generated_at: nowIso(),
@@ -1333,6 +1334,12 @@ function patchSseBlock(block) {
   return lines.join('\n');
 }
 
+// A3: cap the pending-frame buffer so a backend that never emits `\n\n`
+// can't grow it unbounded. Legitimate Anthropic SSE frames are <10KB;
+// the cap is deliberately enormous (512 MiB) to catch only pathological
+// runaway streams and never truncate real traffic.
+const SSE_BUFFER_MAX_BYTES = 512 * 1024 * 1024;
+
 function createSsePatcher() {
   let buf = '';
   return new Transform({
@@ -1343,6 +1350,9 @@ function createSsePatcher() {
       let out = '';
       for (const block of blocks) out += patchSseBlock(block) + '\n\n';
       if (out) this.push(out);
+      if (Buffer.byteLength(buf, 'utf8') > SSE_BUFFER_MAX_BYTES) {
+        return cb(new Error(`SSE frame exceeded ${SSE_BUFFER_MAX_BYTES} bytes without delimiter`));
+      }
       cb();
     },
     flush(cb) {
@@ -2393,10 +2403,23 @@ const hooksServer = require('http').createServer((req, res) => {
               const postToMessages = payload => postJsonLocal(proxyApiPort, '/v1/messages', payload);
               const result = await classifyIntent(prompt, CONFIG, postToMessages);
               if (result.confidence < 60 && result.recommended_tool) {
-                // Log for offline pattern analysis (non-blocking, fire-and-forget with .catch)
-                const logLine = JSON.stringify({ ts: new Date().toISOString(), prompt: prompt.slice(0, 120), result }) + '\n';
-                const logPath = require('path').join(process.env.HOME || require('os').homedir(), '.claude', 'classify-intent-signals.log');
-                require('fs').appendFile(logPath, logLine, () => {}); // async, non-blocking
+                // Log for offline pattern analysis (non-blocking, fire-and-forget).
+                // A6: create with mode 0600 (owner r/w only) and let users opt out entirely
+                // via CLAUDE_PROXY_LOG_PROMPTS=0. `appendFile` alone would leave perms at
+                // the umask default (usually 0644), so we fs.open with an explicit mode.
+                if (process.env.CLAUDE_PROXY_LOG_PROMPTS !== '0') {
+                  const logLine = JSON.stringify({ ts: new Date().toISOString(), prompt: prompt.slice(0, 120), result }) + '\n';
+                  const logPath = require('path').join(process.env.HOME || require('os').homedir(), '.claude', 'classify-intent-signals.log');
+                  require('fs').open(logPath, 'a', 0o600, (openErr, fd) => {
+                    if (openErr) return;
+                    require('fs').appendFile(fd, logLine, () => {
+                      // Pre-existing logs may have been created with umask perms
+                      // before A6 landed; chmod is idempotent and cheap.
+                      require('fs').chmod(logPath, 0o600, () => {});
+                      require('fs').close(fd, () => {});
+                    });
+                  });
+                }
                 issues.push(`Note: lightweight model active — this task may benefit from --route default (confidence: ${result.confidence}%)`);
               }
             } catch (classifyErr) {
