@@ -1241,7 +1241,15 @@ function shouldBypassCooldownForRecoveryProbe(backend, effectiveModel) {
   return nowMs() >= (entry.next_probe_at_ms || 0);
 }
 
-function resolveFallbackModel(model, failureClass) {
+function resolveFallbackModel(model, failureClass, logicalRole = null) {
+  // Per-profile hard_fail gate: classifier must error rather than cascade to a non-equivalent model.
+  if (logicalRole) {
+    const cfg = CONFIG;
+    const hw = resolveProfileName();
+    const profiles = cfg.llm_profiles?.[hw] || {};
+    const profileEntry = profiles[profileAliasKey(logicalRole)];
+    if (profileEntry?.on_failure === 'hard_fail') return null;
+  }
   const strategies = CONFIG.fallback_strategies || {};
   const strategy = strategies[model];
   if (!strategy || !strategy.event) return null;
@@ -1444,6 +1452,18 @@ function resolveBackend(model) {
 
 // ── Helper functions ───────────────────────────────────────────────────
 
+// Injects x-c-thru-resolved-via for hook observability without log-parsing.
+// Only emits on capability requests (logicalRole alias present); skipped on non-capability paths.
+function addResolvedViaHeader(respHeaders, resolved) {
+  const capability = resolved?.capability || resolved?.logicalRole;
+  if (!capability) return;
+  respHeaders['x-c-thru-resolved-via'] = JSON.stringify({
+    capability,
+    profile: resolved.logicalRole || capability,
+    served_by: resolved.effectiveModel || resolved.served_by || null,
+  });
+}
+
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, {
@@ -1556,6 +1576,7 @@ function forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta =
     timeoutState.upstreamResponse = upRes;
     const respHeaders = { ...upRes.headers };
     if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-claude-proxy-served-by'] = effectiveModel;
+    addResolvedViaHeader(respHeaders, requestMeta);
     res.writeHead(upRes.statusCode, respHeaders);
     upRes.on('data', chunk => {
       const contentType = String(upRes.headers['content-type'] || '');
@@ -1654,6 +1675,7 @@ function forwardOllamaPassthrough(req, res, body, backend, effectiveModel, reque
     timeoutState.upstreamResponse = upRes;
     const respHeaders = { ...upRes.headers };
     if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-claude-proxy-served-by'] = effectiveModel;
+    addResolvedViaHeader(respHeaders, requestMeta);
     if (upRes.statusCode !== 200) {
       const errChunks = [];
       upRes.on('data', c => errChunks.push(c));
@@ -1744,6 +1766,8 @@ function handleRequestWithFallback(req, res, body, resolved) {
       backend: b,
       stream: Boolean(fwdBody && fwdBody.stream),
       startedAtMs: nowMs(),
+      capability: logicalRole,
+      logicalRole,
     };
     if (b.kind === 'ollama') {
       (async () => {
@@ -1847,11 +1871,12 @@ function handleRequestWithFallback(req, res, body, resolved) {
           setCooldown(candidateModel, cFailureClass, upRes.statusCode, upRes.headers);
           return tryFallbackChain(candidates, failureClass, currentIdx + 1);
         }
-        proxyLog('fallback.candidate_success', { candidate: candidateModel, terminal_model: terminalModel, status_code: upRes.statusCode, elapsed_ms: nowMs() - cStart });
+        proxyLog('fallback.candidate_success', { candidate: candidateModel, terminal_model: terminalModel, status_code: upRes.statusCode, elapsed_ms: nowMs() - cStart, capability: logicalRole, profile: logicalRole });
         recordFallbackEvent(terminalModel, candidateModel, 'chain_success');
         const respHeaders = { ...upRes.headers };
         if (ANNOTATE_MODEL) respHeaders['x-claude-proxy-served-by'] = candidateModel;
         respHeaders['x-claude-proxy-fallback-from'] = terminalModel;
+        addResolvedViaHeader(respHeaders, { capability: logicalRole, logicalRole, effectiveModel: candidateModel });
         res.writeHead(upRes.statusCode, respHeaders);
         res.end(cRaw);
       });
@@ -1890,7 +1915,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
   });
 
   if (shouldPreferFallbackForHealth(backend, terminalModel)) {
-    const fallbackModel = resolveFallbackModel(terminalModel, healthEntry?.last_failure_class || 'network_failure');
+    const fallbackModel = resolveFallbackModel(terminalModel, healthEntry?.last_failure_class || 'network_failure', logicalRole);
     if (fallbackModel) {
       const fallbackResolved = resolveBackend(fallbackModel);
       if (!fallbackResolved.error) {
@@ -1908,7 +1933,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
   }
 
   if (cooldownActive && !recoveryProbeDue) {
-    const fallbackModel = resolveFallbackModel(terminalModel, cooldowns.get(terminalModel)?.failureClass || 'rate_limit');
+    const fallbackModel = resolveFallbackModel(terminalModel, cooldowns.get(terminalModel)?.failureClass || 'rate_limit', logicalRole);
     if (fallbackModel) {
       const fallbackResolved = resolveBackend(fallbackModel);
       if (!fallbackResolved.error) {
@@ -2033,6 +2058,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
       });
       const respHeaders = { ...upRes.headers };
       if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-claude-proxy-served-by'] = effectiveModel;
+      addResolvedViaHeader(respHeaders, requestMeta);
       res.writeHead(upRes.statusCode, respHeaders);
       res.end(raw);
     });
@@ -2278,6 +2304,8 @@ const server = http.createServer(async (req, res) => {
         backend,
         stream: Boolean(fwdBody.stream),
         startedAtMs: nowMs(),
+        capability: countTokRole,
+        logicalRole: countTokRole,
       };
       if (backend.kind === 'ollama') {
         if (!(await ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url, countTokRole))) return;
@@ -2313,6 +2341,8 @@ const server = http.createServer(async (req, res) => {
     backend,
     stream: Boolean(fwdBody.stream),
     startedAtMs: nowMs(),
+    capability: logicalRole,
+    logicalRole,
   };
 
   // Track status via response wrapper; use mutable refs so fallback paths update attribution.

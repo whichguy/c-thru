@@ -146,6 +146,59 @@ const TOOL_DEFS = {
       verification_steps: { type: 'array', items: { type: 'string' } },
     },
   },
+  code_review_lint: {
+    description: 'Best for fast lint-tier code review. Use it for syntax validation, obvious bugs, and style violations when a lightweight pass is sufficient and deep reasoning is not needed.',
+    category: 'review',
+    supportsPromptAlias: true,
+    responseGuidance: 'Focus on syntax errors, obvious bugs, and clear style violations. Keep findings scoped and actionable. Skip reasoning-heavy analysis — that belongs to detect_bugs or deep_review.',
+    extraOutput: {
+      overall_verdict: { type: 'string' },
+      findings: { type: 'array', items: { type: 'string' } },
+      followups: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  summarize_light: {
+    description: 'Best for fast summarization. Use it to condense code, docs, or output into a concise summary with a single model call when speed matters more than depth.',
+    category: 'review',
+    supportsPromptAlias: true,
+    responseGuidance: 'Return a concise, accurate summary. Prioritize clarity and brevity. Highlight the highest-signal points without elaboration.',
+    extraOutput: {
+      summary: { type: 'string' },
+    },
+  },
+  code_fix: {
+    description: 'Best for targeted code fixes. Use it when you have a bug description and a code snippet and want a concrete, minimal correction applied.',
+    category: 'coder',
+    supportsPromptAlias: true,
+    responseGuidance: 'Apply the most targeted fix that resolves the described bug. Return the corrected code and a brief explanation of what changed and why.',
+    extraOutput: {
+      implementation_plan: { type: 'array', items: { type: 'string' } },
+      proposed_changes: { type: 'array', items: { type: 'string' } },
+      verification_steps: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  plan_review: {
+    description: 'Best for reviewing implementation plans. Use it to evaluate a plan for correctness, feasibility, sequencing, and missing edge cases before committing to implementation.',
+    category: 'review',
+    supportsPromptAlias: true,
+    responseGuidance: 'Assess the plan for correctness and feasibility. Surface sequencing risks, hidden assumptions, and missing edge cases. Prefer the highest-consequence findings over exhaustive minor issues.',
+    extraOutput: {
+      overall_verdict: { type: 'string' },
+      findings: { type: 'array', items: { type: 'string' } },
+      followups: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  hard_reasoning: {
+    description: 'Best for multi-step reasoning, proofs, and deep analysis. Use it when the task requires extended logical chains, formal verification, or structured argumentation that lighter models cannot sustain.',
+    category: 'review',
+    supportsPromptAlias: true,
+    responseGuidance: 'Work through the reasoning explicitly and rigorously. Show intermediate steps. State assumptions clearly and flag where uncertainty exists.',
+    extraOutput: {
+      overall_verdict: { type: 'string' },
+      findings: { type: 'array', items: { type: 'string' } },
+      followups: { type: 'array', items: { type: 'string' } },
+    },
+  },
 };
 
 let spawnedProxy = null;

@@ -17,8 +17,12 @@ const CAPABILITY_KEYS = new Set([
   'generate_tests',
   'deep_review',
   'heavy_coder',
-  'review_plan',
-  'review_code',
+  'code_review_lint',
+  'summarize_light',
+  'code_fix',
+  'plan_review',
+  'review_code_full',
+  'hard_reasoning',
 ]);
 const CONNECTIVITY_MODES = new Set(['connected', 'disconnect']);
 
