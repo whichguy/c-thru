@@ -48,7 +48,18 @@ tools/
   c-thru-classify.sh      # UserPromptSubmit hook — sends prompt to /hooks/context (port 9998) for classify_intent context injection
 config/
   model-map.json          # shipped defaults (JSON5 — comments allowed)
+hw-profile.js             # shared 5-tier hardware detection (tierForGb); used by router and proxy
+test/
+  model-map-v12-adapter.test.js  # adapter fixture test; run with: node test/model-map-v12-adapter.test.js
 ```
+
+### User Profile Files (`~/.claude/`)
+
+| File | Owner | Lifecycle |
+|---|---|---|
+| `model-map.system.json` | `install.sh` | Overwritten on every install — verbatim copy of `config/model-map.json`. Never edit manually. |
+| `model-map.overrides.json` | user | Created empty `{}` on first install. Never touched on upgrade. Edit here to customize over system defaults. |
+| `model-map.json` | derived | Effective merged result (system + overrides). Rewritten by router/proxy on startup. |
 
 ## Architecture
 
@@ -93,6 +104,7 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 | `CLAUDE_MODEL_MAP_DEFAULTS_PATH` | Override shipped `config/model-map.json` path |
 | `CLAUDE_MODEL_MAP_OVERRIDES_PATH` | Override `~/.claude/model-map.overrides.json` path |
 | `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for Phase 2 HTTP hooks listener (default `9998`) |
+| `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection (positive integer GB). Malformed values fall through to `os.totalmem()`. |
 
 ## No External Node Dependencies
 
