@@ -151,7 +151,7 @@ For each item in `wave.json`, write `$wave_dir/digests/<agent>-<item>.md`:
 agent: <role>
 item_id: <id>
 wave: <NNN>
-target_resources: [<resource-ids>]
+target_resources: [<repo-relative file paths>]
 ---
 ## Mission context
 <2 sentences: overall task goal and where this item fits>
@@ -325,11 +325,15 @@ Do NOT copy improvement/augmentation entries separately — `learnings-consolida
 On `continue` or `extend`, AND `verify.json` shows no hard failures:
 
 ```sh
-git add <target_resources for all completed items>
+git add $(jq -r '.batches[].items[] | select(.status=="complete") | .target_resources[]' \
+          "$wave_dir/wave.json" \
+          | sort -u | xargs -I{} sh -c 'test -f "{}" && echo "{}"')
 git commit -m "<commit_message from wave.json>
 
 Wave: <NNN>"
 ```
+
+The `test -f` filter silently skips non-existent paths (e.g. items with empty `target_resources: []`).
 
 The `Wave: <NNN>` trailer enables resume dedup via `git log --grep`.
 On `revise`: do NOT commit — plan is about to change.
