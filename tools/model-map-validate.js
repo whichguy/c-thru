@@ -4,7 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const PROFILE_KEYS = ['default', 'classifier', 'explorer', 'reviewer', 'workhorse', 'coder'];
+const PROFILE_KEYS = ['default', 'classifier', 'explorer', 'reviewer', 'workhorse', 'coder',
+  'judge', 'judge-strict', 'orchestrator', 'code-analyst', 'pattern-coder', 'deep-coder'];
 const CAPABILITY_KEYS = new Set([
   'default',
   'classify_intent',
@@ -219,6 +220,19 @@ function validateConfig(config, _errors) {
           report(`'model_overrides.${from}' must be a non-empty string`);
         } else if (from === to) {
           report(`'model_overrides.${from}' maps to itself — remove or change`);
+        }
+      }
+    }
+  }
+
+  // agent_to_capability: flat map of agent-name → capability-alias, used for 2-hop resolution
+  if (config.agent_to_capability != null) {
+    if (!isObject(config.agent_to_capability)) {
+      report("'agent_to_capability' must be an object when present");
+    } else {
+      for (const [agentName, capAlias] of Object.entries(config.agent_to_capability)) {
+        if (typeof capAlias !== 'string' || !capAlias.trim()) {
+          report(`'agent_to_capability.${agentName}' must be a non-empty string`);
         }
       }
     }

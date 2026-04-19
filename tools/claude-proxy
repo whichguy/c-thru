@@ -376,6 +376,9 @@ function lookupPatternValue(section, model) {
   return null;
 }
 
+// Static set covers the original five aliases + general-default for backward compat.
+// Dynamic profile-key lookup (below) extends this to new capability aliases and
+// synthesized agent-name entries without requiring code changes per alias added.
 const LLM_PROFILE_ALIASES = new Set(['classifier', 'explorer', 'reviewer', 'workhorse', 'coder', 'general-default']);
 
 function profileAliasKey(alias) {
@@ -400,15 +403,30 @@ function resolveConnectivityMode() {
   return mode === 'disconnect' ? 'disconnect' : 'connected';
 }
 
+// Returns the capability alias for a given model name via 2-hop graph traversal:
+//   agent name  → agent_to_capability → capability alias  (e.g. implementer → deep-coder)
+//   alias name  → identity                                 (e.g. deep-coder → deep-coder)
+//   unknown     → null                                     (passthrough, not a profile alias)
+// Checks: static LLM_PROFILE_ALIASES, agent_to_capability map, or direct profile key.
+function resolveCapabilityAlias(model) {
+  if (LLM_PROFILE_ALIASES.has(model)) return model;
+  const a2c = CONFIG.agent_to_capability;
+  if (a2c && Object.prototype.hasOwnProperty.call(a2c, model)) return a2c[model];
+  const profile = (CONFIG.llm_profiles || {})[resolveProfileName()];
+  if (profile && Object.prototype.hasOwnProperty.call(profile, model)) return model;
+  return null;
+}
+
 function resolveLogicalAlias(model) {
-  if (!LLM_PROFILE_ALIASES.has(model)) return model;
+  const capAlias = resolveCapabilityAlias(model);
+  if (!capAlias) return model;
   const profiles = CONFIG.llm_profiles || {};
   const profile = profiles[resolveProfileName()];
   if (!profile) return model;
-  const alias = profile[profileAliasKey(model)];
-  if (!alias || typeof alias !== 'object') return model;
+  const entry = profile[profileAliasKey(capAlias)];
+  if (!entry || typeof entry !== 'object') return model;
   const field = resolveConnectivityMode() === 'disconnect' ? 'disconnect_model' : 'connected_model';
-  return typeof alias[field] === 'string' && alias[field] ? alias[field] : model;
+  return typeof entry[field] === 'string' && entry[field] ? entry[field] : model;
 }
 
 // ── Request stats tracking ─────────────────────────────────────────────
@@ -1418,7 +1436,7 @@ function resolveBackend(model) {
   // 1. Follow route graph first
   const afterRoute = resolveRouteModel(model);
   const terminalModel = resolveLogicalAlias(afterRoute);
-  const logicalRole = LLM_PROFILE_ALIASES.has(afterRoute) ? afterRoute : null;
+  const logicalRole = resolveCapabilityAlias(afterRoute);
 
   // 2. Try exact match in model_routes
   if (modelRoutes[terminalModel] !== undefined) {
