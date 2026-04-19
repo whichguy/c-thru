@@ -12,24 +12,33 @@ Produce accurate docs matching actual behavior — not specs, not aspirational d
 
 **Scope:** Never write outside declared `target_resources`. **Crisis:** stop, record, return `PARTIAL`.
 
-**Write 3 files (paths in prompt):**
+**Response structure** — do NOT write files directly. The orchestrator parses your response into three artifacts:
 
-1. `outputs/doc-writer-<item>.md`:
+1. `## Work completed` section (with `### Learnings` subsection) → `outputs/doc-writer-<item>.md`
    ```markdown
    ## Work completed
    <doc file/section → what was produced>
 
-   ## Learnings
+   ### Learnings
    <behavioral details confirmed from the implementation>
    ```
 
-2. `findings/doc-writer-<item>.jsonl` — one JSON per line:
-   `{"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose>"}`
+2. `## Findings (jsonl)` fenced code block → parsed line-by-line into `findings/doc-writer-<item>.jsonl`
+   ```markdown
+   ## Findings (jsonl)
+   ```jsonl
+   {"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose>"}
+   ```
+   ```
    `detail` is optional — omit when `text` is self-contained.
 
    **Improvement required:** emit at least one `improvement` entry per task. What would make next wave's version of this work easier or higher-quality? If nothing, write `{"class":"improvement","text":"none — task was clean"}`.
 
-3. `outputs/doc-writer-<item>.INDEX.md` — `<section>: <start>-<end>` one per line (line numbers)
+3. `## Output INDEX` section → `outputs/doc-writer-<item>.INDEX.md`
+   ```markdown
+   ## Output INDEX
+   <section>: <start>-<end>
+   ```
 
 **Return:**
 ```
