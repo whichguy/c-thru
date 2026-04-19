@@ -12,6 +12,6 @@ if command -v jq >/dev/null 2>&1 && [[ -n "$input" ]]; then
 else
   model="claude"; cwd=""
 fi
-overlay=$(sh "$HOME/.claude/tools/c-thru-statusline-overlay" 2>/dev/null)
+overlay=$(bash "$HOME/.claude/tools/c-thru-statusline-overlay" 2>/dev/null)
 printf '%s | %s%s' "${model:-claude}" "$cwd" "$overlay"
 exit 0
