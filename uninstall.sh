@@ -195,11 +195,8 @@ echo ""
 echo "Model-map:"
 remove_model_map_aliases
 
-# Warn about preserved project state
-if ls .c-thru/plans/ >/dev/null 2>&1; then
-    echo ""
-    echo -e "  ${YELLOW}ℹ️  .c-thru/plans/ project state preserved — remove manually if not needed${NC}"
-fi
+# Note: plan state lives in ${TMPDIR:-/tmp}/c-thru/ — OS-managed, no action needed.
+# Completed plan archives live in ~/.claude/c-thru-archive/ — remove manually if desired.
 
 echo ""
 echo -e "${GREEN}✅ Uninstall complete.${NC}"

@@ -61,7 +61,7 @@ findings invalidate assumptions.
 /c-thru-plan add a palindrome checker to the auth module
 ```
 
-State lands in `.c-thru/plans/<slug>/` — resumable across sessions.
+State lands in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/` — resumable across sessions. Completed plans archived to `~/.claude/c-thru-archive/`.
 
 - **Agents:** `agents/` — 13 roles from `planner` to `security-reviewer`. Each
   declares `model: <own-name>`; the proxy routes to the right hardware tier.
