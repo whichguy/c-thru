@@ -682,7 +682,7 @@ detect_user_config() {
         yes)
             echo -e "  ${GRAY}✓  existing statusLine detected — NOT modifying settings${NC}"
             echo -e "  ${YELLOW}   To add the fallback badge, append this to your statusline's output:${NC}"
-            echo "       \$(sh ~/.claude/tools/c-thru-statusline-overlay 2>/dev/null)"
+            echo "       \$(bash ~/.claude/tools/c-thru-statusline-overlay 2>/dev/null)"
             ;;
         no)
             echo -e "  ${GRAY}✓  no statusLine configured — overlay installed${NC}"

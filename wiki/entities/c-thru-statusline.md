@@ -42,7 +42,7 @@ either is present the installer prints manual-integration instructions.
 Append overlay to your existing statusline:
 
 ```sh
-printf '%s%s' "$your_existing_output" "$(sh ~/.claude/tools/c-thru-statusline-overlay 2>/dev/null)"
+printf '%s%s' "$your_existing_output" "$(bash ~/.claude/tools/c-thru-statusline-overlay 2>/dev/null)"
 ```
 
 Register Stop hook (append to `hooks.Stop` in `~/.claude/settings.json`).
@@ -67,6 +67,7 @@ integer) to dedupe — only NEW fallback events produce a `systemMessage`.
 
 - **From Session b50c3df0:** Critical correlation bug: the Stop hook reads both `terminal_model` and the fallback model from the same `candidate_success` log line to pair "what should have served" with "what actually served". Originally `terminal_model` was only logged in `chain_start`, causing stale/missing correlation when the hook parsed `candidate_success` alone. Fix: proxy now logs `terminal_model` directly into the `candidate_success` event (PR #7).
 - **From Session b50c3df0:** Design decision: `~/.claude/proxy.log` is the single source of truth, not a separate `proxy-status.json` snapshot. This eliminates atomic-write complexity in the proxy hot path and unifies the event stream. The Stop hook and statusline both tail the log; the `/hooks/context` extension reads the in-memory `fallbackEvents` ring buffer directly. An earlier draft used a snapshot file but the log-as-event-stream approach removed one file and one atomic-write dance.
+- **From Session b50c3df0:** `install.sh` respects `$CLAUDE_DIR` (PR #7 fix). The node-based settings detection probe originally used `process.env.HOME` to find `~/.claude/settings.json`, missing non-default profile directories. Fixed to use the same `$CLAUDE_DIR`/`$CLAUDE_CONFIG_DIR` resolution as the router itself.
 
 ## Why these channels
 
@@ -78,12 +79,12 @@ integer) to dedupe — only NEW fallback events produce a `systemMessage`.
 `Stop` fires exactly once per assistant response and `systemMessage` is
 documented as "Warning message shown to the user" — designed for this.
 
-## TODO: Proxy health false-positive in SessionStart
+## Proxy health label mismatch (SessionStart)
 
-`c-thru-session-start.sh` reports `☁️  Proxy health: cloud backend unhealthy` at session start even when the proxy is not genuinely degraded (label shown: `recovering`). Investigate:
+`proxy-health-session.sh` reported `☁️  Proxy health: cloud backend unhealthy` with hardcoded "degraded or disconnected" text even when the actual state was `recovering` (actively healing, not down). This injected false alarm and incorrect "avoid cloud-only escalation" guidance.
 
-- What triggers the `recovering` label? Is it a transient HTTP timeout before the proxy warms up?
-- Should the hook apply a grace period (e.g. retry once after 1–2 s) before reporting unhealthy?
-- Should the hook suppress the warning entirely if the proxy process was just spawned (compare PID start time vs hook invocation time)?
+- **From Session 0a18c44e:** Root cause: `proxy_health_unhealthy_summary` in `proxy-health-common.sh` included `recovering` in the same bucket as `degraded`/`disconnected`, but the session hook used a hardcoded label "degraded or disconnected" regardless of which states were present. Fix plan (in `~/.claude/plans/continue-lively-rainbow.md`): split the function into `proxy_health_unhealthy_summary` (degraded/disconnected only) and `proxy_health_recovering_summary` (recovering only), then add a three-branch conditional in `proxy-health-session.sh` with accurate labels for each state. The plan also adds a `proxy_health_recent_heal` branch for "recovered" state. Key constraint: `proxy_health_is_unhealthy_transition` must NOT be changed — it is called by `proxy-health-notify.sh:40` to gate transition-event notifications, and removing `recovering` from it would silently suppress those notifications. See [[proxy-health-function-semantics]].
 
-→ See also: [[claude-code-hook-channels]], [[ollama-http-api-migration]], [[hook-safety-posture]], [[load-bearing-invariant]], [[fallback-event-system]]
+- **From Session 9d601210:** Consumer lockstep rule: when a new proxy response header or event field is added (e.g. `x-c-thru-resolved-via` with `capability`/`profile`/`served_by`, or `candidate_success` augmented with `capability`/`profile`), the statusline and Stop-hook consumers must be updated in the same commit/PR — not deferred. Shipping observability plumbing that no consumer reads creates an unbounded drift window. New fields must be additive (existing consumers ignore unknown fields), but consumers should fall back silently to `terminal_model` when new fields are absent (for log-line backward compat).
+
+→ See also: [[claude-code-hook-channels]], [[ollama-http-api-migration]], [[hook-safety-posture]], [[load-bearing-invariant]], [[fallback-event-system]], [[proxy-health-function-semantics]], [[declared-rewrites]]
