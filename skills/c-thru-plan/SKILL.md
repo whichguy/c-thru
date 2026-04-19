@@ -96,7 +96,9 @@ Greenfield projects typically skip Stage 2b; existing-codebase work almost alway
 
 ```
 Agent(subagent_type: "planner",
-  prompt: "<user_intent>\n\n<context_block_from_discovery>")
+  prompt: "mode:      1
+           intent:    <user_intent>
+           discovery: <context_block_from_discovery>")
 ```
 
 Planner writes `$PLAN_DIR/current.md`.
@@ -123,11 +125,10 @@ while round < 20:
 
     # NEEDS_REVISION — pass findings path to planner; driver does NOT read findings file
     Agent(subagent_type: "planner",
-          prompt: "Mode 2 — revision.
-                   current.md:  $PLAN_DIR/current.md
-                   INDEX:       $PLAN_DIR/INDEX.md
-                   findings:    $PLAN_DIR/review/round-<round>.md
-                   Do not touch items with status: complete.")
+          prompt: "mode:       2
+                   current.md: $PLAN_DIR/current.md
+                   INDEX:      $PLAN_DIR/INDEX.md
+                   findings:   $PLAN_DIR/review/round-<round>.md")
 
     # Persist revision count
     update $PLAN_DIR/meta.json: meta.revision_rounds += 1
@@ -159,28 +160,28 @@ result = Agent(subagent_type: "plan-orchestrator",
 ```
 
 Parse result:
+- `STATUS=CYCLE` → dependency cycle detected. Print: "Dependency cycle in wave <NNN>: ITEMS=<items list>". Abort loop. Surface wave_dir to user for manual resolution.
+- `STATUS=PARTIAL` → crisis finding cut wave short. Print: "Crisis in wave <NNN> — check $PLAN_DIR/waves/<NNN>/failures/ and findings.jsonl". Abort loop. Surface wave_dir to user.
+- `STATUS=ERROR` → print `wave_dir` ($PLAN_DIR/waves/<NNN>), abort loop, surface to user
 - `VERDICT=continue` or `VERDICT=extend` → increment NNN, loop (next wave)
 - `VERDICT=revise` → invoke planner (Mode 2) with replan-brief path, then re-enter Phase 3 review loop:
   ```
   Agent(subagent_type: "planner",
-    prompt: "Mode 2 — post-wave revision.
-             Primary briefing (read first):
-               replan-brief:  $PLAN_DIR/waves/<NNN>/replan-brief.md
-               brief_INDEX:   $PLAN_DIR/waves/<NNN>/replan-brief.INDEX.md
-             Raw sources (consult when brief is ambiguous):
-               current.md:    $PLAN_DIR/current.md
-               INDEX:         $PLAN_DIR/INDEX.md
-               artifact:      $PLAN_DIR/waves/<NNN>/artifact.md
-               findings:      $PLAN_DIR/waves/<NNN>/findings.jsonl
-               verify:        $PLAN_DIR/waves/<NNN>/verify.json
-               decision:      $PLAN_DIR/waves/<NNN>/decision.json
-               journal:       $PLAN_DIR/journal.md
-             Verdict:         revise")
+    prompt: "mode:         2
+             replan-brief: $PLAN_DIR/waves/<NNN>/replan-brief.md
+             brief_INDEX:  $PLAN_DIR/waves/<NNN>/replan-brief.INDEX.md
+             current.md:   $PLAN_DIR/current.md
+             INDEX:        $PLAN_DIR/INDEX.md
+             artifact:     $PLAN_DIR/waves/<NNN>/artifact.md
+             findings:     $PLAN_DIR/waves/<NNN>/findings.jsonl
+             verify:       $PLAN_DIR/waves/<NNN>/verify.json
+             decision:     $PLAN_DIR/waves/<NNN>/decision.json
+             journal:      $PLAN_DIR/journal.md
+             Verdict:      revise")
   update $PLAN_DIR/meta.json: meta.revision_rounds += 1
   ```
   After planner returns `STATUS: COMPLETE` → re-enter Phase 3 review loop, then Phase 4 (next wave).
 - `VERDICT=done` → proceed to Phase 5
-- `STATUS=ERROR` → print `wave_dir` ($PLAN_DIR/waves/<NNN>), abort loop, surface to user
 
 ## Phase 5 — Final review
 
@@ -209,12 +210,13 @@ Print summary to user.
 If `RECOMMENDATION: needs_items` → invoke planner (Mode 3) with path:
 ```
 Agent(subagent_type: "planner",
-  prompt: "Mode 3 — gap fill.
-           intent:       <original user intent>
-           current.md:   $PLAN_DIR/current.md
-           INDEX:        $PLAN_DIR/INDEX.md
-           final-review: $PLAN_DIR/final-review.md
-           journal:      $PLAN_DIR/journal.md")
+  prompt: "mode:           3
+           intent:         <original user intent>
+           current.md:     $PLAN_DIR/current.md
+           INDEX:          $PLAN_DIR/INDEX.md
+           final_review:   $PLAN_DIR/final-review.md
+           journal:        $PLAN_DIR/journal.md
+           journal_offset: <line offset for last 5 entries>")
 ```
 Plan-orchestrator re-runs; gaps → immediately ready items (deps already complete).
 Cap: **20 revision rounds total** across all final-review iterations. Escalate to user if cap reached.
