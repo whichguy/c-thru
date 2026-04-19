@@ -19,7 +19,11 @@ fi
 # Check 2: Ollama reachability (only when active route targets an Ollama backend)
 if [ -n "${OLLAMA_URL:-}" ]; then
     OLLAMA_BASE="${OLLAMA_URL%/}"
-    if ! curl --max-time 3 --connect-timeout 2 -sf "${OLLAMA_BASE}/api/tags" >/dev/null 2>&1; then
+    if curl --max-time 3 --connect-timeout 2 -sf "${OLLAMA_BASE}/api/tags" >/dev/null 2>&1; then
+        # Ollama reachable — spawn GC sweep in background (non-blocking, survives hook exit)
+        nohup "${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/tools/c-thru-ollama-gc" sweep </dev/null >/dev/null 2>&1 &
+        disown $!
+    else
         issues+=("⚠️ Ollama unreachable on ${OLLAMA_BASE} — route 'local' will fail. Alternative: --route default")
     fi
 fi

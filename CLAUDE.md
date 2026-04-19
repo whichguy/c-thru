@@ -47,6 +47,7 @@ tools/
   c-thru-proxy-health.sh  # UserPromptSubmit hook — asyncRewake (exit 2, stderr) on proxy down
   c-thru-map-changed.sh   # FileChanged/PostToolUse hook — validates model-map.json on edit
   c-thru-classify.sh      # UserPromptSubmit hook — sends prompt to /hooks/context (port 9998) for classify_intent context injection
+  c-thru-ollama-gc.sh     # GC tool — tracks c-thru-pulled Ollama tags; sweeps unreferenced ones. Subcommands: init|record|sweep|purge
   hw-profile.js             # shared 5-tier hardware detection (tierForGb); used by router and proxy
 config/
   model-map.json          # shipped defaults (JSON5 — comments allowed)

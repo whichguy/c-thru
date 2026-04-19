@@ -86,6 +86,7 @@ link_tool c-thru-classify.sh c-thru-classify
 link_tool c-thru-stop-hook.sh c-thru-stop-hook
 link_tool c-thru-statusline.sh c-thru-statusline
 link_tool c-thru-statusline-overlay.sh c-thru-statusline-overlay
+link_tool c-thru-ollama-gc.sh c-thru-ollama-gc
 
 # --- Migrate legacy providers schema ---
 # Guard: jq -e '.providers' is a no-op if key is absent — idempotent by design.
@@ -624,6 +625,10 @@ elif [ -f "$SHIPPED_MAP" ]; then
 else
     echo -e "  ${YELLOW}⚠️  No config/model-map.json found; skipping seed. Copy manually if needed.${NC}"
 fi
+
+echo ""
+echo "Ollama GC state:"
+"$TOOLS_DEST/c-thru-ollama-gc" init
 
 echo ""
 echo "MCP server:"
