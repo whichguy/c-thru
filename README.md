@@ -50,6 +50,31 @@ Helpers:
 
 See [`docs/model-map.md`](docs/model-map.md) for the schema.
 
+## Agentic plan/wave system
+
+`/c-thru-plan` is a wave-based task orchestrator built on top of c-thru's
+hardware-aware model routing. It breaks any task into a structured plan, executes
+it in parallel waves using 13 specialized agents, and adapts automatically when
+findings invalidate assumptions.
+
+```sh
+/c-thru-plan add a palindrome checker to the auth module
+```
+
+State lands in `.c-thru/plans/<slug>/` — resumable across sessions.
+
+- **Agents:** `agents/` — 13 roles from `planner` to `security-reviewer`. Each
+  declares `model: <own-name>`; the proxy routes to the right hardware tier.
+- **Skills:** `skills/c-thru-plan/` — orchestration logic; `skills/review-plan/`
+  and `skills/review-fix/` for plan review and code quality loops.
+- **Hardware matrix:** `docs/hardware-profile-matrix.md`
+- **Architecture:** `docs/agent-architecture.md`
+
+```sh
+./install.sh    # adds agents/c-thru/ and skills/c-thru/ symlinks
+./uninstall.sh  # removes them; leaves project state untouched
+```
+
 ## License
 
 MIT
