@@ -34,7 +34,7 @@ If `$PLAN_DIR/current.md` exists:
 - restart: move `$PLAN_DIR` to `$PLAN_DIR.archived.<timestamp>`, then proceed as fresh.
 - abort: exit.
 
-If fresh: `mkdir -p $PLAN_DIR/waves $PLAN_DIR/discovery $PLAN_DIR/plan/snapshots`.
+If fresh: `mkdir -p $PLAN_DIR/waves $PLAN_DIR/discovery $PLAN_DIR/plan/snapshots $PLAN_DIR/review`.
 
 ## State model
 

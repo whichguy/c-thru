@@ -1,13 +1,14 @@
 # Agentic Plan/Wave Architecture
 
 The `/c-thru-plan` skill drives complex tasks through a wave-based execution loop using
-13 specialized agents. Each agent declares its own name as its `model:` — the c-thru
+14 specialized agents. Each agent declares its own name as its `model:` — the c-thru
 proxy resolves it to a hardware-appropriate concrete model at request time.
 
 ## Agent roster
 
 | Agent | Capability alias | Role |
 |---|---|---|
+| discovery-advisor | pattern-coder | Reads recon summary, produces prioritized gap questions |
 | planner | judge | Constructs and amends `current.md` (3 modes) |
 | auditor | judge | Determines wave direction: continue / extend / revise |
 | final-reviewer | judge | End-of-plan gap analysis |

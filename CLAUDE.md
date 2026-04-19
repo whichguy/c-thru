@@ -145,7 +145,7 @@ Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`.
 | `judge-strict` | 4–5, hard_fail | security-reviewer |
 | `orchestrator` | 2 | plan-orchestrator, integrator, doc-writer |
 | `code-analyst` | 2–3 | test-writer, reviewer-fix |
-| `pattern-coder` | 1 | scaffolder |
+| `pattern-coder` | 1 | scaffolder, discovery-advisor |
 | `deep-coder` | 3 | implementer |
 
 ### agent_to_capability resolution

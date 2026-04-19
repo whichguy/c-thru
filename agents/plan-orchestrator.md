@@ -168,8 +168,10 @@ Write `$wave_dir/verify.json`:
 ## Step 7 — Concat findings and outputs
 
 ```sh
-cat $wave_dir/findings/*.jsonl > $wave_dir/findings.jsonl
-cat $wave_dir/outputs/*.md    > $wave_dir/artifact.md
+shopt -s nullglob
+cat $wave_dir/findings/*.jsonl > $wave_dir/findings.jsonl 2>/dev/null || true
+cat $wave_dir/outputs/*.md    > $wave_dir/artifact.md 2>/dev/null || true
+shopt -u nullglob
 ```
 
 Pre-check: every declared output file exists and is non-empty. If any missing: write `artifact.md` with available outputs, set `decision=partial`.
@@ -236,7 +238,7 @@ Scan all worker output files (`$wave_dir/outputs/*.md`) and `$wave_dir/findings.
 ## Step 11 — Update plan state
 
 **Snapshot:** `cp <current.md path> <plan_dir>/plan/snapshots/p-<NNN>.md`
-(Derive `plan_dir` as `dirname` of `waves/` from `wave_dir`, two levels up.)
+(Derive `plan_dir` by stripping `waves/<NNN>` from `wave_dir`: `plan_dir=$(dirname $(dirname $wave_dir))`)
 
 **Update `current.md`:**
 - Mark completed items `status: complete`.

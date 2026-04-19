@@ -2,7 +2,7 @@
 # c-thru uninstaller: removes agentic plan/wave system artifacts installed by install.sh.
 # Safe to re-run: treats missing artifacts as no-ops.
 # Does NOT remove: claude-router, claude-proxy, hooks, original 5 capability aliases,
-#   model-map.overrides.json (user data), or .c-thru/plans/ project state.
+#   model-map.overrides.json (user data), or plan state in ${TMPDIR:-/tmp}/c-thru/.
 
 set -euo pipefail
 
