@@ -17,24 +17,33 @@ Input: digest path. Review the code described for correctness, security, and pro
 
 **Scope:** Never write outside declared `target_resources`. **Crisis:** stop, record, return `PARTIAL`.
 
-**Write 3 files (paths in prompt):**
+**Response structure** — do NOT write files directly. The orchestrator parses your response into three artifacts:
 
-1. `outputs/reviewer-fix-<item>.md`:
+1. `## Work completed` section (with `### Learnings` subsection) → `outputs/reviewer-fix-<item>.md`
    ```markdown
    ## Work completed
    <fix → reason>
 
-   ## Learnings
+   ### Learnings
    <patterns or constraints discovered during review>
    ```
 
-2. `findings/reviewer-fix-<item>.jsonl` — one JSON per line:
-   `{"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose>"}`
+2. `## Findings (jsonl)` fenced code block → parsed line-by-line into `findings/reviewer-fix-<item>.jsonl`
+   ```markdown
+   ## Findings (jsonl)
+   ```jsonl
+   {"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose>"}
+   ```
+   ```
    `detail` is optional — omit when `text` is self-contained.
 
    **Improvement required:** emit at least one `improvement` entry per task. What would make next wave's version of this work easier or higher-quality? If nothing, write `{"class":"improvement","text":"none — task was clean"}`.
 
-3. `outputs/reviewer-fix-<item>.INDEX.md` — `<section>: <start>-<end>` one per line (line numbers)
+3. `## Output INDEX` section → `outputs/reviewer-fix-<item>.INDEX.md`
+   ```markdown
+   ## Output INDEX
+   <section>: <start>-<end>
+   ```
 
 **Return:**
 ```

@@ -13,18 +13,19 @@ Each item in current.md requires: `id`, `description`, `target_resources`, `depe
 `target_resources`: list of repository-relative file paths this item will create or modify. Not opaque IDs. Examples: `["src/auth/middleware.js", "test/auth.test.js"]`. Use `[]` for items that don't touch files (e.g. pure research/planning items).
 
 ## Mode 1 — Initial build
-Inputs: user intent string + discovery INDEX path + discovery file paths.
+Input: `mode` + `intent` + `discovery`.
 Read discovery INDEX → pull only relevant sections via `Read(path, offset, limit)`.
 Write current.md from scratch. Group items by logical layer. List all assumptions explicitly (confirmed / assumed / to-be-validated).
 
 ## Mode 2 — Post-wave revision
-Inputs: current.md path + replan-brief.md path (PRIMARY) + raw wave file paths (secondary).
-Read replan-brief.md first. Cross-check raw wave files only when brief is ambiguous.
+Input: `mode` + `current.md` + `INDEX`.
+At least one of {replan-brief, findings} required as trigger. Also accepts (optional): brief_INDEX, artifact, artifact_INDEX, verify, decision, Verdict.
+Read replan-brief first if present; fall back to findings when brief is absent. Cross-check raw wave files only when the primary source is ambiguous.
 Amend only `pending`/`extend` items — never touch `complete` items.
 May restructure `depends_on` edges, re-scope, split, or merge items.
 
 ## Mode 3 — Gap closure
-Inputs: current.md path + gap analysis text + journal.md path + journal line offset.
+Input: `mode` + `intent` + `current.md` path + `INDEX` path + `final_review` path + `journal` path + journal line offset.
 Append new items only. New items must declare `depends_on` on relevant complete items.
 
 **After any write:** emit `## Plan delta` — added/removed/changed items and dep-graph changes.

@@ -192,7 +192,11 @@ Agent(subagent_type: "<agent-name>",
 For each response:
 - If timeout or missing STATUS block: write raw output to `$wave_dir/failures/<agent>-<item>.raw`; mark item `failed`; continue.
 - If malformed STATUS: write raw output to `$wave_dir/failures/<agent>-<item>.raw`; mark item `failed`; continue.
-- If valid STATUS: write response to `$wave_dir/outputs/<agent>-<item>.md`; extract findings to `$wave_dir/findings/<agent>-<item>.jsonl`.
+- If valid STATUS: parse the structured response into three artifacts:
+  - `## Work completed` section (including any `### Learnings` subsection) → write to `$wave_dir/outputs/<agent>-<item>.md`
+  - `## Findings (jsonl)` fenced code block → extract each line → write to `$wave_dir/findings/<agent>-<item>.jsonl`
+  - `## Output INDEX` section → write to `$wave_dir/outputs/<agent>-<item>.INDEX.md`
+  - If any section header is missing from the response: write raw output to `$wave_dir/failures/<agent>-<item>.raw` (per Resilience policy above); mark item `failed`; continue.
 
 Apply **batch-abort threshold** (see above) after each batch.
 
@@ -344,7 +348,7 @@ On any git error: proceed, set `COMMITTED: no`.
 ## Step 13 — Return STATUS
 
 ```
-STATUS: COMPLETE|PARTIAL|ERROR
+STATUS: COMPLETE|PARTIAL|ERROR|CYCLE
 VERDICT: continue|extend|revise|done
 WAVE: <NNN>
 COMMITTED: yes|no
@@ -358,3 +362,4 @@ SUMMARY: ≤20 words
 - `VERDICT=done`: emitted only in step 2 (no ready items)
 - `STATUS=PARTIAL`: crisis cut the wave short
 - `STATUS=ERROR`: unrecoverable failure — driver should surface `wave_dir` to user
+- `STATUS=CYCLE`: dependency cycle detected in step 3 — `ITEMS` field lists the cycling item ids; emitted as early return (no VERDICT/WAVE/COMMITTED)

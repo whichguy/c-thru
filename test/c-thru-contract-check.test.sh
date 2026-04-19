@@ -220,6 +220,149 @@ check "Phase 0 missing mkdir for reports/ → exit 1" 1 "$rc"
 teardown_workspace "$F8"
 
 # ---------------------------------------------------------------------------
+# Fixture 9 — Unhandled STATUS value: agent declares STATUS=CUSTOM_VALUE
+# but caller SKILL.md has no branch for it → Check 6 must fail.
+# ---------------------------------------------------------------------------
+echo "Fixture 9: unhandled STATUS value → fail..."
+F9=$(setup_workspace)
+mkdir -p "$F9/config"
+cat > "$F9/config/model-map.json" <<'EOF'
+{ "agent_to_capability": { "status-agent": "pattern-coder" } }
+EOF
+# Agent declares STATUS: COMPLETE|ERROR|CUSTOM_VALUE
+cat > "$F9/agents/status-agent.md" <<'EOF'
+---
+name: status-agent
+model: status-agent
+---
+# status-agent
+Input: digest path.
+
+**Return:**
+```
+STATUS: COMPLETE|ERROR|CUSTOM_VALUE
+SUMMARY: <text>
+```
+EOF
+# SKILL.md calls status-agent but only branches on COMPLETE and ERROR
+cat > "$F9/skills/c-thru-plan/SKILL.md" <<'EOF'
+---
+name: c-thru-plan
+---
+## Phase 0
+
+mkdir -p $PLAN_DIR/discovery $PLAN_DIR/waves $PLAN_DIR/plan $PLAN_DIR/review
+
+## Phase 1
+
+```
+Agent(subagent_type: "status-agent",
+  prompt: "digest: /tmp/c-thru/x/test-slug/digests/item.md")
+```
+
+if STATUS == "ERROR": abort
+if STATUS == "COMPLETE": proceed
+EOF
+rc=0; run_checker_in "$F9" >/dev/null 2>&1 || rc=$?
+check "unhandled STATUS value (CUSTOM_VALUE) → exit 1" 1 "$rc"
+teardown_workspace "$F9"
+
+# ---------------------------------------------------------------------------
+# Fixture 10 — Undeclared prompt key: caller passes a key the agent doesn't
+# declare in its Input: line → Check 7 must fail.
+# ---------------------------------------------------------------------------
+echo "Fixture 10: undeclared prompt key → fail..."
+F10=$(setup_workspace)
+mkdir -p "$F10/config"
+cat > "$F10/config/model-map.json" <<'EOF'
+{ "agent_to_capability": { "keyed-agent": "pattern-coder" } }
+EOF
+# Agent declares only "digest path" — no undeclared_secret key
+cat > "$F10/agents/keyed-agent.md" <<'EOF'
+---
+name: keyed-agent
+model: keyed-agent
+---
+# keyed-agent
+Input: `digest` path.
+
+**Return:**
+```
+STATUS: COMPLETE|ERROR
+```
+EOF
+# Caller passes "undeclared_secret" key not in agent's Input
+cat > "$F10/skills/c-thru-plan/SKILL.md" <<'EOF'
+---
+name: c-thru-plan
+---
+## Phase 0
+
+mkdir -p $PLAN_DIR/discovery $PLAN_DIR/waves $PLAN_DIR/plan $PLAN_DIR/review
+
+## Phase 1
+
+```
+Agent(subagent_type: "keyed-agent",
+  prompt: "digest:            /tmp/c-thru/x/test-slug/digests/item.md
+           undeclared_secret: some_value")
+```
+EOF
+rc=0; run_checker_in "$F10" >/dev/null 2>&1 || rc=$?
+check "undeclared prompt key (undeclared_secret) → exit 1" 1 "$rc"
+teardown_workspace "$F10"
+
+# ---------------------------------------------------------------------------
+# Fixture 11 — Multi-mode Mode 2 Input mismatch: invocation has mode: 2 but
+# Mode 2 Input line requires "required_key" which is not in the prompt → fail.
+# ---------------------------------------------------------------------------
+echo "Fixture 11: multi-mode Mode 2 input mismatch → fail..."
+F11=$(setup_workspace)
+mkdir -p "$F11/config"
+cat > "$F11/config/model-map.json" <<'EOF'
+{ "agent_to_capability": { "multi-agent": "pattern-coder" } }
+EOF
+# Multi-mode agent: Mode 2 Input requires mode + required_key
+cat > "$F11/agents/multi-agent.md" <<'EOF'
+---
+name: multi-agent
+model: multi-agent
+---
+# multi-agent
+
+## Mode 1 — Build
+Input: `mode` + `intent`.
+
+## Mode 2 — Revise
+Input: `mode` + `required_key`.
+
+**Return:**
+```
+STATUS: COMPLETE|ERROR
+```
+EOF
+# Caller invokes mode: 2 but omits required_key
+cat > "$F11/skills/c-thru-plan/SKILL.md" <<'EOF'
+---
+name: c-thru-plan
+---
+## Phase 0
+
+mkdir -p $PLAN_DIR/discovery $PLAN_DIR/waves $PLAN_DIR/plan $PLAN_DIR/review
+
+## Phase 1
+
+```
+Agent(subagent_type: "multi-agent",
+  prompt: "mode:   2
+           missing: not_the_required_key")
+```
+EOF
+rc=0; run_checker_in "$F11" >/dev/null 2>&1 || rc=$?
+check "multi-mode Mode 2 missing required_key → exit 1" 1 "$rc"
+teardown_workspace "$F11"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

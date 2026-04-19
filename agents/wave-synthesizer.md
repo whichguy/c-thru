@@ -6,7 +6,7 @@ model: wave-synthesizer
 
 # wave-synthesizer
 
-Input: wave artifact path + wave INDEX path + findings.jsonl path + verify.json path + decision.json path + plan INDEX path + journal.md path + journal line offset.
+Input: wave artifact path + wave INDEX path + findings.jsonl path + verify.json path + decision.json path + plan INDEX path + journal.md path + journal line offset + `brief_out` path.
 
 Read INDEX files first. Pull sections via `Read(path, offset, limit)`.
 Filter findings.jsonl for `plan-material` and `crisis` lines only. Schema: `{"class":"...","text":"<≤80 char summary>","detail":"<optional longer prose>"}` — prefer `detail` over `text` when present for replan-brief body text.
