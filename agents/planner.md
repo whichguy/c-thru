@@ -13,13 +13,15 @@ Each item in current.md requires: `id`, `description`, `target_resources`, `depe
 `target_resources`: list of repository-relative file paths this item will create or modify. Not opaque IDs. Examples: `["src/auth/middleware.js", "test/auth.test.js"]`. Use `[]` for items that don't touch files (e.g. pure research/planning items).
 
 ## Mode 1 — Initial build
-Inputs: user intent string + discovery INDEX path + discovery file paths.
+Input: `mode` key (value `1`) + user intent string + discovery INDEX path + discovery file paths.
 Read discovery INDEX → pull only relevant sections via `Read(path, offset, limit)`.
 Write current.md from scratch. Group items by logical layer. List all assumptions explicitly (confirmed / assumed / to-be-validated).
 
 ## Mode 2 — Post-wave revision
-Inputs: current.md path + replan-brief.md path (PRIMARY) + raw wave file paths (secondary).
-Read replan-brief.md first. Cross-check raw wave files only when brief is ambiguous.
+Input: `mode` key (value `2`) + `current.md` path + at least one of {`replan-brief`, `findings`} as the trigger input (PRIMARY).
+Optional supplemental keys: `brief_INDEX`, `artifact`, `artifact_INDEX`, `verify`, `decision`, `Verdict`.
+Full key set (all optional beyond the mode + trigger requirement): `replan-brief`, `brief_INDEX`, `findings`, `artifact`, `artifact_INDEX`, `verify`, `decision`, `Verdict`.
+Read `replan-brief` first if present. Fall back to `findings` when brief is absent. Cross-check raw wave files only when the primary source is ambiguous.
 Amend only `pending`/`extend` items — never touch `complete` items.
 May restructure `depends_on` edges, re-scope, split, or merge items.
 
