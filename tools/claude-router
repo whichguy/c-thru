@@ -1918,6 +1918,7 @@ ensure_ollama_running() {
       return 0
     fi
     ollama_prep_state_update "models" "$state_key" "pull_success" "cached"
+    "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
     claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true"
     list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null) || return 0
     if ! echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
@@ -1936,6 +1937,7 @@ ensure_ollama_running() {
     claude_router_debug_event "ollama stale refresh start model=$model host=$cli_host age=\"$age_text\""
     if "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
       ollama_prep_state_update "models" "$state_key" "pull_success" "refreshed" "$age_text"
+      "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
       claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=true"
       list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null || true)
     else
