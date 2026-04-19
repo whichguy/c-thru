@@ -485,8 +485,177 @@ echo "Skills:"
 install_skill
 
 echo ""
+echo "Agents (agentic plan/wave):"
+install_agents
+
+echo ""
+echo "Skills (agentic plan/wave):"
+install_skills_cthru
+
+echo ""
+echo "Model-map (capability aliases):"
+extend_model_map
+
+echo ""
 echo "Hooks:"
 register_hooks
+
+# --- Agentic plan/wave: agent symlinks ---
+# Symlinks each agents/*.md into ~/.claude/agents/c-thru/ (namespaced to avoid
+# collisions with user's own agents). Only touches symlinks pointing into this repo.
+# Idempotent: skips symlinks already pointing at the correct source.
+# Failure mode: prints a warning and continues if target dir can't be created.
+install_agents() {
+    local agents_src="$REPO_DIR/agents"
+    local agents_dest="$CLAUDE_DIR/agents/c-thru"
+
+    if [ ! -d "$agents_src" ]; then
+        echo -e "  ${YELLOW}⚠️  agents/ directory not found — skipping agent install${NC}"
+        return 0
+    fi
+
+    mkdir -p "$agents_dest" || { echo -e "  ${RED}❌ cannot create $agents_dest${NC}" >&2; return 1; }
+
+    local installed=0 skipped=0
+    for src in "$agents_src"/*.md; do
+        [ -f "$src" ] || continue
+        local name
+        name="$(basename "$src")"
+        local dest="$agents_dest/$name"
+        if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$src" ]; then
+            echo -e "  ${GRAY}✓  agents/c-thru/${name}${NC}"
+            skipped=$((skipped + 1))
+        else
+            ln -sfn "$src" "$dest"
+            echo -e "  ${GREEN}✅ agents/c-thru/${name}${NC}"
+            installed=$((installed + 1))
+        fi
+    done
+    [ $installed -gt 0 ] || [ $skipped -gt 0 ] || echo -e "  ${YELLOW}⚠️  no .md files found in agents/${NC}"
+}
+
+# --- Agentic plan/wave: skill symlinks ---
+# Symlinks each skills/<name>/ directory into ~/.claude/skills/c-thru/<name>/.
+# Namespaced under c-thru to avoid collisions with existing user skills.
+# Idempotent: skips symlinks already pointing at the correct source.
+# Failure mode: prints a warning and continues if target dir can't be created.
+install_skills_cthru() {
+    local skills_src="$REPO_DIR/skills"
+    local skills_dest="$CLAUDE_DIR/skills/c-thru"
+
+    if [ ! -d "$skills_src" ]; then
+        echo -e "  ${YELLOW}⚠️  skills/ directory not found — skipping skill install${NC}"
+        return 0
+    fi
+
+    mkdir -p "$skills_dest" || { echo -e "  ${RED}❌ cannot create $skills_dest${NC}" >&2; return 1; }
+
+    local installed=0 skipped=0
+    for src in "$skills_src"/*/; do
+        [ -d "$src" ] || continue
+        local name
+        name="$(basename "$src")"
+        local dest="$skills_dest/$name"
+        if [ -L "$dest" ] && [ "$(readlink "$dest")" = "${src%/}" ]; then
+            echo -e "  ${GRAY}✓  skills/c-thru/${name}${NC}"
+            skipped=$((skipped + 1))
+        else
+            ln -sfn "${src%/}" "$dest"
+            echo -e "  ${GREEN}✅ skills/c-thru/${name}${NC}"
+            installed=$((installed + 1))
+        fi
+    done
+    [ $installed -gt 0 ] || [ $skipped -gt 0 ] || echo -e "  ${YELLOW}⚠️  no skill directories found in skills/${NC}"
+}
+
+# --- Agentic plan/wave: extend model-map.system.json ---
+# Merges the 6 new capability alias rows + agent_to_capability into
+# model-map.system.json (one per tier, only if absent). Validates before
+# atomic rename (config-swap-invariant). User overrides in
+# model-map.overrides.json are never touched.
+# Idempotent: skips if all 6 aliases already present in every tier.
+# Failure mode: aborts with descriptive message on validator failure.
+extend_model_map() {
+    if [ "$JQ_AVAILABLE" -eq 0 ]; then
+        echo -e "  ${YELLOW}⚠️  jq not found — skipping model-map extension${NC}"
+        return 0
+    fi
+    if ! command -v node >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}⚠️  node not found — skipping model-map extension${NC}"
+        return 0
+    fi
+
+    local system_map="$CLAUDE_DIR/model-map.system.json"
+    local shipped_map="$REPO_DIR/config/model-map.json"
+
+    # If system map doesn't exist yet, sync will create it — nothing to extend.
+    if [ ! -f "$system_map" ]; then
+        echo -e "  ${GRAY}✓  model-map.system.json not present yet (sync will seed it)${NC}"
+        return 0
+    fi
+
+    # Pre-check: verify none of the 6 new aliases already exist in 128gb tier.
+    local already
+    already=$(jq -r '.llm_profiles["128gb"]["judge"] // empty' "$system_map" 2>/dev/null || true)
+    if [ -n "$already" ]; then
+        echo -e "  ${GRAY}✓  capability aliases already present in model-map.system.json${NC}"
+        return 0
+    fi
+
+    # Merge the new aliases from shipped config into system map, alias-by-alias per tier.
+    local tmp="${system_map}.tmp.$$"
+    jq --slurpfile shipped "$shipped_map" '
+        . as $sys |
+        $shipped[0].llm_profiles as $shipped_profiles |
+        ($sys.llm_profiles // {}) as $existing_profiles |
+        .llm_profiles = (
+            $existing_profiles | to_entries | map(
+                .key as $tier |
+                .value as $profile |
+                if $shipped_profiles[$tier] then
+                    .value = ($profile + {
+                        "judge":         $shipped_profiles[$tier]["judge"],
+                        "judge-strict":  $shipped_profiles[$tier]["judge-strict"],
+                        "orchestrator":  $shipped_profiles[$tier]["orchestrator"],
+                        "code-analyst":  $shipped_profiles[$tier]["code-analyst"],
+                        "pattern-coder": $shipped_profiles[$tier]["pattern-coder"],
+                        "deep-coder":    $shipped_profiles[$tier]["deep-coder"]
+                    })
+                else
+                    .
+                end
+            ) | from_entries
+        ) |
+        if (.agent_to_capability == null) then
+            .agent_to_capability = $shipped[0].agent_to_capability
+        else
+            .
+        end |
+        if (.model_routes["devstral-small:2"] == null) then
+            .model_routes["devstral-small:2"] = "ollama_local" |
+            .model_routes["qwen3.6:35b"] = "ollama_local" |
+            .model_routes["qwen3.5:122b"] = "ollama_local" |
+            .model_routes["qwen3.5:27b"] = "ollama_local" |
+            .model_routes["qwen3.5:9b"] = "ollama_local" |
+            .model_routes["qwen3.5:1.7b"] = "ollama_local"
+        else
+            .
+        end
+    ' "$system_map" > "$tmp" || { echo -e "  ${RED}❌ jq merge failed${NC}" >&2; rm -f "$tmp"; return 1; }
+
+    # Validate before atomic rename (config-swap-invariant)
+    if ! node "$TOOLS_SRC/model-map-validate.js" "$tmp" 2>&1 | grep -q "^model-map-validate:"; then
+        mv "$tmp" "$system_map"
+        echo -e "  ${GREEN}✅ model-map.system.json extended with 6 capability aliases + agent_to_capability${NC}"
+    else
+        local errs
+        errs=$(node "$TOOLS_SRC/model-map-validate.js" "$tmp" 2>&1)
+        echo -e "  ${RED}❌ model-map.system.json validation failed — not writing${NC}" >&2
+        echo "$errs" >&2
+        rm -f "$tmp"
+        return 1
+    fi
+}
 
 # --- Non-clobbering detection for statusline + Stop hook ---
 # Probes settings.json via stdlib-only node (no jq dep) and prints
