@@ -122,3 +122,40 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 ## Proxy Lifecycle
 
 `claude-proxy` is a long-running HTTP server auto-spawned by `claude-router` when the backend needs it. The router coordinates via a `/ping` handshake on a dynamically-selected port. Logs land at `~/.claude/proxy.*.log`. Kill a stuck proxy with `pkill -f claude-proxy`.
+
+## Agentic plan/wave system
+
+Invoke with `/c-thru-plan <intent>`. State in `.c-thru/plans/<slug>/`.
+Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`.
+
+### Capability aliases (new — agentic system)
+
+| Alias | Cognitive tier | Agents |
+|---|---|---|
+| `judge` | 4–5 | planner, auditor, review-plan, final-reviewer, journal-digester |
+| `judge-strict` | 4–5, hard_fail | security-reviewer |
+| `orchestrator` | 2 | plan-orchestrator, integrator, doc-writer |
+| `code-analyst` | 2–3 | test-writer, reviewer-fix |
+| `pattern-coder` | 1 | scaffolder |
+| `deep-coder` | 3 | implementer |
+
+### agent_to_capability resolution
+
+Agent files declare `model: <agent-name>`. The proxy resolves via 2-hop graph:
+`agent-name → agent_to_capability → capability-alias → llm_profiles[hw] → concrete model`.
+
+The `agent_to_capability` map lives in `config/model-map.json` (top-level key).
+`resolveCapabilityAlias()` in `claude-proxy` performs the traversal at request time —
+no data is duplicated into `llm_profiles`.
+
+### Adding/rebinding
+
+- Rebind one agent to a different tier: change one line in `agent_to_capability`.
+- Swap a tier's backing model: change one line in `llm_profiles[<hw>][<alias>]`.
+- Agent files are never modified for either operation.
+
+### Model tags
+
+New Ollama tags used by agentic aliases: `devstral-small:2`, `qwen3.6:35b`,
+`qwen3.5:122b`, `qwen3.5:27b`, `qwen3.5:9b`, `qwen3.5:1.7b`.
+Run `ollama list` to confirm presence before first use.

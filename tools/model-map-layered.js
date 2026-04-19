@@ -68,9 +68,13 @@ function computeOverrideDiff(base, effective) {
 let _v12WarnedOnce = false;
 
 // Synthesize v1.2 schema keys from legacy fallback_strategies shape.
-// Fires when fallback_strategies is present but tool_capability_to_profile is absent.
+// Only fires when fallback_strategies is present and tool_capability_to_profile is absent.
 // Does NOT modify fallback_strategies — legacy proxy code continues reading it unchanged.
 // This is config-shape transformation only; it never modifies request-time model fields.
+//
+// agent_to_capability synthesis is intentionally NOT done here — the proxy resolves
+// agent name → capability alias → concrete model via 2-hop graph traversal at request
+// time (resolveCapabilityAlias). No data duplication into llm_profiles is needed.
 function maybeSynthesizeV12Keys(effective) {
   if (!effective.fallback_strategies || effective.tool_capability_to_profile) return effective;
 

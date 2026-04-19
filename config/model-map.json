@@ -53,7 +53,13 @@
         "connected_model": "qwen3:1.7b",
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
-      }
+      },
+      "judge":         { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "hard_fail" },
+      "judge-strict":  { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "hard_fail" },
+      "orchestrator":  { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
+      "code-analyst":  { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
+      "pattern-coder": { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
+      "deep-coder":    { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" }
     },
     "32gb": {
       "default": {
@@ -85,7 +91,13 @@
         "connected_model": "qwen3:1.7b",
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
-      }
+      },
+      "judge":         { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "hard_fail" },
+      "judge-strict":  { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "hard_fail" },
+      "orchestrator":  { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
+      "code-analyst":  { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
+      "pattern-coder": { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
+      "deep-coder":    { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" }
     },
     "48gb": {
       "default": {
@@ -117,7 +129,13 @@
         "connected_model": "gemma4:e4b",
         "disconnect_model": "gemma4:e4b",
         "on_failure": "cascade"
-      }
+      },
+      "judge":         { "connected_model": "claude-opus-4-6", "disconnect_model": "qwen3.5:27b", "on_failure": "cascade" },
+      "judge-strict":  { "connected_model": "claude-opus-4-6", "disconnect_model": "qwen3.5:27b", "on_failure": "hard_fail" },
+      "orchestrator":  { "connected_model": "qwen3.5:9b",      "disconnect_model": "qwen3.5:27b", "on_failure": "cascade" },
+      "code-analyst":  { "connected_model": "qwen3.5:9b",      "disconnect_model": "qwen3.5:27b", "on_failure": "cascade" },
+      "pattern-coder": { "connected_model": "qwen3.5:9b",      "disconnect_model": "qwen3.5:27b", "on_failure": "cascade" },
+      "deep-coder":    { "connected_model": "devstral-small:2", "disconnect_model": "qwen3.5:27b", "on_failure": "cascade" }
     },
     "64gb": {
       "default": {
@@ -149,7 +167,13 @@
         "connected_model": "qwen3-coder:30b",
         "disconnect_model": "qwen3-coder:30b",
         "on_failure": "cascade"
-      }
+      },
+      "judge":         { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",     "on_failure": "cascade" },
+      "judge-strict":  { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",     "on_failure": "hard_fail" },
+      "orchestrator":  { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.5:27b",     "on_failure": "cascade" },
+      "code-analyst":  { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
+      "pattern-coder": { "connected_model": "qwen3.6:35b",      "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
+      "deep-coder":    { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" }
     },
     "128gb": {
       "default": {
@@ -181,7 +205,13 @@
         "connected_model": "gemma4:26b-a4b",
         "disconnect_model": "gemma4:26b-a4b",
         "on_failure": "cascade"
-      }
+      },
+      "judge":         { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade" },
+      "judge-strict":  { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:122b",    "on_failure": "hard_fail" },
+      "orchestrator":  { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade" },
+      "code-analyst":  { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
+      "pattern-coder": { "connected_model": "qwen3-coder:30b",  "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
+      "deep-coder":    { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" }
     }
   },
   "model_routes": {
@@ -200,7 +230,13 @@
     "qwen3-coder-next:cloud": "ollama_cloud",
     "gemma4:26b-a4b": "ollama_local",
     "gemma4:e4b": "ollama_local",
-    "gemma4:31b": "ollama_local"
+    "gemma4:31b": "ollama_local",
+    "qwen3.6:35b": "ollama_local",
+    "qwen3.5:122b": "ollama_local",
+    "qwen3.5:27b": "ollama_local",
+    "qwen3.5:9b": "ollama_local",
+    "qwen3.5:1.7b": "ollama_local",
+    "devstral-small:2": "ollama_local"
   },
   "routes": {
     "default": "general-default",
@@ -296,5 +332,20 @@
   "ollama_defaults": {
     "num_ctx": 65536
   },
-  "model_overrides": {}
+  "model_overrides": {},
+  "agent_to_capability": {
+    "planner":          "judge",
+    "review-plan":      "judge",
+    "auditor":          "judge",
+    "security-reviewer":"judge-strict",
+    "final-reviewer":   "judge",
+    "journal-digester": "judge",
+    "plan-orchestrator":"orchestrator",
+    "integrator":       "orchestrator",
+    "doc-writer":       "orchestrator",
+    "scaffolder":       "pattern-coder",
+    "test-writer":      "code-analyst",
+    "reviewer-fix":     "code-analyst",
+    "implementer":      "deep-coder"
+  }
 }
