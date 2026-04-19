@@ -46,6 +46,19 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Check 1b — No hardcoded .c-thru/plans/ paths in agents/*.md
+# ---------------------------------------------------------------------------
+echo "1b/3 Hardcoded .c-thru/plans/ in agents/*.md..."
+hardcoded_agents=$(grep -l '\.c-thru/plans/' "$AGENTS_DIR"/*.md 2>/dev/null || true)
+if [ -n "$hardcoded_agents" ]; then
+    for f in $hardcoded_agents; do
+        fail "$(basename "$f"): contains hardcoded .c-thru/plans/ path — agents must receive paths via prompt keys"
+    done
+else
+    ok "no hardcoded .c-thru/plans/ in agents/*.md"
+fi
+
+# ---------------------------------------------------------------------------
 # Check 2 — Dangling subagent_type references
 # ---------------------------------------------------------------------------
 echo "2/3  Dangling agent reference check..."

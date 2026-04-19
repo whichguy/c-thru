@@ -84,7 +84,7 @@ run_checker_in() {
 echo "Fixture 1: dangling agent reference..."
 F1=$(setup_workspace)
 write_agent "$F1" "real-agent" "digest path."
-write_skill "$F1" "ghost-agent" "digest: .c-thru/plans/x/digest.md"
+write_skill "$F1" "ghost-agent" "digest: /tmp/c-thru/x/test-slug/digest.md"
 # ghost-agent has no agents/ghost-agent.md
 rc=0; run_checker_in "$F1" >/dev/null 2>&1 || rc=$?
 check "dangling agent → exit 1" 1 "$rc"
@@ -98,7 +98,7 @@ F2=$(setup_workspace)
 # Agent declares "journal_offset" but prompt omits it
 write_agent "$F2" "my-agent" "\`journal.md\` path + journal line offset."
 # Prompt passes journal but NOT journal_offset
-write_skill "$F2" "my-agent" "journal:  .c-thru/plans/x/journal.md"
+write_skill "$F2" "my-agent" "journal:  /tmp/c-thru/x/test-slug/journal.md"
 rc=0; run_checker_in "$F2" >/dev/null 2>&1 || rc=$?
 check "missing key (journal_offset) → exit 1" 1 "$rc"
 teardown_workspace "$F2"
@@ -109,8 +109,8 @@ teardown_workspace "$F2"
 echo "Fixture 3: clean case..."
 F3=$(setup_workspace)
 write_agent "$F3" "clean-agent" "\`journal.md\` path + digest path."
-write_skill "$F3" "clean-agent" "journal:  .c-thru/plans/x/journal.md
-           digest:  .c-thru/plans/x/digests/item.md"
+write_skill "$F3" "clean-agent" "journal:  /tmp/c-thru/x/test-slug/journal.md
+           digest:  /tmp/c-thru/x/test-slug/digests/item.md"
 rc=0; run_checker_in "$F3" >/dev/null 2>&1 || rc=$?
 check "clean case → exit 0" 0 "$rc"
 teardown_workspace "$F3"
