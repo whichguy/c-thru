@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { spawn, spawnSync } = require('child_process');
+const { spawn, spawnSync, execFile } = require('child_process');
 const { Transform } = require('stream');
 
 // ── Rolling log ───────────────────────────────────────────────────────
@@ -444,6 +444,7 @@ const stats = {
 };
 
 const CLAUDE_PROFILE_DIR = process.env.CLAUDE_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || os.homedir(), '.claude');
+const GC_TOOL_PATH = path.join(CLAUDE_PROFILE_DIR, 'tools', 'c-thru-ollama-gc');
 const USAGE_STATS_FILE = process.env.CLAUDE_PROXY_USAGE_STATS_FILE || path.join(CLAUDE_PROFILE_DIR, 'proxy-usage-stats.json');
 const USAGE_LOG_FILE = process.env.CLAUDE_PROXY_USAGE_LOG_FILE || '';
 const USAGE_FLUSH_DEBOUNCE_MS = numberFromEnv('CLAUDE_PROXY_USAGE_FLUSH_DEBOUNCE_MS', 250);
@@ -779,6 +780,15 @@ function warmOllamaModel(model, backendId, backendUrl) {
     req.write(body);
     req.end();
   } catch { /* malformed URL, etc. — ignore */ }
+}
+
+// ── Ollama GC helpers ─────────────────────────────────────────────────
+// recordOllamaPull: non-fatal shell-out to c-thru-ollama-gc record.
+// execFile (not exec) for safety with tag chars that might contain special characters.
+function recordOllamaPull(model, backendUrl) {
+  return new Promise((resolve) => {
+    execFile(GC_TOOL_PATH, ['record', model, 'proxy', backendUrl], { timeout: 5000 }, () => resolve());
+  });
 }
 
 // ── Ollama HTTP helpers (async, stdlib only) ───────────────────────────
@@ -1344,6 +1354,7 @@ async function ensureOllamaModelLoaded(model, backendUrl, logicalRole = null) {
       return { type: 'api_error', message: msg };
     }
     proxyLog('ollama.pull.success', { model, backend_url: backendUrl });
+    recordOllamaPull(model, backendUrl).catch(() => {});
   }
 
   // 3) Enforce role exclusivity — unload previous model for this role if binding changed.
@@ -2587,6 +2598,22 @@ server.listen(INITIAL_PORT, '127.0.0.1', () => {
   if (STARTUP_PROBE_ENABLED) setImmediate(() => runStartupProbes().catch(() => {}));
   startLivenessProbeLoop();
   startNetworkInterfaceWatcher();
+  // Background GC sweep — detached so proxy shutdown is never blocked on completion.
+  try {
+    if (fs.existsSync(GC_TOOL_PATH)) {
+      let logFd = null;
+      try { logFd = fs.openSync(PROXY_LOG_FILE, 'a'); } catch {}
+      const gcStdio = logFd !== null ? ['ignore', logFd, logFd] : ['ignore', 'ignore', 'ignore'];
+      let gcChild;
+      try {
+        gcChild = spawn(GC_TOOL_PATH, ['sweep'], { detached: true, stdio: gcStdio });
+      } finally {
+        if (logFd !== null) try { fs.closeSync(logFd); } catch {}
+      }
+      gcChild.unref();
+      setTimeout(() => { try { gcChild.kill('SIGTERM'); } catch {} }, 30_000).unref();
+    }
+  } catch {}
 });
 
 // ── Hooks listener (fixed port for HTTP hooks) ─────────────────────────

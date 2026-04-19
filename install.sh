@@ -86,6 +86,7 @@ link_tool c-thru-classify.sh c-thru-classify
 link_tool c-thru-stop-hook.sh c-thru-stop-hook
 link_tool c-thru-statusline.sh c-thru-statusline
 link_tool c-thru-statusline-overlay.sh c-thru-statusline-overlay
+link_tool c-thru-ollama-gc.sh c-thru-ollama-gc
 
 # --- Migrate legacy providers schema ---
 # Guard: jq -e '.providers' is a no-op if key is absent — idempotent by design.
@@ -596,7 +597,7 @@ if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
         if node "$local_validate" "$USER_MAP" 2>/dev/null; then
             echo -e "  ${GREEN}✅ model-map.system.json updated (shipped defaults)${NC}"
             if [ -f "$OVR_MAP" ]; then
-                override_keys="$(node -e "try{const o=JSON.parse(require('fs').readFileSync('$OVR_MAP','utf8'));console.log(Object.keys(o).length);}catch{console.log(0);}" 2>/dev/null || echo 0)"
+                override_keys="$(node -e 'try{const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(Object.keys(o).length);}catch{console.log(0);}' "$OVR_MAP" 2>/dev/null || echo 0)"
                 echo -e "  ${GRAY}✓  model-map.overrides.json (${override_keys} override keys)${NC}"
             else
                 echo -e "  ${GRAY}ℹ  model-map.overrides.json absent — no user overrides${NC}"
@@ -611,14 +612,9 @@ if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
 
     # Print detected hardware tier
     if [ -f "$TOOLS_SRC/hw-profile.js" ]; then
-        active_tier="$(node -e "
-try {
-  const os = require('os');
-  const {tierForGb} = require('$TOOLS_SRC/hw-profile.js');
-  const gb = Math.ceil(os.totalmem() / (1024**3));
-  process.stdout.write(tierForGb(gb) + ' (' + gb + ' GB detected)');
-} catch(e) { process.exit(1); }
-" 2>/dev/null || true)"
+        active_tier="$(node -e \
+            'try{const os=require("os");const {tierForGb}=require(process.argv[1]);const gb=Math.ceil(os.totalmem()/(1024**3));process.stdout.write(tierForGb(gb)+" ("+gb+" GB detected)");}catch(e){process.exit(1);}' \
+            "$TOOLS_SRC/hw-profile.js" 2>/dev/null || true)"
         if [ -n "$active_tier" ]; then
             echo -e "  ${GRAY}ℹ  active hardware profile: ${active_tier}${NC}"
         fi
@@ -629,6 +625,10 @@ elif [ -f "$SHIPPED_MAP" ]; then
 else
     echo -e "  ${YELLOW}⚠️  No config/model-map.json found; skipping seed. Copy manually if needed.${NC}"
 fi
+
+echo ""
+echo "Ollama GC state:"
+"$TOOLS_DEST/c-thru-ollama-gc" init
 
 echo ""
 echo "MCP server:"
@@ -682,7 +682,7 @@ detect_user_config() {
         yes)
             echo -e "  ${GRAY}✓  existing statusLine detected — NOT modifying settings${NC}"
             echo -e "  ${YELLOW}   To add the fallback badge, append this to your statusline's output:${NC}"
-            echo "       \$(sh ~/.claude/tools/c-thru-statusline-overlay 2>/dev/null)"
+            echo "       \$(bash ~/.claude/tools/c-thru-statusline-overlay 2>/dev/null)"
             ;;
         no)
             echo -e "  ${GRAY}✓  no statusLine configured — overlay installed${NC}"

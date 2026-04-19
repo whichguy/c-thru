@@ -225,14 +225,20 @@ function validateConfig(config, _errors) {
     }
   }
 
-  // agent_to_capability: flat map of agent-name → capability-alias, used for 2-hop resolution
+  // agent_to_capability: flat map of agent-name → capability-alias, used for 2-hop resolution.
+  // Values must be valid profile keys (i.e. a key in PROFILE_KEYS) so that
+  // resolveCapabilityAlias can complete the 2-hop lookup without silently falling through
+  // to a passthrough on a typo.
   if (config.agent_to_capability != null) {
+    const validCapAliases = new Set(PROFILE_KEYS);
     if (!isObject(config.agent_to_capability)) {
       report("'agent_to_capability' must be an object when present");
     } else {
       for (const [agentName, capAlias] of Object.entries(config.agent_to_capability)) {
         if (typeof capAlias !== 'string' || !capAlias.trim()) {
           report(`'agent_to_capability.${agentName}' must be a non-empty string`);
+        } else if (!validCapAliases.has(capAlias)) {
+          report(`'agent_to_capability.${agentName}' references unknown capability alias '${capAlias}' (expected one of: ${PROFILE_KEYS.join(', ')})`);
         }
       }
     }
