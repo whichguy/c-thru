@@ -142,14 +142,14 @@ remove_model_map_aliases() {
             .model_routes["qwen3.5:1.7b"])
     ' "$system_map" > "$tmp" || { echo -e "  ${RED}❌ jq transformation failed${NC}" >&2; rm -f "$tmp"; return 1; }
 
-    if ! node "$TOOLS_SRC/model-map-validate.js" "$tmp" 2>&1 | grep -q "^model-map-validate:"; then
+    local validate_rc=0 validate_out
+    validate_out=$(node "$TOOLS_SRC/model-map-validate.js" "$tmp" 2>&1) || validate_rc=$?
+    if [ "$validate_rc" -eq 0 ]; then
         mv "$tmp" "$system_map"
         echo -e "  ${GREEN}✅ removed capability aliases + agent_to_capability from model-map.system.json${NC}"
     else
-        local errs
-        errs=$(node "$TOOLS_SRC/model-map-validate.js" "$tmp" 2>&1)
         echo -e "  ${RED}❌ validation failed after removal — not writing${NC}" >&2
-        echo "$errs" >&2
+        echo "$validate_out" >&2
         rm -f "$tmp"
         return 1
     fi

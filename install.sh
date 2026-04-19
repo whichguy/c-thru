@@ -387,119 +387,6 @@ register_hooks() {
     fi
 }
 
-# --- User model-map: system defaults + user overrides split ---
-# Three files: model-map.system.json (system, overwritten on upgrade),
-#              model-map.overrides.json (user, never touched on upgrade),
-#              model-map.json (derived effective, written by sync).
-echo ""
-echo "Model-map:"
-SYS_MAP="$CLAUDE_DIR/model-map.system.json"
-OVR_MAP="$CLAUDE_DIR/model-map.overrides.json"
-USER_MAP="$CLAUDE_DIR/model-map.json"
-SHIPPED_MAP="$REPO_DIR/config/model-map.json"
-
-if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
-    local_sync="$TOOLS_SRC/model-map-sync.js"
-    local_validate="$TOOLS_SRC/model-map-validate.js"
-
-    # Migrate legacy providers schema in-place before we diff against defaults.
-    # Must run before syncLayeredConfig uses USER_MAP as bootstrapEffectivePath,
-    # otherwise old providers[] entries would be captured as-is into overrides.
-    if [ -f "$USER_MAP" ]; then
-        migrate_providers_schema "$USER_MAP"
-    fi
-
-    # Banner if user modified model-map.system.json (changes will be overwritten)
-    if [ -f "$SYS_MAP" ]; then
-        PRIOR_SYS_SHA="$(shasum -a 256 "$SYS_MAP" 2>/dev/null | awk '{print $1}')"
-        SHIPPED_SHA="$(shasum -a 256 "$SHIPPED_MAP" 2>/dev/null | awk '{print $1}')"
-        if [ -n "$PRIOR_SYS_SHA" ] && [ -n "$SHIPPED_SHA" ] && [ "$PRIOR_SYS_SHA" != "$SHIPPED_SHA" ]; then
-            echo -e "  ${YELLOW}⚠️  model-map.system.json was modified — overwriting with shipped defaults${NC}"
-            echo -e "  ${YELLOW}   To preserve customizations, edit model-map.overrides.json instead${NC}"
-        fi
-    fi
-
-    # Write effective to tmp first — if interrupted: old system + new effective (safe),
-    # never new system + old effective.
-    if [ -f "$local_sync" ]; then
-        node "$local_sync" "$SHIPPED_MAP" "$OVR_MAP" "$USER_MAP.tmp" "$USER_MAP" 2>/dev/null || true
-    fi
-    # Atomic system write
-    cp "$SHIPPED_MAP" "$SYS_MAP.tmp" && mv "$SYS_MAP.tmp" "$SYS_MAP"
-    # Finalize effective
-    if [ -f "$USER_MAP.tmp" ]; then
-        mv "$USER_MAP.tmp" "$USER_MAP"
-    elif [ ! -f "$USER_MAP" ]; then
-        cp "$SHIPPED_MAP" "$USER_MAP"
-    fi
-
-    # Validate effective
-    if [ -f "$local_validate" ] && [ -f "$USER_MAP" ]; then
-        if node "$local_validate" "$USER_MAP" 2>/dev/null; then
-            echo -e "  ${GREEN}✅ model-map.system.json updated (shipped defaults)${NC}"
-            if [ -f "$OVR_MAP" ]; then
-                override_keys="$(node -e "try{const o=JSON.parse(require('fs').readFileSync('$OVR_MAP','utf8'));console.log(Object.keys(o).length);}catch{console.log(0);}" 2>/dev/null || echo 0)"
-                echo -e "  ${GRAY}✓  model-map.overrides.json (${override_keys} override keys)${NC}"
-            else
-                echo -e "  ${GRAY}ℹ  model-map.overrides.json absent — no user overrides${NC}"
-            fi
-            echo -e "  ${GRAY}✓  model-map.json (effective merged config, valid)${NC}"
-        else
-            echo -e "  ${YELLOW}⚠️  effective model-map.json failed validation — run: node ${local_validate} ${USER_MAP}${NC}"
-        fi
-    else
-        echo -e "  ${GREEN}✅ model-map.system.json updated (validator unavailable)${NC}"
-    fi
-
-    # Print detected hardware tier
-    if [ -f "$TOOLS_SRC/hw-profile.js" ]; then
-        active_tier="$(node -e "
-try {
-  const os = require('os');
-  const {tierForGb} = require('$TOOLS_SRC/hw-profile.js');
-  const gb = Math.ceil(os.totalmem() / (1024**3));
-  process.stdout.write(tierForGb(gb) + ' (' + gb + ' GB detected)');
-} catch(e) { process.exit(1); }
-" 2>/dev/null || true)"
-        if [ -n "$active_tier" ]; then
-            echo -e "  ${GRAY}ℹ  active hardware profile: ${active_tier}${NC}"
-        fi
-    fi
-elif [ -f "$SHIPPED_MAP" ]; then
-    cp "$SHIPPED_MAP" "$USER_MAP"
-    echo -e "  ${GREEN}✅ Seeded from config/model-map.json (node unavailable for layered sync)${NC}"
-else
-    echo -e "  ${YELLOW}⚠️  No config/model-map.json found; skipping seed. Copy manually if needed.${NC}"
-fi
-
-echo ""
-echo "MCP server:"
-register_mcp_server
-
-echo ""
-echo "Permissions:"
-add_permission
-
-echo ""
-echo "Skills:"
-install_skill
-
-echo ""
-echo "Agents (agentic plan/wave):"
-install_agents
-
-echo ""
-echo "Skills (agentic plan/wave):"
-install_skills_cthru
-
-echo ""
-echo "Model-map (capability aliases):"
-extend_model_map
-
-echo ""
-echo "Hooks:"
-register_hooks
-
 # --- Agentic plan/wave: agent symlinks ---
 # Symlinks each agents/*.md into ~/.claude/agents/c-thru/ (namespaced to avoid
 # collisions with user's own agents). Only touches symlinks pointing into this repo.
@@ -643,19 +530,133 @@ extend_model_map() {
         end
     ' "$system_map" > "$tmp" || { echo -e "  ${RED}❌ jq merge failed${NC}" >&2; rm -f "$tmp"; return 1; }
 
-    # Validate before atomic rename (config-swap-invariant)
-    if ! node "$TOOLS_SRC/model-map-validate.js" "$tmp" 2>&1 | grep -q "^model-map-validate:"; then
+    # Validate before atomic rename (config-swap-invariant).
+    # Use explicit return-code capture — pipe-to-grep is unreliable under pipefail.
+    local validate_rc=0 validate_out
+    validate_out=$(node "$TOOLS_SRC/model-map-validate.js" "$tmp" 2>&1) || validate_rc=$?
+    if [ "$validate_rc" -eq 0 ]; then
         mv "$tmp" "$system_map"
         echo -e "  ${GREEN}✅ model-map.system.json extended with 6 capability aliases + agent_to_capability${NC}"
     else
-        local errs
-        errs=$(node "$TOOLS_SRC/model-map-validate.js" "$tmp" 2>&1)
         echo -e "  ${RED}❌ model-map.system.json validation failed — not writing${NC}" >&2
-        echo "$errs" >&2
+        echo "$validate_out" >&2
         rm -f "$tmp"
         return 1
     fi
 }
+
+# --- User model-map: system defaults + user overrides split ---
+# Three files: model-map.system.json (system, overwritten on upgrade),
+#              model-map.overrides.json (user, never touched on upgrade),
+#              model-map.json (derived effective, written by sync).
+echo ""
+echo "Model-map:"
+SYS_MAP="$CLAUDE_DIR/model-map.system.json"
+OVR_MAP="$CLAUDE_DIR/model-map.overrides.json"
+USER_MAP="$CLAUDE_DIR/model-map.json"
+SHIPPED_MAP="$REPO_DIR/config/model-map.json"
+
+if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
+    local_sync="$TOOLS_SRC/model-map-sync.js"
+    local_validate="$TOOLS_SRC/model-map-validate.js"
+
+    # Migrate legacy providers schema in-place before we diff against defaults.
+    # Must run before syncLayeredConfig uses USER_MAP as bootstrapEffectivePath,
+    # otherwise old providers[] entries would be captured as-is into overrides.
+    if [ -f "$USER_MAP" ]; then
+        migrate_providers_schema "$USER_MAP"
+    fi
+
+    # Banner if user modified model-map.system.json (changes will be overwritten)
+    if [ -f "$SYS_MAP" ]; then
+        PRIOR_SYS_SHA="$(shasum -a 256 "$SYS_MAP" 2>/dev/null | awk '{print $1}')"
+        SHIPPED_SHA="$(shasum -a 256 "$SHIPPED_MAP" 2>/dev/null | awk '{print $1}')"
+        if [ -n "$PRIOR_SYS_SHA" ] && [ -n "$SHIPPED_SHA" ] && [ "$PRIOR_SYS_SHA" != "$SHIPPED_SHA" ]; then
+            echo -e "  ${YELLOW}⚠️  model-map.system.json was modified — overwriting with shipped defaults${NC}"
+            echo -e "  ${YELLOW}   To preserve customizations, edit model-map.overrides.json instead${NC}"
+        fi
+    fi
+
+    # Write effective to tmp first — if interrupted: old system + new effective (safe),
+    # never new system + old effective.
+    if [ -f "$local_sync" ]; then
+        node "$local_sync" "$SHIPPED_MAP" "$OVR_MAP" "$USER_MAP.tmp" "$USER_MAP" 2>/dev/null || true
+    fi
+    # Atomic system write
+    cp "$SHIPPED_MAP" "$SYS_MAP.tmp" && mv "$SYS_MAP.tmp" "$SYS_MAP"
+    # Finalize effective
+    if [ -f "$USER_MAP.tmp" ]; then
+        mv "$USER_MAP.tmp" "$USER_MAP"
+    elif [ ! -f "$USER_MAP" ]; then
+        cp "$SHIPPED_MAP" "$USER_MAP"
+    fi
+
+    # Validate effective
+    if [ -f "$local_validate" ] && [ -f "$USER_MAP" ]; then
+        if node "$local_validate" "$USER_MAP" 2>/dev/null; then
+            echo -e "  ${GREEN}✅ model-map.system.json updated (shipped defaults)${NC}"
+            if [ -f "$OVR_MAP" ]; then
+                override_keys="$(node -e "try{const o=JSON.parse(require('fs').readFileSync('$OVR_MAP','utf8'));console.log(Object.keys(o).length);}catch{console.log(0);}" 2>/dev/null || echo 0)"
+                echo -e "  ${GRAY}✓  model-map.overrides.json (${override_keys} override keys)${NC}"
+            else
+                echo -e "  ${GRAY}ℹ  model-map.overrides.json absent — no user overrides${NC}"
+            fi
+            echo -e "  ${GRAY}✓  model-map.json (effective merged config, valid)${NC}"
+        else
+            echo -e "  ${YELLOW}⚠️  effective model-map.json failed validation — run: node ${local_validate} ${USER_MAP}${NC}"
+        fi
+    else
+        echo -e "  ${GREEN}✅ model-map.system.json updated (validator unavailable)${NC}"
+    fi
+
+    # Print detected hardware tier
+    if [ -f "$TOOLS_SRC/hw-profile.js" ]; then
+        active_tier="$(node -e "
+try {
+  const os = require('os');
+  const {tierForGb} = require('$TOOLS_SRC/hw-profile.js');
+  const gb = Math.ceil(os.totalmem() / (1024**3));
+  process.stdout.write(tierForGb(gb) + ' (' + gb + ' GB detected)');
+} catch(e) { process.exit(1); }
+" 2>/dev/null || true)"
+        if [ -n "$active_tier" ]; then
+            echo -e "  ${GRAY}ℹ  active hardware profile: ${active_tier}${NC}"
+        fi
+    fi
+elif [ -f "$SHIPPED_MAP" ]; then
+    cp "$SHIPPED_MAP" "$USER_MAP"
+    echo -e "  ${GREEN}✅ Seeded from config/model-map.json (node unavailable for layered sync)${NC}"
+else
+    echo -e "  ${YELLOW}⚠️  No config/model-map.json found; skipping seed. Copy manually if needed.${NC}"
+fi
+
+echo ""
+echo "MCP server:"
+register_mcp_server
+
+echo ""
+echo "Permissions:"
+add_permission
+
+echo ""
+echo "Skills:"
+install_skill
+
+echo ""
+echo "Agents (agentic plan/wave):"
+install_agents
+
+echo ""
+echo "Skills (agentic plan/wave):"
+install_skills_cthru
+
+echo ""
+echo "Model-map (capability aliases):"
+extend_model_map
+
+echo ""
+echo "Hooks:"
+register_hooks
 
 # --- Non-clobbering detection for statusline + Stop hook ---
 # Probes settings.json via stdlib-only node (no jq dep) and prints
