@@ -20,6 +20,60 @@ AFFECTED_ITEMS: []
 SUMMARY: wave already committed — skipped
 ```
 
+Also check for `$wave_dir/wave.json` — if it exists and any batch is incomplete (see **Within-wave resume** below), resume from the first incomplete batch rather than re-dispatching from scratch.
+
+---
+
+## Resilience policy
+
+Every Agent() call in steps 1, 5, 8, 9 is wrapped with a timeout and failure handler:
+
+- **Timeout:** 600s default (override per-call via `$WORKER_TIMEOUT_SEC`; chosen as 10× typical tool-call response ceiling — tune based on observed plan durations).
+- **On timeout or missing STATUS:** mark item `failed`, record raw output to `$wave_dir/failures/<agent>-<item>.raw`, continue.
+- **`failures/` directory:** created lazily on first write — no Phase 0 mkdir needed (wave-scoped).
+- **Retry policy:**
+  - Workers (step 5): zero retries. Worker failures almost always indicate a plan-material issue (wrong scope, bad assumption, resource conflict) rather than a transient fault. Retrying masks the signal.
+  - Auditor (step 8) and wave-synthesizer (step 9): one retry each (they're deterministic-ish). Before retry, delete prior malformed output so the second invocation writes fresh.
+
+---
+
+## Batch-abort threshold
+
+After each batch in step 5:
+- Count failed items in the batch (timed-out, missing STATUS, or malformed STATUS).
+- If `failed_count / total_count > 0.5`: abort remaining batches, jump to step 6 with `decision=partial` and `STATUS=PARTIAL`.
+- **Small-batch rule:** always abort when ≥2 items fail in a batch of ≤3.
+- Log the abort decision (failed count / total) to `journal.md`.
+- **Threshold note:** 50% is a conservative starting point; tune via observation of first real plans.
+
+---
+
+## Auditor fallback (step 8)
+
+`verify.json` schema (produced in Step 6):
+```json
+{ "files_present": true|false, "tests_pass": true|false|null, "syntax_valid": true|false }
+```
+If a field is absent from the written file, treat it as `false` (conservative bias toward `extend`).
+
+If the auditor returns missing or malformed VERDICT after 1 retry:
+- Read `$wave_dir/verify.json`.
+- If `files_present == true && tests_pass != false && syntax_valid == true`:
+  - Write `$wave_dir/decision.json` with `action="continue"`, `rationale="auditor fallback — all verify checks green"`.
+- Otherwise:
+  - Write `$wave_dir/decision.json` with `action="extend"`, `rationale="auditor fallback — verify failed or incomplete"`.
+
+---
+
+## Within-wave resume
+
+Pre-check also examines `$wave_dir/wave.json` when it exists:
+
+- **Batch-complete predicate:** a batch is complete iff every item in `batches[].items` has a corresponding `$wave_dir/findings/<agent>-<item>.jsonl` file with a valid STATUS entry.
+- **Partial batch:** some items have findings, others do not — re-run from the first item missing a findings file.
+- **All batches complete:** treat wave as fully dispatched; skip to step 6.
+- **Known limitation:** resume assumes no upstream plan edits (`current.md`, `learnings.md`) occurred between orchestrator restarts. If such edits occurred, discard `wave.json` and re-dispatch the wave fresh.
+
 ---
 
 ## Step 1 — Refresh learnings
@@ -128,16 +182,21 @@ Pre-check: every digest declared in wave.json must be non-empty before proceedin
 
 For each batch in `wave.json.batches`:
 
-Fire all items as parallel Agent() calls in a **single message**:
+Fire all items as parallel Agent() calls in a **single message**. If any item is missing its digest file, skip that item with `failed` status — do not block the batch:
 ```
 Agent(subagent_type: "<agent-name>",
-  prompt: "<path: $wave_dir/digests/<agent>-<item>.md>")
+  prompt: "<path: $wave_dir/digests/<agent>-<item>.md>",
+  timeout: ${WORKER_TIMEOUT_SEC:-600})
 ```
 
-Write each response to `$wave_dir/outputs/<agent>-<item>.md`.
-Extract findings to `$wave_dir/findings/<agent>-<item>.jsonl`.
+For each response:
+- If timeout or missing STATUS block: write raw output to `$wave_dir/failures/<agent>-<item>.raw`; mark item `failed`; continue.
+- If malformed STATUS: write raw output to `$wave_dir/failures/<agent>-<item>.raw`; mark item `failed`; continue.
+- If valid STATUS: write response to `$wave_dir/outputs/<agent>-<item>.md`; extract findings to `$wave_dir/findings/<agent>-<item>.jsonl`.
 
-After each batch, scan `FINDING_CATS` counts returned by each worker:
+Apply **batch-abort threshold** (see above) after each batch.
+
+After each batch, scan `FINDING_CATS` counts returned by successful workers:
 - **crisis** anywhere → stop immediately. Skip remaining batches. Proceed to step 7 with `decision=partial`.
 - **plan-material** → continue to next batch.
 - **contextual/trivial** → continue to next batch.
@@ -189,10 +248,13 @@ Agent(subagent_type: "auditor",
            current.md:     <current.md path>
            plan_INDEX:     <INDEX path>
            verify:         $wave_dir/verify.json
-           decision_out:   $wave_dir/decision.json")
+           decision_out:   $wave_dir/decision.json",
+  timeout: ${WORKER_TIMEOUT_SEC:-600})
 ```
 
 Validate `action` ∈ {continue, extend, revise}.
+
+On missing/malformed VERDICT after 1 retry (delete prior `$wave_dir/decision.json` before retry): apply **Auditor fallback** (see above).
 
 ---
 
@@ -212,10 +274,13 @@ Agent(subagent_type: "wave-synthesizer",
            plan_INDEX:     <INDEX path>
            journal:        <journal path>
            journal_offset: <line offset for last 5 journal entries>
-           brief_out:      $wave_dir/replan-brief.md")
+           brief_out:      $wave_dir/replan-brief.md",
+  timeout: ${WORKER_TIMEOUT_SEC:-600})
 ```
 
 Wait for `STATUS: COMPLETE`. Read `AFFECTED_ITEMS` from its return block (do NOT read the full brief).
+
+On timeout or missing STATUS after 1 retry (delete prior `$wave_dir/replan-brief.md` before retry): write a stub brief — `$wave_dir/replan-brief.md` = `"synthesizer failed; review findings.jsonl manually"` — and return VERDICT as-is.
 
 ---
 
