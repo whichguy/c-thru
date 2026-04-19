@@ -6,7 +6,7 @@ model: journal-digester
 
 # journal-digester
 
-Input: `journal.md` path + CLAUDE.md path + optional `prior_findings` (list of `waves/*/findings.jsonl` paths). Read all inputs.
+Input: `journal.md` path + CLAUDE.md path + optional `prior_findings` (list of `waves/*/findings.jsonl` paths) + `journal_digest_out` path. Read all inputs.
 
 Extract `{"class":"improvement",...}` entries and any `## Improvement suggestions` sections from journal.md. Also extract improvement-class entries from any `prior_findings` paths provided. Synthesize into:
 
