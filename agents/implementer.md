@@ -30,8 +30,9 @@ Follow existing patterns unless the digest requires otherwise. Pattern divergenc
 
 2. `findings/implementer-<item>.jsonl` — one JSON per line:
    ```jsonl
-   {"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"..."}
+   {"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose — omit if redundant>"}
    ```
+   `detail` is optional. Use it when the full context (line refs, proposed fix, example) exceeds 80 chars.
    Classes:
    - `trivial` — routine observation, no action
    - `contextual` — useful for future waves, no escalation

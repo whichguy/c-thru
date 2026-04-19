@@ -57,23 +57,40 @@ If fresh: `mkdir -p $PLAN_DIR/waves $PLAN_DIR/discovery $PLAN_DIR/plan/snapshots
 
 **Stage 1 — Reconnaissance (read-only, no agent spawn):**
 Read: `CLAUDE.md`, relevant wiki entries, existing source structure, any prior `.c-thru/plans/` overlapping the intent.
-Build an internal context summary. Do not write any files in this stage.
 
-**Stage 2 — Gap check:**
-Self-interrogate: "What do I still not know that would materially change the plan?"
-If gaps exist, dispatch lightweight discovery agents (read-only):
+Write reconnaissance summary to `.c-thru/plans/<SLUG>/discovery/recon.md` (always overwrite fresh — `rm -f` first if it exists):
+```markdown
+# Reconnaissance — <slug>
+## Source structure
+<key directories, patterns, and conventions observed>
+## Prior plan overlap
+<any existing .c-thru/plans/ relevant to this intent; "none" if absent>
+## Known constraints
+<CLAUDE.md directives, wiki entities, or invariants that affect the plan>
+```
+This file is the orchestrator's scratchpad — never cached between runs.
+
+**Stage 2a — Gap advisor:**
+Invoke the discovery-advisor to identify what is still unknown:
+```
+Agent(subagent_type: "discovery-advisor",
+  prompt: "intent:     <original user intent>
+           recon_path: .c-thru/plans/<SLUG>/discovery/recon.md")
+```
+Wait for `STATUS: COMPLETE`. If `GAPS: 0` (greenfield or fully covered by recon) → skip Stage 2b.
+
+**Stage 2b — Explorer fan-out:**
+For each gap listed in `gaps.md`, dispatch one explorer (read-only, in parallel):
 ```
 Agent(subagent_type: "explorer", run_in_background: true,
-  prompt: "<specific gap question>",
-  // Each explorer writes its summary to a unique path:
-  // .c-thru/plans/<slug>/discovery/<gap-slug>.md
-)
+  prompt: "gap_question: <specific gap question from gaps.md>
+           output_path:  .c-thru/plans/<SLUG>/discovery/<gap-slug>.md")
 ```
-Await all explorers (max 60s per agent). Resume with or without results.
+Await all explorers (max 60s per agent). Resume with or without results — partial discovery is acceptable; record missing gaps as `assumed` in the plan.
 
 **Stage 3 — Synthesize:**
 Merge reconnaissance + discovery summaries into a context block for the planner.
-Greenfield projects typically skip Stage 2; existing-codebase work almost always needs it.
+Greenfield projects typically skip Stage 2b; existing-codebase work almost always needs it.
 
 ## Phase 2 — Plan construction
 
@@ -86,6 +103,8 @@ Planner writes `.c-thru/plans/<slug>/current.md`.
 
 ## Phase 3 — Plan review loop
 
+<!-- This invokes the c-thru-native agents/review-plan.md (headless, APPROVED/NEEDS_REVISION verdict).
+     The skills/review-plan/ skill is a separate interactive human plan-mode tool — not used here. -->
 Invoke the `review-plan` **agent** (not the skill) in a loop capped at 20 rounds.
 The agent returns a machine-readable verdict (`APPROVED` or `NEEDS_REVISION`).
 
