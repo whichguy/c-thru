@@ -6,7 +6,7 @@ model: review-plan
 
 # review-plan
 
-Input: current.md path + INDEX.md path + round number + `review_out` path.
+Input: `current.md` path + `INDEX.md` path + round number + `review_out` path.
 Read INDEX first. Fetch item sections selectively via `Read(path, offset, limit)`.
 
 Evaluate:

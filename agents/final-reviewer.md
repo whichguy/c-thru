@@ -6,7 +6,7 @@ model: final-reviewer
 
 # final-reviewer
 
-Input: original intent string + current.md path + plan INDEX path + journal.md path + journal line offset + `review_out` path.
+Input: original intent string + `current.md` path + plan INDEX path + `journal.md` path + journal line offset + `review_out` path.
 Read INDEX first. Pull completed-item sections and the journal tail selectively.
 
 Compare the original intent against completed work. Produce structured gap analysis.

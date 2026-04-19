@@ -94,15 +94,19 @@ done < <(grep -oE 'subagent_type:[[:space:]]*"[^"]+"' "$SKILL" \
 # ---------------------------------------------------------------------------
 # Check 3 — Agent prompt key mismatch
 #
-# For each Agent() block in SKILL.md: extract key names from the prompt body.
-# For each agent file: extract declared input tokens from the Input: line.
-# Report: declared tokens with no corresponding key in the prompt.
+# For each Agent() block in SKILL.md + plan-orchestrator.md: extract key names
+# from the prompt body. For each agent file: extract declared input tokens from
+# the Input: line. Report: declared tokens with no corresponding key in prompt.
+#
+# Multi-mode agents: parse ## Mode N headings and match invocations by
+# mode: N key (MODEKEY:<N> synthetic token from awk). Validate per-mode Input.
+# Invocations without a mode: key → WARN (not FAIL).
 #
 # Fuzzy matching: single-word tokens (not compounds). Substring match on both
 # sides. Accepts false negatives on compound names like journal_offset; the
 # check catches obvious structural gaps (missing whole input categories).
 # ---------------------------------------------------------------------------
-echo "3/5  Agent prompt key check..."
+echo "3/7  Agent prompt key check..."
 
 # Returns newline-separated input tokens for an agent file.
 # Strategy:
@@ -160,13 +164,30 @@ agent_tokens() {
 }
 
 # Detect multi-mode agents (multiple Inputs:/Input: sections).
-# These have mode-specific inputs; a single invocation will not cover all
-# declared inputs. Return 1 if multi-mode, 0 otherwise.
 is_multi_mode() {
     local agent_file="$1"
     local count
     count=$(grep -c -Ei '^Input[s]?:' "$agent_file" 2>/dev/null || echo 0)
     [ "$count" -gt 1 ]
+}
+
+# Extract the Input: line for ## Mode N from an agent file.
+mode_input_line() {
+    local agent_file="$1" mode_n="$2"
+    awk "/^## Mode ${mode_n}[[:space:]]/{found=1} found && /^Input[s]*:/{print; exit}" \
+        "$agent_file" 2>/dev/null \
+        | sed 's/^Input[s]*:[[:space:]]*//'
+}
+
+# agent_tokens_for_line: same logic as agent_tokens but takes an input string.
+# Creates a temp file, runs agent_tokens against it.
+agent_tokens_for_line() {
+    local input_str="$1"
+    local tmp
+    tmp=$(mktemp)
+    printf 'Input: %s\n' "$input_str" > "$tmp"
+    agent_tokens "$tmp"
+    rm -f "$tmp"
 }
 
 # Extract Agent(subagent_type: "X", prompt: "...") blocks from SKILL.md.
@@ -175,39 +196,41 @@ is_multi_mode() {
 tmpblocks=$(mktemp)
 trap 'rm -f "$tmpblocks"' EXIT
 
+# awk_agent_blocks: extract Agent() blocks from a file.
+# Emits: AGENT_NAME|key1 key2 ... MODEKEY:<N>
+# MODEKEY:<N> is a synthetic token added when mode: N key is present in prompt.
+awk_agent_blocks() {
 awk '
 BEGIN { agent=""; keys=""; in_prompt=0 }
 
-# Start of a new Agent block
 /subagent_type:/ {
     if (agent != "" && in_prompt) { print agent "|" keys }
     agent=""; keys=""; in_prompt=0
     s=$0
     sub(/.*subagent_type:[[:space:]]*"/, "", s)
     sub(/".*/, "", s)
-    # Skip template placeholders
     if (s ~ /^</) { agent=""; next }
     agent=s
 }
 
-# prompt: line — mark start; may have a key on the same line after the quote
 /[[:space:]]prompt:/ && agent != "" && !in_prompt {
     in_prompt=1
     s=$0
     sub(/.*prompt:[[:space:]]*"/, "", s)
-    # A key starts the prompt content right after the opening quote
     if (s ~ /^[a-zA-Z][a-zA-Z0-9_.]+:/) {
         k=s; sub(/:.*/, "", k)
         keys=(keys == "" ? k : keys " " k)
+        if (k == "mode") {
+            val=s; sub(/^mode:[[:space:]]*/, "", val); gsub(/[^0-9].*/, "", val)
+            if (val+0 > 0) keys=keys " MODEKEY:" val
+        }
     }
-    # Single-line prompt (opens and closes on this line)
     if ($0 ~ /"\)/) {
         print agent "|" keys
         agent=""; keys=""; in_prompt=0
     }
 }
 
-# Key-value lines in the prompt body
 in_prompt && /^[[:space:]]+[a-zA-Z][a-zA-Z0-9_.]+:[[:space:]]/ {
     s=$0
     gsub(/^[[:space:]]+/, "", s)
@@ -215,19 +238,27 @@ in_prompt && /^[[:space:]]+[a-zA-Z][a-zA-Z0-9_.]+:[[:space:]]/ {
     if (s != "" && s != "prompt") {
         keys=(keys == "" ? s : keys " " s)
     }
-    # Closing line: ends with ")
+    if (s == "mode") {
+        mline=$0; gsub(/^[[:space:]]+mode:[[:space:]]+/, "", mline); gsub(/[^0-9].*/, "", mline)
+        if (mline+0 > 0) keys=keys " MODEKEY:" mline
+    }
     if ($0 ~ /"\)/) {
         print agent "|" keys
         agent=""; keys=""; in_prompt=0
     }
 }
 
-# Closing line without a key (just ends with ")
 in_prompt && /"\)/ && !/^[[:space:]]+[a-zA-Z][a-zA-Z0-9_.]+:[[:space:]]/ && agent != "" {
     print agent "|" keys
     agent=""; keys=""; in_prompt=0
 }
-' "$SKILL" > "$tmpblocks"
+' "$1"
+}
+
+ORCHESTRATOR="$AGENTS_DIR/plan-orchestrator.md"
+# Scan SKILL.md only for Check 3/7 (plan-orchestrator uses a different prompt-close
+# format that the awk doesn't parse reliably). Check 6 uses grep directly.
+awk_agent_blocks "$SKILL" > "$tmpblocks"
 
 # For each extracted Agent() invocation, check prompt keys vs. declared inputs
 while IFS='|' read -r agent keys; do
@@ -236,13 +267,40 @@ while IFS='|' read -r agent keys; do
     [ -f "$agent_file" ] || continue   # Already reported in check 2
     [ -z "$keys" ] && continue          # Path-only prompt (e.g. digest path) — skip
 
-    # Multi-mode agents: skip key check; their inputs vary per-mode invocation
+    # Multi-mode agents: match invocation to mode via MODEKEY:<N> synthetic token
     if is_multi_mode "$agent_file"; then
-        warn "Agent(\"$agent\"): multi-mode — key check skipped (mode-specific inputs)"
+        mode_val=$(echo "$keys" | tr ' ' '\n' | { grep '^MODEKEY:' || true; } | sed 's/MODEKEY://' | head -1)
+        if [ -z "$mode_val" ]; then
+            warn "Agent(\"$agent\"): multi-mode invocation has no mode: key — cannot match to mode (prompt keys: $keys)"
+            continue
+        fi
+        # Get Mode N Input line and validate against non-MODEKEY prompt keys
+        input_line=$(mode_input_line "$agent_file" "$mode_val")
+        if [ -z "$input_line" ]; then
+            warn "Agent(\"$agent\"): mode: $mode_val invocation but no ## Mode $mode_val section in agent file"
+            continue
+        fi
+        declared=$(agent_tokens_for_line "$input_line" | sort -u | tr '\n' ' ')
+        [ -z "$declared" ] && continue
+        # Keys without the synthetic MODEKEY marker
+        real_keys=$(echo "$keys" | tr ' ' '\n' | { grep -v '^MODEKEY:' || true; } | tr '\n' ' ')
+        norm_keys=$(echo "$real_keys" | tr '[:upper:]' '[:lower:]' | tr '.-' '__')
+        for tok in $declared; do
+            [ -z "$tok" ] && continue
+            [ "${#tok}" -lt 3 ] && continue
+            found=0
+            for key in $norm_keys; do
+                case "$key" in *"$tok"*) found=1; break ;; esac
+                case "$tok" in *"$key"*) found=1; break ;; esac
+            done
+            if [ "$found" -eq 0 ]; then
+                fail "Agent(\"$agent\") Mode $mode_val: declared input token \"$tok\" has no matching key in prompt (prompt keys: $real_keys)"
+            fi
+        done
         continue
     fi
 
-    # Declared tokens for this agent
+    # Declared tokens for this agent (single-mode)
     declared=$(agent_tokens "$agent_file" | sort -u | tr '\n' ' ')
     [ -z "$declared" ] && continue
 
@@ -269,7 +327,7 @@ done < "$tmpblocks"
 # Canonical source: config/model-map.json#agent_to_capability.
 # agents/*.md count must match; docs must not hardcode a different number.
 # ---------------------------------------------------------------------------
-echo "4/5  Agent-count consistency check..."
+echo "4/7  Agent-count consistency check..."
 
 MODEL_MAP="$REPO_DIR/config/model-map.json"
 if [ ! -f "$MODEL_MAP" ]; then
@@ -305,7 +363,7 @@ fi
 # Every $PLAN_DIR/<subdir>/ referenced in SKILL.md must have a corresponding
 # mkdir in Phase 0. Wave-scoped dirs ($wave_dir/...) are excluded.
 # ---------------------------------------------------------------------------
-echo "5/5  Phase 0 mkdir coverage check..."
+echo "5/7  Phase 0 mkdir coverage check..."
 
 # Extract subdirectory names referenced as $PLAN_DIR/<name>/ in SKILL.md
 referenced=$(grep -oE '\$PLAN_DIR/[a-z_-]+/' "$SKILL" 2>/dev/null \
@@ -327,6 +385,124 @@ for d in $referenced; do
         ok "Phase 0 mkdir covers \$PLAN_DIR/$d/"
     fi
 done
+
+# ---------------------------------------------------------------------------
+# Check 6 — STATUS/VERDICT value coverage
+#
+# For each agent called from SKILL.md or plan-orchestrator.md:
+#   Extract declared STATUS/VERDICT values from the Return block.
+#   For each non-trivial value V (not COMPLETE or APPROVED):
+#     Search SKILL.md + plan-orchestrator.md for the literal string V as a
+#     whole-word match. FAIL if the value is absent from both caller files.
+# ---------------------------------------------------------------------------
+echo "6/7  STATUS/VERDICT value coverage check..."
+
+# Extract STATUS/VERDICT values from an agent's Return block.
+# Matches both "**Return:**" (most agents) and "## Step N — Return STATUS"
+# (plan-orchestrator) conventions. Prints one value per line.
+extract_return_values() {
+    local agent_file="$1"
+    awk '
+        /\*\*Return|\#\# Step [0-9].*Return/ { in_return=1; in_block=0; next }
+        in_return && /^```/ { in_block = !in_block; next }
+        in_return && in_block && /^STATUS:/ {
+            line=$0; sub(/^STATUS:[[:space:]]*/, "", line)
+            n=split(line, vals, /[|]/)
+            for (i=1; i<=n; i++) { gsub(/[[:space:]]/, "", vals[i]); if (vals[i] != "") print vals[i] }
+        }
+        in_return && in_block && /^VERDICT:/ {
+            line=$0; sub(/^VERDICT:[[:space:]]*/, "", line)
+            n=split(line, vals, /[|]/)
+            for (i=1; i<=n; i++) { gsub(/[[:space:]]/, "", vals[i]); if (vals[i] != "") print vals[i] }
+        }
+        in_return && !in_block && /^## / { in_return=0 }
+    ' "$agent_file" 2>/dev/null
+}
+
+# Build list of agents referenced as subagent_type in SKILL.md or plan-orchestrator
+called_agents=$(cut -d'|' -f1 "$tmpblocks" | sort -u)
+
+for agent in $called_agents; do
+    agent_file="$AGENTS_DIR/${agent}.md"
+    [ -f "$agent_file" ] || continue
+    while IFS= read -r val; do
+        [ -z "$val" ] && continue
+        # Skip always-ok values: COMPLETE and APPROVED are implicit success paths
+        case "$val" in COMPLETE|APPROVED) ok "Agent(\"$agent\") $val — implicit success path"; continue ;; esac
+        # Search both caller files for the literal value as a whole word
+        found_in_callers=0
+        for caller in "$SKILL" "$ORCHESTRATOR"; do
+            [ -f "$caller" ] || continue
+            if grep -qwE "$val" "$caller" 2>/dev/null; then
+                found_in_callers=1
+                break
+            fi
+        done
+        if [ "$found_in_callers" -eq 1 ]; then
+            ok "Agent(\"$agent\") $val — found in caller"
+        else
+            fail "Agent(\"$agent\"): declared return value \"$val\" has no branch in SKILL.md or plan-orchestrator.md"
+        fi
+    done < <(extract_return_values "$agent_file")
+done
+
+# ---------------------------------------------------------------------------
+# Check 7 — Undeclared prompt keys in caller invocations
+#
+# For each single-mode Agent() block (multi-mode agents skipped):
+#   Extract prompt keys. For each key K:
+#     Check if any declared token T from agent_tokens satisfies substring match.
+#     Also accept if K is in the built-in allowlist.
+#   FAIL when a key is neither declared nor built-in.
+#
+# Allowlist: subagent_type, prompt, description, mode
+# (model, run_in_background, timeout are agent-level params, not prompt-body keys)
+# ---------------------------------------------------------------------------
+echo "7/7  Undeclared prompt key check..."
+
+# Built-in prompt keys never in an agent's Input: line
+BUILTIN_PROMPT_KEYS="subagent_type prompt description mode"
+
+while IFS='|' read -r agent keys; do
+    [ -z "$agent" ] && continue
+    agent_file="$AGENTS_DIR/${agent}.md"
+    [ -f "$agent_file" ] || continue
+    [ -z "$keys" ] && continue
+
+    # Skip multi-mode agents (their optional keys can't be enumerated per invocation)
+    if is_multi_mode "$agent_file"; then
+        continue
+    fi
+
+    declared=$(agent_tokens "$agent_file" | sort -u | tr '\n' ' ')
+
+    for key in $keys; do
+        [ -z "$key" ] && continue
+        # Normalize key
+        norm_key=$(echo "$key" | tr '[:upper:]' '[:lower:]' | tr '.-' '__')
+        [ "${#norm_key}" -lt 2 ] && continue
+
+        # Check built-in allowlist
+        in_builtin=0
+        for b in $BUILTIN_PROMPT_KEYS; do
+            [ "$norm_key" = "$b" ] && in_builtin=1 && break
+        done
+        [ "$in_builtin" -eq 1 ] && continue
+
+        # Check against declared tokens (substring match, both directions)
+        found=0
+        for tok in $declared; do
+            [ -z "$tok" ] && continue
+            [ "${#tok}" -lt 3 ] && continue
+            norm_tok=$(echo "$tok" | tr '[:upper:]' '[:lower:]' | tr '.-' '__')
+            case "$norm_key" in *"$norm_tok"*) found=1; break ;; esac
+            case "$norm_tok" in *"$norm_key"*) found=1; break ;; esac
+        done
+        if [ "$found" -eq 0 ]; then
+            fail "Agent(\"$agent\"): prompt passes key \"$key\" but agent Input: does not declare it (declared: $declared)"
+        fi
+    done
+done < "$tmpblocks"
 
 # ---------------------------------------------------------------------------
 # Summary
