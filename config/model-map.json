@@ -264,34 +264,35 @@
       "model": "reviewer"
     }
   },
-  "fallback_strategies": {
-    "glm-5.1:cloud": {
-      "event": {
-        "network_failure": ["gemma4:26b-a4b"],
-        "rate_limit":      ["gemma4:26b-a4b"],
-        "account_quota":   ["gemma4:26b-a4b"],
-        "context_limit":   ["gemma4:26b-a4b"]
-      },
-      "cooldown": {
-        "network_failure": { "mode": "fixed",      "seconds": 60 },
-        "rate_limit":      { "mode": "header_or_max", "max_seconds": 120 },
-        "account_quota":   { "mode": "fixed",      "seconds": 3600 }
-      }
-    },
-    "claude-sonnet-4-6": {
-      "event": {
-        "network_failure": ["glm-5.1:cloud", "gemma4:26b-a4b"],
-        "rate_limit":      ["glm-5.1:cloud", "gemma4:26b-a4b"],
-        "account_quota":   ["glm-5.1:cloud", "gemma4:26b-a4b"],
-        "context_limit":   ["glm-5.1:cloud", "gemma4:26b-a4b"]
-      },
-      "cooldown": {
-        "network_failure": { "mode": "fixed",      "seconds": 60 },
-        "rate_limit":      { "mode": "header_or_max", "max_seconds": 120 },
-        "account_quota":   { "mode": "fixed",      "seconds": 3600 }
-      }
-    }
+  "tool_capability_to_profile": {
+    "default":           "general-default",
+    "classify_intent":   "classifier",
+    "explore_local":     "explorer",
+    "explore_web":       "explorer",
+    "review_quality":    "reviewer",
+    "critique_plan":     "reviewer",
+    "detect_bugs":       "workhorse",
+    "navigate_codebase": "workhorse",
+    "generate_tests":    "coder",
+    "deep_review":       "workhorse",
+    "heavy_coder":       "general-default",
+    "code_review_lint":  "classifier",
+    "summarize_light":   "classifier",
+    "code_fix":          "workhorse",
+    "plan_review":       "workhorse",
+    "review_code_full":  "reviewer",
+    "hard_reasoning":    "reviewer"
   },
+  "models": [
+    {
+      "name": "glm-5.1:cloud",
+      "equivalents": ["gemma4:26b-a4b"]
+    },
+    {
+      "name": "claude-sonnet-4-6",
+      "equivalents": ["glm-5.1:cloud", "gemma4:26b-a4b"]
+    }
+  ],
   "ollama_defaults": {
     "num_ctx": 65536
   },

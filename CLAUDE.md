@@ -25,6 +25,7 @@ bash -n tools/claude-router             # bash syntax check
 node --check tools/claude-proxy         # node syntax check
 node --check tools/model-map-*.js tools/llm-capabilities-mcp.js
 node tools/model-map-validate.js config/model-map.json   # validate shipped config
+node test/model-map-v12-adapter.test.js                  # adapter regression test
 ~/.claude/tools/claude-router --list    # runtime smoke-test (requires install)
 ```
 
@@ -46,9 +47,20 @@ tools/
   c-thru-proxy-health.sh  # UserPromptSubmit hook — asyncRewake (exit 2, stderr) on proxy down
   c-thru-map-changed.sh   # FileChanged/PostToolUse hook — validates model-map.json on edit
   c-thru-classify.sh      # UserPromptSubmit hook — sends prompt to /hooks/context (port 9998) for classify_intent context injection
+  hw-profile.js             # shared 5-tier hardware detection (tierForGb); used by router and proxy
 config/
   model-map.json          # shipped defaults (JSON5 — comments allowed)
+test/
+  model-map-v12-adapter.test.js  # adapter fixture test; run with: node test/model-map-v12-adapter.test.js
 ```
+
+### User Profile Files (`~/.claude/`)
+
+| File | Owner | Lifecycle |
+|---|---|---|
+| `model-map.system.json` | `install.sh` | Overwritten on every install — verbatim copy of `config/model-map.json`. Never edit manually. |
+| `model-map.overrides.json` | user | Created empty `{}` on first install. Never touched on upgrade. Edit here to customize over system defaults. |
+| `model-map.json` | derived | Effective merged result (system + overrides). Rewritten by router/proxy on startup. |
 
 ## Architecture
 
@@ -93,6 +105,7 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 | `CLAUDE_MODEL_MAP_DEFAULTS_PATH` | Override shipped `config/model-map.json` path |
 | `CLAUDE_MODEL_MAP_OVERRIDES_PATH` | Override `~/.claude/model-map.overrides.json` path |
 | `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for Phase 2 HTTP hooks listener (default `9998`) |
+| `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection (positive integer GB). Malformed values fall through to `os.totalmem()`. |
 
 ## No External Node Dependencies
 
