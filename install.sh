@@ -402,6 +402,13 @@ if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
     local_sync="$TOOLS_SRC/model-map-sync.js"
     local_validate="$TOOLS_SRC/model-map-validate.js"
 
+    # Migrate legacy providers schema in-place before we diff against defaults.
+    # Must run before syncLayeredConfig uses USER_MAP as bootstrapEffectivePath,
+    # otherwise old providers[] entries would be captured as-is into overrides.
+    if [ -f "$USER_MAP" ]; then
+        migrate_providers_schema "$USER_MAP"
+    fi
+
     # Banner if user modified model-map.system.json (changes will be overwritten)
     if [ -f "$SYS_MAP" ]; then
         PRIOR_SYS_SHA="$(shasum -a 256 "$SYS_MAP" 2>/dev/null | awk '{print $1}')"
