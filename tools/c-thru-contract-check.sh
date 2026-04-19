@@ -4,9 +4,12 @@
 # Agent contract integrity checker for the c-thru agentic plan/wave system.
 #
 # Checks:
-#   1. Skill("review-plan") accidental invocation in skills/c-thru-plan/SKILL.md
-#   2. Dangling subagent_type references (no corresponding agents/X.md file)
-#   3. Agent prompt key mismatches vs. declared Input: lines
+#   1.  Skill("review-plan") accidental invocation in skills/c-thru-plan/SKILL.md
+#   1b. No hardcoded .c-thru/plans/ paths in agents/*.md
+#   2.  Dangling subagent_type references (no corresponding agents/X.md file)
+#   3.  Agent prompt key mismatches vs. declared Input: lines
+#   4.  Agent-count consistency (agents/*.md vs agent_to_capability keys)
+#   5.  Phase 0 mkdir coverage for $PLAN_DIR subdirectories
 #
 # Exit 0: no issues. Exit 1: one or more issues found.
 # Run: bash tools/c-thru-contract-check.sh

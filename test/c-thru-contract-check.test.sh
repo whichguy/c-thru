@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for tools/c-thru-contract-check.sh
-# 3 fixtures: missing-key → fail, dangling-agent → fail, clean → pass
+# 8 fixtures: dangling-agent, missing-key, clean, Skill() regression, path-backtick FP,
+#             *_out key missing, agent-count mismatch, Phase 0 mkdir missing
 #
 # Run: bash test/c-thru-contract-check.test.sh
 

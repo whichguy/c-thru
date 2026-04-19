@@ -8,7 +8,7 @@ model: plan-orchestrator
 
 Input: `current.md` path + `INDEX` path + `learnings` path + `learnings.INDEX` path + `prior_findings` (glob list of prior `findings.jsonl` paths) + `journal` path + `wave_dir` (absolute path to this wave's directory).
 
-Runs all 14 steps of the wave lifecycle. Each step is explicit and mechanical — route tool calls, don't reason about wave content.
+Runs all 13 steps of the wave lifecycle. Each step is explicit and mechanical — route tool calls, don't reason about wave content.
 
 **Pre-check:** Before step 3, check `git log --oneline --grep="Wave: $(basename $wave_dir)"`. If a matching commit exists, this wave was already committed (resume case) — skip steps 3–13 and return:
 ```
@@ -325,7 +325,7 @@ Do NOT copy improvement/augmentation entries separately — `learnings-consolida
 On `continue` or `extend`, AND `verify.json` shows no hard failures:
 
 ```sh
-git add $(jq -r '.batches[].items[] | select(.status=="complete") | .target_resources[]' \
+git add $(jq -r '.batches[].items[].target_resources[]' \
           "$wave_dir/wave.json" \
           | sort -u | xargs -I{} sh -c 'test -f "{}" && echo "{}"')
 git commit -m "<commit_message from wave.json>
