@@ -1,13 +1,14 @@
 # Agentic Plan/Wave Architecture
 
 The `/c-thru-plan` skill drives complex tasks through a wave-based execution loop using
-13 specialized agents. Each agent declares its own name as its `model:` — the c-thru
+14 specialized agents. Each agent declares its own name as its `model:` — the c-thru
 proxy resolves it to a hardware-appropriate concrete model at request time.
 
 ## Agent roster
 
 | Agent | Capability alias | Role |
 |---|---|---|
+| discovery-advisor | pattern-coder | Reads recon summary, produces prioritized gap questions |
 | planner | judge | Constructs and amends `current.md` (3 modes) |
 | auditor | judge | Determines wave direction: continue / extend / revise |
 | final-reviewer | judge | End-of-plan gap analysis |
@@ -46,39 +47,51 @@ See `docs/hardware-profile-matrix.md` for the full 6-profile × 5-alias table.
 2. **Plan construction** — `planner` writes `current.md`
 3. **Plan review loop** — `review-plan` up to 20 rounds
 4. **Wave loop** — repeats until no ready items:
-   - `plan-orchestrator` → `wave.json` (topological sort, collision detection)
-   - Prepare → digest files (no LLM)
-   - Execute → parallel agent dispatch per batch
-   - Finding scan → pause on crisis/plan-material; continue on contextual/trivial
-   - `reviewer-fix` loop (code items, max 5 iterations)
-   - Consolidate + Verify (no LLM)
-   - `auditor` → continue / extend / revise
-   - Commit → update `current.md`, snapshot, journal
+   - `plan-orchestrator` (full wave executor — runs in its own agent context per wave):
+     - Refresh learnings via `learnings-consolidator`
+     - Topological sort → `wave.json` (with `commit_message`)
+     - Assemble digest files
+     - Dispatch worker batches in parallel (simplest-first ordering)
+     - Concat findings → `findings.jsonl`; concat outputs → `artifact.md`
+     - Verify (no LLM) → `verify.json`
+     - `auditor` → continue / extend / revise
+     - `wave-synthesizer` on extend/revise → `replan-brief.md`
+     - Write `wave-summary.md`
+     - Update `current.md`, snapshot, append `journal.md`
+     - `git commit` on continue/extend (trailer: `Wave: NNN`)
+   - Driver receives one compact STATUS block per wave
 5. **Final review** — `final-reviewer` gap analysis; `planner` Mode 3 if gaps found
 
 ## Revision cap
 
 20 revision rounds total (plan review + final-review cycles). Tracked in
-`.c-thru/plans/<slug>/meta.json`. Counter reaches 20 → user escalation.
+`${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/meta.json`. Counter reaches 20 → user escalation.
 
 ## Wave state layout
 
+State root: `${TMPDIR:-/tmp}/c-thru/<repo-basename>/<slug>/`
+Completed plans archived to: `~/.claude/c-thru-archive/<slug>-<ts>/`
+
 ```
-.c-thru/plans/<slug>/
+${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/
   current.md          — live plan (items, assumptions, completed-work summaries)
   meta.json           — slug, revision_rounds, created, status
   journal.md          — wave-by-wave log
+  learnings.md        — cross-wave wiki; refreshed each wave
+  learnings.INDEX.md  — section offsets for selective reads
   plan/snapshots/     — p-NNN.md per wave
   discovery/          — explorer summaries from Phase 1
   waves/
     NNN/
-      wave.json       — batch plan from plan-orchestrator
+      wave.json       — batch plan (wave_id, commit_message, batches[])
+      wave-summary.md — key findings, improvement signals, open questions
       digests/        — <agent>-<item>.md per execution item
       outputs/        — <agent>-<item>.md per completed item
       findings/       — <agent>-<item>.jsonl per item; findings.jsonl aggregate
       artifact.md     — consolidated wave output
       verify.json     — deterministic post-wave checks
       decision.json   — auditor verdict
+      replan-brief.md — wave-synthesizer output (extend/revise only)
 ```
 
 ## Cross-wave communication

@@ -134,7 +134,7 @@ Catches dangling `subagent_type` references, missing prompt keys vs. declared `I
 
 ## Agentic plan/wave system
 
-Invoke with `/c-thru-plan <intent>`. State in `.c-thru/plans/<slug>/`.
+Invoke with `/c-thru-plan <intent>`. State in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/`. Completed plans archived to `~/.claude/c-thru-archive/`.
 Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`.
 
 ### Capability aliases (new — agentic system)
@@ -145,7 +145,7 @@ Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`.
 | `judge-strict` | 4–5, hard_fail | security-reviewer |
 | `orchestrator` | 2 | plan-orchestrator, integrator, doc-writer |
 | `code-analyst` | 2–3 | test-writer, reviewer-fix |
-| `pattern-coder` | 1 | scaffolder |
+| `pattern-coder` | 1 | scaffolder, discovery-advisor |
 | `deep-coder` | 3 | implementer |
 
 ### agent_to_capability resolution

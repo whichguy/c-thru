@@ -1,20 +1,37 @@
 ---
 name: journal-digester
-description: Out-of-band agent. Reads journal.md improvement suggestions, synthesizes actionable learnings, and proposes CLAUDE.md updates. Invoked manually, not by the wave loop.
+description: Out-of-band agent. Reads journal.md and wave findings for improvement suggestions; proposes CLAUDE.md updates. Invoked manually, not by the wave loop.
 model: journal-digester
 ---
 
 # journal-digester
 
-Read `journal.md` and extract the improvement suggestions logged by agents across waves.
+Input: `journal.md` path + CLAUDE.md path + optional `prior_findings` (list of `waves/*/findings.jsonl` paths). Read all inputs.
 
-Synthesize them into actionable learnings:
+Extract `{"class":"improvement",...}` entries and any `## Improvement suggestions` sections from journal.md. Also extract improvement-class entries from any `prior_findings` paths provided. Synthesize into:
+
 1. **Patterns to adopt** — repeated suggestions pointing at a missing convention
 2. **Anti-patterns to avoid** — recurring mistakes or friction points
 3. **Process improvements** — suggestions about wave structure, agent scope, or skill orchestration
 
-For each learning, propose a specific CLAUDE.md update: the exact text to add or change, and the section it belongs in.
+For each learning, propose a specific CLAUDE.md update: exact text to add/change and section it belongs in.
 
-Do NOT make the CLAUDE.md changes yourself — output the proposals for human review. This is an advisory digest, not an automated mutation.
+Advisory only — do NOT modify CLAUDE.md yourself. Output is for human review.
 
-Emit a brief summary at the top: N suggestions processed, M distinct themes found.
+**Write:** the `journal_digest_out:` path given in the prompt, with:
+```markdown
+## Summary
+<N suggestions processed, M distinct themes found>
+
+## Proposed CLAUDE.md updates
+<theme → section → exact text>
+```
+
+**Return:**
+```
+STATUS: COMPLETE|ERROR
+WROTE: <journal-digest.md path>
+THEMES: N
+PROPOSALS: N
+SUMMARY: <≤20 words>
+```

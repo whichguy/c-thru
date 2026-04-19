@@ -22,7 +22,7 @@ Each question must be:
 - Scoped to a single concern (file structure, dependency, existing pattern, etc.)
 - Answerable from files on disk or the project wiki
 
-**Write one file** at `.c-thru/plans/<slug>/discovery/gaps.md`:
+**Write one file** at the `gaps_out:` path given in the prompt:
 ```markdown
 # Discovery gaps — <slug>
 

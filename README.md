@@ -54,16 +54,16 @@ See [`docs/model-map.md`](docs/model-map.md) for the schema.
 
 `/c-thru-plan` is a wave-based task orchestrator built on top of c-thru's
 hardware-aware model routing. It breaks any task into a structured plan, executes
-it in parallel waves using 13 specialized agents, and adapts automatically when
+it in parallel waves using 14 specialized agents, and adapts automatically when
 findings invalidate assumptions.
 
 ```sh
 /c-thru-plan add a palindrome checker to the auth module
 ```
 
-State lands in `.c-thru/plans/<slug>/` — resumable across sessions.
+State lands in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/` — resumable across sessions. Completed plans archived to `~/.claude/c-thru-archive/`.
 
-- **Agents:** `agents/` — 13 roles from `planner` to `security-reviewer`. Each
+- **Agents:** `agents/` — 14 roles from `planner` to `security-reviewer`. Each
   declares `model: <own-name>`; the proxy routes to the right hardware tier.
 - **Skills:** `skills/c-thru-plan/` — orchestration logic; `skills/review-plan/`
   and `skills/review-fix/` for plan review and code quality loops.
