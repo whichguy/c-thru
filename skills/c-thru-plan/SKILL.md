@@ -131,6 +131,16 @@ Repeat until no ready items OR final-reviewer approves:
 Determine next wave number `NNN` (next unused `waves/NNN/` directory, zero-padded to 3 digits).
 `mkdir -p .c-thru/plans/<slug>/waves/<NNN>/digests .c-thru/plans/<slug>/waves/<NNN>/outputs .c-thru/plans/<slug>/waves/<NNN>/findings`
 
+Refresh learnings before reading the plan (learnings feed digest assembly):
+```
+Agent(subagent_type: "learnings-consolidator",
+  prompt: "learnings:        .c-thru/plans/<slug>/learnings.md
+           learnings.INDEX:  .c-thru/plans/<slug>/learnings.INDEX.md
+           prior_findings:   [waves/*/findings.jsonl]
+           journal:          .c-thru/plans/<slug>/journal.md")
+```
+Wait for `STATUS: COMPLETE` before dispatching plan-orchestrator.
+
 plan-orchestrator reads current.md fresh from disk each wave — no cached wave state carries over.
 
 ```
@@ -263,6 +273,7 @@ Agent(subagent_type: "wave-synthesizer",
            current.md:     .c-thru/plans/<slug>/current.md
            plan_INDEX:     .c-thru/plans/<slug>/INDEX.md
            journal:        .c-thru/plans/<slug>/journal.md
+           journal_offset: <line offset for last 5 entries>
            brief_out:      waves/<NNN>/replan-brief.md")
 ```
 
@@ -274,7 +285,7 @@ Update `current.md`:
 - Mark completed items `status: complete`
 - Add confirmed learnings to assumption state
 - Add completed-work summaries for use in future digests
-- On **extend**: mark affected items `status: extend` (plan-orchestrator will re-queue them)
+- On **extend**: mark items listed in wave-synthesizer's `AFFECTED_ITEMS` as `status: extend` (plan-orchestrator will re-queue them)
 - On **revise**: invoke planner (Mode 2) to rewrite pending items:
 
 ```
@@ -304,7 +315,7 @@ Append to `journal.md`:
 - **continue**: 1-line entry: `Wave <NNN> complete — <items completed>`
 - **extend/revise**: rich entry: what changed, which assumptions shifted, improvement suggestions from agent outputs
 
-Extract agent `## Improvement suggestions` sections → append to journal.md for journal-digester.
+Extract `improvement` and `augmentation` class entries from `waves/<NNN>/findings.jsonl` → append to journal.md for journal-digester and learnings-consolidator.
 
 ## Phase 5 — Final review
 

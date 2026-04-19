@@ -38,7 +38,7 @@ Follow existing patterns unless the digest requires otherwise. Pattern divergenc
    - `plan-material` — invalidates assumption or reveals dep gap
    - `crisis` — approach is broken, stop
    - `augmentation` — scope gaps for planner Mode 3
-   - `improvement` — **Improvement required:** emit at least one per task. What would make next wave's version of this work easier or higher-quality? If nothing surfaces, write `{"class":"improvement","text":"none — task was clean"}`. Plan-orchestrator consolidates these into learnings.md.
+   - `improvement` — **Improvement required:** emit at least one per task. What would make next wave's version of this work easier or higher-quality? If nothing surfaces, write `{"class":"improvement","text":"none — task was clean"}`. Learnings-consolidator aggregates these into learnings.md between waves.
 
 3. `outputs/implementer-<item>.INDEX.md` — `<section>: <start>-<end>` one per line (line numbers)
 
