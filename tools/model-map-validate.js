@@ -223,6 +223,27 @@ function validateConfig(config, _errors) {
       }
     }
   }
+
+  // v1.2 schema keys — optional, accepted when present
+  if (config.tool_capability_to_profile != null) {
+    if (!isObject(config.tool_capability_to_profile)) {
+      report("'tool_capability_to_profile' must be an object when present");
+    }
+  }
+  if (config.models != null) {
+    if (!Array.isArray(config.models)) {
+      report("'models' must be an array when present");
+    } else {
+      for (let i = 0; i < config.models.length; i++) {
+        const m = config.models[i];
+        if (!isObject(m)) { report(`'models[${i}]' must be an object`); continue; }
+        if (typeof m.name !== 'string' || !m.name) report(`'models[${i}].name' must be a non-empty string`);
+        if (m.equivalents != null && !Array.isArray(m.equivalents)) {
+          report(`'models[${i}].equivalents' must be an array when present`);
+        }
+      }
+    }
+  }
 }
 
 function main() {

@@ -25,6 +25,7 @@ bash -n tools/claude-router             # bash syntax check
 node --check tools/claude-proxy         # node syntax check
 node --check tools/model-map-*.js tools/llm-capabilities-mcp.js
 node tools/model-map-validate.js config/model-map.json   # validate shipped config
+node test/model-map-v12-adapter.test.js                  # adapter regression test
 ~/.claude/tools/claude-router --list    # runtime smoke-test (requires install)
 ```
 
