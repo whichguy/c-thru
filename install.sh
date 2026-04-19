@@ -596,7 +596,7 @@ if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
         if node "$local_validate" "$USER_MAP" 2>/dev/null; then
             echo -e "  ${GREEN}✅ model-map.system.json updated (shipped defaults)${NC}"
             if [ -f "$OVR_MAP" ]; then
-                override_keys="$(node -e "try{const o=JSON.parse(require('fs').readFileSync('$OVR_MAP','utf8'));console.log(Object.keys(o).length);}catch{console.log(0);}" 2>/dev/null || echo 0)"
+                override_keys="$(node -e 'try{const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(Object.keys(o).length);}catch{console.log(0);}' "$OVR_MAP" 2>/dev/null || echo 0)"
                 echo -e "  ${GRAY}✓  model-map.overrides.json (${override_keys} override keys)${NC}"
             else
                 echo -e "  ${GRAY}ℹ  model-map.overrides.json absent — no user overrides${NC}"
@@ -611,14 +611,9 @@ if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
 
     # Print detected hardware tier
     if [ -f "$TOOLS_SRC/hw-profile.js" ]; then
-        active_tier="$(node -e "
-try {
-  const os = require('os');
-  const {tierForGb} = require('$TOOLS_SRC/hw-profile.js');
-  const gb = Math.ceil(os.totalmem() / (1024**3));
-  process.stdout.write(tierForGb(gb) + ' (' + gb + ' GB detected)');
-} catch(e) { process.exit(1); }
-" 2>/dev/null || true)"
+        active_tier="$(node -e \
+            'try{const os=require("os");const {tierForGb}=require(process.argv[1]);const gb=Math.ceil(os.totalmem()/(1024**3));process.stdout.write(tierForGb(gb)+" ("+gb+" GB detected)");}catch(e){process.exit(1);}' \
+            "$TOOLS_SRC/hw-profile.js" 2>/dev/null || true)"
         if [ -n "$active_tier" ]; then
             echo -e "  ${GRAY}ℹ  active hardware profile: ${active_tier}${NC}"
         fi

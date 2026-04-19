@@ -40,7 +40,7 @@ remove_agents() {
         if [ -L "$dest" ]; then
             local target
             target="$(readlink "$dest")"
-            if [[ "$target" == "$REPO_DIR"* ]]; then
+            if [[ "$target" == "$REPO_DIR/"* ]]; then
                 rm "$dest"
                 echo -e "  ${GREEN}✅ removed agents/c-thru/$(basename "$dest")${NC}"
                 removed=$((removed + 1))
@@ -76,7 +76,7 @@ remove_skills_cthru() {
         if [ -L "$link" ]; then
             local target
             target="$(readlink "$link")"
-            if [[ "$target" == "$REPO_DIR"* ]]; then
+            if [[ "$target" == "$REPO_DIR/"* ]]; then
                 rm "$link"
                 echo -e "  ${GREEN}✅ removed skills/c-thru/${name}${NC}"
                 removed=$((removed + 1))
