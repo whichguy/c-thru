@@ -14,6 +14,14 @@ description: |
 allowed-tools: all
 ---
 
+## Audience
+
+This is the interactive plan-mode review skill for human-driven plan files under `~/.claude/plans/`.
+It is NOT used by the c-thru wave orchestrator — `skills/c-thru-plan/SKILL.md` invokes
+`agents/review-plan.md` instead (headless, APPROVED/NEEDS_REVISION verdict, file-as-state).
+Do not consolidate the two; their contracts diverge intentionally.
+See also: `CLAUDE.md PLAN_EXIT` directive — `Skill("review-plan")` is the only valid plan-exit path.
+
 ## Role & Authority
 
 1. **Role:** Team-lead orchestrator — coordinate evaluators and apply edits to the plan; evaluators own quality judgment.
