@@ -2604,10 +2604,14 @@ server.listen(INITIAL_PORT, '127.0.0.1', () => {
       let logFd = null;
       try { logFd = fs.openSync(PROXY_LOG_FILE, 'a'); } catch {}
       const gcStdio = logFd !== null ? ['ignore', logFd, logFd] : ['ignore', 'ignore', 'ignore'];
-      const gcChild = spawn(GC_TOOL_PATH, ['sweep'], { detached: true, stdio: gcStdio });
+      let gcChild;
+      try {
+        gcChild = spawn(GC_TOOL_PATH, ['sweep'], { detached: true, stdio: gcStdio });
+      } finally {
+        if (logFd !== null) try { fs.closeSync(logFd); } catch {}
+      }
       gcChild.unref();
       setTimeout(() => { try { gcChild.kill('SIGTERM'); } catch {} }, 30_000).unref();
-      if (logFd !== null) try { fs.closeSync(logFd); } catch {}
     }
   } catch {}
 });

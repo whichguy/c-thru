@@ -188,7 +188,17 @@ CANDEOF
     return 0
   fi
 
-  # Step 3: ollama rm each candidate; collect all attempted (success or orphan) for state cleanup
+  # Step 3: verify ollama is reachable before issuing rm commands.
+  # `ollama rm` exits 1 for BOTH "model not found" AND "server unreachable" — we
+  # cannot distinguish them at the per-model level.  Probing with `ollama list`
+  # first lets us bail early rather than treating every rm failure as an orphan
+  # and silently purging state entries for models that are still installed.
+  if ! ollama list >/dev/null 2>&1; then
+    echo "c-thru-ollama-gc: sweep: ollama server unreachable — skipping GC to avoid purging state for live models" >&2
+    return 0
+  fi
+
+  # Step 4: ollama rm each candidate; collect all attempted (success or orphan) for state cleanup
   local -a processed=()
   while IFS= read -r m; do
     [ -z "$m" ] && continue
@@ -201,7 +211,7 @@ CANDEOF
     processed+=("$m")
   done <<< "$candidates"
 
-  # Step 4: batch-remove processed models from state file under lock
+  # Step 5: batch-remove processed models from state file under lock
   if [ ${#processed[@]} -gt 0 ]; then
     _with_lock _sweep_state_update "${processed[@]}"
     echo "c-thru-ollama-gc: swept ${#processed[@]} model(s)" >&2
