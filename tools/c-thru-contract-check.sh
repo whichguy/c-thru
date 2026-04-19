@@ -38,7 +38,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 1 — Skill("review-plan") regression
 # ---------------------------------------------------------------------------
-echo "1/3  Skill(\"review-plan\") regression..."
+echo "1/5  Skill(\"review-plan\") regression..."
 if grep -qE 'Skill\([[:space:]]*["'"'"']review-plan["'"'"']' "$SKILL" 2>/dev/null; then
     fail 'skills/c-thru-plan/SKILL.md: Skill("review-plan") found — must use Agent(subagent_type: "review-plan") here (Skill() path invokes the interactive human plan-mode tool, not the c-thru wave agent)'
 else
@@ -48,7 +48,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 1b — No hardcoded .c-thru/plans/ paths in agents/*.md
 # ---------------------------------------------------------------------------
-echo "1b/3 Hardcoded .c-thru/plans/ in agents/*.md..."
+echo "1b/5 Hardcoded .c-thru/plans/ in agents/*.md..."
 hardcoded_agents=$(grep -l '\.c-thru/plans/' "$AGENTS_DIR"/*.md 2>/dev/null || true)
 if [ -n "$hardcoded_agents" ]; then
     for f in $hardcoded_agents; do
@@ -61,7 +61,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 2 — Dangling subagent_type references
 # ---------------------------------------------------------------------------
-echo "2/3  Dangling agent reference check..."
+echo "2/5  Dangling agent reference check..."
 
 # Claude Code built-in subagent types — no agents/*.md expected for these
 BUILTIN="general-purpose Explore"
@@ -99,7 +99,7 @@ done < <(grep -oE 'subagent_type:[[:space:]]*"[^"]+"' "$SKILL" \
 # sides. Accepts false negatives on compound names like journal_offset; the
 # check catches obvious structural gaps (missing whole input categories).
 # ---------------------------------------------------------------------------
-echo "3/3  Agent prompt key check..."
+echo "3/5  Agent prompt key check..."
 
 # Returns newline-separated input tokens for an agent file.
 # Strategy:
@@ -114,12 +114,16 @@ agent_tokens() {
     [ -z "$input_line" ] && return
 
     # a. Backtick-quoted tokens — strip file extension, normalize to snake_case
-    echo "$input_line" \
+    # Skip path-like examples: tokens containing $ / < > are not input key names
+    while IFS= read -r tok; do
+        case "$tok" in *'$'*|*/*|*'<'*|*'>'*) continue ;; esac
+        echo "$tok"
+    done < <(echo "$input_line" \
         | grep -oE '`[^`]+`' \
         | tr -d '`' \
         | sed 's/\.[a-z]*$//' \
         | tr '[:upper:]' '[:lower:]' \
-        | tr '.-' '__'
+        | tr '.-' '__')
 
     # b. Strip backtick content, then extract individual meaningful words
     local stripped
@@ -133,6 +137,9 @@ agent_tokens() {
             # Emit each word as a separate token
             for word in $seg; do
                 norm=$(echo "$word" | tr '[:upper:]' '[:lower:]' | tr '.-' '__')
+                # Explicit *_out suffix: treat as declared input key regardless of stop-words
+                case "$norm" in *_out) echo "$norm"; continue ;; esac
+
                 # Broad stop-word list for prose input descriptions.
                 # These are modifier/descriptor words; the semantic key is a
                 # sibling word in the same phrase (e.g. "plan INDEX path" → key
@@ -252,6 +259,71 @@ while IFS='|' read -r agent keys; do
         fi
     done
 done < "$tmpblocks"
+
+# ---------------------------------------------------------------------------
+# Check 4 — Agent-count consistency
+#
+# Canonical source: config/model-map.json#agent_to_capability.
+# agents/*.md count must match; docs must not hardcode a different number.
+# ---------------------------------------------------------------------------
+echo "4/5  Agent-count consistency check..."
+
+MODEL_MAP="$REPO_DIR/config/model-map.json"
+if [ ! -f "$MODEL_MAP" ]; then
+    warn "config/model-map.json not found — skipping Check 4"
+else
+    agent_file_count=$(ls "$AGENTS_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
+    cap_key_count=$(jq '.agent_to_capability | keys | length' "$MODEL_MAP" 2>/dev/null || echo "0")
+
+    if [ "$agent_file_count" != "$cap_key_count" ]; then
+        fail "agents/*.md count ($agent_file_count) != agent_to_capability keys ($cap_key_count) in config/model-map.json"
+    else
+        ok "agent count consistent: $agent_file_count agents/*.md = $cap_key_count agent_to_capability keys"
+    fi
+
+    for doc in README.md CLAUDE.md docs/agent-architecture.md; do
+        doc_path="$REPO_DIR/$doc"
+        [ -f "$doc_path" ] || continue
+        if grep -qE '\b[0-9]+[[:space:]]+(specialized[[:space:]]+)?(agents?|roles?)\b' "$doc_path" 2>/dev/null; then
+            claimed=$(grep -oE '\b[0-9]+[[:space:]]+(specialized[[:space:]]+)?(agents?|roles?)\b' "$doc_path" \
+                      | head -1 | grep -oE '^[0-9]+')
+            if [ "$claimed" != "$agent_file_count" ]; then
+                fail "$doc claims '$claimed agents/roles' but agents/ has $agent_file_count"
+            else
+                ok "$doc agent count ($claimed) matches agents/ ($agent_file_count)"
+            fi
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------------------
+# Check 5 — Phase 0 mkdir coverage
+#
+# Every $PLAN_DIR/<subdir>/ referenced in SKILL.md must have a corresponding
+# mkdir in Phase 0. Wave-scoped dirs ($wave_dir/...) are excluded.
+# ---------------------------------------------------------------------------
+echo "5/5  Phase 0 mkdir coverage check..."
+
+# Extract subdirectory names referenced as $PLAN_DIR/<name>/ in SKILL.md
+referenced=$(grep -oE '\$PLAN_DIR/[a-z_-]+/' "$SKILL" 2>/dev/null \
+             | sed 's|\$PLAN_DIR/||;s|/$||' \
+             | sort -u || true)
+
+# Extract subdirectory names created in Phase 0 mkdir commands
+phase0_mkdir=$(awk '/^## Phase 0/,/^## Phase 1/' "$SKILL" 2>/dev/null \
+               | grep -oE '\$PLAN_DIR/[a-z_-]+' \
+               | sed 's|\$PLAN_DIR/||' \
+               | sort -u || true)
+
+for d in $referenced; do
+    # Skip file-like references (contain a dot) — these are files, not dirs
+    case "$d" in *.*) continue ;; esac
+    if ! echo "$phase0_mkdir" | grep -q "^${d}\$"; then
+        fail "SKILL.md references \$PLAN_DIR/$d/ but Phase 0 mkdir does not create it"
+    else
+        ok "Phase 0 mkdir covers \$PLAN_DIR/$d/"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # Summary
