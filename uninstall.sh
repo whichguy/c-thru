@@ -155,6 +155,35 @@ remove_model_map_aliases() {
     fi
 }
 
+echo "Ollama GC:"
+purge_ollama_models() {
+    local gc_tool="$CLAUDE_DIR/tools/c-thru-ollama-gc"
+    local state_file="$CLAUDE_DIR/c-thru-ollama-models.json"
+
+    if [ ! -f "$state_file" ]; then
+        echo -e "  ${GRAY}✓  no Ollama GC state file — nothing to purge${NC}"
+        return 0
+    fi
+
+    if ! command -v ollama >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}⚠️  ollama not on PATH — skipping model purge${NC}"
+        rm -f "$state_file"
+        echo -e "  ${GREEN}✅ removed $state_file${NC}"
+        return 0
+    fi
+
+    if [ -x "$gc_tool" ]; then
+        "$gc_tool" purge || true
+    else
+        echo -e "  ${YELLOW}⚠️  c-thru-ollama-gc not found — skipping model purge${NC}"
+    fi
+
+    rm -f "$state_file"
+    echo -e "  ${GREEN}✅ removed $state_file${NC}"
+}
+purge_ollama_models
+
+echo ""
 echo "Agents:"
 remove_agents
 
