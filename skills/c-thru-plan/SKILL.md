@@ -43,7 +43,7 @@ If fresh: `mkdir -p $PLAN_DIR/waves $PLAN_DIR/discovery $PLAN_DIR/plan/snapshots
 - `waves/<NNN>/` — ephemeral per-wave artifacts (wave.json, digests, outputs, findings, verify.json, decision.json, artifact.md, replan-brief.md, wave-summary.md, INDEX.md). Write-once per wave.
 - `plan/snapshots/p-<NNN>.md` — historical snapshot post-commit.
 - `journal.md` — append-only event log.
-- `learnings.md` + `learnings.INDEX.md` — wiki-style cross-wave improvements. Refreshed by `learnings-consolidator` at start of each wave.
+- `learnings.md` + `learnings.INDEX.md` — wiki-style cross-wave improvements. Refreshed by plan-orchestrator (step 1) at start of each wave.
 - `meta.json` — counters (`revision_rounds`, `status`).
 
 **Invariants:**
