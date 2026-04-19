@@ -32,6 +32,8 @@
 | Check | Finding | Severity |
 |---|---|---|
 | Input completeness (Mode 2) | "raw wave file paths (secondary)" is an unenumerated catch-all; SKILL.md Phase 4 passes `brief_INDEX`, `findings`, `artifact`, `artifact_INDEX`, `verify`, `decision`, `Verdict` — none explicitly declared | BLOCKING |
+| Input completeness (Mode 3) | Phase 5 caller passes `mode`, `intent`, `INDEX`, `final-review`, `journal_offset` but Mode 3 Input declared only `current.md path + gap analysis text + journal.md path + journal line offset` — missing `mode`, `intent`, `INDEX`; "gap analysis text" not parseable as `final-review` key | BLOCKING |
+| Phase 5 caller (Mode 3) | SKILL.md Phase 5 used prose "Mode 3 — gap fill." as first line instead of `mode: 3` key; missing `journal_offset` passthrough | BLOCKING |
 | Input completeness (Mode 1/2) | No `mode` key declared in any Mode's Input line; multi-mode check requires `mode: N` in caller for per-mode validation | advisory |
 | Multi-mode handling | Check 3 skips entirely via `is_multi_mode` guard, emitting WARN | advisory |
 | Return consumers | STATUS, all DELTA fields, WROTE, INDEX — all consumed by callers | ok |
@@ -205,3 +207,4 @@
 | `STATUS=CYCLE` undeclared | plan-orchestrator Step 3 emits `STATUS: CYCLE` but Step 13 Return only declares `COMPLETE\|PARTIAL\|ERROR` | BLOCKING |
 | Worker write ambiguity | Seven worker agents say "Write 3 files to paths given in the prompt" but the digest contains only a digest path; plan-orchestrator Step 5 is the actual writer — contract does not resolve which side is authoritative | BLOCKING |
 | planner Mode 2 revision key set | SKILL.md Phase 3 passes `findings` to planner Mode 2; planner's "secondary" catch-all doesn't enumerate it — same gap as the Mode 2 unenumerated keys finding | BLOCKING (same fix as planner.md Mode 2) |
+| planner Mode 3 key set | SKILL.md Phase 5 passes `mode`, `intent`, `INDEX`, `final-review`, `journal_offset`; Mode 3 Input didn't declare them; Phase 5 used prose instead of `mode: 3` key | BLOCKING (fixed in planner.md + SKILL.md Phase 5) |

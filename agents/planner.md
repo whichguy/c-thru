@@ -25,7 +25,7 @@ Amend only `pending`/`extend` items — never touch `complete` items.
 May restructure `depends_on` edges, re-scope, split, or merge items.
 
 ## Mode 3 — Gap closure
-Inputs: current.md path + gap analysis text + journal.md path + journal line offset.
+Input: `mode` + `intent` + `current.md` path + `INDEX` path + `final_review` path + `journal` path + journal line offset.
 Append new items only. New items must declare `depends_on` on relevant complete items.
 
 **After any write:** emit `## Plan delta` — added/removed/changed items and dep-graph changes.

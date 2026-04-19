@@ -210,12 +210,13 @@ Print summary to user.
 If `RECOMMENDATION: needs_items` → invoke planner (Mode 3) with path:
 ```
 Agent(subagent_type: "planner",
-  prompt: "Mode 3 — gap fill.
-           intent:       <original user intent>
-           current.md:   $PLAN_DIR/current.md
-           INDEX:        $PLAN_DIR/INDEX.md
-           final-review: $PLAN_DIR/final-review.md
-           journal:      $PLAN_DIR/journal.md")
+  prompt: "mode:           3
+           intent:         <original user intent>
+           current.md:     $PLAN_DIR/current.md
+           INDEX:          $PLAN_DIR/INDEX.md
+           final_review:   $PLAN_DIR/final-review.md
+           journal:        $PLAN_DIR/journal.md
+           journal_offset: <line offset for last 5 entries>")
 ```
 Plan-orchestrator re-runs; gaps → immediately ready items (deps already complete).
 Cap: **20 revision rounds total** across all final-review iterations. Escalate to user if cap reached.
