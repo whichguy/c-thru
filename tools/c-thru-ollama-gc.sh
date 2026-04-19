@@ -108,7 +108,30 @@ try { raw = fs.readFileSync(process.argv[2], 'utf8'); } catch (e) {
   process.stderr.write('c-thru-ollama-gc: cannot read model-map: ' + e.message + '\n');
   process.exit(1);
 }
-raw = raw.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+// String-aware JSON5 comment stripper — avoids clobbering // inside string literals
+function stripJsonComments(s) {
+  let out = '', i = 0;
+  while (i < s.length) {
+    if (s[i] === '"') {
+      out += s[i++];
+      while (i < s.length) {
+        if (s[i] === '\\') { out += s[i++]; if (i < s.length) out += s[i++]; }
+        else if (s[i] === '"') { out += s[i++]; break; }
+        else out += s[i++];
+      }
+    } else if (s[i] === '/' && s[i+1] === '/') {
+      while (i < s.length && s[i] !== '\n') i++;
+    } else if (s[i] === '/' && s[i+1] === '*') {
+      i += 2;
+      while (i < s.length && !(s[i] === '*' && s[i+1] === '/')) i++;
+      i += 2;
+    } else {
+      out += s[i++];
+    }
+  }
+  return out;
+}
+raw = stripJsonComments(raw);
 let map;
 try { map = JSON.parse(raw); } catch (e) {
   process.stderr.write('c-thru-ollama-gc: failed to parse model-map: ' + e.message + '\n');
