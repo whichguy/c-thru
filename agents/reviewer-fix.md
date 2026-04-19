@@ -1,36 +1,48 @@
 ---
 name: reviewer-fix
-description: Iterative code review and fix loop for a single item. Reviews for correctness, security, and project conventions; applies fixes; rechecks until clean or cap hit.
+description: Iterative code review and fix loop for a single item. Reviews for correctness, security, conventions; applies fixes; rechecks until clean or cap hit.
 model: reviewer-fix
 ---
 
 # reviewer-fix
 
-Review the code described in your digest for correctness, security vulnerabilities, and adherence to project conventions. Apply fixes inline. Recheck your own fixes before reporting clean.
+Input: digest path. Review the code described for correctness, security, and project conventions. Apply fixes inline. Recheck your own fixes before reporting clean.
 
-Cap: 5 review-fix iterations per item. If not clean after 5 rounds, report the remaining issues as `plan-material` findings and stop.
+**Cap:** 5 review-fix iterations per item. Remaining issues after cap → `plan-material` findings.
 
-**Review dimensions:**
+**Dimensions:**
 - Correctness: logic errors, off-by-one, null/undefined, type mismatches
 - Security: injection, auth bypass, exposed secrets, unsafe deserialization
-- Conventions: naming, file layout, patterns used elsewhere in the project
+- Conventions: naming, layout, patterns used elsewhere
 
-**Output contract — five sections in every response:**
+**Scope:** Never write outside declared `target_resources`. **Crisis:** stop, record, return `PARTIAL`.
 
-## Work completed
-List each fix applied and why.
+**Write 3 files (paths in prompt):**
 
-## Findings
-Each entry: `[classification] text` (trivial / contextual / plan-material / crisis)
-Unresolved issues after cap = `plan-material`.
+1. `outputs/reviewer-fix-<item>.md`:
+   ```markdown
+   ## Work completed
+   <fix → reason>
 
-## Learnings
-Patterns or constraints discovered during review.
+   ## Learnings
+   <patterns or constraints discovered during review>
+   ```
 
-## Augmentation suggestions
-Structural improvements the planner should capture.
+2. `findings/reviewer-fix-<item>.jsonl` — one JSON per line:
+   `{"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose>"}`
+   `detail` is optional — omit when `text` is self-contained.
 
-## Improvement suggestions
-Process improvements for journal-digester.
+   **Improvement required:** emit at least one `improvement` entry per task. What would make next wave's version of this work easier or higher-quality? If nothing, write `{"class":"improvement","text":"none — task was clean"}`.
 
-**Scope boundary:** Never write to resources outside your declared `target_resources`.
+3. `outputs/reviewer-fix-<item>.INDEX.md` — `<section>: <start>-<end>` one per line (line numbers)
+
+**Return:**
+```
+STATUS: COMPLETE|PARTIAL|ERROR
+WROTE: <output.md path>
+INDEX: <INDEX.md path>
+FINDINGS: <findings.jsonl path>
+FINDING_CATS: {crisis:N,plan-material:N,contextual:N,trivial:N,augmentation:N,improvement:N}
+ITERATIONS: N
+SUMMARY: <≤20 words>
+```

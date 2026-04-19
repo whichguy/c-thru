@@ -124,6 +124,14 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 
 `claude-proxy` is a long-running HTTP server auto-spawned by `claude-router` when the backend needs it. The router coordinates via a `/ping` handshake on a dynamically-selected port. Logs land at `~/.claude/proxy.*.log`. Kill a stuck proxy with `pkill -f claude-proxy`.
 
+## Contract integrity
+
+Before committing changes to `skills/c-thru-plan/SKILL.md` or any `agents/*.md` file, run:
+```sh
+bash tools/c-thru-contract-check.sh   # exit 0 = clean; exit 1 = contract violations
+```
+Catches dangling `subagent_type` references, missing prompt keys vs. declared `Input:` lines, and accidental `Skill("review-plan")` invocations. Symlinked by `install.sh` to `~/.claude/tools/c-thru-contract-check`.
+
 ## Agentic plan/wave system
 
 Invoke with `/c-thru-plan <intent>`. State in `.c-thru/plans/<slug>/`.
