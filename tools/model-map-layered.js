@@ -64,10 +64,54 @@ function computeOverrideDiff(base, effective) {
   return deepEqual(base, effective) ? undefined : deepClone(effective);
 }
 
+// Module-scope guard so the legacy-shape warning fires at most once per process.
+let _v12WarnedOnce = false;
+
+// Synthesize v1.2 schema keys from legacy fallback_strategies shape.
+// Fires when fallback_strategies is present but tool_capability_to_profile is absent.
+// Does NOT modify fallback_strategies — legacy proxy code continues reading it unchanged.
+// This is config-shape transformation only; it never modifies request-time model fields.
+function maybeSynthesizeV12Keys(effective) {
+  if (!effective.fallback_strategies || effective.tool_capability_to_profile) return effective;
+
+  if (!_v12WarnedOnce) {
+    _v12WarnedOnce = true;
+    process.stderr.write('claude-proxy: model-map uses legacy fallback_strategies shape; synthesizing v1.2 keys in-memory. Migrate overrides to v1.2 to silence this.\n');
+  }
+
+  const v12 = {};
+
+  if (effective.llm_capabilities) {
+    v12.tool_capability_to_profile = {};
+    for (const [cap, entry] of Object.entries(effective.llm_capabilities)) {
+      if (entry && typeof entry.model === 'string') {
+        v12.tool_capability_to_profile[cap] = entry.model;
+      }
+    }
+  }
+
+  const modelsArray = [];
+  for (const [modelName, strategy] of Object.entries(effective.fallback_strategies)) {
+    const seen = new Set();
+    if (strategy.event) {
+      for (const candidates of Object.values(strategy.event)) {
+        for (const c of candidates) seen.add(c);
+      }
+    }
+    if (seen.size > 0) {
+      modelsArray.push({ name: modelName, equivalents: [...seen] });
+    }
+  }
+  if (modelsArray.length > 0) v12.models = modelsArray;
+
+  return Object.assign({}, effective, v12);
+}
+
 function loadLayeredConfig(defaultsPath, overridesPath) {
   const defaults = readJson(defaultsPath);
   const overrides = readJsonOrEmpty(overridesPath);
-  const effective = mergeConfigLayers(defaults, overrides);
+  let effective = mergeConfigLayers(defaults, overrides);
+  effective = maybeSynthesizeV12Keys(effective);
   validateConfig(effective);
   return { defaults, overrides, effective };
 }

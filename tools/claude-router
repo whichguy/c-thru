@@ -2132,8 +2132,41 @@ print_config_section() {
   fi
 }
 
+print_active_profile_table() {
+  [[ -f "$CONFIG" ]] || return 0
+  llm_profiles_defined || return 0
+
+  local profile mode memory_gb source summary_context
+  ensure_llm_profile_context || return 0
+  profile="$LLM_PROFILE_CACHE_NAME"
+  [[ -n "$profile" ]] || return 0
+  mode="$(resolve_connectivity_mode)"
+  memory_gb="${LLM_PROFILE_CACHE_MEMORY_GB:-}"
+  source="${LLM_PROFILE_CACHE_SOURCE:-auto}"
+
+  case "$source" in
+    auto)   summary_context="auto-detected from ${memory_gb:-unknown} GB RAM" ;;
+    env)    summary_context="forced by CLAUDE_LLM_PROFILE" ;;
+    config) summary_context="configured in model-map" ;;
+    *)      summary_context="$source" ;;
+  esac
+
+  echo "Active hardware profile: $profile ($summary_context, connectivity=$mode)"
+  echo ""
+
+  local slot model
+  while IFS=$'\t' read -r slot model; do
+    [[ -n "$slot" && -n "$model" ]] || continue
+    printf '  %-14s  %s\n' "$slot" "$model"
+  done < <(collect_active_profile_capability_assignments)
+  echo ""
+}
+
 # --- Show available models from all sources ---
 show_models() {
+  # Active hardware profile + capability assignments
+  print_active_profile_table
+
   # Configured routes
   print_config_section "routes" "Configured routes (model-map.json)"
 

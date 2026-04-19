@@ -362,3 +362,81 @@ Valid types: INIT, INGEST, QUERY, LINT, SESSION_START, SESSION_END, EXTRACT
 [2026-04-18 15:14] SESSION_CLEAR session:48948541: /clear boundary in c-thru
 [2026-04-18 15:14] WIKI_LOAD session:: /wiki-load capability-profile-model-layers
 [2026-04-18 15:23] SESSION_END session:48948541: closed in c-thru
+[2026-04-18 15:54] SESSION_START session:a9bb05a0: opened in c-thru
+[2026-04-18 15:54] SESSION_CLEAR session:a9bb05a0: /clear boundary in c-thru
+[2026-04-18 15:55] SESSION_END session:a9bb05a0: closed in c-thru
+[2026-04-18 16:12] WIKI_LOAD session:: /wiki-load model-map schema resolution declared-rewrites
+[2026-04-18 16:29] SESSION_START session:b6bb60e1: opened in c-thru
+[2026-04-18 16:29] SESSION_CLEAR session:b6bb60e1: /clear boundary in c-thru
+[2026-04-18 16:33] SESSION_END session:b6bb60e1: closed in c-thru
+[2026-04-18 16:36] SESSION_START session:525ebce1: opened in c-thru
+[2026-04-18 16:36] SESSION_CLEAR session:525ebce1: /clear boundary in c-thru
+[2026-04-18 16:38] WIKI_LOAD session:: /wiki-load proxy model resolution config routing
+[2026-04-18 18:50] SESSION_START session:1e8f92f1: opened in c-thru
+[2026-04-18 18:50] SESSION_CLEAR session:1e8f92f1: /clear boundary in c-thru
+[2026-04-18 18:53] SESSION_END session:1e8f92f1: closed in c-thru
+[2026-04-18 19:07] SESSION_START session:53680972: opened in c-thru
+[2026-04-18 19:07] SESSION_START session:e5dcd299: opened in c-thru
+[2026-04-18 19:07] SESSION_START session:0a599683: opened in c-thru
+[2026-04-18 19:07] SESSION_START session:c6b40ab4: opened in c-thru
+[2026-04-18 19:07] SESSION_START session:95c87c64: opened in c-thru
+[2026-04-18 19:07] SESSION_START session:53680972: opened in c-thru
+[2026-04-18 19:07] PERIODIC session:e5dcd299: probabilistic trigger fired (mod=17)
+[2026-04-18 19:10] SESSION_START session:972a89c7: opened in c-thru
+[2026-04-18 19:13] PERIODIC session:95c87c64: probabilistic trigger fired (mod=17)
+[2026-04-18 19:19] PERIODIC session:c6b40ab4: probabilistic trigger fired (mod=17)
+[2026-04-18 19:40] PERIODIC session:c6b40ab4: probabilistic trigger fired (mod=17)
+[2026-04-18 19:58] PERIODIC session:972a89c7: probabilistic trigger fired (mod=17)
+[2026-04-18 20:01] PERIODIC session:c6b40ab4: probabilistic trigger fired (mod=17)
+[2026-04-18 20:10] SESSION_START session:de07cb0c: opened in c-thru
+[2026-04-18 20:11] SESSION_START session:53680972: opened in c-thru
+[2026-04-18 20:11] SESSION_START session:03113f09: opened in c-thru
+[2026-04-18 20:11] SESSION_CLEAR session:03113f09: /clear boundary in c-thru
+[2026-04-18 20:11] SESSION_START session:03113f09: opened in c-thru
+[2026-04-18 20:11] SESSION_START session:a1a120a2: opened in c-thru
+[2026-04-18 20:11] SESSION_START session:43b01f24: opened in c-thru
+[2026-04-18 20:11] SESSION_START session:78c9b870: opened in c-thru
+[2026-04-18 20:11] SESSION_START session:966a9ae9: opened in c-thru
+[2026-04-18 20:11] SESSION_START session:03113f09: opened in c-thru
+[2026-04-18 20:13] PERIODIC session:972a89c7: probabilistic trigger fired (mod=17)
+[2026-04-18 20:16] SESSION_START session:295dbf7c: opened in c-thru
+[2026-04-18 20:17] SESSION_START session:6576c8d9: opened in c-thru
+[2026-04-18 20:18] WIKI_LOAD session:: /wiki-load capability-profile-model-layers
+[2026-04-18 20:19] PERIODIC session:c6b40ab4: probabilistic trigger fired (mod=17)
+[2026-04-18 20:20] PERIODIC session:a1a120a2: probabilistic trigger fired (mod=17)
+[2026-04-18 20:25] SESSION_END session:03113f09: closed in c-thru
+[2026-04-18 20:25] SESSION_START session:29079678: opened in c-thru
+[2026-04-18 20:26] SESSION_START session:3ca8981d: opened in c-thru
+[2026-04-18 20:31] PERIODIC session:95c87c64: probabilistic trigger fired (mod=17)
+[2026-04-18 20:31] PERIODIC session:de07cb0c: probabilistic trigger fired (mod=17)
+[2026-04-18 20:32] SESSION_START session:fe790d17: opened in c-thru
+[2026-04-18 20:34] SESSION_START session:d271146c: opened in c-thru
+[2026-04-18 20:35] SESSION_START session:c42fc232: opened in c-thru
+[2026-04-18 20:35] SESSION_START session:99f0ebed: opened in c-thru
+[2026-04-18 20:37] SESSION_START session:7fa990d4: opened in c-thru
+[2026-04-18 20:38] PERIODIC session:03113f09: probabilistic trigger fired (mod=17)
+[2026-04-18 20:38] PERIODIC session:c42fc232: probabilistic trigger fired (mod=17)
+[2026-04-18 20:38] SESSION_START session:bf426918: opened in c-thru
+[2026-04-18 20:38] SESSION_START session:2054fcc2: opened in c-thru
+[2026-04-18 20:40] PERIODIC session:95c87c64: probabilistic trigger fired (mod=17)
+[2026-04-18 20:41] SESSION_START session:86503900: opened in c-thru
+[2026-04-18 20:41] SESSION_START session:9003a7bd: opened in c-thru
+[2026-04-18 20:41] PERIODIC session:86503900: probabilistic trigger fired (mod=17)
+[2026-04-18 20:42] SESSION_START session:ff017752: opened in c-thru
+[2026-04-18 20:42] SESSION_CLEAR session:ff017752: /clear boundary in c-thru
+[2026-04-18 20:42] WIKI_LOAD session:: /wiki-load capability-profile-model-layers
+[2026-04-18 20:44] PERIODIC session:a1a120a2: probabilistic trigger fired (mod=17)
+[2026-04-18 20:47] SESSION_START session:5cb3c26e: opened in c-thru
+[2026-04-18 20:47] SESSION_START session:a8f4e7d2: opened in c-thru
+[2026-04-18 20:47] SESSION_START session:5d05a8ee: opened in c-thru
+[2026-04-18 20:49] SESSION_START session:a42a92eb: opened in c-thru
+[2026-04-18 20:50] SESSION_START session:80b5832c: opened in c-thru
+[2026-04-18 20:50] SESSION_START session:94c57544: opened in c-thru
+[2026-04-18 20:50] PERIODIC session:2054fcc2: probabilistic trigger fired (mod=17)
+[2026-04-18 20:50] SESSION_START session:4f4d643d: opened in c-thru
+[2026-04-18 20:52] PERIODIC session:de07cb0c: probabilistic trigger fired (mod=17)
+[2026-04-18 20:52] SESSION_START session:3e183215: opened in c-thru
+[2026-04-18 20:53] PERIODIC session:80b5832c: probabilistic trigger fired (mod=17)
+[2026-04-18 20:53] SESSION_START session:0b9b3476: opened in c-thru
+[2026-04-18 20:53] SESSION_START session:4b99433c: opened in c-thru
+[2026-04-18 20:53] PERIODIC session:4b99433c: probabilistic trigger fired (mod=17)

@@ -90,9 +90,13 @@ function repoDefaultsPath() {
 }
 
 function maybeSyncLayeredProfileModelMap() {
-  const defaultsPath = repoDefaultsPath();
-  const claudeDir = canonicalizeDir(process.env.CLAUDE_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || '', '.claude'));
-  if (!defaultsPath || !claudeDir) return;
+  const claudeDir = canonicalizeDir(process.env.CLAUDE_PROFILE_DIR || process.env.CLAUDE_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || '', '.claude'));
+  if (!claudeDir) return;
+  // Prefer model-map.system.json (installed by install.sh) over the repo defaults so the
+  // proxy works even when run from outside the repo. Fall back to the repo config/model-map.json.
+  const systemPath = path.join(claudeDir, 'model-map.system.json');
+  const defaultsPath = fs.existsSync(systemPath) ? systemPath : repoDefaultsPath();
+  if (!defaultsPath) return;
   const overridesPath = path.join(claudeDir, 'model-map.overrides.json');
   if (!fs.existsSync(overridesPath)) return;
   const effectivePath = path.join(claudeDir, 'model-map.json');
@@ -381,7 +385,8 @@ function profileAliasKey(alias) {
 function detectMemoryProfile() {
   const override = process.env.CLAUDE_LLM_MEMORY_GB;
   const totalGb = override && /^\d+$/.test(override) ? Number(override) : Math.ceil(os.totalmem() / (1024 ** 3));
-  return totalGb >= 96 ? '128gb' : '64gb';
+  const { tierForGb } = require('./hw-profile.js');
+  return tierForGb(totalGb);
 }
 
 function resolveProfileName() {
@@ -2683,6 +2688,9 @@ function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 process.on('SIGHUP', () => {
+  // Re-sync layered config (overrides → effective) before reloading from disk so that
+  // edits to model-map.overrides.json take effect without a proxy restart.
+  maybeSyncLayeredProfileModelMap();
   if (reloadConfigFromDisk()) {
     console.error('claude-proxy: config reloaded via SIGHUP');
   }
