@@ -6,7 +6,7 @@ model: discovery-advisor
 
 # discovery-advisor
 
-Input: `intent` (original user intent string) + `recon_path` (path to reconnaissance summary written in Stage 1).
+Input: `intent` (original user intent string) + `recon_path` (path to reconnaissance summary written in Stage 1) + `gaps_out` path.
 
 Read `recon_path`. Identify what is still unknown or ambiguous that would materially change the plan.
 

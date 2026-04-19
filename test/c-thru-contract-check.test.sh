@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for tools/c-thru-contract-check.sh
-# 3 fixtures: missing-key → fail, dangling-agent → fail, clean → pass
+# 8 fixtures: dangling-agent, missing-key, clean, Skill() regression, path-backtick FP,
+#             *_out key missing, agent-count mismatch, Phase 0 mkdir missing
 #
 # Run: bash test/c-thru-contract-check.test.sh
 
@@ -134,6 +135,89 @@ EOF
 rc=0; run_checker_in "$F4" >/dev/null 2>&1 || rc=$?
 check "Skill(\"review-plan\") → exit 1" 1 "$rc"
 teardown_workspace "$F4"
+
+# ---------------------------------------------------------------------------
+# Fixture 5 — Path-example in backticks is NOT a false positive
+# Agent Input: line contains a backtick path like `$PLAN_DIR/waves/003` — the
+# checker must skip it (not treat it as a required prompt key).
+# ---------------------------------------------------------------------------
+echo "Fixture 5: path-like backtick token not flagged as missing key..."
+F5=$(setup_workspace)
+mkdir -p "$F5/config"
+cat > "$F5/config/model-map.json" <<'EOF'
+{ "agent_to_capability": { "path-agent": "pattern-coder" } }
+EOF
+write_agent "$F5" "path-agent" "\`journal.md\` path + digest path. e.g. \`\$PLAN_DIR/waves/003\`"
+write_skill "$F5" "path-agent" "journal:  /tmp/c-thru/x/test-slug/journal.md
+           digest:  /tmp/c-thru/x/test-slug/digests/item.md"
+rc=0; run_checker_in "$F5" >/dev/null 2>&1 || rc=$?
+check "path backtick example — no false positive → exit 0" 0 "$rc"
+teardown_workspace "$F5"
+
+# ---------------------------------------------------------------------------
+# Fixture 6 — Declared *_out key missing in prompt → fail
+# Agent Input: line includes gaps_out (ends in _out); prompt omits it.
+# ---------------------------------------------------------------------------
+echo "Fixture 6: declared *_out key missing in prompt → fail..."
+F6=$(setup_workspace)
+mkdir -p "$F6/config"
+cat > "$F6/config/model-map.json" <<'EOF'
+{ "agent_to_capability": { "gap-agent": "pattern-coder" } }
+EOF
+write_agent "$F6" "gap-agent" "intent string + recon_path path + gaps_out path."
+write_skill "$F6" "gap-agent" "intent:      some task
+           recon_path:  /tmp/c-thru/x/test-slug/discovery/recon.md"
+rc=0; run_checker_in "$F6" >/dev/null 2>&1 || rc=$?
+check "missing *_out key (gaps_out) → exit 1" 1 "$rc"
+teardown_workspace "$F6"
+
+# ---------------------------------------------------------------------------
+# Fixture 7 — Agent-count mismatch (agents/*.md != agent_to_capability keys)
+# ---------------------------------------------------------------------------
+echo "Fixture 7: agent count mismatch → fail..."
+F7=$(setup_workspace)
+mkdir -p "$F7/config"
+# 2 agent files, but model-map has 3 agent_to_capability keys
+write_agent "$F7" "agent-a" "digest path."
+write_agent "$F7" "agent-b" "digest path."
+cat > "$F7/config/model-map.json" <<'EOF'
+{ "agent_to_capability": { "agent-a": "pattern-coder", "agent-b": "pattern-coder", "agent-c": "pattern-coder" } }
+EOF
+write_skill "$F7" "agent-a" "digest: /tmp/c-thru/x/test-slug/digests/item.md"
+rc=0; run_checker_in "$F7" >/dev/null 2>&1 || rc=$?
+check "agent count mismatch → exit 1" 1 "$rc"
+teardown_workspace "$F7"
+
+# ---------------------------------------------------------------------------
+# Fixture 8 — SKILL.md references $PLAN_DIR/reports/ but Phase 0 has no mkdir
+# ---------------------------------------------------------------------------
+echo "Fixture 8: missing Phase 0 mkdir for referenced subdir → fail..."
+F8=$(setup_workspace)
+mkdir -p "$F8/config"
+write_agent "$F8" "report-agent" "digest path."
+cat > "$F8/config/model-map.json" <<'EOF'
+{ "agent_to_capability": { "report-agent": "pattern-coder" } }
+EOF
+cat > "$F8/skills/c-thru-plan/SKILL.md" <<'EOF'
+---
+name: c-thru-plan
+---
+## Phase 0
+
+mkdir -p $PLAN_DIR/waves $PLAN_DIR/discovery
+
+## Phase 1
+
+Write output to $PLAN_DIR/reports/summary.md.
+
+```
+Agent(subagent_type: "report-agent",
+  prompt: "digest: /tmp/c-thru/x/test-slug/digests/item.md")
+```
+EOF
+rc=0; run_checker_in "$F8" >/dev/null 2>&1 || rc=$?
+check "Phase 0 missing mkdir for reports/ → exit 1" 1 "$rc"
+teardown_workspace "$F8"
 
 # ---------------------------------------------------------------------------
 # Summary
