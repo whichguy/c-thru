@@ -23,7 +23,7 @@ Compare the original intent against completed work. Produce structured gap analy
 complete | needs_items
 ```
 
-If `needs_items`, gap descriptions go directly to planner Mode 3 — be specific enough that actionable items can be written from them. Do NOT write plan items yourself.
+If `needs_items`, gap descriptions go directly to planner (signal=final_review) — be specific enough that actionable items can be written from them. Do NOT write plan items yourself.
 
 **Return:**
 ```
