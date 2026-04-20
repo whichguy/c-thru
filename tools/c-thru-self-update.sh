@@ -54,10 +54,9 @@ _grace_pid=$!
 wait "$_pull_pid" 2>/dev/null || true
 kill "$_grace_pid" 2>/dev/null; wait "$_grace_pid" 2>/dev/null || true
 
-# Hard kill any lingering git subprocesses (belt-and-suspenders; _pull_pid
-# is already waited above, but subprocesses it spawned may still be running).
-# Mirror the grace-kill pattern: launch, don't wait on the sleep, kill+collect.
-( sleep 4; kill -0 "$_pull_pid" 2>/dev/null && kill -KILL "$_pull_pid" 2>/dev/null ) 2>/dev/null &
+# Belt-and-suspenders: cancel the sleep subshell. _pull_pid is already reaped
+# by wait above so kill -KILL on it is a no-op; this just harvests the subshell.
+( sleep 4; true ) 2>/dev/null &
 _hard_pid=$!
 kill "$_hard_pid" 2>/dev/null; wait "$_hard_pid" 2>/dev/null || true
 
