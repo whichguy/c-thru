@@ -83,36 +83,11 @@ layered_profile_model_map_enabled() {
   [[ -f "$MODEL_MAP_DEFAULTS_FILE" && -f "$MODEL_MAP_OVERRIDES_FILE" ]]
 }
 
-record_model_map_git_pull_attempt() {
-  local now_epoch
-  now_epoch="$(date +%s 2>/dev/null || echo 0)"
-  mkdir -p "$(dirname "$MODEL_MAP_SYNC_STATE_FILE")"
-  printf '{\n  "last_git_pull_attempt_at": %s\n}\n' "$now_epoch" > "$MODEL_MAP_SYNC_STATE_FILE" 2>/dev/null || true
-}
-
-should_attempt_model_map_git_pull() {
-  [[ "${CLAUDE_MODEL_MAP_SKIP_GIT_PULL:-0}" != "1" ]] || return 1
-  [[ -n "$ROUTER_REPO_ROOT" && -d "$ROUTER_REPO_ROOT/.git" ]] || return 1
-  command -v git >/dev/null 2>&1 || return 1
-  [[ -f "$MODEL_MAP_DEFAULTS_FILE" ]] || return 1
-  local now_epoch last_attempt
-  now_epoch="$(date +%s 2>/dev/null || echo 0)"
-  last_attempt="$(jq -r '.last_git_pull_attempt_at // 0' "$MODEL_MAP_SYNC_STATE_FILE" 2>/dev/null || echo 0)"
-  [[ "$last_attempt" =~ ^[0-9]+$ ]] || last_attempt=0
-  (( now_epoch - last_attempt >= MODEL_MAP_GIT_PULL_MIN_RETRY_SECONDS ))
-}
-
 maybe_refresh_model_map_defaults_from_git() {
-  layered_profile_model_map_enabled || return 0
-  should_attempt_model_map_git_pull || return 0
-  record_model_map_git_pull_attempt
-  if command -v nohup >/dev/null 2>&1; then
-    nohup git -C "$ROUTER_REPO_ROOT" pull --ff-only --quiet >/dev/null 2>&1 </dev/null &
-  else
-    (
-      git -C "$ROUTER_REPO_ROOT" pull --ff-only --quiet >/dev/null 2>&1 || true
-    ) </dev/null &
-  fi
+  # Superseded by c-thru-self-update.sh (has dirty-tree guard, debounce,
+  # self_update override, and bounded logging). Kept as a no-op so any
+  # external callers don't break on older installs that reference this name.
+  true
 }
 
 sync_layered_profile_model_map() {
