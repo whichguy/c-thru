@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # c-thru proxy health check — UserPromptSubmit hook
-# Derive port from explicit env var or from ANTHROPIC_BASE_URL set by claude-router.
+# Derive port from explicit env var or from ANTHROPIC_BASE_URL set by c-thru.
 # A13: `-u` catches unset-var bugs; `-e` off so curl failure falls through to exit 2.
 set -uo pipefail
 PORT="${CLAUDE_PROXY_PORT:-}"
