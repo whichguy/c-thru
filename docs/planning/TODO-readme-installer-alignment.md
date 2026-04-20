@@ -61,3 +61,15 @@ changes that likely need to be documented/installed:
    the installer's effects cleanly.
 6. Dry-run mode (`install.sh --dry-run`) that prints what *would*
    change without mutating `~/.claude/`.
+
+## Recent changes that may require installer updates
+
+- `hookEventName` is now required in all `hookSpecificOutput` emissions
+  (Claude Code v2.1.114+). The four hook scripts (`c-thru-session-start.sh`,
+  `c-thru-classify.sh`, `c-thru-map-changed.sh`, `c-thru-proxy-health.sh`)
+  are fixed. Verify installer symlinks the updated versions and that
+  `~/.claude/settings.json` hook entries match the registered event names.
+- `c-thru-map-changed.sh` is registered as `PostToolUse` (not `FileChanged`).
+  Confirm the settings.json entry uses the correct event name.
+- Proxy `requestMeta` crash (fix: 35ccb58) — if any user has an older proxy
+  binary cached, `pkill -f claude-proxy` will force a respawn from the updated source.
