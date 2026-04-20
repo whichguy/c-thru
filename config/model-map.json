@@ -134,13 +134,13 @@
         "disconnect_model": "gemma4:e4b",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade" },
-      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",  "on_failure": "hard_fail" },
-      "orchestrator":            { "connected_model": "qwen3.5:9b",       "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade" },
+      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
+      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",  "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
+      "orchestrator":            { "connected_model": "qwen3.5:9b",       "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
       "code-analyst":            { "connected_model": "qwen3.5:9b",       "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade" },
       "pattern-coder":           { "connected_model": "qwen3.5:9b",       "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade" },
       "deep-coder":              { "connected_model": "devstral-small:2",  "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.5:27b",      "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade" },
+      "local-planner":           { "connected_model": "qwen3.5:27b",      "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
       "commit-message-generator":{ "connected_model": "qwen3.5:1.7b",     "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" }
     },
     "64gb": {
@@ -174,13 +174,13 @@
         "disconnect_model": "qwen3-coder:30b",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",      "on_failure": "cascade" },
-      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",      "on_failure": "hard_fail" },
-      "orchestrator":            { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.5:27b",      "on_failure": "cascade" },
+      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",      "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
+      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",      "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
+      "orchestrator":            { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.5:27b",      "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
       "code-analyst":            { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
       "pattern-coder":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
       "deep-coder":              { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.5:27b",      "disconnect_model": "qwen3.5:27b",      "on_failure": "cascade" },
+      "local-planner":           { "connected_model": "qwen3.5:27b",      "disconnect_model": "qwen3.5:27b",      "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
       "commit-message-generator":{ "connected_model": "qwen3.5:1.7b",     "disconnect_model": "qwen3.5:1.7b",     "on_failure": "cascade" }
     },
     "128gb": {
@@ -214,13 +214,13 @@
         "disconnect_model": "gemma4:26b-a4b",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade" },
-      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:122b",    "on_failure": "hard_fail" },
-      "orchestrator":            { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade" },
+      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
+      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:122b",    "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
+      "orchestrator":            { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
       "code-analyst":            { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
       "pattern-coder":           { "connected_model": "qwen3-coder:30b",  "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
       "deep-coder":              { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.5:27b",      "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade" },
+      "local-planner":           { "connected_model": "qwen3.5:27b",      "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
       "commit-message-generator":{ "connected_model": "qwen3.5:1.7b",     "disconnect_model": "qwen3.5:1.7b",    "on_failure": "cascade" }
     }
   },
