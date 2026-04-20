@@ -1016,7 +1016,7 @@ ensure_proxy_running() {
       ROUTER_STARTED_PROXY_PID=""
       ROUTER_PROXY_PORT=""
       ROUTER_PROXY_LOG_PATH=""
-      if [[ -n "$temp_log" && ! proxy_logging_enabled ]]; then
+      if [[ -n "$temp_log" ]] && ! proxy_logging_enabled; then
         rm -f "$temp_log"
       fi
       rm -f "$ready_pipe"
@@ -1482,8 +1482,8 @@ collect_active_profile_cloud_ollama_models() {
   [[ -f "$CONFIG" ]] || return 0
   llm_profiles_defined || return 0
 
-  local capability resolved backend_data cli_host cli_key backend_id explicit_auth local_flag rest
-  while IFS=$'\t' read -r capability resolved; do
+  local capability resolved _rec backend_data cli_host cli_key backend_id explicit_auth local_flag rest
+  while IFS=$'\t' read -r capability resolved _rec; do
     [[ -n "$resolved" ]] || continue
     model_is_cloud_designated "$resolved" || continue
     backend_data="$(resolve_ollama_backend_for_model "$resolved" || true)"
@@ -1504,19 +1504,15 @@ collect_active_profile_local_ollama_models() {
   [[ -f "$CONFIG" ]] || return 0
   llm_profiles_defined || return 0
 
-  local profile field
+  local profile
   ensure_llm_profile_context || return 0
   profile="$LLM_PROFILE_CACHE_NAME"
   [[ -n "$profile" ]] || return 0
-  if [[ "$(resolve_connectivity_mode)" == "disconnect" ]]; then
-    field="disconnect_model"
-  else
-    field="connected_model"
-  fi
-  claude_router_debug_event "ollama sweep profile profile=$profile field=$field"
+  local llm_mode; llm_mode="$(resolve_llm_mode)"
+  claude_router_debug_event "ollama sweep profile profile=$profile mode=$llm_mode"
 
-  local capability resolved backend_data cli_host cli_key backend_id
-  while IFS=$'\t' read -r capability resolved; do
+  local capability resolved _rec backend_data cli_host cli_key backend_id
+  while IFS=$'\t' read -r capability resolved _rec; do
     [[ -n "$resolved" ]] || continue
     backend_data="$(resolve_local_ollama_backend_for_model "$resolved" || true)"
     [[ -n "$backend_data" ]] || continue
