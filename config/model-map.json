@@ -337,6 +337,10 @@
     {
       "name": "claude-sonnet-4-6",
       "equivalents": ["glm-5.1:cloud", "gemma4:26b-a4b"]
+    },
+    {
+      "name": "claude-opus-4-6",
+      "equivalents": ["qwen3.5:27b", "qwen3.5:122b"]
     }
   ],
   "ollama_defaults": {
