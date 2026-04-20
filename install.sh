@@ -28,7 +28,7 @@ if [ ! -d "$TOOLS_SRC" ]; then
     exit 1
 fi
 
-chmod +x "$TOOLS_SRC/claude-router" "$TOOLS_SRC/claude-proxy" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru" "$TOOLS_SRC/claude-proxy" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/claude-proxy" "$TOOLS_SRC/llm-capabilities-mcp.js" "$TOOLS_SRC/model-map-sync.js" "$TOOLS_SRC/model-map-validate.js" "$TOOLS_SRC/model-map-edit.js" "$TOOLS_SRC/model-map-layered.js" 2>/dev/null || true
 # llm-capabilities-shared.js is a library, not executable
 chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
@@ -68,8 +68,8 @@ link_tool() {
 
 echo ""
 echo "Tools:"
-link_tool claude-router claude-router
-link_tool claude-router c-thru
+link_tool c-thru c-thru
+link_tool c-thru claude-router
 link_tool claude-proxy claude-proxy
 if command -v node >/dev/null 2>&1; then
     link_tool llm-capabilities-mcp.js llm-capabilities-mcp
@@ -214,7 +214,7 @@ add_permission() {
 install_skill() {
     local commands_dir="$CLAUDE_DIR/commands"
     local skill_file="$commands_dir/c-thru-status.md"
-    local canonical_line='Run: ~/.claude/tools/claude-router --list $ARGUMENTS'
+    local canonical_line='Run: ~/.claude/tools/c-thru --list $ARGUMENTS'
 
     mkdir -p "$commands_dir"
 
@@ -231,7 +231,7 @@ allowed-tools: "Bash"
 
 # c-thru Status
 
-Run: ~/.claude/tools/claude-router --list $ARGUMENTS
+Run: ~/.claude/tools/c-thru --list $ARGUMENTS
 SKILL_EOF
     echo -e "  ${GREEN}✅ installed skill: /c-thru-status${NC}"
 }
@@ -719,7 +719,7 @@ detect_user_config
 
 echo ""
 echo -e "${YELLOW}Quick reference:${NC}"
-echo "  ~/.claude/tools/claude-router --list   list routes / local models"
+echo "  ~/.claude/tools/c-thru --list   list routes / local models"
 echo "  ~/.claude/tools/model-map-validate     validate profile/project model-map configs"
 echo "  tail ~/.claude/proxy.*.log             troubleshoot proxy startup"
 echo "  pkill -f claude-proxy                  restart proxy after config edits"

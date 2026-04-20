@@ -21,21 +21,21 @@ rewriting path creates a silent source of drift from `config/model-map.json`.
 
 ```sh
 ./install.sh                            # symlinks tools into ~/.claude/tools/, seeds model-map
-bash -n tools/claude-router             # bash syntax check
+bash -n tools/c-thru             # bash syntax check
 node --check tools/claude-proxy         # node syntax check
 node --check tools/model-map-*.js tools/llm-capabilities-mcp.js
 node tools/model-map-validate.js config/model-map.json   # validate shipped config
 node test/model-map-v12-adapter.test.js                  # adapter regression test
-~/.claude/tools/claude-router --list    # runtime smoke-test (requires install)
+~/.claude/tools/c-thru --list    # runtime smoke-test (requires install)
 ```
 
 ## Directory Layout and Path Invariants
 
-The `tools/` + `config/` two-directory structure is **required**. `claude-router` and `claude-proxy` both compute `ROUTER_REPO_ROOT` as `$(dirname $0)/..` and read `$ROUTER_REPO_ROOT/config/model-map.json`. Do not flatten.
+The `tools/` + `config/` two-directory structure is **required**. `c-thru` and `claude-proxy` both compute `ROUTER_REPO_ROOT` as `$(dirname $0)/..` and read `$ROUTER_REPO_ROOT/config/model-map.json`. Do not flatten.
 
 ```
 tools/
-  claude-router           # bash, 2300+ lines — the entrypoint
+  c-thru                 # bash, 2300+ lines — the entrypoint
   claude-proxy            # node, stdlib-only — Anthropic→provider translation layer
   model-map-layered.js    # merges 3-tier config stack; no external deps
   model-map-validate.js   # schema validator; called by router at startup
@@ -71,7 +71,7 @@ test/
 ### Request flow
 
 ```
-claude-router (bash)
+c-thru (bash)
   ├─ reads 3-tier model-map (project/.claude/ → ~/.claude/ → config/model-map.json)
   ├─ resolves route → backend → env vars
   ├─ for Ollama backends: spawns/reuses claude-proxy (HTTP server on a free port)
@@ -128,7 +128,7 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 
 ## Proxy Lifecycle
 
-`claude-proxy` is a long-running HTTP server auto-spawned by `claude-router` when the backend needs it. The router coordinates via a `/ping` handshake on a dynamically-selected port. Logs land at `~/.claude/proxy.*.log`. Kill a stuck proxy with `pkill -f claude-proxy`.
+`claude-proxy` is a long-running HTTP server auto-spawned by `c-thru` when the backend needs it. The router coordinates via a `/ping` handshake on a dynamically-selected port. Logs land at `~/.claude/proxy.*.log`. Kill a stuck proxy with `pkill -f claude-proxy`.
 
 ## Contract integrity
 

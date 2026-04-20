@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Best-effort git self-update for c-thru. Called from claude-router at startup.
+# Best-effort git self-update for c-thru. Called from c-thru at startup.
 # Never blocks launch. Always exits 0. Protects against all offline/dirty/detached states.
 set -euo pipefail
 

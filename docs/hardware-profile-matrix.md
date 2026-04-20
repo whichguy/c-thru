@@ -23,12 +23,12 @@ The connected/disconnected split uses the existing `connected_model`/`disconnect
 
 Verify detected tier:
 ```sh
-~/.claude/tools/claude-router --list
+~/.claude/tools/c-thru --list
 ```
 
 Override for testing (e.g. simulate 48gb machine):
 ```sh
-CLAUDE_LLM_MEMORY_GB=48 ~/.claude/tools/claude-router --list
+CLAUDE_LLM_MEMORY_GB=48 ~/.claude/tools/c-thru --list
 ```
 
 ## Resolution path

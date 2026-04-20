@@ -18,6 +18,6 @@ The router reads a layered stack of `model-map.json` files and merges them:
 
 - **backends** — connection metadata (URL, auth strategy, kind).
 - **models** — logical aliases mapped to `(backend, upstream-id, capabilities)`.
-- **routes** — named presets resolved via `claude-router --route <name>`. `routes.default` is used when no flag is passed.
+- **routes** — named presets resolved via `c-thru --route <name>`. `routes.default` is used when no flag is passed.
 
 Validate with `model-map-validate <path>`. See `tools/model-map-validate.js` for the full schema and `tools/model-map-layered.js` for the merge order.

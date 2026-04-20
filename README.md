@@ -13,12 +13,12 @@ Claude Code is locked to one vendor and one billing model. Local LLMs via Ollama
 ## How it works
 
 ```
-You type: claude-router
+You type: c-thru
 
 Claude Code
     │  Anthropic Messages API (unmodified)
     ▼
-claude-router       reads model-map.json, resolves route + backend
+c-thru               reads model-map.json, resolves route + backend
     │
     ▼
 claude-proxy        translates protocol, manages Ollama, applies fallbacks
@@ -84,9 +84,9 @@ RAM is auto-detected at proxy startup via `hw-profile.js`. The same agent routes
 | 48 GB | offline | qwen3.5:27b | qwen3.5:27b | qwen3.5:27b |
 | ≤32 GB | any | qwen3.5:1.7b | qwen3.5:1.7b | qwen3.5:1.7b |
 
-Verify detected tier: `claude-router --list`
+Verify detected tier: `c-thru --list`
 
-Override for testing: `CLAUDE_LLM_MEMORY_GB=48 claude-router --list`
+Override for testing: `CLAUDE_LLM_MEMORY_GB=48 c-thru --list`
 
 ---
 
@@ -113,7 +113,7 @@ c-thru manages the Ollama fleet. You never run `ollama pull` or `ollama run` man
 **From launch to first response:**
 
 ```
-claude-router starts
+c-thru starts
     │
     ├─▶ detect hardware tier from RAM
     ├─▶ detect connectivity (connected / disconnected)
@@ -386,7 +386,7 @@ cd c-thru
 ./install.sh
 ```
 
-The installer symlinks `claude-router`, `claude-proxy`, and model-map helpers into `~/.claude/tools/`, seeds `~/.claude/model-map.json` from `config/model-map.json` on first run (never overwritten on upgrade), and registers the `llm-capabilities-mcp` server and hook scripts in `~/.claude/settings.json`.
+The installer symlinks `c-thru` (also aliased as `claude-router`), `claude-proxy`, and model-map helpers into `~/.claude/tools/`, seeds `~/.claude/model-map.json` from `config/model-map.json` on first run (never overwritten on upgrade), and registers the `llm-capabilities-mcp` server and hook scripts in `~/.claude/settings.json`.
 
 Add `~/.claude/tools` to your `PATH`:
 
@@ -400,7 +400,7 @@ Verify:
 bash -n tools/c-thru-classify.sh          # shell syntax check
 node --check tools/claude-proxy           # node syntax check
 node tools/model-map-validate.js config/model-map.json
-claude-router --list                      # runtime smoke-test
+c-thru --list                      # runtime smoke-test
 ```
 
 ---
@@ -408,10 +408,10 @@ claude-router --list                      # runtime smoke-test
 ## Usage
 
 ```sh
-claude-router                             # routes.default, or transparent Anthropic fallback
-claude-router --route background          # named route from model-map
-claude-router --model devstral-small:2   # explicit Ollama model
-claude-router --list                      # show resolved profile + all routes
+c-thru                             # routes.default, or transparent Anthropic fallback
+c-thru --route background          # named route from model-map
+c-thru --model devstral-small:2   # explicit Ollama model
+c-thru --list                      # show resolved profile + all routes
 /c-thru-plan <intent>                     # launch wave-based task orchestrator
 ```
 
