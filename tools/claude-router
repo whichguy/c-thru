@@ -121,6 +121,16 @@ sync_layered_profile_model_map() {
   [[ -f "$sync_tool" ]] || return 0
   command -v node >/dev/null 2>&1 || return 0
   node "$sync_tool" "$MODEL_MAP_DEFAULTS_FILE" "$MODEL_MAP_OVERRIDES_FILE" "$CLAUDE_PROFILE_DIR/model-map.json" "$CLAUDE_PROFILE_DIR/model-map.json" >/dev/null
+  # Apply recommended-mappings.json as lowest-precedence tier (no-op if absent)
+  local rec_tool="$ROUTER_SELF_DIR/model-map-apply-recommendations.js"
+  if [[ -f "$rec_tool" && -n "$ROUTER_REPO_ROOT" ]]; then
+    local _tmp="$CLAUDE_PROFILE_DIR/model-map.json.rec.$$"
+    if node "$rec_tool" "$ROUTER_REPO_ROOT" "$CLAUDE_PROFILE_DIR/model-map.json" > "$_tmp" 2>/dev/null; then
+      mv "$_tmp" "$CLAUDE_PROFILE_DIR/model-map.json"
+    else
+      rm -f "$_tmp"
+    fi
+  fi
 }
 
 find_parent_model_map() {
@@ -407,17 +417,36 @@ collect_active_profile_capability_assignments() {
   [[ -f "$CONFIG" ]] || return 0
   llm_profiles_defined || return 0
 
-  local profile mode field slot requested resolved
+  local profile llm_mode slot requested resolved rec_suffix
   ensure_llm_profile_context || return 0
   profile="$LLM_PROFILE_CACHE_NAME"
   [[ -n "$profile" ]] || return 0
-  mode="$(resolve_connectivity_mode)"
-  [[ "$mode" == "disconnect" ]] && field="disconnect_model" || field="connected_model"
+  llm_mode="$(resolve_llm_mode)"
+
+  # Load rec map for (rec) suffix: rec_map[slot] = recommended connected_model for this tier
+  local rec_file="$ROUTER_REPO_ROOT/config/recommended-mappings.json"
+  declare -A _rec_map=()
+  if [[ -f "$rec_file" ]]; then
+    while IFS=$'\t' read -r cap model; do
+      [[ -n "$cap" && -n "$model" ]] && _rec_map["$cap"]="$model"
+    done < <(jq -r --arg tier "$profile" '
+      .recommendations // {} | to_entries[] |
+      select(.value[$tier] != null) |
+      [.key, .value[$tier]] | @tsv
+    ' "$rec_file" 2>/dev/null)
+  fi
 
   while IFS= read -r slot; do
     [[ -n "$slot" ]] || continue
-    requested="$(jq -r --arg p "$profile" --arg key "$slot" --arg field "$field" '
-      (.llm_profiles // {})[$p][$key][$field] // empty
+    # llm_mode-aware resolution: mirrors resolveProfileModel() in claude-proxy
+    requested="$(jq -r --arg p "$profile" --arg key "$slot" --arg mode "$llm_mode" '
+      (.llm_profiles // {})[$p][$key] as $e |
+      if $e == null then empty
+      elif ($e.modes // {}) | has($mode) then $e.modes[$mode]
+      elif $mode == "offline" then $e.disconnect_model
+      elif $mode == "semi-offload" or $mode == "cloud-judge-only" then $e.disconnect_model
+      else $e.connected_model
+      end // empty
     ' "$CONFIG" 2>/dev/null)"
     [[ -n "$requested" && "$requested" != "null" ]] || continue
     looks_like_model_pattern_key "$requested" && continue
@@ -426,7 +455,9 @@ collect_active_profile_capability_assignments() {
       resolved="$(resolve_profile_alias_model "$resolved")"
     fi
     [[ -n "$resolved" ]] || continue
-    printf '%s\t%s\n' "$slot" "$resolved"
+    rec_suffix=""
+    [[ "${_rec_map[$slot]+_}" == "_" && "${_rec_map[$slot]}" == "$requested" ]] && rec_suffix="(rec)"
+    printf '%s\t%s\t%s\n' "$slot" "$resolved" "$rec_suffix"
   done < <(profile_capability_slots)
 }
 
@@ -435,11 +466,11 @@ log_llm_profile_selection() {
   [[ -f "$CONFIG" ]] || return 0
   llm_profiles_defined || return 0
 
-  local profile mode source summary_context launch_model="$1"
+  local profile llm_mode source summary_context launch_model="$1"
   ensure_llm_profile_context || return 0
   profile="$LLM_PROFILE_CACHE_NAME"
   [[ -n "$profile" ]] || return 0
-  mode="$(resolve_connectivity_mode)"
+  llm_mode="$(resolve_llm_mode)"
   source="${LLM_PROFILE_CACHE_SOURCE:-config}"
 
   case "$source" in
@@ -457,11 +488,11 @@ log_llm_profile_selection() {
       ;;
   esac
 
-  echo "claude-router: form factor profile '$profile' ($summary_context, connectivity=$mode)" >&2
+  echo "claude-router: form factor profile '$profile' ($summary_context, mode=$llm_mode)" >&2
 
   local plan_parts=()
-  local slot model
-  while IFS=$'\t' read -r slot model; do
+  local slot model _rec
+  while IFS=$'\t' read -r slot model _rec; do
     [[ -n "$slot" && -n "$model" ]] || continue
     plan_parts+=("$slot=$model")
   done < <(collect_active_profile_capability_assignments)
@@ -2168,7 +2199,7 @@ print_active_profile_table() {
   ensure_llm_profile_context || return 0
   profile="$LLM_PROFILE_CACHE_NAME"
   [[ -n "$profile" ]] || return 0
-  mode="$(resolve_connectivity_mode)"
+  local llm_mode; llm_mode="$(resolve_llm_mode)"
   memory_gb="${LLM_PROFILE_CACHE_MEMORY_GB:-}"
   source="${LLM_PROFILE_CACHE_SOURCE:-auto}"
 
@@ -2179,13 +2210,13 @@ print_active_profile_table() {
     *)      summary_context="$source" ;;
   esac
 
-  echo "Active hardware profile: $profile ($summary_context, connectivity=$mode)"
+  echo "Active hardware profile: $profile ($summary_context, mode=$llm_mode)"
   echo ""
 
-  local slot model
-  while IFS=$'\t' read -r slot model; do
+  local slot model rec_suffix
+  while IFS=$'\t' read -r slot model rec_suffix; do
     [[ -n "$slot" && -n "$model" ]] || continue
-    printf '  %-14s  %s\n' "$slot" "$model"
+    printf '  %-14s  %-40s%s\n' "$slot" "$model" "${rec_suffix:+  $rec_suffix}"
   done < <(collect_active_profile_capability_assignments)
   echo ""
 }
@@ -2211,6 +2242,14 @@ show_models() {
   fi
 
   echo "Any other model name is assumed to be available from local Ollama ($ollama_http_base)."
+
+  # Update log footer
+  local update_log="$ROUTER_REPO_ROOT/.c-thru-update.log"
+  if [[ -f "$update_log" ]]; then
+    local last_update
+    last_update="$(tail -1 "$update_log" 2>/dev/null || true)"
+    [[ -n "$last_update" ]] && echo "" && echo "Last self-update: $last_update"
+  fi
 
   # Backend health — query running proxy if one is up (requires CLAUDE_PROXY_PORT or prior session start)
   local proxy_port=""
