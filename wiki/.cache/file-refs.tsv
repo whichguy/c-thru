@@ -1,0 +1,10 @@
+CLAUDE.md	declared-rewrites,hook-model-rewriting-removal
+config/model-map.json	capability-profile-model-layers,declared-rewrites,fallback-event-system,hook-model-rewriting-removal
+docs/planning/TODO-header-regex-fallback.md	capability-profile-model-layers
+docs/planning/TODO-readme-installer-alignment.md	capability-profile-model-layers,readme-installer-alignment
+install.sh	c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,readme-installer-alignment
+README.md	readme-installer-alignment
+test/model-map-v12-adapter.test.js	capability-profile-model-layers
+tools/c-thru-statusline-overlay.sh	c-thru-statusline
+tools/c-thru-statusline.sh	c-thru-statusline
+tools/c-thru-stop-hook.sh	c-thru-statusline
