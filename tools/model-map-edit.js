@@ -56,6 +56,45 @@ function applyUpdates(config, spec) {
     next.llm_active_profile = spec.active_profile;
   }
 
+  const LLM_MODES = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline']);
+  if (spec.llm_mode != null) {
+    if (typeof spec.llm_mode !== 'string' || !LLM_MODES.has(spec.llm_mode)) {
+      fail(`'llm_mode' must be one of: ${[...LLM_MODES].join(', ')}`);
+    }
+    next.llm_mode = spec.llm_mode;
+  }
+
+  if (spec.self_update != null) {
+    if (typeof spec.self_update !== 'boolean') fail("'self_update' must be a boolean");
+    next.self_update = spec.self_update;
+  }
+
+  if (spec.backends != null) {
+    if (!isObject(spec.backends)) fail("'backends' update payload must be an object");
+    next.backends = isObject(next.backends) ? { ...next.backends } : {};
+    for (const [name, val] of Object.entries(spec.backends)) {
+      if (val === null) {
+        delete next.backends[name];
+      } else {
+        if (!isObject(val)) fail(`backend '${name}' must be an object`);
+        next.backends[name] = val;
+      }
+    }
+  }
+
+  if (spec.model_routes != null) {
+    if (!isObject(spec.model_routes)) fail("'model_routes' update payload must be an object");
+    next.model_routes = isObject(next.model_routes) ? { ...next.model_routes } : {};
+    for (const [model, backendOrNull] of Object.entries(spec.model_routes)) {
+      if (backendOrNull === null) {
+        delete next.model_routes[model];
+      } else {
+        if (typeof backendOrNull !== 'string' || !backendOrNull.trim()) fail(`model_routes['${model}'] must be a non-empty string or null`);
+        next.model_routes[model] = backendOrNull;
+      }
+    }
+  }
+
   validateConfig(next);
   return next;
 }
