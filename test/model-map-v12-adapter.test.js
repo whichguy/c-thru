@@ -160,5 +160,75 @@ console.log('\n4. Shipped config/model-map.json passes validator');
   }
 }
 
+// ── Test 5: llm_mode enum validation ──────────────────────────────────
+console.log('\n5. llm_mode enum validation');
+{
+  const { validateConfig } = require('../tools/model-map-validate.js');
+  const base = {
+    llm_profiles: { '64gb': {
+      default: { connected_model: 'x', disconnect_model: 'x' },
+      classifier: { connected_model: 'x', disconnect_model: 'x' },
+      explorer: { connected_model: 'x', disconnect_model: 'x' },
+      reviewer: { connected_model: 'x', disconnect_model: 'x' },
+      workhorse: { connected_model: 'x', disconnect_model: 'x' },
+      coder: { connected_model: 'x', disconnect_model: 'x' },
+    }},
+  };
+  for (const m of ['connected', 'semi-offload', 'cloud-judge-only', 'offline']) {
+    const errs = [];
+    validateConfig({ ...base, llm_mode: m }, errs);
+    assert(errs.length === 0, `llm_mode '${m}' is valid`);
+  }
+  const badErrs = [];
+  validateConfig({ ...base, llm_mode: 'disconnect' }, badErrs);
+  assert(badErrs.length > 0, "llm_mode 'disconnect' (legacy) is rejected");
+}
+
+// ── Test 6: modes sub-map key validation ──────────────────────────────
+console.log('\n6. modes sub-map keys are validated against llm_mode enum');
+{
+  const { validateConfig } = require('../tools/model-map-validate.js');
+  const withModes = {
+    llm_profiles: { '64gb': {
+      default: { connected_model: 'x', disconnect_model: 'x' },
+      classifier: { connected_model: 'x', disconnect_model: 'x' },
+      explorer: { connected_model: 'x', disconnect_model: 'x' },
+      reviewer: { connected_model: 'x', disconnect_model: 'x' },
+      workhorse: { connected_model: 'x', disconnect_model: 'x' },
+      coder: { connected_model: 'x', disconnect_model: 'x' },
+      judge: { connected_model: 'a', disconnect_model: 'b', modes: { 'semi-offload': 'a', 'cloud-judge-only': 'a' } },
+    }},
+  };
+  const okErrs = [];
+  validateConfig(withModes, okErrs);
+  assert(okErrs.length === 0, 'valid modes sub-map passes validation');
+
+  const badModes = JSON.parse(JSON.stringify(withModes));
+  badModes.llm_profiles['64gb'].judge.modes['bad-mode'] = 'a';
+  const badErrs = [];
+  validateConfig(badModes, badErrs);
+  assert(badErrs.length > 0, 'invalid modes key is rejected');
+}
+
+// ── Test 7: llm_connectivity_mode: "disconnect" back-compat ───────────
+console.log('\n7. llm_connectivity_mode: "disconnect" still validates (back-compat)');
+{
+  const { validateConfig } = require('../tools/model-map-validate.js');
+  const legacy = {
+    llm_connectivity_mode: 'disconnect',
+    llm_profiles: { '64gb': {
+      default: { connected_model: 'x', disconnect_model: 'x' },
+      classifier: { connected_model: 'x', disconnect_model: 'x' },
+      explorer: { connected_model: 'x', disconnect_model: 'x' },
+      reviewer: { connected_model: 'x', disconnect_model: 'x' },
+      workhorse: { connected_model: 'x', disconnect_model: 'x' },
+      coder: { connected_model: 'x', disconnect_model: 'x' },
+    }},
+  };
+  const errs = [];
+  validateConfig(legacy, errs);
+  assert(errs.length === 0, 'llm_connectivity_mode: "disconnect" validates without errors (back-compat)');
+}
+
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

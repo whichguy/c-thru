@@ -398,9 +398,43 @@ function resolveProfileName() {
   return configured === 'auto' ? detectMemoryProfile() : configured;
 }
 
+const LLM_MODE_ENUM = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline']);
+
+function resolveLlmMode() {
+  // Precedence: CLAUDE_LLM_MODE → CLAUDE_CONNECTIVITY_MODE (legacy) → CONFIG.llm_mode → CONFIG.llm_connectivity_mode (legacy) → 'connected'
+  const envMode = process.env.CLAUDE_LLM_MODE;
+  if (envMode) {
+    if (!LLM_MODE_ENUM.has(envMode)) {
+      process.stderr.write(`claude-proxy: unknown CLAUDE_LLM_MODE '${envMode}', ignoring\n`);
+    } else {
+      return envMode;
+    }
+  }
+  const legacyEnv = process.env.CLAUDE_CONNECTIVITY_MODE || process.env.CLAUDE_LLM_CONNECTIVITY_MODE;
+  if (legacyEnv) {
+    return legacyEnv === 'disconnect' ? 'offline' : 'connected';
+  }
+  if (CONFIG.llm_mode && LLM_MODE_ENUM.has(CONFIG.llm_mode)) return CONFIG.llm_mode;
+  if (CONFIG.llm_connectivity_mode) return CONFIG.llm_connectivity_mode === 'disconnect' ? 'offline' : 'connected';
+  return 'connected';
+}
+
+// Kept for internal callers that still use the old name during transition.
 function resolveConnectivityMode() {
-  const mode = process.env.CLAUDE_CONNECTIVITY_MODE || process.env.CLAUDE_LLM_CONNECTIVITY_MODE || CONFIG.llm_connectivity_mode || 'connected';
-  return mode === 'disconnect' ? 'disconnect' : 'connected';
+  const m = resolveLlmMode();
+  return m === 'offline' ? 'disconnect' : 'connected';
+}
+
+function resolveProfileModel(entry, mode) {
+  // llm_mode: <mode> → model selection from profile entry
+  if (entry.modes && Object.prototype.hasOwnProperty.call(entry.modes, mode)) {
+    return entry.modes[mode];
+  }
+  if (mode === 'offline') return entry.disconnect_model;
+  if (mode === 'connected') return entry.connected_model;
+  // semi-offload and cloud-judge-only default to local unless modes[] overrides
+  if (mode === 'semi-offload' || mode === 'cloud-judge-only') return entry.disconnect_model;
+  return entry.connected_model; // conservative default for unknown modes
 }
 
 // Returns the capability alias for a given model name via 2-hop graph traversal:
@@ -425,8 +459,8 @@ function resolveLogicalAlias(model) {
   if (!profile) return model;
   const entry = profile[profileAliasKey(capAlias)];
   if (!entry || typeof entry !== 'object') return model;
-  const field = resolveConnectivityMode() === 'disconnect' ? 'disconnect_model' : 'connected_model';
-  return typeof entry[field] === 'string' && entry[field] ? entry[field] : model;
+  const resolved = resolveProfileModel(entry, resolveLlmMode());
+  return typeof resolved === 'string' && resolved ? resolved : model;
 }
 
 // ── Request stats tracking ─────────────────────────────────────────────
@@ -1224,6 +1258,8 @@ function classifyError(statusCode, headers, bodyText = '') {
   const body = String(bodyText || '').toLowerCase();
   if (body.includes('credits exhausted') || body.includes('account quota') || body.includes('insufficient credits')) return 'account_quota';
   if (body.includes('context length exceeded') || body.includes('context limit') || body.includes('too many tokens')) return 'context_limit';
+  if (statusCode === 400 && /credit balance|insufficient credit/i.test(bodyText || '')) return 'account_quota';
+  if (statusCode === 401) return 'account_quota'; // invalid / revoked key
   if (statusCode === 429) return 'rate_limit';
   if (statusCode === 402 || statusCode === 403) return 'account_quota';
   if (statusCode === 413) return 'context_limit';
@@ -1435,6 +1471,8 @@ function attachFatalCallTimeout(up, res, targetUrl, timeoutMs, state) {
   return clear;
 }
 
+const BACKEND_SIGIL_RE = /^(.+)@([A-Za-z0-9_-]+)$/;
+
 function resolveBackend(model) {
   if (model == null || typeof model !== 'string' || !model.trim()) {
     return { error: 'model is required', status: 400 };
@@ -1448,6 +1486,17 @@ function resolveBackend(model) {
   const afterRoute = resolveRouteModel(model);
   const terminalModel = resolveLogicalAlias(afterRoute);
   const logicalRole = resolveCapabilityAlias(afterRoute);
+
+  // 1a. @<backend> sigil: "model@backend_id" binds directly to named backend
+  const sigilMatch = terminalModel.match(BACKEND_SIGIL_RE);
+  if (sigilMatch) {
+    const [, baseModel, backendId] = sigilMatch;
+    if (backends[backendId]) {
+      // Strip the @suffix — it is a routing sigil, not part of the model name
+      return { backend: { id: backendId, ...backends[backendId] }, effectiveModel: baseModel, logicalRole };
+    }
+    return { error: `@backend sigil '${backendId}' in '${terminalModel}' is not a declared backend`, status: 500, extra: { terminal_model: terminalModel } };
+  }
 
   // 2. Try exact match in model_routes
   if (modelRoutes[terminalModel] !== undefined) {

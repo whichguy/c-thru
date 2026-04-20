@@ -27,6 +27,8 @@ const CAPABILITY_KEYS = new Set([
   'hard_reasoning',
 ]);
 const CONNECTIVITY_MODES = new Set(['connected', 'disconnect']);
+const BACKEND_SIGIL_RE = /^(.+)@([A-Za-z0-9_-]+)$/;
+const LLM_MODES = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline']);
 
 function fail(message) {
   console.error(`model-map-validate: ${message}`);
@@ -153,8 +155,20 @@ function validateConfig(config, _errors) {
     }
   }
 
-  if (config.llm_connectivity_mode != null && !CONNECTIVITY_MODES.has(config.llm_connectivity_mode)) {
-    report("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
+  if (config.llm_mode != null && !LLM_MODES.has(config.llm_mode)) {
+    report(`'llm_mode' must be one of: ${[...LLM_MODES].join(', ')}`);
+  }
+
+  if (config.llm_connectivity_mode != null) {
+    if (!CONNECTIVITY_MODES.has(config.llm_connectivity_mode)) {
+      report("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
+    } else if (config.llm_mode == null) {
+      // Non-fatal migration hint — printed to stderr but does not fail validation
+      const warn = typeof _errors === 'object'
+        ? (m) => console.warn(`model-map-validate: warning: ${m}`)
+        : (m) => console.warn(`model-map-validate: warning: ${m}`);
+      warn("'llm_connectivity_mode' is deprecated; migrate to 'llm_mode' (connected|semi-offload|cloud-judge-only|offline)");
+    }
   }
 
   if (config.llm_active_profile != null) {
@@ -178,6 +192,21 @@ function validateConfig(config, _errors) {
             }
             if (typeof profileValue[aliasName].disconnect_model !== 'string' || !profileValue[aliasName].disconnect_model.trim()) {
               report(`'llm_profiles.${profileName}.${aliasName}.disconnect_model' must be a non-empty string`);
+            }
+            const modesEntry = profileValue[aliasName].modes;
+            if (modesEntry != null) {
+              if (!isObject(modesEntry)) {
+                report(`'llm_profiles.${profileName}.${aliasName}.modes' must be an object`);
+              } else {
+                for (const modeKey of Object.keys(modesEntry)) {
+                  if (!LLM_MODES.has(modeKey)) {
+                    report(`'llm_profiles.${profileName}.${aliasName}.modes.${modeKey}' is not a valid llm_mode (expected one of: ${[...LLM_MODES].join(', ')})`);
+                  }
+                  if (typeof modesEntry[modeKey] !== 'string' || !modesEntry[modeKey].trim()) {
+                    report(`'llm_profiles.${profileName}.${aliasName}.modes.${modeKey}' must be a non-empty string`);
+                  }
+                }
+              }
             }
           }
         }
@@ -210,6 +239,18 @@ function validateConfig(config, _errors) {
       if (!isObject(strategy)) report(`'fallback_strategies.${modelName}' must be an object`);
     }
     try { validateFallbackGraph(config); } catch (e) { report(e.message); }
+  }
+
+  if (config.model_routes != null && isObject(config.model_routes) && isObject(config.backends)) {
+    for (const [modelKey] of Object.entries(config.model_routes)) {
+      const sigilMatch = modelKey.match(BACKEND_SIGIL_RE);
+      if (sigilMatch) {
+        const [, , backendId] = sigilMatch;
+        if (!config.backends[backendId]) {
+          report(`model_routes key '${modelKey}' references @backend '${backendId}' which is not declared in backends`);
+        }
+      }
+    }
   }
 
   if (config.model_overrides != null) {
