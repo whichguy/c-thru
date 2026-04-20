@@ -54,12 +54,6 @@ _grace_pid=$!
 wait "$_pull_pid" 2>/dev/null || true
 kill "$_grace_pid" 2>/dev/null; wait "$_grace_pid" 2>/dev/null || true
 
-# Belt-and-suspenders: cancel the sleep subshell. _pull_pid is already reaped
-# by wait above so kill -KILL on it is a no-op; this just harvests the subshell.
-( sleep 4; true ) 2>/dev/null &
-_hard_pid=$!
-kill "$_hard_pid" 2>/dev/null; wait "$_hard_pid" 2>/dev/null || true
-
 _new_sha="$(git rev-parse HEAD 2>/dev/null || true)"
 
 # Append bounded log entry on fast-forward (max 100 lines)
