@@ -272,6 +272,7 @@ a. Buffer dep_discovery updates for affected pending items (target_resources, no
 b. Buffer `[x]` markings for completed items (wave: NNN, produced: [paths]).
 
    Write current.md atomically (tmp→rename) with both (a) and (b) applied together — never partial-write.
+   After writing current.md, regenerate INDEX.md: scan section headings in current.md, record `<section>: <start>-<end>` one per line. INDEX.md must be fresh before any agent call that receives it as input.
 
 c. Compute newly-ready items: items where all `depends_on` entries are now `[x]`.
 

@@ -24,6 +24,10 @@ Input: `current.md` path + `signal` + `wave_summary` path + `affected_items` lis
 8. Write `current.md` atomically (tmp→rename): only affected items modified. `## Outcome` and `[x]` items untouched.
 9. If no ready items: return `VERDICT: done`.
 
+**Write:**
+- `current.md` in place (atomically via tmp→rename)
+- `INDEX.md` alongside it: `<section name>: <start>-<end>` one per line. Regenerate after every current.md write.
+
 **[x] items immutable:** never amend, restructure, or remove completed items.
 
 **Do not add new items.** If dep_discoveries imply a blocking prerequisite not in the plan, emit it in SUMMARY for user review — do not add it autonomously. Scope additions require cloud judge.

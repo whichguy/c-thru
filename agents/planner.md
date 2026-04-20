@@ -82,7 +82,9 @@ Append gap items only. New items must declare `depends_on` on relevant complete 
 
 **After any write:** emit `## Plan delta` — added/removed/changed items and dep-graph changes.
 
-**Write:** `current.md` in place (atomically via tmp→rename).
+**Write:**
+- `current.md` in place (atomically via tmp→rename)
+- `INDEX.md` alongside it: `<section name>: <start>-<end>` one per line (line numbers, no `L` prefix). Regenerate after every current.md write so downstream agents (review-plan, final-reviewer) get accurate line ranges.
 
 **Return (these lines only):**
 ```
