@@ -54,6 +54,11 @@ vs required status. Check 3 would WARN (not FAIL) for optional tokens absent fro
 invocation. Check 7 would still FAIL if a caller passes a key that is neither required nor
 optional in the Input line. This also unblocks Check 7 coverage for multi-mode agents.
 
+**Priority elevated (PR #24):** The unified planner refactor required 3 Input: lines
+(multi-mode workaround) specifically because optional signal-specific keys have no
+`[optional]` notation. Without this item, every signal-based agent will leave its
+invocations unvalidated by Checks 3 and 7.
+
 ---
 
 ### Item 3 — Extend Check 3/7 to scan plan-orchestrator.md (COVERAGE-GAP)
@@ -106,7 +111,7 @@ should know which pattern to follow by default. Add a "Response conventions" sec
 
 ---
 
-### Item 6 — Add signal-based multi-mode matching to Checks 3 and 7 (SIGNAL-MODE-GAP)
+### Item 7 — Add signal-based multi-mode matching to Checks 3 and 7 (SIGNAL-MODE-GAP)
 
 **File:** `tools/c-thru-contract-check.sh`
 
@@ -123,3 +128,61 @@ signal-based invocations are unvalidated.
 **Fix:** Extend `awk_agent_blocks` to emit a synthetic `SIGNALKEY:<value>` token when
 `signal:` key is present in prompt. Extend `is_multi_mode` to detect `## Signal N` headers
 in addition to `## Mode N`. Match invocations to signal sections by SIGNALKEY token.
+
+---
+
+### Item 8 — Add artifact-production validation: Check 8 (COVERAGE-GAP)
+
+**File:** `tools/c-thru-contract-check.sh`
+
+**Problem discovered in:** refactor/unify-planner-local-first (PR #24)
+
+Checks 3 and 7 validate that agents *receive* declared input keys (prompt-key ↔
+Input: alignment). There is no symmetric check that agents *produce* the files their
+callers expect.
+
+During the unified planner refactor, `planner.md`'s Write section was narrowed to
+`current.md` only. But `review-plan.md` and `final-reviewer.md` declare `INDEX.md`
+in their Input: lines, and SKILL.md passes `INDEX: $PLAN_DIR/INDEX.md` to both.
+When planner stopped writing INDEX.md, no check caught it — the regression was found
+only by advisor review.
+
+**Proposal: Check 8 — Write/Read cross-agent artifact validation**
+
+For each agent with a `**Write:**` section: extract the filenames it declares.
+For each caller (SKILL.md, plan-orchestrator.md) that passes those filenames as
+prompt keys: confirm the writing agent is called earlier in the same phase.
+FAIL when an agent receives a file as input that no upstream agent in the call
+sequence is declared to write.
+
+**Scope of extraction:** The `**Write:**` section in agent files uses varied formats
+(bullet lists of paths, prose with path in backticks). The awk extractor should match
+common patterns: backtick-quoted paths, `path/to/file.ext` tokens following write-verb
+words (Write, Writes, write). False negatives (missed Write entries) are acceptable;
+false positives are not.
+
+**Limitations:** Does not validate runtime-derived paths (e.g. `$wave_dir/...`) —
+restrict to plan-dir-level files like `INDEX.md`, `current.md`, `final-review.md`.
+
+---
+
+### Item 9 — Derive PROFILE_KEYS from llm_profiles dynamically (MAINTENANCE-GAP)
+
+**File:** `tools/model-map-validate.js`
+
+**Problem discovered in:** refactor/unify-planner-local-first (PR #24)
+
+`PROFILE_KEYS` on line 7 is a hardcoded list of allowed capability alias names used
+to validate `agent_to_capability` values. Adding new aliases (`local-planner`,
+`commit-message-generator`) in PR #24 required a manual update to this list —
+a step easy to forget and not caught by any test until `node tools/model-map-validate.js`
+is run against the config.
+
+**Fix:** Replace the hardcoded constant with a dynamic derivation from the config
+being validated. Derive allowed aliases by reading `Object.keys(config.llm_profiles[<any-profile>])`
+since every valid alias must appear in at least one profile. Use union of all profiles'
+keys to be safe. Keep the existing validator export (`PROFILE_KEYS`) updated dynamically
+so tests still work.
+
+**Validation:** After the fix, adding a new alias to `llm_profiles` automatically
+makes it valid in `agent_to_capability` without touching the validator.
