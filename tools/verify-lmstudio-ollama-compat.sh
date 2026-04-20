@@ -119,7 +119,7 @@ if [[ $FAIL -eq 0 && $SKIP -eq 0 ]]; then
   echo "RESULT: LM Studio is Ollama-compat — use kind:\"ollama\" for lmstudio_local backend."
   echo "        Add to model-map.json:"
   echo "          \"lmstudio_local\": { \"kind\": \"ollama\", \"url\": \"$BASE\" }"
-elif echo "$gen_resp ${msg_resp:-}" | grep -q "FAIL\|ERROR" 2>/dev/null; then
+elif echo "${gen_resp:-} ${msg_resp:-}" | grep -q "FAIL\|ERROR" 2>/dev/null; then
   echo "RESULT: /v1/messages not supported. LM Studio only speaks OpenAI format."
   echo "        kind:\"openai\" is required (full protocol translation — deferred in plan §3)."
   echo "        Until kind:\"openai\" is implemented, use OpenRouter as the cloud proxy instead."
