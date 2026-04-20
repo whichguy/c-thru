@@ -5,23 +5,35 @@ were out-of-scope for that work but should not be lost.
 
 ---
 
-### Item 1 — Fix awk hyphen gap in Checks 3 and 7 (CHECK-REGRESSION)
+### ~~Item 1 — Fix awk hyphen gap in Checks 3 and 7~~ ✓ DONE (PR #23)
+
+---
+
+### Item 1b — Add F12b negative companion fixture (TEST-COVERAGE)
 
 **File:** `tools/c-thru-contract-check.sh`
 
-The awk key-extractor pattern `[a-zA-Z][a-zA-Z0-9_.]+` does not include `-`.
-Hyphenated prompt keys (`replan-brief:`, `final-review:`, `artifact_INDEX:`) are
-silently dropped from both Check 3 (declared-but-not-passed) and Check 7
-(passed-but-not-declared). `replan-brief:` in the Mode 2 post-wave invocation has
-never been validated end-to-end.
+**File:** `test/c-thru-contract-check.test.sh`
 
-Fix: extend the character class to `[a-zA-Z][a-zA-Z0-9_.-]+` in the awk key-extraction
-patterns (both the `prompt:` line handler and the key-value line handler). The `tr '.-' '__'`
-normalization already handles `-` → `_`, so token comparison works once keys are extracted.
+F12 (PASS case) was added in PR #23. The reviewer noted a missing negative companion:
+agent declares `other-key` only, caller passes `replan-brief:` → Check 7 should FAIL.
+F2 provides general missing-key coverage but does not cover the hyphenated-key
+false-negative path specifically. Low priority but closes the regression loop.
 
-Add fixture F12: agent declares `` `replan-brief` `` in backtick Input; caller passes
-`replan-brief: ...` key; checker should PASS (currently drops the key → silent false-negative;
-fixture locks in correct behavior after fix).
+---
+
+### Item 6 — Fixture test harness: patched SKILL.md needs STATUS branch coverage (TEST-INFRA)
+
+**File:** `test/c-thru-contract-check.test.sh`
+
+Discovered while writing F12: Check 6 (STATUS/VERDICT coverage) fires on fixture SKILL.md
+files that declare `STATUS: COMPLETE|ERROR` in the agent's Return block but don't include
+an ERROR-handling branch in the SKILL.md caller. The fixture had to add `"If hyphen-agent
+returns ERROR, abort."` to pass Check 6. This is correct behavior, but it means every future
+fixture must remember to include STATUS branches or it will fail Check 6 rather than the
+check under test — masking real failures. Consider adding a `write_skill` helper to
+`setup_workspace` that generates a minimal SKILL.md with all STATUS values covered, so
+fixture authors only override what they're testing.
 
 ---
 
@@ -41,6 +53,11 @@ Update `agent_tokens()` to strip `[optional]` before token extraction and track 
 vs required status. Check 3 would WARN (not FAIL) for optional tokens absent from an
 invocation. Check 7 would still FAIL if a caller passes a key that is neither required nor
 optional in the Input line. This also unblocks Check 7 coverage for multi-mode agents.
+
+**Priority elevated (PR #24):** The unified planner refactor required 3 Input: lines
+(multi-mode workaround) specifically because optional signal-specific keys have no
+`[optional]` notation. Without this item, every signal-based agent will leave its
+invocations unvalidated by Checks 3 and 7.
 
 ---
 
@@ -91,3 +108,81 @@ should know which pattern to follow by default. Add a "Response conventions" sec
   final-reviewer, discovery-advisor, etc.): write files directly and return paths in STATUS block.
 - **Distinguishing heuristic:** if the agent is dispatched in a loop over plan items and
   produces per-item artifacts → W1. If dispatched once per phase → direct-write.
+
+---
+
+### Item 7 — Add signal-based multi-mode matching to Checks 3 and 7 (SIGNAL-MODE-GAP)
+
+**File:** `tools/c-thru-contract-check.sh`
+
+**Context:** The refactored `planner` agent uses `## Signal 1/2/3` headers with three
+`Input:` lines instead of `## Mode N` headers. The contract checker's multi-mode detection
+(`is_multi_mode`) counts `Input:` lines correctly, so planner is treated as multi-mode.
+However, Check 3 matches invocations to mode sections via `mode: N` synthetic token in the
+prompt — not via `signal:` key. Result: all planner invocations generate WARN (no mode: key)
+and are skipped. Check 7 is skipped entirely for multi-mode agents.
+
+**Impact:** Low — the WARNs are non-fatal and the actual key alignment is correct. But
+signal-based invocations are unvalidated.
+
+**Fix:** Extend `awk_agent_blocks` to emit a synthetic `SIGNALKEY:<value>` token when
+`signal:` key is present in prompt. Extend `is_multi_mode` to detect `## Signal N` headers
+in addition to `## Mode N`. Match invocations to signal sections by SIGNALKEY token.
+
+---
+
+### Item 8 — Add artifact-production validation: Check 8 (COVERAGE-GAP)
+
+**File:** `tools/c-thru-contract-check.sh`
+
+**Problem discovered in:** refactor/unify-planner-local-first (PR #24)
+
+Checks 3 and 7 validate that agents *receive* declared input keys (prompt-key ↔
+Input: alignment). There is no symmetric check that agents *produce* the files their
+callers expect.
+
+During the unified planner refactor, `planner.md`'s Write section was narrowed to
+`current.md` only. But `review-plan.md` and `final-reviewer.md` declare `INDEX.md`
+in their Input: lines, and SKILL.md passes `INDEX: $PLAN_DIR/INDEX.md` to both.
+When planner stopped writing INDEX.md, no check caught it — the regression was found
+only by advisor review.
+
+**Proposal: Check 8 — Write/Read cross-agent artifact validation**
+
+For each agent with a `**Write:**` section: extract the filenames it declares.
+For each caller (SKILL.md, plan-orchestrator.md) that passes those filenames as
+prompt keys: confirm the writing agent is called earlier in the same phase.
+FAIL when an agent receives a file as input that no upstream agent in the call
+sequence is declared to write.
+
+**Scope of extraction:** The `**Write:**` section in agent files uses varied formats
+(bullet lists of paths, prose with path in backticks). The awk extractor should match
+common patterns: backtick-quoted paths, `path/to/file.ext` tokens following write-verb
+words (Write, Writes, write). False negatives (missed Write entries) are acceptable;
+false positives are not.
+
+**Limitations:** Does not validate runtime-derived paths (e.g. `$wave_dir/...`) —
+restrict to plan-dir-level files like `INDEX.md`, `current.md`, `final-review.md`.
+
+---
+
+### Item 9 — Derive PROFILE_KEYS from llm_profiles dynamically (MAINTENANCE-GAP)
+
+**File:** `tools/model-map-validate.js`
+
+**Problem discovered in:** refactor/unify-planner-local-first (PR #24)
+
+`PROFILE_KEYS` on line 7 is a hardcoded list of allowed capability alias names used
+to validate `agent_to_capability` values. Adding new aliases (`local-planner`,
+`commit-message-generator`) in PR #24 required a manual update to this list —
+a step easy to forget and not caught by any test until `node tools/model-map-validate.js`
+is run against the config.
+
+**Fix:** Replace the hardcoded constant with a dynamic derivation from the config
+being validated. Derive allowed aliases by reading `Object.keys(config.llm_profiles[<any-profile>])`
+since every valid alias must appear in at least one profile. Use union of all profiles'
+keys to be safe. Keep the existing validator export (`PROFILE_KEYS`) updated dynamically
+so tests still work.
+
+**Validation:** After the fix, adding a new alias to `llm_profiles` automatically
+makes it valid in `agent_to_capability` without touching the validator.

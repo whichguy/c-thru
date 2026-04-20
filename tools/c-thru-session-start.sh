@@ -33,5 +33,5 @@ fi
 
 # Inject additionalContext with collected warnings
 context=$(printf '%s\n' "${issues[@]}" | paste -sd '\n' -)
-printf '{"hookSpecificOutput":{"additionalContext":"%s"}}' \
+printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}' \
     "$(printf '%s' "$context" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//')"

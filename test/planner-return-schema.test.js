@@ -1,0 +1,334 @@
+#!/usr/bin/env node
+// Fixture validator for the unified planner contract (v2).
+// Covers: planner return block, structured findings JSON schema,
+//         transition_type classification, and migration shim behavior.
+// Run: node test/planner-return-schema.test.js
+
+'use strict';
+
+let passed = 0;
+let failed = 0;
+
+function ok(label) {
+  console.log(`  ok    ${label}`);
+  passed++;
+}
+
+function fail(label, reason) {
+  console.error(`  FAIL  ${label}`);
+  if (reason) console.error(`        ${reason}`);
+  failed++;
+}
+
+// ---------------------------------------------------------------------------
+// Planner return block parser
+// ---------------------------------------------------------------------------
+
+function parsePlannerReturn(text) {
+  const result = {};
+  for (const line of text.trim().split('\n')) {
+    const m = line.match(/^([A-Z_]+):\s*(.*)$/);
+    if (!m) continue;
+    const [, key, val] = m;
+    if (key === 'READY_ITEMS') {
+      result[key] = val.replace(/^\[|\]$/g, '').split(',').map(s => s.trim()).filter(Boolean);
+    } else {
+      result[key] = val.trim();
+    }
+  }
+  return result;
+}
+
+// Driver validation rules (a)–(h) from planner contract
+function validatePlannerReturn(r) {
+  const errors = [];
+  if (!['COMPLETE', 'CYCLE', 'ERROR'].includes(r.STATUS)) errors.push('(a) STATUS invalid');
+  if (r.STATUS !== 'CYCLE' && r.STATUS !== 'ERROR' && !['ready', 'done'].includes(r.VERDICT)) errors.push('(b) VERDICT invalid');
+  if (r.VERDICT === 'ready' && (!r.READY_ITEMS || r.READY_ITEMS.length === 0)) errors.push('(c) VERDICT=ready but READY_ITEMS empty');
+  // (d) ID validation requires current.md context — skipped in unit test
+  if (r.STATUS === 'CYCLE' && !r.ITEMS) errors.push('(e) STATUS=CYCLE but ITEMS absent');
+  if (r.STATUS === 'ERROR' && !r.SUMMARY) errors.push('(f) STATUS=ERROR but SUMMARY absent');
+  if (r.VERDICT === 'done' && r.READY_ITEMS && r.READY_ITEMS.length > 0) errors.push('(g) VERDICT=done but READY_ITEMS non-empty');
+  if (r.VERDICT === 'done' && r.COMMIT_MESSAGE) errors.push('(h) VERDICT=done but COMMIT_MESSAGE present');
+  return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Section 1 — Planner return block validation
+// ---------------------------------------------------------------------------
+
+console.log('\n1. Planner return block');
+
+{
+  const raw = `
+STATUS: COMPLETE
+VERDICT: ready
+READY_ITEMS: [item-1, item-2]
+COMMIT_MESSAGE: implement auth middleware and session store
+DELTA_ADDED: 2
+DELTA_CHANGED: 0
+SUMMARY: initial wave with auth and session items
+PARALLEL_WAVES: false
+  `.trim();
+  const r = parsePlannerReturn(raw);
+  const errs = validatePlannerReturn(r);
+  errs.length === 0 ? ok('VERDICT=ready with all fields') : fail('VERDICT=ready with all fields', errs.join('; '));
+}
+
+{
+  const raw = `
+STATUS: COMPLETE
+VERDICT: done
+DELTA_ADDED: 0
+DELTA_CHANGED: 0
+SUMMARY: no ready items remaining
+PARALLEL_WAVES: false
+  `.trim();
+  const r = parsePlannerReturn(raw);
+  const errs = validatePlannerReturn(r);
+  errs.length === 0 ? ok('VERDICT=done clean') : fail('VERDICT=done clean', errs.join('; '));
+}
+
+{
+  const raw = `
+STATUS: CYCLE
+ITEMS: item-3, item-7
+SUMMARY: circular dependency detected
+  `.trim();
+  const r = parsePlannerReturn(raw);
+  const errs = validatePlannerReturn(r);
+  errs.length === 0 ? ok('STATUS=CYCLE with ITEMS') : fail('STATUS=CYCLE with ITEMS', errs.join('; '));
+}
+
+// Rule (a) — STATUS invalid
+{
+  const raw = `STATUS: UNKNOWN\nVERDICT: ready\nREADY_ITEMS: [item-1]`;
+  const r = parsePlannerReturn(raw);
+  const errs = validatePlannerReturn(r);
+  errs.some(e => e.includes('(a)')) ? ok('(a) rejects invalid STATUS') : fail('(a) rejects invalid STATUS', `errors: ${errs}`);
+}
+
+// Rule (b) — VERDICT invalid
+{
+  const raw = `STATUS: COMPLETE\nVERDICT: continue\nREADY_ITEMS: [item-1]`;
+  const r = parsePlannerReturn(raw);
+  const errs = validatePlannerReturn(r);
+  errs.some(e => e.includes('(b)')) ? ok('(b) rejects invalid VERDICT') : fail('(b) rejects invalid VERDICT');
+}
+
+// Rule (c) — VERDICT=ready but READY_ITEMS empty
+{
+  const raw = `STATUS: COMPLETE\nVERDICT: ready\nREADY_ITEMS: []\nCOMMIT_MESSAGE: implement something\nSUMMARY: x\nDELTA_ADDED: 0\nDELTA_CHANGED: 0\nPARALLEL_WAVES: false`;
+  const r = parsePlannerReturn(raw);
+  const errs = validatePlannerReturn(r);
+  errs.some(e => e.includes('(c)')) ? ok('(c) rejects ready with empty READY_ITEMS') : fail('(c) rejects ready with empty READY_ITEMS');
+}
+
+// Rule (e) — STATUS=CYCLE but ITEMS absent
+{
+  const raw = `STATUS: CYCLE\nSUMMARY: cycle detected`;
+  const r = parsePlannerReturn(raw);
+  const errs = validatePlannerReturn(r);
+  errs.some(e => e.includes('(e)')) ? ok('(e) rejects CYCLE without ITEMS') : fail('(e) rejects CYCLE without ITEMS');
+}
+
+// Rule (f) — STATUS=ERROR but SUMMARY absent
+{
+  const raw = `STATUS: ERROR\nVERDICT: done`;
+  const r = parsePlannerReturn(raw);
+  const errs = validatePlannerReturn(r);
+  errs.some(e => e.includes('(f)')) ? ok('(f) rejects ERROR without SUMMARY') : fail('(f) rejects ERROR without SUMMARY');
+}
+
+// Rule (g) — VERDICT=done but READY_ITEMS non-empty
+{
+  const raw = `STATUS: COMPLETE\nVERDICT: done\nREADY_ITEMS: [item-1]\nSUMMARY: done\nDELTA_ADDED: 0\nDELTA_CHANGED: 0\nPARALLEL_WAVES: false`;
+  const r = parsePlannerReturn(raw);
+  const errs = validatePlannerReturn(r);
+  errs.some(e => e.includes('(g)')) ? ok('(g) rejects done with non-empty READY_ITEMS') : fail('(g) rejects done with non-empty READY_ITEMS');
+}
+
+// Rule (h) — VERDICT=done but COMMIT_MESSAGE present
+{
+  const raw = `STATUS: COMPLETE\nVERDICT: done\nCOMMIT_MESSAGE: oops\nSUMMARY: done\nDELTA_ADDED: 0\nDELTA_CHANGED: 0\nPARALLEL_WAVES: false`;
+  const r = parsePlannerReturn(raw);
+  const errs = validatePlannerReturn(r);
+  errs.some(e => e.includes('(h)')) ? ok('(h) rejects done with COMMIT_MESSAGE') : fail('(h) rejects done with COMMIT_MESSAGE');
+}
+
+// ---------------------------------------------------------------------------
+// Section 2 — Structured findings JSON schema
+// ---------------------------------------------------------------------------
+
+console.log('\n2. Structured findings JSON schema');
+
+function validateFinding(obj) {
+  const required = ['item_id', 'status', 'produced', 'dep_discoveries', 'outcome_risk'];
+  const missing = required.filter(k => !(k in obj));
+  if (missing.length > 0) return { valid: false, missing };
+  if (!Array.isArray(obj.produced)) return { valid: false, missing: ['produced must be array'] };
+  if (!Array.isArray(obj.dep_discoveries)) return { valid: false, missing: ['dep_discoveries must be array'] };
+  if (typeof obj.outcome_risk !== 'boolean') return { valid: false, missing: ['outcome_risk must be boolean'] };
+  for (const d of obj.dep_discoveries) {
+    if (!d.affects_item || !d.type || !d.confidence) {
+      return { valid: false, missing: ['dep_discovery missing affects_item/type/confidence'] };
+    }
+    if (!['high', 'low'].includes(d.confidence)) {
+      return { valid: false, missing: ['dep_discovery confidence must be high|low'] };
+    }
+  }
+  return { valid: true };
+}
+
+{
+  const f = {
+    item_id: 'item-3', status: 'complete',
+    produced: ['src/middleware/auth.ts'],
+    dep_discoveries: [{ affects_item: 'item-7', type: 'resource_dependency', path: 'src/chain.ts', note: 'pos 2', confidence: 'high' }],
+    complexity_delta: 0, outcome_risk: false, outcome_risk_reason: null
+  };
+  const v = validateFinding(f);
+  v.valid ? ok('valid finding with dep_discovery') : fail('valid finding with dep_discovery', v.missing?.join(', '));
+}
+
+{
+  const f = { item_id: 'item-1', status: 'complete', produced: [], dep_discoveries: [], outcome_risk: false };
+  const v = validateFinding(f);
+  v.valid ? ok('minimal finding (no discoveries)') : fail('minimal finding (no discoveries)', v.missing?.join(', '));
+}
+
+{
+  const f = { item_id: 'item-5', status: 'complete', produced: [], dep_discoveries: [], outcome_risk: true };
+  const v = validateFinding(f);
+  v.valid ? ok('outcome_risk=true finding') : fail('outcome_risk=true finding');
+}
+
+{
+  const f = { item_id: 'item-2', status: 'complete', produced: 'not-an-array', dep_discoveries: [], outcome_risk: false };
+  const v = validateFinding(f);
+  !v.valid ? ok('rejects non-array produced') : fail('rejects non-array produced');
+}
+
+{
+  const f = { item_id: 'item-9', status: 'complete', produced: [], dep_discoveries: [{ affects_item: 'x', type: 'y', confidence: 'medium' }], outcome_risk: false };
+  const v = validateFinding(f);
+  !v.valid ? ok('rejects invalid confidence value') : fail('rejects invalid confidence value');
+}
+
+{
+  const f = { status: 'complete', produced: [], dep_discoveries: [], outcome_risk: false };
+  const v = validateFinding(f);
+  !v.valid ? ok('rejects missing item_id') : fail('rejects missing item_id');
+}
+
+// ---------------------------------------------------------------------------
+// Section 3 — Transition type classification
+// ---------------------------------------------------------------------------
+
+console.log('\n3. Transition type classification');
+
+function classifyTransition(findings) {
+  let hasOutcomeRisk = false;
+  let hasUnrecoverable = false;
+  let hasLowConfidence = false;
+
+  for (const f of findings) {
+    const v = validateFinding(f);
+    if (!v.valid) {
+      // Migration shim: try to recover item_id + status
+      if (f.item_id && f.status) {
+        hasLowConfidence = true; // shim-normalized → dep_update
+      } else {
+        hasUnrecoverable = true; // unrecoverable → outcome_risk
+      }
+      continue;
+    }
+    if (f.outcome_risk) hasOutcomeRisk = true;
+    for (const d of f.dep_discoveries) {
+      if (d.confidence === 'low') hasLowConfidence = true;
+    }
+  }
+
+  if (hasOutcomeRisk || hasUnrecoverable) return 'outcome_risk';
+  if (hasLowConfidence) return 'dep_update';
+  return 'clean';
+}
+
+{
+  const findings = [
+    { item_id: 'i1', status: 'complete', produced: [], dep_discoveries: [{ affects_item: 'i2', type: 'res', confidence: 'high' }], outcome_risk: false },
+    { item_id: 'i2', status: 'complete', produced: [], dep_discoveries: [], outcome_risk: false }
+  ];
+  const t = classifyTransition(findings);
+  t === 'clean' ? ok('all-high-confidence + no-risk → clean') : fail('all-high-confidence + no-risk → clean', `got ${t}`);
+}
+
+{
+  const findings = [
+    { item_id: 'i1', status: 'complete', produced: [], dep_discoveries: [{ affects_item: 'i2', type: 'res', confidence: 'low' }], outcome_risk: false }
+  ];
+  const t = classifyTransition(findings);
+  t === 'dep_update' ? ok('low-confidence dep_discovery → dep_update') : fail('low-confidence dep_discovery → dep_update', `got ${t}`);
+}
+
+{
+  const findings = [
+    { item_id: 'i1', status: 'complete', produced: [], dep_discoveries: [], outcome_risk: true }
+  ];
+  const t = classifyTransition(findings);
+  t === 'outcome_risk' ? ok('outcome_risk=true → outcome_risk') : fail('outcome_risk=true → outcome_risk', `got ${t}`);
+}
+
+// ---------------------------------------------------------------------------
+// Section 4 — Migration shim behavior
+// ---------------------------------------------------------------------------
+
+console.log('\n4. Migration shim');
+
+{
+  // Free-form finding that the shim can recover (has item_id + status but missing dep_discoveries)
+  const shimFinding = { item_id: 'i1', status: 'complete', produced: ['foo.ts'] };
+  const findings = [shimFinding];
+  const t = classifyTransition(findings);
+  t === 'dep_update' ? ok('shim-normalized finding → dep_update (not outcome_risk)') : fail('shim-normalized finding → dep_update', `got ${t}`);
+}
+
+{
+  // Completely unrecoverable finding (missing item_id)
+  const findings = [{ status: 'complete', produced: ['foo.ts'], some: 'extra' }];
+  const t = classifyTransition(findings);
+  t === 'outcome_risk' ? ok('unrecoverable finding (missing item_id) → outcome_risk') : fail('unrecoverable finding → outcome_risk', `got ${t}`);
+}
+
+{
+  // Mixed: one good finding + one shim-normalized → dep_update
+  const findings = [
+    { item_id: 'i1', status: 'complete', produced: [], dep_discoveries: [], outcome_risk: false },
+    { item_id: 'i2', status: 'complete', produced: ['bar.ts'] } // shim: missing required fields
+  ];
+  const t = classifyTransition(findings);
+  t === 'dep_update' ? ok('mixed (good + shim-normalized) → dep_update') : fail('mixed (good + shim-normalized) → dep_update', `got ${t}`);
+}
+
+{
+  // outcome_risk wins over shim-normalized
+  const findings = [
+    { item_id: 'i1', status: 'complete', produced: [] }, // shim
+    { item_id: 'i2', status: 'complete', produced: [], dep_discoveries: [], outcome_risk: true } // risk
+  ];
+  const t = classifyTransition(findings);
+  t === 'outcome_risk' ? ok('outcome_risk overrides shim-normalized → outcome_risk') : fail('outcome_risk overrides shim-normalized', `got ${t}`);
+}
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+
+console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
+if (failed > 0) {
+  console.error(`\n✗ ${failed} test(s) failed`);
+  process.exit(1);
+} else {
+  console.log('\n✓ All tests passed');
+  process.exit(0);
+}
