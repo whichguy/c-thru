@@ -54,10 +54,12 @@ _grace_pid=$!
 wait "$_pull_pid" 2>/dev/null || true
 kill "$_grace_pid" 2>/dev/null; wait "$_grace_pid" 2>/dev/null || true
 
-# 5s hard kill on any lingering git process
+# Hard kill any lingering git subprocesses (belt-and-suspenders; _pull_pid
+# is already waited above, but subprocesses it spawned may still be running).
+# Mirror the grace-kill pattern: launch, don't wait on the sleep, kill+collect.
 ( sleep 4; kill -0 "$_pull_pid" 2>/dev/null && kill -KILL "$_pull_pid" 2>/dev/null ) 2>/dev/null &
 _hard_pid=$!
-wait "$_hard_pid" 2>/dev/null || true
+kill "$_hard_pid" 2>/dev/null; wait "$_hard_pid" 2>/dev/null || true
 
 _new_sha="$(git rev-parse HEAD 2>/dev/null || true)"
 

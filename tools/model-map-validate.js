@@ -164,10 +164,7 @@ function validateConfig(config, _errors) {
       report("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
     } else if (config.llm_mode == null) {
       // Non-fatal migration hint — printed to stderr but does not fail validation
-      const warn = typeof _errors === 'object'
-        ? (m) => console.warn(`model-map-validate: warning: ${m}`)
-        : (m) => console.warn(`model-map-validate: warning: ${m}`);
-      warn("'llm_connectivity_mode' is deprecated; migrate to 'llm_mode' (connected|semi-offload|cloud-judge-only|offline)");
+      console.warn("model-map-validate: warning: 'llm_connectivity_mode' is deprecated; migrate to 'llm_mode' (connected|semi-offload|cloud-judge-only|offline)");
     }
   }
 
