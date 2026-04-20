@@ -56,11 +56,9 @@ function applyRecommendations(effectiveMap, repoRoot) {
       const entry = profiles[tier][cap];
       if (!entry || typeof entry !== 'object') continue;
       if (entry.connected_model && entry.connected_model !== model) {
-        // User has an explicit value — preserve it
         preserved++;
       } else if (!entry.connected_model) {
         entry.connected_model = model;
-        entry._rec = true; // marker for --list (rec) suffix; stripped before forwarding
         applied++;
       }
       // If connected_model === model it's already correct; no-op
