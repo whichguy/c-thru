@@ -111,7 +111,7 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 | `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for Phase 2 HTTP hooks listener (default `9998`) |
 | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection (positive integer GB). Malformed values fall through to `os.totalmem()`. |
 | `CLAUDE_LLM_MODE` | Override connectivity mode: `connected` \| `semi-offload` \| `cloud-judge-only` \| `offline`. Replaces `CLAUDE_CONNECTIVITY_MODE` (legacy alias still accepted). |
-| `CLAUDE_ROUTER_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). Also settable via `/map-model update off`. |
+| `CLAUDE_ROUTER_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). Also settable via `/map-model update off` (writes `self_update: false` to model-map.overrides.json). |
 | `CLAUDE_ROUTER_UPDATE_INTERVAL` | Seconds between self-update fetches (default `3600`). Debounced via `.git/FETCH_HEAD` mtime. |
 
 ## No External Node Dependencies
