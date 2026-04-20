@@ -217,7 +217,7 @@ BEGIN { agent=""; keys=""; in_prompt=0 }
     in_prompt=1
     s=$0
     sub(/.*prompt:[[:space:]]*"/, "", s)
-    if (s ~ /^[a-zA-Z][a-zA-Z0-9_.]+:/) {
+    if (s ~ /^[a-zA-Z][a-zA-Z0-9_.-]+:/) {
         k=s; sub(/:.*/, "", k)
         keys=(keys == "" ? k : keys " " k)
         if (k == "mode") {
@@ -231,7 +231,7 @@ BEGIN { agent=""; keys=""; in_prompt=0 }
     }
 }
 
-in_prompt && /^[[:space:]]+[a-zA-Z][a-zA-Z0-9_.]+:[[:space:]]/ {
+in_prompt && /^[[:space:]]+[a-zA-Z][a-zA-Z0-9_.-]+:[[:space:]]/ {
     s=$0
     gsub(/^[[:space:]]+/, "", s)
     sub(/:.*/, "", s)
@@ -248,7 +248,7 @@ in_prompt && /^[[:space:]]+[a-zA-Z][a-zA-Z0-9_.]+:[[:space:]]/ {
     }
 }
 
-in_prompt && /"\)/ && !/^[[:space:]]+[a-zA-Z][a-zA-Z0-9_.]+:[[:space:]]/ && agent != "" {
+in_prompt && /"\)/ && !/^[[:space:]]+[a-zA-Z][a-zA-Z0-9_.-]+:[[:space:]]/ && agent != "" {
     print agent "|" keys
     agent=""; keys=""; in_prompt=0
 }

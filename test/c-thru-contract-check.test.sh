@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Tests for tools/c-thru-contract-check.sh
-# 8 fixtures: dangling-agent, missing-key, clean, Skill() regression, path-backtick FP,
-#             *_out key missing, agent-count mismatch, Phase 0 mkdir missing
+# 12 fixtures: dangling-agent, missing-key, clean, Skill() regression, path-backtick FP,
+#              *_out key missing, agent-count mismatch, Phase 0 mkdir missing,
+#              multi-mode Mode 1 pass, undeclared key fail, multi-mode Mode 2 fail,
+#              hyphenated key (replan-brief) pass
 #
 # Run: bash test/c-thru-contract-check.test.sh
 
@@ -361,6 +363,51 @@ EOF
 rc=0; run_checker_in "$F11" >/dev/null 2>&1 || rc=$?
 check "multi-mode Mode 2 missing required_key → exit 1" 1 "$rc"
 teardown_workspace "$F11"
+
+# ---------------------------------------------------------------------------
+# Fixture 12 — Hyphenated prompt key (replan-brief) → pass.
+# Agent declares Input: `replan-brief` path.  Caller passes replan-brief:.
+# Pre-fix: Check 3 emits false-positive FAIL.  Post-fix: exit 0.
+# ---------------------------------------------------------------------------
+echo "Fixture 12: hyphenated prompt key (replan-brief) → pass..."
+F12=$(setup_workspace)
+mkdir -p "$F12/config"
+cat > "$F12/config/model-map.json" <<'EOF'
+{ "agent_to_capability": { "hyphen-agent": "pattern-coder" } }
+EOF
+cat > "$F12/agents/hyphen-agent.md" <<'EOF'
+---
+name: hyphen-agent
+model: hyphen-agent
+---
+# hyphen-agent
+Input: `replan-brief` path.
+
+**Return:**
+```
+STATUS: COMPLETE|ERROR
+```
+EOF
+cat > "$F12/skills/c-thru-plan/SKILL.md" <<'EOF'
+---
+name: c-thru-plan
+---
+## Phase 0
+
+mkdir -p $PLAN_DIR/discovery $PLAN_DIR/waves $PLAN_DIR/plan $PLAN_DIR/review
+
+## Phase 1
+
+```
+Agent(subagent_type: "hyphen-agent",
+  prompt: "replan-brief: /tmp/c-thru/x/test-slug/replan.md")
+```
+
+If hyphen-agent returns ERROR, abort.
+EOF
+rc=0; run_checker_in "$F12" >/dev/null 2>&1 || rc=$?
+check "hyphenated prompt key (replan-brief) → exit 0" 0 "$rc"
+teardown_workspace "$F12"
 
 # ---------------------------------------------------------------------------
 # Summary
