@@ -392,24 +392,14 @@ collect_active_profile_capability_assignments() {
   [[ -f "$CONFIG" ]] || return 0
   llm_profiles_defined || return 0
 
-  local profile llm_mode slot requested resolved rec_suffix
+  local profile llm_mode slot requested resolved rec_suffix rec_model
   ensure_llm_profile_context || return 0
   profile="$LLM_PROFILE_CACHE_NAME"
   [[ -n "$profile" ]] || return 0
   llm_mode="$(resolve_llm_mode)"
 
-  # Load rec map for (rec) suffix: rec_map[slot] = recommended connected_model for this tier
+  # rec_file path for (rec) suffix detection (bash 3.2-safe: no associative arrays)
   local rec_file="$ROUTER_REPO_ROOT/config/recommended-mappings.json"
-  declare -A _rec_map=()
-  if [[ -f "$rec_file" ]]; then
-    while IFS=$'\t' read -r cap model; do
-      [[ -n "$cap" && -n "$model" ]] && _rec_map["$cap"]="$model"
-    done < <(jq -r --arg tier "$profile" '
-      .recommendations // {} | to_entries[] |
-      select(.value[$tier] != null) |
-      [.key, .value[$tier]] | @tsv
-    ' "$rec_file" 2>/dev/null)
-  fi
 
   while IFS= read -r slot; do
     [[ -n "$slot" ]] || continue
@@ -430,8 +420,13 @@ collect_active_profile_capability_assignments() {
       resolved="$(resolve_profile_alias_model "$resolved")"
     fi
     [[ -n "$resolved" ]] || continue
+    # (rec) suffix: check if slot's recommended model for this tier matches the requested model
     rec_suffix=""
-    [[ "${_rec_map[$slot]+_}" == "_" && "${_rec_map[$slot]}" == "$requested" ]] && rec_suffix="(rec)"
+    if [[ -f "$rec_file" ]]; then
+      rec_model="$(jq -r --arg cap "$slot" --arg tier "$profile" \
+        '(.recommendations // {})[$cap][$tier] // empty' "$rec_file" 2>/dev/null)"
+      [[ -n "$rec_model" && "$rec_model" == "$requested" ]] && rec_suffix="(rec)"
+    fi
     printf '%s\t%s\t%s\n' "$slot" "$resolved" "$rec_suffix"
   done < <(profile_capability_slots)
 }
