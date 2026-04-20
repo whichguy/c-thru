@@ -211,7 +211,12 @@ resolve_launch_project_dir() {
   return 1
 }
 
-maybe_refresh_model_map_defaults_from_git || true
+_self_update_script="$ROUTER_SELF_DIR/c-thru-self-update.sh"
+if [[ -x "$_self_update_script" ]]; then
+  ROUTER_REPO_ROOT="$ROUTER_REPO_ROOT" bash "$_self_update_script" 2>/dev/null || true
+else
+  maybe_refresh_model_map_defaults_from_git || true
+fi
 sync_layered_profile_model_map || {
   echo "claude-router: failed to build effective layered model-map config" >&2
   exit 1

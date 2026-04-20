@@ -34,7 +34,7 @@ chmod +x "$TOOLS_SRC/claude-proxy" "$TOOLS_SRC/llm-capabilities-mcp.js" "$TOOLS_
 chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TOOLS_SRC/c-thru-statusline-overlay.sh" 2>/dev/null || true
-chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" 2>/dev/null || true
 
 mkdir -p "$TOOLS_DEST"
 
@@ -89,6 +89,7 @@ link_tool c-thru-statusline.sh c-thru-statusline
 link_tool c-thru-statusline-overlay.sh c-thru-statusline-overlay
 link_tool c-thru-ollama-gc.sh c-thru-ollama-gc
 link_tool c-thru-contract-check.sh c-thru-contract-check
+link_tool c-thru-self-update.sh c-thru-self-update
 
 # --- Migrate legacy providers schema ---
 # Guard: jq -e '.providers' is a no-op if key is absent — idempotent by design.
