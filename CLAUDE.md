@@ -43,6 +43,7 @@ tools/
   model-map-edit.js       # interactive map editor; calls validate + layered
   llm-capabilities-mcp.js # MCP server exposing list_models + classify_intent tools
   verify-llm-capabilities-mcp.sh  # shell smoke-test for the MCP server
+  verify-lmstudio-ollama-compat.sh # spike: run when LM Studio available to confirm kind:"ollama" vs kind:"openai"
   c-thru-session-start.sh # SessionStart/PostCompact hook — proxy+Ollama health check, silent on happy path
   c-thru-proxy-health.sh  # UserPromptSubmit hook — asyncRewake (exit 2, stderr) on proxy down
   c-thru-map-changed.sh   # FileChanged/PostToolUse hook — validates model-map.json on edit
