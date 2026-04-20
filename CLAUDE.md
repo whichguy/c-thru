@@ -52,7 +52,7 @@ tools/
   hw-profile.js             # shared 5-tier hardware detection (tierForGb); used by router and proxy
   model-map-apply-recommendations.js  # merges config/recommended-mappings.json as lowest-precedence tier
 config/
-  model-map.json          # shipped defaults (JSON5 — comments allowed)
+  model-map.json          # shipped defaults (standard JSON — no comments; parsed with JSON.parse)
   recommended-mappings.json  # community capability→model recommendations per hw tier (lowest precedence)
 test/
   model-map-v12-adapter.test.js  # adapter fixture test; run with: node test/model-map-v12-adapter.test.js
