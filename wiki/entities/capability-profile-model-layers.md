@@ -28,6 +28,12 @@ The model resolution architecture has three distinct layers. **Capability** (log
 
 ## Connectivity decision
 
-The connectivity-mode vs cascade decision remains pending — see [[connectivity-vs-cascade]]. Phase B (flip default, remove env gate) is blocked until a spike measures real flip frequency in production. This decision is out of scope for the hardware-profile-defaults PR.
+**Resolved (2026-04-20, feat/llm-mode-multi-provider):** The `reactive-only` branch was chosen. `llm_connectivity_mode` (binary `connected`/`disconnect`) is replaced by `llm_mode` (4-value enum: `connected` | `semi-offload` | `cloud-judge-only` | `offline`). Per-request cascade on cloud failures (`classifyError` → `tryFallbackChain`) is retained and extended (401 + 400-credit-balance gaps filled). No proactive liveness prober, no global auto-flip. Mode is set statically via config/env or via `/map-model mode <value>` and applies per-request via `resolveProfileModel(entry, mode)`.
+
+`llm_mode` resolution precedence: `CLAUDE_LLM_MODE` env → `CLAUDE_CONNECTIVITY_MODE` (legacy) → `CONFIG.llm_mode` → `CONFIG.llm_connectivity_mode` (legacy) → `'connected'`.
+
+Profile entries may add a sparse `modes` sub-map: `modes[mode]` overrides the selected model for that mode only. Capabilities with no `modes` entry fall back to `disconnect_model` for `semi-offload`/`cloud-judge-only`/`offline`, or `connected_model` for `connected` and unknown.
+
+See also: [[connectivity-vs-cascade]] (now closed by this decision).
 
 → See also: [[logical-role-exclusivity]], [[declared-rewrites]], [[fallback-event-system]], [[ollama-http-api-migration]], [[config-swap-invariant]], [[sighup-config-reload]], [[connectivity-vs-cascade]]

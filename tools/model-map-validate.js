@@ -159,8 +159,16 @@ function validateConfig(config, _errors) {
     report(`'llm_mode' must be one of: ${[...LLM_MODES].join(', ')}`);
   }
 
-  if (config.llm_connectivity_mode != null && !CONNECTIVITY_MODES.has(config.llm_connectivity_mode)) {
-    report("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
+  if (config.llm_connectivity_mode != null) {
+    if (!CONNECTIVITY_MODES.has(config.llm_connectivity_mode)) {
+      report("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
+    } else if (config.llm_mode == null) {
+      // Non-fatal migration hint — printed to stderr but does not fail validation
+      const warn = typeof _errors === 'object'
+        ? (m) => console.warn(`model-map-validate: warning: ${m}`)
+        : (m) => console.warn(`model-map-validate: warning: ${m}`);
+      warn("'llm_connectivity_mode' is deprecated; migrate to 'llm_mode' (connected|semi-offload|cloud-judge-only|offline)");
+    }
   }
 
   if (config.llm_active_profile != null) {
