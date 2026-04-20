@@ -9,12 +9,13 @@ color: blue
 
 # /c-thru-plan — Wave Orchestrator
 
-<!-- Phase 0: Pre-check (state-exists) -->
+<!-- Phase 0: Pre-check (state-exists, contract-version detection) -->
 <!-- Phase 1: Discovery -->
-<!-- Phase 2: Plan construction -->
+<!-- Phase 2: Plan construction (signal=intent, unified planner) -->
 <!-- Phase 3: Plan review loop (max 20 rounds) -->
-<!-- Phase 4: Wave loop -->
-<!--   plan-orchestrator runs the complete wave (learnings → digests → dispatch → auditor → commit) -->
+<!-- Phase 4: Wave loop (three-branch: clean / dep_update / outcome_risk) -->
+<!--   deterministic pre-processor classifies each transition — zero LLM on clean -->
+<!--   planner-local handles dep_update (local 27B+); planner handles outcome_risk (cloud) -->
 <!-- Phase 5: Final review -->
 
 ## Phase 0 — Pre-check
@@ -28,29 +29,40 @@ PLAN_DIR="$PLAN_ROOT/$SLUG"
 ```
 
 If `$PLAN_DIR/current.md` exists:
-- Prompt user: **resume** (continue from current plan), **restart** (archive + fresh), or **abort**.
-- resume: skip to Phase 4, picking up next incomplete wave.
-  - Check for any wave dir that has `findings.jsonl` but no matching `Wave: <NNN>` git commit via `git log --grep="Wave: <NNN>"` — if found, offer to re-run that wave.
-- restart: move `$PLAN_DIR` to `$PLAN_DIR.archived.<timestamp>`, then proceed as fresh.
-- abort: exit.
+
+  **Contract version check:** If `.c-thru-contract-version` does NOT exist in `$PLAN_DIR`:
+    - Print: "Pre-refactor plan state detected (no contract version marker). This plan was created with the old orchestrator contract (Mode 1/2/3). Options: **drain** (finish remaining waves via legacy path), **discard** (archive + start fresh), or **abort**."
+    - Prompt user and wait.
+    - discard: move `$PLAN_DIR` to `$PLAN_DIR.archived.<timestamp>`, proceed as fresh.
+    - abort: exit.
+    - drain: proceed to Phase 4, treating first wave as a recovery wave (accept VERDICT=done from legacy orchestrator).
+
+  If `.c-thru-contract-version` exists (resume case):
+    - Prompt user: **resume** (continue from current plan), **restart** (archive + fresh), or **abort**.
+    - resume: skip to Phase 4, picking up next incomplete wave.
+      - Check for any wave dir that has `findings.jsonl` but no matching `Wave: <NNN>` git commit via `git log --grep="Wave: <NNN>"` — if found, offer to re-run that wave.
+    - restart: move `$PLAN_DIR` to `$PLAN_DIR.archived.<timestamp>`, then proceed as fresh.
+    - abort: exit.
 
 If fresh: `mkdir -p $PLAN_DIR/waves $PLAN_DIR/discovery $PLAN_DIR/plan/snapshots $PLAN_DIR/review`.
 
 ## State model
 
-- `current.md` — mutable plan state. Written only by planner (Modes 1/2/3). Read by every other phase via its INDEX.md.
-- `INDEX.md` — companion to current.md; `<section>: <start>-<end>` per line.
-- `waves/<NNN>/` — ephemeral per-wave artifacts (wave.json, digests, outputs, findings, verify.json, decision.json, artifact.md, replan-brief.md, wave-summary.md, INDEX.md). Write-once per wave.
+- `current.md` — single source of truth. Two immutable-rule sections: `## Outcome` (written once, never changed) and `## Items` (updated by planner per-wave). `[x]` items are immutable.
+- `waves/<NNN>/` — ephemeral per-wave artifacts (wave.json, digests, outputs, findings, verify.json, wave-summary.md). Write-once per wave. `decision.json` and `replan-brief.md` are exception-path only (outcome_risk escalation).
 - `plan/snapshots/p-<NNN>.md` — historical snapshot post-commit.
 - `journal.md` — append-only event log.
-- `learnings.md` + `learnings.INDEX.md` — wiki-style cross-wave improvements. Refreshed by plan-orchestrator (step 1) at start of each wave.
+- `learnings.md` — cross-wave improvements; refreshed by planner (step 2 of planner algorithm).
 - `meta.json` — counters (`revision_rounds`, `status`).
+- `pre-processor.log` — structured log of each wave transition classification.
+- `.c-thru-contract-version` — marker file; value `2` indicates refactored contract.
 
 **Invariants:**
 - Agents take paths, never inlined content. Returns are ≤20-line STATUS blocks.
-- One wave exists at a time. Replan is post-wave.
-- `status: complete` items are immutable — no mode ever touches them.
+- One wave executes at a time. Parallel waves annotated (`PARALLEL_WAVES: true`) but deferred to v2.
+- `[x]` items are immutable — no agent may modify them.
 - Driver context holds pointers + STATUS blocks, never full file bodies.
+- Cloud judge is invoked only on `signal=intent` (initial plan) or `outcome_risk` transition.
 
 ## Phase 1 — Discovery
 
@@ -96,19 +108,36 @@ Greenfield projects typically skip Stage 2b; existing-codebase work almost alway
 
 ```
 Agent(subagent_type: "planner",
-  prompt: "mode:      1
-           intent:    <user_intent>
-           discovery: <context_block_from_discovery>")
+  prompt: "signal:     intent
+           intent:     <user_intent>
+           discovery:  <context_block_from_discovery>
+           current.md: $PLAN_DIR/current.md")
 ```
 
-Planner writes `$PLAN_DIR/current.md`.
+Validate planner return — fail-loud on any of:
+- (a) `STATUS` not in `{COMPLETE, CYCLE, ERROR}`
+- (b) `VERDICT` not in `{ready, done}`
+- (c) `VERDICT=ready` but `READY_ITEMS` empty or absent
+- (d) `READY_ITEMS` contains item IDs not present in current.md as pending
+- (e) `STATUS=CYCLE` but `ITEMS` list absent or empty
+- (f) `STATUS=ERROR` but `SUMMARY` absent
+- (g) `VERDICT=done` but `READY_ITEMS` non-empty (contradictory)
+- (h) `VERDICT=done` but `COMMIT_MESSAGE` present
+
+On validation failure: print the specific rule (a)–(h) and the raw planner return; stop and escalate to user.
+
+On `STATUS=CYCLE`: print "Dependency cycle in initial plan: ITEMS=<items>". Stop. Surface to user for manual resolution.
+
+Write contract version marker:
+```sh
+echo "2" > $PLAN_DIR/.c-thru-contract-version
+```
 
 ## Phase 3 — Plan review loop
 
 <!-- This invokes the c-thru-native agents/review-plan.md (headless, APPROVED/NEEDS_REVISION verdict).
      The skills/review-plan/ skill is a separate interactive human plan-mode tool — not used here. -->
 Invoke the `review-plan` **agent** (not the skill) in a loop capped at 20 rounds.
-The agent returns a machine-readable verdict (`APPROVED` or `NEEDS_REVISION`).
 
 ```
 round = 0
@@ -119,73 +148,165 @@ while round < 20:
                             round:       <round>
                             review_out:  $PLAN_DIR/review/round-<round>.md")
 
-    # Parse verdict: look for literal "APPROVED" or "NEEDS_REVISION" in result
     if result contains "APPROVED":
-        break  # proceed to Phase 4
+        break  # proceed to Phase 3 aftermath
 
-    # NEEDS_REVISION — pass findings path to planner; driver does NOT read findings file
+    # NEEDS_REVISION — pass findings path to planner
     Agent(subagent_type: "planner",
-          prompt: "mode:       2
+          prompt: "signal:     wave_summary
+                   wave_summary: $PLAN_DIR/review/round-<round>.md
                    current.md: $PLAN_DIR/current.md
-                   INDEX:      $PLAN_DIR/INDEX.md
-                   findings:   $PLAN_DIR/review/round-<round>.md")
+                   learnings.md: $PLAN_DIR/learnings.md")
 
-    # Persist revision count
     update $PLAN_DIR/meta.json: meta.revision_rounds += 1
-
     round += 1
 
 if round == 20 and no APPROVED received:
-    # Escalate — do NOT proceed to Phase 4
     Tell user: "Plan review hit the 20-round cap without APPROVED. Manual intervention required."
     Stop.
 ```
 
-Proceed to Phase 4 only when the agent returns APPROVED.
+## Phase 3 aftermath — Re-materialize READY_ITEMS
+
+After APPROVED, compute initial READY_ITEMS for wave 001 without an LLM call:
+
+```
+Read $PLAN_DIR/current.md:
+  READY_ITEMS = [item IDs where status=pending AND all depends_on entries are [x] or depends_on is empty]
+  commit_message = "<imperative summary of first-wave items, ≤72 chars>"
+  # Derive commit_message locally from READY_ITEMS descriptions; no planner call needed
+```
+
+If no READY_ITEMS found after review (plan complete after review): proceed to Phase 5.
+
+Proceed to Phase 4 with initial READY_ITEMS[] and commit_message.
 
 ## Phase 4 — Wave loop
 
-Determine next wave number `NNN` (next unused `$PLAN_DIR/waves/NNN/` directory, zero-padded to 3 digits).
-`mkdir -p $PLAN_DIR/waves/<NNN>/digests $PLAN_DIR/waves/<NNN>/outputs $PLAN_DIR/waves/<NNN>/findings`
-
 ```
-result = Agent(subagent_type: "plan-orchestrator",
-  prompt: "current.md:      $PLAN_DIR/current.md
-           INDEX:           $PLAN_DIR/INDEX.md
-           learnings:       $PLAN_DIR/learnings.md
-           learnings.INDEX: $PLAN_DIR/learnings.INDEX.md
-           prior_findings:  [$PLAN_DIR/waves/*/findings.jsonl]
-           journal:         $PLAN_DIR/journal.md
-           wave_dir:        $PLAN_DIR/waves/<NNN>")
+loop:
+  # Driver creates clean wave directory
+  NNN = next unused wave number (zero-padded to 3 digits)
+  mkdir -p $PLAN_DIR/waves/<NNN>/digests $PLAN_DIR/waves/<NNN>/outputs $PLAN_DIR/waves/<NNN>/findings
+
+  # Orchestrator executes the wave
+  result = Agent(subagent_type: "plan-orchestrator",
+    prompt: "current.md:    $PLAN_DIR/current.md
+             READY_ITEMS:   [<item-id>, <item-id>, ...]
+             commit_message: <commit_message>
+             wave_dir:      $PLAN_DIR/waves/<NNN>")
+
+  if result.STATUS == PARTIAL:
+    Print: "Partial wave <NNN> — crisis finding cut it short. Check $PLAN_DIR/waves/<NNN>/failures/ and findings.jsonl"
+    Abort loop. Surface wave_dir to user.
+
+  if result.STATUS == ERROR:
+    Print: "Error in wave <NNN> — check $PLAN_DIR/waves/<NNN>/"
+    Abort loop. Surface wave_dir to user.
+
+  # STATUS == COMPLETE: run deterministic pre-processor
+  transition = pre_process(result.FINDINGS_PATH, $PLAN_DIR/current.md)
+
+  if transition.type == "clean":
+    READY_ITEMS = transition.ready_items
+    commit_message = transition.commit_message      # generated by local 7B
+    if READY_ITEMS is empty: break → Phase 5        # all items done
+
+  elif transition.type == "dep_update":
+    planner_result = Agent(subagent_type: "planner-local",
+      prompt: "signal:        wave_summary
+               wave_summary:  <result.FINDINGS_PATH>
+               affected_items: <transition.affected_items joined as list>
+               current.md:    $PLAN_DIR/current.md
+               learnings.md:  $PLAN_DIR/learnings.md")
+    # Validate planner-local return (same rules a–h as Phase 2)
+    if planner_result.STATUS == ERROR: surface to user; abort
+    if planner_result.STATUS == CYCLE:
+      Print: "Dependency cycle after dep_update — ITEMS=<ITEMS>"
+      Abort loop. Surface to user.
+    READY_ITEMS = planner_result.READY_ITEMS
+    commit_message = planner_result.COMMIT_MESSAGE
+    if planner_result.VERDICT == "done": break → Phase 5
+
+  elif transition.type == "outcome_risk":
+    planner_result = Agent(subagent_type: "planner",
+      prompt: "signal:        wave_summary
+               wave_summary:  <result.FINDINGS_PATH>
+               current.md:    $PLAN_DIR/current.md
+               learnings.md:  $PLAN_DIR/learnings.md")
+    # Validate planner return (same rules a–h as Phase 2)
+    if planner_result.STATUS == ERROR: surface to user; abort
+    if planner_result.STATUS == CYCLE:
+      Print: "Dependency cycle after outcome_risk planner — ITEMS=<ITEMS>"
+      Abort loop. Surface wave_dir to user.
+    READY_ITEMS = planner_result.READY_ITEMS
+    commit_message = planner_result.COMMIT_MESSAGE
+    if planner_result.VERDICT == "done": break → Phase 5
+
+  update $PLAN_DIR/meta.json: meta.wave_count += 1
+
+  # Parallel waves: annotated but not executed in v1
+  if planner_result.PARALLEL_WAVES == true:
+    log to $PLAN_DIR/pre-processor.log: "parallel waves detected — deferred to v2"
 ```
 
-Parse result:
-- `STATUS=CYCLE` → dependency cycle detected. Print: "Dependency cycle in wave <NNN>: ITEMS=<items list>". Abort loop. Surface wave_dir to user for manual resolution.
-- `STATUS=PARTIAL` → crisis finding cut wave short. Print: "Crisis in wave <NNN> — check $PLAN_DIR/waves/<NNN>/failures/ and findings.jsonl". Abort loop. Surface wave_dir to user.
-- `STATUS=ERROR` → print `wave_dir` ($PLAN_DIR/waves/<NNN>), abort loop, surface to user
-- `VERDICT=continue` or `VERDICT=extend` → increment NNN, loop (next wave)
-- `VERDICT=revise` → invoke planner (Mode 2) with replan-brief path, then re-enter Phase 3 review loop:
-  ```
-  Agent(subagent_type: "planner",
-    prompt: "mode:         2
-             replan-brief: $PLAN_DIR/waves/<NNN>/replan-brief.md
-             brief_INDEX:  $PLAN_DIR/waves/<NNN>/replan-brief.INDEX.md
-             current.md:   $PLAN_DIR/current.md
-             INDEX:        $PLAN_DIR/INDEX.md
-             artifact:     $PLAN_DIR/waves/<NNN>/artifact.md
-             findings:     $PLAN_DIR/waves/<NNN>/findings.jsonl
-             verify:       $PLAN_DIR/waves/<NNN>/verify.json
-             decision:     $PLAN_DIR/waves/<NNN>/decision.json
-             journal:      $PLAN_DIR/journal.md
-             Verdict:      revise")
-  update $PLAN_DIR/meta.json: meta.revision_rounds += 1
-  ```
-  After planner returns `STATUS: COMPLETE` → re-enter Phase 3 review loop, then Phase 4 (next wave).
-- `VERDICT=done` → proceed to Phase 5
+## Deterministic pre-processor
+
+Named driver function `pre_process(findings_path, current_md_path)`. Zero LLM cost.
+
+**Algorithm:**
+
+a0. Parse each finding from `findings_path` (JSONL). Validate required fields:
+    `{item_id, status, produced, dep_discoveries, outcome_risk, confidence}`.
+    - If finding is structurally valid: proceed to steps (a)–(d).
+    - If finding is missing required fields but contains `item_id` and `status` (migration shim):
+      Normalize to `{outcome_risk: false, dep_discoveries: [], confidence: "low"}`.
+      Log as `shim-normalized` in `$PLAN_DIR/pre-processor.log`.
+      Treat as dep_update input (low-confidence).
+    - If finding is unrecoverable (missing item_id or status):
+      Log as `unrecoverable-rejection` in `$PLAN_DIR/pre-processor.log`.
+      Force `transition_type=outcome_risk`.
+
+a. Buffer dep_discovery updates for affected pending items (target_resources, notes).
+
+b. Buffer `[x]` markings for completed items (wave: NNN, produced: [paths]).
+
+   Write current.md atomically (tmp→rename) with both (a) and (b) applied together — never partial-write.
+
+c. Compute newly-ready items: items where all `depends_on` entries are now `[x]`.
+
+d. Classify TRANSITION_TYPE:
+   - `clean`:        no outcome_risk findings, no shim-normalized findings,
+                     all dep_discoveries have confidence=high
+   - `dep_update`:   any dep_discovery has confidence=low (including shim-normalized),
+                     OR dep_discovery type requires semantic judgment (new item, dep removal)
+   - `outcome_risk`: any finding has outcome_risk=true, OR any finding was unrecoverable
+
+e. If TRANSITION_TYPE == clean: generate commit_message locally using commit-message-generator tier
+   (local 7B, templated from READY_ITEMS descriptions).
+
+f. Compress findings: strip prose_notes, write compressed copy to `$PLAN_DIR/waves/<NNN>/wave_summary_compressed.md`.
+
+g. Check PARALLEL_WAVES annotation in current.md items (v1: log only, always serial).
+
+h. Emit structured log line to `$PLAN_DIR/pre-processor.log`:
+   `{wave, transition_type, reason, dep_discoveries_count, low_confidence_count, outcome_risk_items, ready_items, rejected_findings}`
+
+**Return:**
+```
+{
+  type:                  "clean" | "dep_update" | "outcome_risk",
+  ready_items:           [item-id, ...],
+  commit_message:        string | null,   # null on dep_update/outcome_risk (planner derives)
+  affected_items:        [item-id, ...],  # items whose deps were updated; [] on clean
+  findings_compressed:   path,
+  rejected_findings:     [path, ...]
+}
+```
 
 ## Phase 5 — Final review
 
-When plan-orchestrator returns `VERDICT=done`:
+When the wave loop exits (all items done):
 
 ```
 Agent(subagent_type: "final-reviewer",
@@ -207,24 +328,26 @@ echo "Plan archived to: $ARCHIVE_DIR"
 ```
 Print summary to user.
 
-If `RECOMMENDATION: needs_items` → invoke planner (Mode 3) with path:
+If `RECOMMENDATION: needs_items`:
 ```
-Agent(subagent_type: "planner",
-  prompt: "mode:           3
-           intent:         <original user intent>
-           current.md:     $PLAN_DIR/current.md
-           INDEX:          $PLAN_DIR/INDEX.md
-           final_review:   $PLAN_DIR/final-review.md
-           journal:        $PLAN_DIR/journal.md
-           journal_offset: <line offset for last 5 entries>")
+# Planner adds gap items
+planner_result = Agent(subagent_type: "planner",
+  prompt: "signal:        final_review
+           final_review:  $PLAN_DIR/final-review.md
+           current.md:    $PLAN_DIR/current.md
+           learnings.md:  $PLAN_DIR/learnings.md")
+update $PLAN_DIR/meta.json: meta.revision_rounds += 1
+
+# Re-materialize READY_ITEMS from updated current.md (same logic as Phase 3 aftermath)
+READY_ITEMS = [items where status=pending and all depends_on are [x]]
+commit_message = <derived locally>
 ```
-Plan-orchestrator re-runs; gaps → immediately ready items (deps already complete).
-Cap: **20 revision rounds total** across all final-review iterations. Escalate to user if cap reached.
+Re-enter Phase 4 loop. Cap: **20 revision rounds total** across all iterations.
 
 ## Revision cap
 
 Total plan revision rounds (Phases 3 + 5 combined) capped at **20**. Counter tracked in `$PLAN_DIR/meta.json`:
 ```json
-{ "slug": "<slug>", "revision_rounds": 0, "created": "<iso-timestamp>", "status": "active" }
+{ "slug": "<slug>", "revision_rounds": 0, "wave_count": 0, "created": "<iso-timestamp>", "status": "active" }
 ```
 Increment on each review-plan or final-reviewer→planner cycle. At 20: pause and ask user to continue or abort.

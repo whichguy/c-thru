@@ -41,7 +41,7 @@ Follow existing patterns unless the digest requires otherwise. Pattern divergenc
    - `contextual` — useful for future waves, no escalation
    - `plan-material` — invalidates assumption or reveals dep gap
    - `crisis` — approach is broken, stop
-   - `augmentation` — scope gaps for planner Mode 3
+   - `augmentation` — scope gaps for planner (signal=final_review)
    - `improvement` — **Improvement required:** emit at least one per task. What would make next wave's version of this work easier or higher-quality? If nothing surfaces, write `{"class":"improvement","text":"none — task was clean"}`. Learnings-consolidator aggregates these into learnings.md between waves.
 
 3. `## Output INDEX` section → `outputs/implementer-<item>.INDEX.md`

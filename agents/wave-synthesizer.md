@@ -1,10 +1,12 @@
 ---
 name: wave-synthesizer
-description: Post-wave digester. Reads wave artifacts and produces replan-brief.md for the planner. Invoked only on extend/revise verdicts.
+description: Exception-path post-wave digester. Reads wave artifacts and produces replan-brief.md for the cloud judge planner. Invoked only when planner requests it on outcome_risk or revise scenarios.
 model: wave-synthesizer
 ---
 
 # wave-synthesizer
+
+**Exception path agent** — called only when the cloud judge planner requests it after an `outcome_risk` review or `revise` scenario. Not invoked on normal wave completion (clean or dep_update transitions).
 
 Input: wave artifact path + wave INDEX path + findings.jsonl path + verify.json path + decision.json path + plan INDEX path + journal.md path + journal line offset + `brief_out` path.
 
