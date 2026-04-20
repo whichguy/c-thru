@@ -7,7 +7,7 @@ The router wraps `claude`, rewrites the upstream endpoint (and credentials) on a
 ## Install
 
 ```sh
-git clone https://github.com/jameswiese/c-thru.git
+git clone https://github.com/whichguy/c-thru.git
 cd c-thru
 ./install.sh
 ```
@@ -33,11 +33,22 @@ claude-router --list                    # show all available models
 
 ## Environment
 
-- `CLAUDE_PROXY_BYPASS=1` — skip the proxy; transparent path only.
-- `CLAUDE_ROUTER_DEBUG=1` — verbose router logging.
-- `CLAUDE_PROXY_DEBUG=1` — verbose proxy logging.
+| Variable | Effect |
+|---|---|
+| `CLAUDE_PROXY_BYPASS=1` | Skip the proxy; transparent Anthropic path. |
+| `CLAUDE_ROUTER_DEBUG=1` | Verbose router logging. |
+| `CLAUDE_ROUTER_DEBUG=2` | + proxy port, Ollama vars, route keys. |
+| `CLAUDE_PROXY_DEBUG=1` | Verbose proxy logging. |
+| `CLAUDE_PROXY_DEBUG=2` | + full request/response tracing. |
+| `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for the HTTP hooks listener (default `9998`). |
+| `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection. |
+| `CLAUDE_PROXY_OLLAMA_PULL_TIMEOUT_MS` | Timeout for `ollama pull` via HTTP API (default 300 000 ms). |
+| `CLAUDE_PROXY_OLLAMA_WARM_TIMEOUT_MS` | Timeout for model warm-up (default 60 000 ms). |
+| `CLAUDE_PROXY_OLLAMA_KEEP_ALIVE` | Keep-alive duration passed to Ollama on warm requests. |
 
 Logs land at `~/.claude/proxy.*.log`. Kill a stuck proxy with `pkill -f claude-proxy`.
+
+> **Note:** `claude-proxy` communicates with Ollama via its HTTP API (`/api/tags`, `/api/pull`, `/api/ps`, `/api/generate`). The `ollama` CLI is not a runtime dependency.
 
 ## Model map
 
@@ -65,6 +76,9 @@ State lands in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/` — resumable across sess
 
 - **Agents:** `agents/` — specialized agents (see `agents/` directory). Each
   declares `model: <own-name>`; the proxy routes to the right hardware tier.
+- **Local-first planning:** dependency-update waves are handled by `planner-local`,
+  which runs on a local 27B+ model and never calls cloud — keeping iteration fast
+  and cost-free for mechanical changes.
 - **Skills:** `skills/c-thru-plan/` — orchestration logic; `skills/review-plan/`
   and `skills/review-fix/` for plan review and code quality loops.
 - **Hardware matrix:** `docs/hardware-profile-matrix.md`
