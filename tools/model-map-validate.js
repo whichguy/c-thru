@@ -27,6 +27,7 @@ const CAPABILITY_KEYS = new Set([
   'hard_reasoning',
 ]);
 const CONNECTIVITY_MODES = new Set(['connected', 'disconnect']);
+const LLM_MODES = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline']);
 
 function fail(message) {
   console.error(`model-map-validate: ${message}`);
@@ -153,6 +154,10 @@ function validateConfig(config, _errors) {
     }
   }
 
+  if (config.llm_mode != null && !LLM_MODES.has(config.llm_mode)) {
+    report(`'llm_mode' must be one of: ${[...LLM_MODES].join(', ')}`);
+  }
+
   if (config.llm_connectivity_mode != null && !CONNECTIVITY_MODES.has(config.llm_connectivity_mode)) {
     report("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
   }
@@ -178,6 +183,21 @@ function validateConfig(config, _errors) {
             }
             if (typeof profileValue[aliasName].disconnect_model !== 'string' || !profileValue[aliasName].disconnect_model.trim()) {
               report(`'llm_profiles.${profileName}.${aliasName}.disconnect_model' must be a non-empty string`);
+            }
+            const modesEntry = profileValue[aliasName].modes;
+            if (modesEntry != null) {
+              if (!isObject(modesEntry)) {
+                report(`'llm_profiles.${profileName}.${aliasName}.modes' must be an object`);
+              } else {
+                for (const modeKey of Object.keys(modesEntry)) {
+                  if (!LLM_MODES.has(modeKey)) {
+                    report(`'llm_profiles.${profileName}.${aliasName}.modes.${modeKey}' is not a valid llm_mode (expected one of: ${[...LLM_MODES].join(', ')})`);
+                  }
+                  if (typeof modesEntry[modeKey] !== 'string' || !modesEntry[modeKey].trim()) {
+                    report(`'llm_profiles.${profileName}.${aliasName}.modes.${modeKey}' must be a non-empty string`);
+                  }
+                }
+              }
             }
           }
         }

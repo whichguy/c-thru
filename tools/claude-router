@@ -475,17 +475,32 @@ log_llm_profile_selection() {
   ROUTER_PROFILE_SUMMARY_LOGGED=1
 }
 
-resolve_connectivity_mode() {
-  local mode="${CLAUDE_CONNECTIVITY_MODE:-${CLAUDE_LLM_CONNECTIVITY_MODE:-}}"
-  if [[ -n "$mode" ]]; then
-    printf '%s' "$mode"
+resolve_llm_mode() {
+  # Precedence: CLAUDE_LLM_MODE → CLAUDE_CONNECTIVITY_MODE (legacy) → CONFIG.llm_mode → CONFIG.llm_connectivity_mode (legacy) → 'connected'
+  if [[ -n "${CLAUDE_LLM_MODE:-}" ]]; then
+    printf '%s' "$CLAUDE_LLM_MODE"
+    return 0
+  fi
+  local legacy_env="${CLAUDE_CONNECTIVITY_MODE:-${CLAUDE_LLM_CONNECTIVITY_MODE:-}}"
+  if [[ -n "$legacy_env" ]]; then
+    [[ "$legacy_env" == "disconnect" ]] && printf 'offline' || printf 'connected'
     return 0
   fi
   if [[ -f "$CONFIG" ]]; then
-    mode="$(jq -r '.llm_connectivity_mode // "connected"' "$CONFIG" 2>/dev/null)"
+    local mode
+    mode="$(jq -r '.llm_mode // .llm_connectivity_mode // "connected"' "$CONFIG" 2>/dev/null)"
+    [[ -z "$mode" || "$mode" == "null" ]] && mode="connected"
+    [[ "$mode" == "disconnect" ]] && mode="offline"
+    printf '%s' "$mode"
+    return 0
   fi
-  [[ -z "$mode" || "$mode" == "null" ]] && mode="connected"
-  printf '%s' "$mode"
+  printf 'connected'
+}
+
+resolve_connectivity_mode() {
+  # Legacy shim: returns 'disconnect' for offline, 'connected' otherwise.
+  local m; m="$(resolve_llm_mode)"
+  [[ "$m" == "offline" ]] && printf 'disconnect' || printf 'connected'
 }
 
 resolve_profile_alias_model() {
@@ -500,13 +515,19 @@ resolve_profile_alias_model() {
     return 0
   }
 
-  local profile mode profile_key field resolved
+  local profile llm_mode profile_key resolved
   profile="$(resolve_llm_profile_name)" || return 1
-  mode="$(resolve_connectivity_mode)"
+  llm_mode="$(resolve_llm_mode)"
   profile_key="$(profile_alias_key "$requested")"
-  [[ "$mode" == "disconnect" ]] && field="disconnect_model" || field="connected_model"
-  resolved="$(jq -r --arg p "$profile" --arg key "$profile_key" --arg field "$field" '
-    (.llm_profiles // {})[$p][$key][$field] // empty
+  # llm_mode: <llm_mode> → model selection (modes[] first, then connected/disconnect_model)
+  resolved="$(jq -r --arg p "$profile" --arg key "$profile_key" --arg mode "$llm_mode" '
+    (.llm_profiles // {})[$p][$key] as $e |
+    if $e == null then empty
+    elif ($e.modes // {}) | has($mode) then $e.modes[$mode]
+    elif $mode == "offline" then $e.disconnect_model
+    elif $mode == "semi-offload" or $mode == "cloud-judge-only" then $e.disconnect_model
+    else $e.connected_model
+    end // empty
   ' "$CONFIG" 2>/dev/null)"
   if [[ -n "$resolved" && "$resolved" != "null" ]]; then
     printf '%s' "$resolved"

@@ -21,7 +21,7 @@
     }
   },
   "llm_active_profile": "auto",
-  "llm_connectivity_mode": "connected",
+  "llm_mode": "connected",
   "llm_profiles": {
     "16gb": {
       "default": {
