@@ -4,3 +4,5 @@ node_modules/
 proxy-usage-stats.json
 proxy-health.json
 ollama-prep-state.json
+wiki/.session-*
+wiki/.cache/

@@ -97,7 +97,7 @@ if (require.main === module) {
     process.exit(1);
   }
   const { map, applied, preserved } = applyRecommendations(effectiveMap, repoRoot);
-  if (process.env.CLAUDE_ROUTER_DEBUG >= '1') {
+  if (parseInt(process.env.CLAUDE_ROUTER_DEBUG || '0', 10) >= 1) {
     process.stderr.write(`c-thru: applied ${applied} recommendations (${preserved} user overrides preserved)\n`);
   }
   process.stdout.write(JSON.stringify(map, null, 2) + '\n');
