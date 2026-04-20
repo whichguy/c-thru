@@ -27,6 +27,7 @@ const CAPABILITY_KEYS = new Set([
   'hard_reasoning',
 ]);
 const CONNECTIVITY_MODES = new Set(['connected', 'disconnect']);
+const BACKEND_SIGIL_RE = /^(.+)@([A-Za-z0-9_-]+)$/;
 const LLM_MODES = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline']);
 
 function fail(message) {
@@ -230,6 +231,18 @@ function validateConfig(config, _errors) {
       if (!isObject(strategy)) report(`'fallback_strategies.${modelName}' must be an object`);
     }
     try { validateFallbackGraph(config); } catch (e) { report(e.message); }
+  }
+
+  if (config.model_routes != null && isObject(config.model_routes) && isObject(config.backends)) {
+    for (const [modelKey] of Object.entries(config.model_routes)) {
+      const sigilMatch = modelKey.match(BACKEND_SIGIL_RE);
+      if (sigilMatch) {
+        const [, , backendId] = sigilMatch;
+        if (!config.backends[backendId]) {
+          report(`model_routes key '${modelKey}' references @backend '${backendId}' which is not declared in backends`);
+        }
+      }
+    }
   }
 
   if (config.model_overrides != null) {

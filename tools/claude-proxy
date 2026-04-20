@@ -1469,6 +1469,8 @@ function attachFatalCallTimeout(up, res, targetUrl, timeoutMs, state) {
   return clear;
 }
 
+const BACKEND_SIGIL_RE = /^(.+)@([A-Za-z0-9_-]+)$/;
+
 function resolveBackend(model) {
   if (model == null || typeof model !== 'string' || !model.trim()) {
     return { error: 'model is required', status: 400 };
@@ -1482,6 +1484,17 @@ function resolveBackend(model) {
   const afterRoute = resolveRouteModel(model);
   const terminalModel = resolveLogicalAlias(afterRoute);
   const logicalRole = resolveCapabilityAlias(afterRoute);
+
+  // 1a. @<backend> sigil: "model@backend_id" binds directly to named backend
+  const sigilMatch = terminalModel.match(BACKEND_SIGIL_RE);
+  if (sigilMatch) {
+    const [, baseModel, backendId] = sigilMatch;
+    if (backends[backendId]) {
+      // Strip the @suffix — it is a routing sigil, not part of the model name
+      return { backend: { id: backendId, ...backends[backendId] }, effectiveModel: baseModel, logicalRole };
+    }
+    return { error: `@backend sigil '${backendId}' in '${terminalModel}' is not a declared backend`, status: 500, extra: { terminal_model: terminalModel } };
+  }
 
   // 2. Try exact match in model_routes
   if (modelRoutes[terminalModel] !== undefined) {
