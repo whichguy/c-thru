@@ -306,9 +306,64 @@ function validateConfig(config, _errors) {
   }
 }
 
+const VALID_HW_TIERS = new Set(['16gb', '32gb', '48gb', '64gb', '128gb']);
+
+function validateRecommendedMappings(config, _errors) {
+  const report = _errors
+    ? (msg) => _errors.push(msg)
+    : (msg) => fail(msg);
+
+  if (!isObject(config)) { report('top-level recommended-mappings must be an object'); return; }
+  if (config.schema_version !== 1) {
+    report(`'schema_version' must be 1, got ${JSON.stringify(config.schema_version)}`);
+  }
+  if (typeof config.updated_at !== 'string' || !config.updated_at.trim()) {
+    report("'updated_at' must be a non-empty string");
+  }
+
+  const validCaps = new Set(PROFILE_KEYS);
+  const recs = config.recommendations;
+  if (recs != null) {
+    if (!isObject(recs)) {
+      report("'recommendations' must be an object");
+    } else {
+      for (const [cap, tierMap] of Object.entries(recs)) {
+        if (!validCaps.has(cap)) {
+          report(`'recommendations.${cap}' is not a known capability alias (expected one of: ${PROFILE_KEYS.join(', ')})`);
+          continue;
+        }
+        if (!isObject(tierMap)) { report(`'recommendations.${cap}' must be an object`); continue; }
+        for (const [tier, model] of Object.entries(tierMap)) {
+          if (!VALID_HW_TIERS.has(tier)) {
+            report(`'recommendations.${cap}.${tier}' is not a valid hw tier (expected one of: ${[...VALID_HW_TIERS].join(', ')})`);
+          }
+          if (typeof model !== 'string' || !model.trim()) {
+            report(`'recommendations.${cap}.${tier}' must be a non-empty string`);
+          }
+        }
+      }
+    }
+  }
+
+  const a2cDefaults = config.agent_to_capability_defaults;
+  if (a2cDefaults != null) {
+    if (!isObject(a2cDefaults)) {
+      report("'agent_to_capability_defaults' must be an object");
+    } else {
+      for (const [agent, cap] of Object.entries(a2cDefaults)) {
+        if (typeof cap !== 'string' || !cap.trim()) {
+          report(`'agent_to_capability_defaults.${agent}' must be a non-empty string`);
+        } else if (!validCaps.has(cap)) {
+          report(`'agent_to_capability_defaults.${agent}' references unknown capability '${cap}'`);
+        }
+      }
+    }
+  }
+}
+
 function main() {
   const filePath = process.argv[2];
-  if (!filePath) fail('usage: model-map-validate.js <path-to-model-map.json>');
+  if (!filePath) fail('usage: model-map-validate.js <path-to-model-map.json> [--rec config/recommended-mappings.json]');
   const absolutePath = path.resolve(filePath);
   let parsed;
   try {
@@ -322,6 +377,25 @@ function main() {
     for (const e of errors) console.error(`model-map-validate: ${e}`);
     process.exit(1);
   }
+
+  // Optionally validate recommended-mappings.json when passed as second arg
+  const recFlag = process.argv.indexOf('--rec');
+  if (recFlag !== -1 && process.argv[recFlag + 1]) {
+    const recPath = path.resolve(process.argv[recFlag + 1]);
+    let recParsed;
+    try {
+      recParsed = JSON.parse(fs.readFileSync(recPath, 'utf8'));
+    } catch (e) {
+      fail(`failed to read '${recPath}': ${e.message}`);
+    }
+    const recErrors = [];
+    validateRecommendedMappings(recParsed, recErrors);
+    if (recErrors.length > 0) {
+      for (const e of recErrors) console.error(`model-map-validate (rec): ${e}`);
+      process.exit(1);
+    }
+    console.log('recommended-mappings: OK');
+  }
 }
 
 if (require.main === module) {
@@ -332,7 +406,10 @@ module.exports = {
   PROFILE_KEYS,
   CAPABILITY_KEYS,
   CONNECTIVITY_MODES,
+  LLM_MODES,
+  VALID_HW_TIERS,
   isObject,
   resolveRoute,
   validateConfig,
+  validateRecommendedMappings,
 };
