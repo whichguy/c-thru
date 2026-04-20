@@ -40,5 +40,5 @@ else
     msg=$(node "$validator" "$file_path" 2>&1 | head -5)
 fi
 
-printf '{"hookSpecificOutput":{"additionalContext":"%s"}}' \
+printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}' \
     "$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//')"

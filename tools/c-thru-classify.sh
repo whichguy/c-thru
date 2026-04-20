@@ -60,5 +60,5 @@ fi
 [ -n "$context" ] || exit 0
 
 # Output hookSpecificOutput with additionalContext
-printf '{"hookSpecificOutput":{"additionalContext":"%s"}}' \
+printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' \
     "$(printf '%s' "$context" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//')"
