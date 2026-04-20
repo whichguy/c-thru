@@ -2100,7 +2100,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
       });
       const respHeaders = { ...upRes.headers };
       if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-claude-proxy-served-by'] = effectiveModel;
-      addResolvedViaHeader(respHeaders, requestMeta);
+      addResolvedViaHeader(respHeaders, { capability: logicalRole, logicalRole, effectiveModel: effectiveModel || clientModel });
       res.writeHead(upRes.statusCode, respHeaders);
       res.end(raw);
     });
