@@ -345,7 +345,12 @@ planner_result = Agent(subagent_type: "planner",
            final_review:  $PLAN_DIR/final-review.md
            current.md:    $PLAN_DIR/current.md
            learnings.md:  $PLAN_DIR/learnings.md")
-update $PLAN_DIR/meta.json: meta.revision_rounds += 1
+# Read from disk before incrementing — Phase 5 may be re-entered after context compaction
+# (meta variable from Phase 3 would be stale). ?? 0 guard for upgrade path.
+meta = read $PLAN_DIR/meta.json
+meta.revision_rounds = meta.revision_rounds ?? 0
+meta.revision_rounds += 1
+write $PLAN_DIR/meta.json
 
 # Re-materialize READY_ITEMS from updated current.md (same logic as Phase 3 aftermath)
 READY_ITEMS = [items where status=pending and all depends_on are [x]]

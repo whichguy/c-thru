@@ -219,7 +219,7 @@ SUMMARY: <≤20 words>
 | COMPLETE | STATUS, CONFIDENCE, WROTE, INDEX, FINDINGS, FINDING_CATS, SUMMARY | UNCERTAINTY_REASONS omit when high |
 | PARTIAL | Same as COMPLETE | Crisis finding — orchestrator marks item failed after reviewer-fix cap |
 | ERROR | STATUS, SUMMARY | Unrecoverable setup failure |
-| RECUSE | STATUS, ATTEMPTED, RECUSAL_REASON, RECOMMEND, SUMMARY | PARTIAL_OUTPUT only when ATTEMPTED=yes; no WROTE/INDEX/FINDINGS |
+| RECUSE | STATUS, ATTEMPTED, RECUSAL_REASON, RECOMMEND, SUMMARY | PARTIAL_OUTPUT only when ATTEMPTED=yes; no WROTE/INDEX/FINDINGS. Exception: `security-reviewer` omits ATTEMPTED, PARTIAL_OUTPUT, and RECOMMEND (recuses before any work; no cascade target) |
 
 **uplift-decider contract (distinct):**
 
