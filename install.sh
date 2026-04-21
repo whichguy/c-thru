@@ -12,7 +12,7 @@ GRAY='\033[0;90m'
 NC='\033[0m'
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-${CLAUDE_DIR:-$HOME/.claude}}"
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
 TOOLS_SRC="$REPO_DIR/tools"
 TOOLS_DEST="$CLAUDE_DIR/tools"
 
@@ -338,7 +338,7 @@ install_planner_hint_hook() {
         local hint_val
         hint_val=$(jq -r '.planner_hint // "unset"' "$ovr" 2>/dev/null || echo "unset")
         if [ "$hint_val" = "false" ]; then
-            echo -e "  ${GRAY}✓  planner hint opted out — skipping hook${NC}"
+            echo -e "  ${GRAY}✓  planner hint opted out — skipping hook (re-enable: /c-thru-config planning on)${NC}"
             return 0
         fi
     fi
