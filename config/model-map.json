@@ -61,7 +61,9 @@
       "pattern-coder":           { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
       "deep-coder":              { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
       "local-planner":           { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
-      "commit-message-generator":{ "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" }
+      "commit-message-generator":{ "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
+      "deep-coder-cloud":        { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "hard_fail" },
+      "code-analyst-cloud":      { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "hard_fail" }
     },
     "32gb": {
       "default": {
@@ -101,7 +103,9 @@
       "pattern-coder":           { "connected_model": "qwen3.5:9b",  "disconnect_model": "qwen3.5:9b",  "on_failure": "cascade" },
       "deep-coder":              { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "cascade" },
       "local-planner":           { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "cascade" },
-      "commit-message-generator":{ "connected_model": "qwen3:1.7b",  "disconnect_model": "qwen3:1.7b",  "on_failure": "cascade" }
+      "commit-message-generator":{ "connected_model": "qwen3:1.7b",  "disconnect_model": "qwen3:1.7b",  "on_failure": "cascade" },
+      "deep-coder-cloud":        { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "hard_fail" },
+      "code-analyst-cloud":      { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "hard_fail" }
     },
     "48gb": {
       "default": {
@@ -143,7 +147,9 @@
       "pattern-coder":           { "connected_model": "qwen3.5:9b",       "disconnect_model": "qwen3.6:35b",  "on_failure": "cascade" },
       "deep-coder":              { "connected_model": "gpt-oss:20b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.5:35b-a3b-coding-nvfp4", "on_failure": "cascade" },
       "local-planner":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
-      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",   "on_failure": "cascade" }
+      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",   "on_failure": "cascade" },
+      "deep-coder-cloud":        { "connected_model": "claude-sonnet-4-6", "disconnect_model": "qwen3.6:35b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.5:35b-a3b-coding-nvfp4", "on_failure": "hard_fail" },
+      "code-analyst-cloud":      { "connected_model": "claude-sonnet-4-6", "disconnect_model": "qwen3.6:35b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "hard_fail" }
     },
     "64gb": {
       "default": {
@@ -185,7 +191,9 @@
       "pattern-coder":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "gpt-oss:20b",  "on_failure": "cascade" },
       "deep-coder":              { "connected_model": "gpt-oss:20b",      "disconnect_model": "gpt-oss:20b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.5:35b-a3b-coding-nvfp4", "on_failure": "cascade" },
       "local-planner":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
-      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",   "on_failure": "cascade" }
+      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",   "on_failure": "cascade" },
+      "deep-coder-cloud":        { "connected_model": "claude-sonnet-4-6", "disconnect_model": "gpt-oss:20b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.5:35b-a3b-coding-nvfp4", "on_failure": "hard_fail" },
+      "code-analyst-cloud":      { "connected_model": "claude-sonnet-4-6", "disconnect_model": "gpt-oss:20b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "gpt-oss:20b",                "on_failure": "hard_fail" }
     },
     "128gb": {
       "default": {
@@ -227,7 +235,9 @@
       "pattern-coder":           { "connected_model": "qwen3-coder:30b",  "disconnect_model": "gpt-oss:20b",     "on_failure": "cascade" },
       "deep-coder":              { "connected_model": "qwen3-coder:30b",  "disconnect_model": "qwen3-coder:30b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3-coder:30b",             "on_failure": "cascade" },
       "local-planner":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",     "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
-      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",      "on_failure": "cascade" }
+      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",      "on_failure": "cascade" },
+      "deep-coder-cloud":        { "connected_model": "claude-sonnet-4-6", "disconnect_model": "qwen3-coder:30b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3-coder:30b",             "on_failure": "hard_fail" },
+      "code-analyst-cloud":      { "connected_model": "claude-sonnet-4-6", "disconnect_model": "gpt-oss:20b",     "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "gpt-oss:20b",                "on_failure": "hard_fail" }
     }
   },
   "model_routes": {
@@ -488,6 +498,10 @@
     "wave-synthesizer":     "code-analyst",
     "learnings-consolidator": "pattern-coder",
     "explorer":             "pattern-coder",
-    "discovery-advisor":    "pattern-coder"
+    "discovery-advisor":    "pattern-coder",
+    "uplift-decider":       "judge",
+    "implementer-cloud":    "deep-coder-cloud",
+    "test-writer-cloud":    "code-analyst-cloud",
+    "converger":            "code-analyst"
   }
 }
