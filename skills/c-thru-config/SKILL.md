@@ -4,7 +4,7 @@ description: |
   Unified c-thru configuration: diagnose the active setup, resolve what a
   capability alias maps to, switch connectivity modes, remap per-capability
   models, validate the config, or reload the running proxy.
-  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] | remap <cap> <model> [--tier <tier>] | validate | reload
+  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] | validate | reload
 color: cyan
 ---
 
@@ -18,12 +18,14 @@ print the usage block:
 
 ```
 Usage:
-  /c-thru-config diag [--verbose]                     full diagnostics view
-  /c-thru-config resolve <capability>                 what does X resolve to right now?
-  /c-thru-config mode [<mode>]                        read or set connectivity mode
-  /c-thru-config remap <cap> <model> [--tier <tier>]  rebind a capability → model
-  /c-thru-config validate                             schema check
-  /c-thru-config reload                               SIGHUP the running proxy
+  /c-thru-config diag [--verbose]                                 full diagnostics view
+  /c-thru-config resolve <capability>                             what does X resolve to right now?
+  /c-thru-config mode [<mode>] [--reload]                         read or set connectivity mode
+  /c-thru-config remap <cap> <model> [--tier <tier>] [--reload]   rebind a capability → model
+  /c-thru-config route <model> <backend>                          bind a model name → backend
+  /c-thru-config backend <name> <url> [--kind <kind>] [--auth-env <VAR>]  add/update a backend
+  /c-thru-config validate                                         schema check
+  /c-thru-config reload                                           SIGHUP the running proxy
 
 Modes: connected | semi-offload | cloud-judge-only | offline
 ```
@@ -107,7 +109,7 @@ Exit codes: 0 on resolved, 2 on unknown capability, 1 on config error.
 ## Subcommand: `mode`
 
 **Usage:** `/c-thru-config mode` — show active mode and its source
-**Usage:** `/c-thru-config mode <mode>` — persistently set mode
+**Usage:** `/c-thru-config mode <mode> [--reload]` — persistently set mode; `--reload` sends SIGHUP immediately after
 
 ### Read (no second argument in `$ARGUMENTS`):
 
@@ -147,7 +149,25 @@ node "$CLAUDE_DIR/tools/model-map-edit" \
 ```
 
 Substitute `<MODE>` with the actual mode argument. On success, print:
-`mode set to <MODE> — run '/c-thru-config reload' to apply to running proxy`
+- If `--reload` is absent: `mode set to <MODE> — run '/c-thru-config reload' to apply to running proxy`
+- If `--reload` is present: `mode set to <MODE>`
+
+If `--reload` is present in `$ARGUMENTS`, also send SIGHUP immediately after a successful edit:
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+PID_FILE="$CLAUDE_DIR/proxy.pid"
+if [ -f "$PID_FILE" ]; then
+  PID=$(cat "$PID_FILE" 2>/dev/null)
+  if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+    kill -HUP "$PID" && echo "proxy reloaded (pid $PID)"
+  else
+    echo "proxy not running — config saved but not reloaded"
+  fi
+else
+  echo "proxy not running — config saved but not reloaded"
+fi
+```
 
 If `model-map-edit` is not found at that path, print:
 `c-thru-config: model-map-edit not found — run ./install.sh first`
@@ -156,12 +176,13 @@ If `model-map-edit` is not found at that path, print:
 
 ## Subcommand: `remap`
 
-**Usage:** `/c-thru-config remap <capability> <model> [--tier <tier>]`
+**Usage:** `/c-thru-config remap <capability> <model> [--tier <tier>] [--reload]`
 
 Rebinds `llm_profiles[<tier>][<capability>]` in the user's overrides.
 Default tier is the active hardware tier unless `--tier` is given.
+`--reload` sends SIGHUP to the running proxy immediately after a successful edit.
 
-Extract `<CAPABILITY>`, `<MODEL>`, and optionally `--tier <TIER>` from `$ARGUMENTS`.
+Extract `<CAPABILITY>`, `<MODEL>`, and optionally `--tier <TIER>` and `--reload` from `$ARGUMENTS`.
 If capability or model is missing, print usage and stop.
 
 Steps:
@@ -225,8 +246,90 @@ node "$CLAUDE_DIR/tools/model-map-edit" \
 > ```
 
 On success, print:
+- If `--reload` is absent:
+  ```
+  remapped <CAPABILITY> → <MODEL>  (tier: <TIER>)
+  run '/c-thru-config reload' to apply to running proxy
+  ```
+- If `--reload` is present:
+  ```
+  remapped <CAPABILITY> → <MODEL>  (tier: <TIER>)
+  ```
+
+If `--reload` is present, also send SIGHUP immediately after a successful edit (same inline bash as the `mode --reload` block above).
+
+---
+
+## Subcommand: `route`
+
+**Usage:** `/c-thru-config route <model> <backend>`
+
+Binds a specific model name to a named backend in `model_routes`. Any request using that
+exact model string will be forwarded to `<backend>` regardless of the route graph.
+
+Extract `<MODEL>` and `<BACKEND>` from `$ARGUMENTS`. Both are required.
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+SPEC=$(node -e "process.stdout.write(JSON.stringify({model_routes: {[process.argv[1]]: process.argv[2]}}))" -- "<MODEL>" "<BACKEND>")
+node "$CLAUDE_DIR/tools/model-map-edit" \
+  "$CLAUDE_DIR/model-map.system.json" \
+  "$CLAUDE_DIR/model-map.overrides.json" \
+  "$CLAUDE_DIR/model-map.json" \
+  "$SPEC"
 ```
-remapped <CAPABILITY> → <MODEL>  (tier: <TIER>)
+
+On success, print:
+```
+bound <MODEL> → backend '<BACKEND>'
+run '/c-thru-config reload' to apply to running proxy
+```
+
+To remove a binding, delete the key directly from `~/.claude/model-map.overrides.json`
+(setting it to an empty string will be rejected by model-map-edit — use `null` in a raw
+JSON edit instead).
+
+---
+
+## Subcommand: `backend`
+
+**Usage:** `/c-thru-config backend <name> <url> [--kind <kind>] [--auth-env <VAR>]`
+
+Adds or updates a backend entry in `backends`. Default `kind` is `ollama` when omitted.
+`--auth-env` sets the env var name that holds the API key (e.g. `OPENROUTER_API_KEY`).
+
+**Note:** this subcommand **replaces** the entire backend entry — it does not merge with
+the existing one. If the backend already has fields (e.g. `auth_env`) that you want to
+keep, you must re-pass them explicitly, or edit `~/.claude/model-map.overrides.json`
+directly.
+
+Extract `<NAME>`, `<URL>`, optional `--kind <KIND>`, and optional `--auth-env <VAR>` from
+`$ARGUMENTS`. `<NAME>` and `<URL>` are required.
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+SPEC=$(node -e "
+'use strict';
+const name = process.argv[1], url = process.argv[2];
+const kind = process.argv[3] || 'ollama';
+const authEnv = process.argv[4] || null;
+const entry = { url, kind };
+if (authEnv) entry.auth_env = authEnv;
+process.stdout.write(JSON.stringify({ backends: { [name]: entry } }));
+" -- "<NAME>" "<URL>" "<KIND_OR_EMPTY>" "<AUTH_ENV_OR_EMPTY>")
+node "$CLAUDE_DIR/tools/model-map-edit" \
+  "$CLAUDE_DIR/model-map.system.json" \
+  "$CLAUDE_DIR/model-map.overrides.json" \
+  "$CLAUDE_DIR/model-map.json" \
+  "$SPEC"
+```
+
+Substitute `<KIND_OR_EMPTY>` with the `--kind` value (or empty string to use default `ollama`),
+and `<AUTH_ENV_OR_EMPTY>` with the `--auth-env` value (or empty string to omit).
+
+On success, print:
+```
+backend '<NAME>' set  (url: <URL>, kind: <KIND>)
 run '/c-thru-config reload' to apply to running proxy
 ```
 
@@ -383,4 +486,44 @@ CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
 echo ""
 echo "Backends:"
 "$CLAUDE_DIR/tools/c-thru" --list 2>&1 | head -30 || echo "  (c-thru --list unavailable)"
+```
+
+### Step 4 — Ollama drift probe (skip if ollama not installed)
+
+Compares the Ollama models referenced by the active tier's profile against those actually
+pulled. Prints a one-line summary of any missing models.
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+if command -v ollama >/dev/null 2>&1; then
+  echo ""
+  ollama list 2>/dev/null | node -e "
+'use strict';
+const fs = require('fs'), os = require('os'), path = require('path'), readline = require('readline');
+const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
+const { resolveActiveTier } = require(path.join(CLAUDE_DIR, 'tools', 'model-map-resolve.js'));
+let config = {};
+try { config = JSON.parse(fs.readFileSync(CLAUDE_DIR + '/model-map.json','utf8')); } catch {}
+const tier = resolveActiveTier(config);
+const profile = (config.llm_profiles || {})[tier] || {};
+const refs = new Set();
+for (const e of Object.values(profile)) {
+  if (e && typeof e === 'object') {
+    [e.connected_model, e.disconnect_model, ...Object.values(e.modes || {})].forEach(m => {
+      if (m && m.includes(':') && !m.includes('claude') && !m.includes('gpt')) refs.add(m);
+    });
+  }
+}
+const pulled = new Set();
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+rl.on('line', l => { const t = l.split(/\s+/)[0]; if (t && t !== 'NAME') pulled.add(t); });
+rl.on('close', () => {
+  const missing = [...refs].filter(m => !pulled.has(m));
+  if (missing.length > 0)
+    console.log('ollama drift: ' + missing.join(', ') + ' not pulled — run: ollama pull <model>');
+  else if (refs.size > 0)
+    console.log('ollama: all ' + refs.size + ' capability-referenced model(s) present');
+});
+  " 2>/dev/null
+fi
 ```
