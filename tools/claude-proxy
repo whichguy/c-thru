@@ -2832,10 +2832,17 @@ const hooksServer = require('http').createServer((req, res) => {
 
           if (issues.length > 0) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            const hookOut = eventName
-              ? { hookEventName: eventName, additionalContext: issues.join('\n') }
-              : { additionalContext: issues.join('\n') };
-            res.end(JSON.stringify({ hookSpecificOutput: hookOut }));
+            // Side-effect-only events (PostCompact, PreCompact, SessionEnd, Stop, etc.)
+            // do not accept hookSpecificOutput — only top-level systemMessage is valid.
+            const SIDE_EFFECT_EVENTS = new Set(['PostCompact', 'PreCompact', 'SessionEnd', 'Stop', 'Notification', 'WorktreeRemove', 'InstructionsLoaded', 'StopFailure', 'CwdChanged', 'FileChanged']);
+            if (eventName && SIDE_EFFECT_EVENTS.has(eventName)) {
+              res.end(JSON.stringify({ systemMessage: issues.join('\n') }));
+            } else {
+              const hookOut = eventName
+                ? { hookEventName: eventName, additionalContext: issues.join('\n') }
+                : { additionalContext: issues.join('\n') };
+              res.end(JSON.stringify({ hookSpecificOutput: hookOut }));
+            }
           } else {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end('{}');
