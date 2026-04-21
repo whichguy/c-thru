@@ -94,8 +94,40 @@ function maybeSynthesizeV12Keys(effective) {
     }
   }
 
+  // Build a set of (tier, capability) keys already covered by fallback_chains
+  // so we don't synthesize redundant legacy equivalents for those pairs.
+  const fallbackChainsCovered = new Set();
+  if (effective.fallback_chains && typeof effective.fallback_chains === 'object') {
+    for (const [tier, capMap] of Object.entries(effective.fallback_chains)) {
+      if (capMap && typeof capMap === 'object') {
+        for (const cap of Object.keys(capMap)) {
+          fallbackChainsCovered.add(`${tier}:${cap}`);
+        }
+      }
+    }
+  }
+
   const modelsArray = [];
   for (const [modelName, strategy] of Object.entries(effective.fallback_strategies)) {
+    // Skip synthesis for models covered by capability-layer fallback_chains
+    // (determined by checking if any tier covers the capability resolving to this model)
+    let coveredByChain = false;
+    if (fallbackChainsCovered.size > 0 && effective.llm_profiles) {
+      for (const [tier, profile] of Object.entries(effective.llm_profiles)) {
+        if (!profile || typeof profile !== 'object') continue;
+        for (const [cap, entry] of Object.entries(profile)) {
+          if (entry && (entry.connected_model === modelName || entry.disconnect_model === modelName)) {
+            if (fallbackChainsCovered.has(`${tier}:${cap}`)) {
+              coveredByChain = true;
+              break;
+            }
+          }
+        }
+        if (coveredByChain) break;
+      }
+    }
+    if (coveredByChain) continue;
+
     const seen = new Set();
     if (strategy.event) {
       for (const candidates of Object.values(strategy.event)) {
