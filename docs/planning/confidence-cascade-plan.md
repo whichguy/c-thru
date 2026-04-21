@@ -232,7 +232,9 @@ surface to user
 | `reviewer-fix` | `implementer-cloud` | Approach broken → restart at cloud implementer. Skips `deep-coder` tier: review recusal means the code requires redesign — a local re-implementation attempt would reproduce the same failure |
 | `test-writer` | `test-writer-cloud` | Same role, higher tier (†Wave-2 — see §3.7) |
 | `planner-local` | `planner` | Cloud judge; already natural `outcome_risk` path |
-| `implementer-cloud` | `judge` | Cloud judge as high-capability implementer |
+| `converger` | `implementer-cloud` | Unresolvable parallel conflict; cloud implementer resolves |
+| `test-writer-cloud` | `judge` (sentinel) | Stop signal — orchestrator marks blocked + surfaces to user |
+| `implementer-cloud` | `judge` (sentinel) | Stop signal — orchestrator marks blocked + surfaces to user; does NOT dispatch a judge agent |
 | `judge` | surface to user | Last resort only |
 
 ### 3.5 Orchestrator escalation tracking

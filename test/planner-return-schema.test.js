@@ -506,6 +506,106 @@ SUMMARY: recused after thinking`;
 }
 
 // ---------------------------------------------------------------------------
+// Section 6 — uplift-decider VERDICT parsing (Wave-2 orchestrator dispatch)
+// ---------------------------------------------------------------------------
+
+console.log('\n6. uplift-decider VERDICT parsing');
+
+// uplift-decider returns STATUS: COMPLETE + VERDICT — no Work/Findings/INDEX sections.
+// Orchestrator must detect VERDICT before section parsing to avoid marking item failed.
+
+function parseUpliftDeciderResponse(raw) {
+  const text = stripThinkTags(raw);
+  const result = {};
+  for (const line of text.trim().split('\n')) {
+    const m = line.match(/^([A-Z_]+):\s*(.*)$/);
+    if (!m) continue;
+    result[m[1]] = m[2].trim();
+  }
+  return result;
+}
+
+function classifyUpliftVerdict(r) {
+  if (r.STATUS !== 'COMPLETE') return 'not-complete';
+  if (!r.VERDICT) return 'missing-verdict';
+  if (r.VERDICT === 'accept') return 'accept';
+  if (r.VERDICT === 'uplift') return 'uplift';
+  if (r.VERDICT === 'restart') return 'restart';
+  return 'unknown-verdict';
+}
+
+// 13. VERDICT: accept — orchestrator promotes local partial output, marks COMPLETE
+{
+  const raw = `STATUS: COMPLETE
+VERDICT: accept
+CLOUD_CONFIDENCE: high
+RATIONALE: all success criteria satisfied by partial output as written
+SUMMARY: local output accepted without cloud dispatch`;
+  const r = parseUpliftDeciderResponse(raw);
+  const action = classifyUpliftVerdict(r);
+  (action === 'accept' && r.STATUS === 'COMPLETE' && r.CLOUD_CONFIDENCE === 'high')
+    ? ok('VERDICT=accept — promote partial output, mark COMPLETE')
+    : fail('VERDICT=accept — promote partial output, mark COMPLETE', JSON.stringify(r));
+}
+
+// 14. VERDICT: uplift — orchestrator dispatches implementer-cloud with escalation context
+{
+  const raw = `STATUS: COMPLETE
+VERDICT: uplift
+CLOUD_CONFIDENCE: medium
+RATIONALE: core approach sound but two criteria unsatisfied
+PATCH_SCOPE: extend error handling in processAuth; add null-guard before token.claims access
+SUMMARY: partial output viable; cloud should extend not rewrite`;
+  const r = parseUpliftDeciderResponse(raw);
+  const action = classifyUpliftVerdict(r);
+  (action === 'uplift' && r.PATCH_SCOPE && r.PATCH_SCOPE.length > 0)
+    ? ok('VERDICT=uplift — dispatch implementer-cloud with uplift context')
+    : fail('VERDICT=uplift — dispatch implementer-cloud with uplift context', JSON.stringify(r));
+}
+
+// 15. VERDICT: restart — orchestrator dispatches implementer-cloud with clean original digest
+{
+  const raw = `STATUS: COMPLETE
+VERDICT: restart
+CLOUD_CONFIDENCE: low
+RATIONALE: core approach is structurally wrong — anchoring on draft would propagate mistake
+SUMMARY: discard partial output; restart from original task digest`;
+  const r = parseUpliftDeciderResponse(raw);
+  const action = classifyUpliftVerdict(r);
+  (action === 'restart' && !r.PATCH_SCOPE)
+    ? ok('VERDICT=restart — dispatch with clean digest, PATCH_SCOPE absent')
+    : fail('VERDICT=restart — dispatch with clean digest, PATCH_SCOPE absent', JSON.stringify(r));
+}
+
+// 16. uplift-decider missing VERDICT → mark item failed
+{
+  const raw = `STATUS: COMPLETE
+RATIONALE: something happened
+SUMMARY: malformed response`;
+  const r = parseUpliftDeciderResponse(raw);
+  const action = classifyUpliftVerdict(r);
+  (action === 'missing-verdict')
+    ? ok('uplift-decider missing VERDICT → mark item failed')
+    : fail('uplift-decider missing VERDICT → mark item failed', `action: ${action}`);
+}
+
+// 17. uplift-decider VERDICT: accept has no ## Work/Findings/INDEX sections (routing-only response)
+{
+  const raw = `STATUS: COMPLETE
+VERDICT: accept
+CLOUD_CONFIDENCE: high
+RATIONALE: all success criteria satisfied
+SUMMARY: accept local output`;
+  // Confirm: no section headers present — orchestrator must NOT treat missing sections as failure
+  const hasWorkSection = raw.includes('## Work completed');
+  const hasFindings = raw.includes('## Findings');
+  const hasIndex = raw.includes('## Output INDEX');
+  (!hasWorkSection && !hasFindings && !hasIndex)
+    ? ok('uplift-decider accept response: no Work/Findings/INDEX sections (routing-only)')
+    : fail('uplift-decider accept response: unexpected section headers found');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 
