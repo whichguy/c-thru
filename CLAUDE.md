@@ -98,6 +98,17 @@ Top-level keys: `backends`, `routes`, `models` (models is sparse — most resolu
 
 MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including all `llm_capabilities` entries plus `ask_model` and `list_models`). Called by Claude Code as a local MCP server — registered in `~/.claude.json` by `install.sh`.
 
+## Proxy CLI Flags
+
+`claude-proxy` accepts these flags in addition to env vars:
+
+| Flag | Effect |
+|---|---|
+| `--config <path>` | Override config path (sets `CLAUDE_MODEL_MAP_PATH`). `/ping` reports `config_source: "override"`. |
+| `--profile <tier>` | Force hardware tier (sets `CLAUDE_LLM_PROFILE`). `/ping` reports `active_tier`. |
+| `--port <n>` | Bind to fixed port (suppresses `READY <port>` stdout line). |
+| `--hooks-port <n>` | Bind hooks listener to fixed port (default 9998). |
+
 ## Key Environment Variables
 
 | Variable | Effect |
