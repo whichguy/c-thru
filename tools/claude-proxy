@@ -159,6 +159,8 @@ const _args = process.argv.slice(2);
 for (let i = 0; i < _args.length; i++) {
   if (_args[i] === '--port' && _args[i + 1]) process.env.CLAUDE_PROXY_PORT = _args[++i];
   if (_args[i] === '--hooks-port' && _args[i + 1]) process.env.CLAUDE_PROXY_HOOKS_PORT = _args[++i];
+  if (_args[i] === '--config'  && _args[i + 1]) process.env.CLAUDE_MODEL_MAP_PATH = _args[++i];
+  if (_args[i] === '--profile' && _args[i + 1]) process.env.CLAUDE_LLM_PROFILE    = _args[++i];
 }
 
 const { classifyIntent } = require('./llm-capabilities-shared');
@@ -2186,6 +2188,7 @@ const server = http.createServer(async (req, res) => {
       pid: process.pid,
       config_path: CONFIG_PATH,
       config_source: CONFIG_SOURCE,
+      active_tier: resolveActiveTier(CONFIG),
     });
   }
 
