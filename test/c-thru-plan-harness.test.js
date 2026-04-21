@@ -583,6 +583,31 @@ console.log('\n7. update-marker — [~] → [x] with produced: appended');
   assert(wd.items.get('item-1').escalation_policy_source === 'step4b', 'escalation_policy_source updated');
 }
 
+// escalation_log append via --escal-log-append
+{
+  const tmp = tmpDir();
+  const cMd = path.join(tmp, 'current.md');
+  const wMd = path.join(tmp, 'wave.md');
+  fs.writeFileSync(cMd, sampleCurrentMd);
+  runHarness(['batch', '--current-md', cMd, '--items', 'item-1', '--wave-id', '1', '--commit-msg', 't', '--output', wMd]);
+
+  const entry1 = { agent: 'implementer', tier: 'deep-coder', attempted: true, recusal_reason: 'no pattern', partial_output: null };
+  runHarness(['update-marker', '--wave-md', wMd, '--item', 'item-1', '--status', '~',
+    '--escal-log-append', JSON.stringify(entry1), '--escal-depth', '1']);
+  let wd = parseWaveMd(fs.readFileSync(wMd, 'utf8'));
+  assert(wd.items.get('item-1').escalation_log.length === 1, 'first escal-log-append: 1 entry');
+  assert(wd.items.get('item-1').escalation_log[0].agent === 'implementer', 'log entry agent correct');
+  assert(wd.items.get('item-1').escalation_depth === 1, 'escalation_depth updated to 1');
+
+  const entry2 = { agent: 'implementer-cloud', tier: 'deep-coder-cloud', attempted: true, recusal_reason: 'judge sentinel', partial_output: null };
+  runHarness(['update-marker', '--wave-md', wMd, '--item', 'item-1', '--status', '!',
+    '--escal-log-append', JSON.stringify(entry2), '--escal-depth', '2']);
+  wd = parseWaveMd(fs.readFileSync(wMd, 'utf8'));
+  assert(wd.items.get('item-1').escalation_log.length === 2, 'second escal-log-append: 2 entries');
+  assert(wd.items.get('item-1').escalation_log[1].agent === 'implementer-cloud', 'second log entry agent correct');
+  assert(wd.items.get('item-1').status === 'blocked', 'status updated to blocked');
+}
+
 // ── 8. update-marker — concurrent write rejection ─────────────────────────────
 
 console.log('\n8. update-marker — concurrent write rejection (lock)');

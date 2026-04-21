@@ -682,19 +682,25 @@ function cmdInjectContract(cliArgs) {
  *                 [--produced <csv>] [--wave <N>]
  *                 [--escal-policy <policy>] [--escal-policy-source <source>]
  *                 [--escal-depth <N>]
+ *                 [--escal-log-append <json-object>]
+ *
+ * --escal-log-append: JSON string of a single log entry to append to escalation_log[].
+ *   Reads current log, appends the entry, writes back — all inside the lock.
+ *   Example: '{"agent":"implementer","tier":"deep-coder","attempted":true,"recusal_reason":"..."}'
  *
  * Exit codes: 0 success, 1 error (item not found, lock contention, parse failure)
  * @param {string[]} cliArgs
  */
 function cmdUpdateMarker(cliArgs) {
-  const waveMdPath  = arg(cliArgs, '--wave-md',             true);
-  const itemId      = arg(cliArgs, '--item',                true);
-  const newStatus   = arg(cliArgs, '--status',              true);
-  const producedCsv = arg(cliArgs, '--produced');
-  const waveNumArg  = arg(cliArgs, '--wave');
-  const escalPol    = arg(cliArgs, '--escal-policy');
-  const escalSrc    = arg(cliArgs, '--escal-policy-source');
-  const escalDepArg = arg(cliArgs, '--escal-depth');
+  const waveMdPath     = arg(cliArgs, '--wave-md',             true);
+  const itemId         = arg(cliArgs, '--item',                true);
+  const newStatus      = arg(cliArgs, '--status',              true);
+  const producedCsv    = arg(cliArgs, '--produced');
+  const waveNumArg     = arg(cliArgs, '--wave');
+  const escalPol       = arg(cliArgs, '--escal-policy');
+  const escalSrc       = arg(cliArgs, '--escal-policy-source');
+  const escalDepArg    = arg(cliArgs, '--escal-depth');
+  const escalLogAppend = arg(cliArgs, '--escal-log-append');
 
   const VALID_STATUS = new Set(['x', '~', '!', '+']);
   if (!VALID_STATUS.has(newStatus)) {
@@ -720,11 +726,18 @@ function cmdUpdateMarker(cliArgs) {
 
     const STATUS_MAP = { 'x': 'complete', '~': 'in_progress', '!': 'blocked', '+': 'extend' };
     item.status = STATUS_MAP[newStatus];
-    if (producedCsv)  item.produced  = producedCsv.split(',').map(s => s.trim()).filter(Boolean);
-    if (waveNumArg)   item.wave_num  = parseInt(waveNumArg, 10);
-    if (escalPol)     item.escalation_policy = escalPol;
-    if (escalSrc)     item.escalation_policy_source = escalSrc;
-    if (escalDepArg)  item.escalation_depth = parseInt(escalDepArg, 10);
+    if (producedCsv)   item.produced  = producedCsv.split(',').map(s => s.trim()).filter(Boolean);
+    if (waveNumArg)    item.wave_num  = parseInt(waveNumArg, 10);
+    if (escalPol)      item.escalation_policy = escalPol;
+    if (escalSrc)      item.escalation_policy_source = escalSrc;
+    if (escalDepArg)   item.escalation_depth = parseInt(escalDepArg, 10);
+    if (escalLogAppend) {
+      let entry;
+      try { entry = JSON.parse(escalLogAppend); } catch (e) {
+        die(`--escal-log-append is not valid JSON: ${e.message}`);
+      }
+      item.escalation_log = [...(item.escalation_log || []), entry];
+    }
 
     writeWaveMd(waveData, waveMdPath);
     process.stdout.write(`update-marker: ${itemId} → [${newStatus}] (${STATUS_MAP[newStatus]})\n`);
@@ -793,7 +806,7 @@ Subcommands:
   update-marker   --wave-md <path> --item <id> --status <x|~|!|+>
                   [--produced <csv>] [--wave <N>]
                   [--escal-policy <policy>] [--escal-policy-source <source>]
-                  [--escal-depth <N>]
+                  [--escal-depth <N>] [--escal-log-append <json-object>]
   targets         --wave-md <path>
 
 Exit codes: 0 success, 1 abort/error, 2 cycle detected (batch)
