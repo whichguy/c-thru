@@ -41,69 +41,13 @@ Modes: connected | semi-offload | cloud-judge-only | offline | cloud-best-qualit
 **Usage:** `/c-thru-config resolve <capability>`
 
 Answers "under the current mode and hardware tier, what concrete model will
-`<capability>` use?" Accepts capability aliases (`deep-coder`) and agent names
-(`implementer`).
+`<capability>` use?" Accepts capability aliases (`deep-coder`) and agent names (`implementer`).
 
-Extract the capability/agent name from `$ARGUMENTS` (the word after `resolve`).
-If missing, print usage and stop.
-
-Run the bash block below, substituting `<CAPABILITY>` with the actual argument
-(properly shell-quoted):
+Extract capability name from `$ARGUMENTS`. If missing, print usage and stop.
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-node -e "
-'use strict';
-const fs = require('fs'), os = require('os'), path = require('path');
-const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
-const mapPath = CLAUDE_DIR + '/model-map.json';
-
-let config;
-try { config = JSON.parse(fs.readFileSync(mapPath, 'utf8')); }
-catch (e) { process.stderr.write('c-thru-config: cannot read ' + mapPath + ': ' + e.message + '\n'); process.exit(1); }
-
-const input = process.argv[1];
-if (!input) { process.stderr.write('usage: /c-thru-config resolve <capability>\n'); process.exit(1); }
-
-const {
-  resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, LLM_MODE_ENUM,
-} = require(path.join(CLAUDE_DIR, 'tools', 'model-map-resolve.js'));
-
-const mode = resolveLlmMode(config);
-const tier = resolveActiveTier(config);
-const capAlias = resolveCapabilityAlias(input, config, tier);
-
-if (!capAlias) {
-  process.stderr.write('c-thru-config: unknown capability or agent: ' + JSON.stringify(input) + '\n');
-  process.exit(2);
-}
-
-const profile = (config.llm_profiles || {})[tier];
-if (!profile) {
-  process.stderr.write('c-thru-config: no llm_profiles entry for tier ' + tier + '\n');
-  process.exit(1);
-}
-const aliasKey = capAlias === 'general-default' ? 'default' : capAlias;
-const entry = profile[aliasKey];
-if (!entry || typeof entry !== 'object') {
-  process.stderr.write('c-thru-config: no profile entry for ' + JSON.stringify(capAlias) + ' in tier ' + tier + '\n');
-  process.exit(2);
-}
-
-const resolved = resolveProfileModel(entry, mode);
-if (typeof resolved !== 'string' || !resolved) {
-  process.stderr.write('c-thru-config: resolveProfileModel returned empty for ' + JSON.stringify(capAlias) + '\n');
-  process.exit(1);
-}
-
-const modeSource = process.env.CLAUDE_LLM_MODE ? 'CLAUDE_LLM_MODE env'
-  : (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) ? mapPath : 'default';
-console.log(resolved);
-process.stderr.write('  capability:  ' + capAlias + (input !== capAlias ? '  (via agent: ' + input + ')' : '') + '\n');
-process.stderr.write('  mode:        ' + mode + '  (' + modeSource + ')\n');
-process.stderr.write('  hw tier:     ' + tier + '\n');
-process.stderr.write('  on_failure:  ' + (entry.on_failure || 'cascade') + '\n');
-" -- "<CAPABILITY>"
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(cd "$(dirname "$0")/.." && pwd)")
+node "$REPO_ROOT/tools/c-thru-config-helpers.js" resolve "<CAPABILITY>"
 ```
 
 Exit codes: 0 on resolved, 2 on unknown capability, 1 on config error.
@@ -118,52 +62,18 @@ Exit codes: 0 on resolved, 2 on unknown capability, 1 on config error.
 ### Read (no second argument in `$ARGUMENTS`):
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-node -e "
-'use strict';
-const fs = require('fs'), os = require('os'), path = require('path');
-const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
-const mapPath = CLAUDE_DIR + '/model-map.json';
-const ovrPath = CLAUDE_DIR + '/model-map.overrides.json';
-let config = {}; try { config = JSON.parse(fs.readFileSync(mapPath,'utf8')); } catch {}
-let overrides = {}; try { overrides = JSON.parse(fs.readFileSync(ovrPath,'utf8')); } catch {}
-const LLM_MODE_ENUM = new Set(['connected','semi-offload','cloud-judge-only','offline','cloud-best-quality','local-best-quality']);
-const envMode = process.env.CLAUDE_LLM_MODE;
-if (envMode && LLM_MODE_ENUM.has(envMode)) {
-  console.log('mode: ' + envMode + '  (source: CLAUDE_LLM_MODE env — transient, not persisted)');
-} else if (overrides.llm_mode && LLM_MODE_ENUM.has(overrides.llm_mode)) {
-  console.log('mode: ' + overrides.llm_mode + '  (source: ' + ovrPath + ')');
-} else if (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) {
-  console.log('mode: ' + config.llm_mode + '  (source: ' + mapPath + ' — system default)');
-} else {
-  console.log('mode: connected  (source: built-in default)');
-}
-"
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(cd "$(dirname "$0")/.." && pwd)")
+node "$REPO_ROOT/tools/c-thru-config-helpers.js" mode-read
 ```
 
 ### Write — validate `<mode>` is one of the six valid values, then:
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-node "$CLAUDE_DIR/tools/model-map-edit" \
-  "$CLAUDE_DIR/model-map.system.json" \
-  "$CLAUDE_DIR/model-map.overrides.json" \
-  "$CLAUDE_DIR/model-map.json" \
-  '{"llm_mode": "<MODE>"}'
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(cd "$(dirname "$0")/.." && pwd)")
+node "$REPO_ROOT/tools/c-thru-config-helpers.js" mode-write "<MODE>" [--reload]
 ```
 
-Substitute `<MODE>` with the actual mode argument. On success, print:
-- If `--reload` is absent: `mode set to <MODE> — run '/c-thru-config reload' to apply to running proxy`
-- If `--reload` is present: `mode set to <MODE>`
-
-If `--reload` is present in `$ARGUMENTS`, also reload the running proxy immediately after a successful edit:
-
-```bash
-~/.claude/tools/c-thru reload || echo "proxy not running — config saved, will apply on next spawn"
-```
-
-If `model-map-edit` is not found at that path, print:
-`c-thru-config: model-map-edit not found — run ./install.sh first`
+If `model-map-edit` is not found (install.sh not run), the helper prints an error and exits 1.
 
 ---
 
