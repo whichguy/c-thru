@@ -150,6 +150,8 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 | `c-thru restart` | SIGTERM + waits for listener to vanish, then re-spawns (port inherited from `CLAUDE_PROXY_PORT` env or auto-assigned). `--force` escalates to SIGKILL after timeout. |
 | `/c-thru-config reload` | Skill equivalent of `c-thru reload` — usable from a Claude session. |
 | `/c-thru-status fix` | Apply recommended mappings, reload proxy, show current status. |
+| `/c-thru-config planning [...]` | Toggle the `EnterPlanMode` advisory hint suggesting `/c-thru-plan`. On by default; fires in all Claude Code sessions on the machine. Natural-language args — e.g. "turn off", "disable", "what's the status". Opt-out env: `CLAUDE_ROUTER_PLANNER_HINT=0`. |
+| `/cplan <intent>` | 4-letter shortcut for `/c-thru-plan <intent>` — wave-based agentic planner. |
 
 **Ollama defaults (changed):** `CLAUDE_ROUTER_OLLAMA_AUTOSTART` now defaults to `1` — Ollama is started automatically when unreachable. Opt out with `CLAUDE_ROUTER_OLLAMA_AUTOSTART=0`.
 
