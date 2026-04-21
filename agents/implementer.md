@@ -17,50 +17,19 @@ Follow existing patterns unless the digest requires otherwise. Pattern divergenc
 
 **Crisis:** On a `crisis` finding, stop work. Do not continue. Record the crisis in findings.jsonl and return `STATUS: PARTIAL`.
 
-**Response structure** — do NOT write files directly. The orchestrator parses your response into three artifacts:
+**Response structure** and **post-work linting** — see `## Worker contract` injected into your digest.
 
-1. `## Work completed` section (with `### Learnings` subsection) → `outputs/implementer-<item>.md`
-   ```markdown
-   ## Work completed
-   <file → what changed>
-
-   ### Learnings
-   <newly confirmed facts about the codebase>
-   ```
-
-2. `## Findings (jsonl)` fenced code block → parsed line-by-line into `findings/implementer-<item>.jsonl`
-   ```markdown
-   ## Findings (jsonl)
-   ```jsonl
-   {"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose — omit if redundant>"}
-   ```
-   ```
-   `detail` is optional. Use it when the full context (line refs, proposed fix, example) exceeds 80 chars.
-   Classes:
-   - `trivial` — routine observation, no action
-   - `contextual` — useful for future waves, no escalation
-   - `plan-material` — invalidates assumption or reveals dep gap
-   - `crisis` — approach is broken, stop
-   - `augmentation` — scope gaps for planner (signal=final_review)
-   - `improvement` — **Improvement required:** emit at least one per task. What would make next wave's version of this work easier or higher-quality? If nothing surfaces, write `{"class":"improvement","text":"none — task was clean"}`. Learnings-consolidator aggregates these into learnings.md between waves.
-
-3. `## Output INDEX` section → `outputs/implementer-<item>.INDEX.md`
-   ```markdown
-   ## Output INDEX
-   <section>: <start>-<end>
-   ```
+Findings class taxonomy (implementer-specific context):
+- `trivial` — routine observation, no action
+- `contextual` — useful for future waves, no escalation
+- `plan-material` — invalidates assumption or reveals dep gap
+- `crisis` — approach is broken, stop
+- `augmentation` — scope gaps for planner (signal=final_review)
+- `improvement` — what would make next wave's version of this easier or higher-quality?
 
 ## Self-recusal
 
-Apply this rubric BEFORE starting work. The fourth signal fires mid-execution.
-
-**Recuse if ANY of:**
-- Cannot identify the specific existing pattern to satisfy success criteria
-- Success criteria cannot be verified by available means
-- Two or more valid interpretations exist — choosing wrong one fails verification
-- Attempted this; produced output but cannot establish it is correct (set ATTEMPTED: yes)
-
-Do not hedge. When a signal fires, stop and return STATUS: RECUSE. The orchestrator re-routes.
+Criteria — see `## Worker contract` in your digest. Do not hedge: when a signal fires, stop.
 
 ```
 STATUS: RECUSE
@@ -72,7 +41,6 @@ SUMMARY: <≤20 words>
 ```
 
 Note: `uplift-decider` does NOT use STATUS: RECUSE — it uses STATUS: COMPLETE with a routing field.
-Do not include WROTE, INDEX, FINDINGS, or FINDING_CATS when recusing.
 
 ---
 

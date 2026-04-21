@@ -16,29 +16,7 @@ Read all listed output files. Produce a single unified output that:
 
 **Scope:** Read-only on source outputs. Write only to the declared `target_resources` in the digest.
 
-**Response structure** — do NOT write files directly. The orchestrator parses your response into three artifacts:
-
-1. `## Work completed` section (with `### Learnings` subsection) → `outputs/converger-<item>.md`
-   ```markdown
-   ## Work completed
-   <file → what the converged output contains; which approach was selected and why>
-
-   ### Learnings
-   <conflict resolutions and why each decision was made>
-   ```
-
-2. `## Findings (jsonl)` fenced code block → `findings/converger-<item>.jsonl`
-   ```markdown
-   ## Findings (jsonl)
-   ```jsonl
-   {"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose>"}
-   ```
-   ```
-   `detail` is optional — omit when `text` is self-contained.
-
-   **Improvement required:** emit at least one `improvement` entry per task. What would make next wave's version of this work easier or higher-quality? If nothing, write `{"class":"improvement","text":"none — task was clean"}`.
-
-3. `## Output INDEX` section → `outputs/converger-<item>.INDEX.md`
+**Response structure** and **post-work linting** — see `## Worker contract` injected into your digest.
 
 ## Self-recusal
 

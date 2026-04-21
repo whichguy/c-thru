@@ -39,12 +39,15 @@ Every Agent() call in step 5 is wrapped with a timeout and failure handler:
 
 ## Batch-abort threshold
 
-After each batch in step 5:
-- Count failed items in the batch (timed-out, missing STATUS, or malformed STATUS).
-- If `failed_count / total_count > 0.5`: abort remaining batches, jump to step 6 with `decision=partial` and `STATUS=PARTIAL`.
-- **Small-batch rule:** always abort when ≥2 items fail in a batch of ≤3.
-- Log the abort decision (failed count / total) to `$wave_dir/batch-abort.log`.
-- **Threshold note:** 50% is a conservative starting point; tune via observation of first real plans.
+After each batch in step 5, delegate the abort decision to the harness:
+
+```sh
+node tools/c-thru-plan-harness.js batch-abort \
+  --failed <N> --total <N> --wave-dir "$wave_dir"
+```
+
+Exit 1 → abort remaining batches, jump to step 6 with `decision=partial` and `STATUS=PARTIAL`.
+Exit 0 → continue. Decision + ratio written to `$wave_dir/batch-abort.log`.
 
 ---
 
@@ -69,46 +72,23 @@ Pre-check examines `$wave_dir/wave.json` when it exists:
 
 ## Step 3 — Write wave.json
 
-Receive `READY_ITEMS[]` and `commit_message` from driver input.
+Receive `READY_ITEMS[]` and `commit_message` from driver input. Delegate topo-sort
+and batch assembly to the harness (deterministic, zero LLM):
 
-Determine batches from READY_ITEMS (simplest-first ordering within each tier):
-1. Topological sort by `depends_on` (deterministic — zero LLM).
-2. Simplest-first within the same topological tier: fewest `depends_on` edges → smallest `target_resources` count → no external API in scope.
-3. Non-overlapping `target_resources` → same batch (`parallel: true`).
-4. Overlapping or ancestor/descendant resources → sequential batches.
-5. No `target_resources` → its own batch.
-
-If `depends_on` forms a cycle in READY_ITEMS (should not occur if driver validated, but guard here):
-```
-STATUS: ERROR
-SUMMARY: dependency cycle in READY_ITEMS — driver validation gap
+```sh
+node tools/c-thru-plan-harness.js batch \
+  --current-md "$plan_dir/current.md" \
+  --items "<READY_ITEMS joined as comma-separated list>" \
+  --wave-id <NNN> \
+  --commit-msg "<commit_message>" \
+  --output "$wave_dir/wave.json"
 ```
 
-Write `$wave_dir/wave.json` atomically:
-```json
-{
-  "wave_id": <NNN as integer>,
-  "commit_message": "<commit_message from input>",
-  "batches": [
-    { "parallel": true, "items": [
-      {
-        "agent": "<role>",
-        "item": "<id>",
-        "target_resources": [...],
-        "depends_on": [...],
-        "escalation_policy": "local",
-        "escalation_policy_source": "step4b",
-        "escalation_depth": 0,
-        "escalation_log": []
-      }
-    ]}
-  ]
-}
-```
+On exit code 2 (cycle detected): return `STATUS: ERROR, SUMMARY: dependency cycle in READY_ITEMS — driver validation gap`.
 
 **Backward-compatible defaults:** Wave-1 items lacking escalation fields → `escalation_policy: "local"`, `escalation_depth: 0`, `escalation_log: []` on read. Step 4b never emits `never-cloud` — that is user/policy-set only.
 
-Validate schema (wave_id, commit_message, batches array all present).
+Validate schema after write: wave_id, commit_message, batches array all present.
 
 ---
 
@@ -141,6 +121,14 @@ target_resources: [<repo-relative file paths>]
 ## Accumulated learnings
 <Pull topic sections from $plan_dir/learnings.md relevant to this agent role and target_resources.
  Read only relevant sections. If learnings.md is empty or absent, omit this section.>
+```
+
+After all digests are assembled, inject the shared worker contract (idempotent):
+
+```sh
+node tools/c-thru-plan-harness.js inject-contract \
+  --contract "$(git rev-parse --show-toplevel)/shared/_worker-contract.md" \
+  --digests-dir "$wave_dir/digests"
 ```
 
 Pre-check: every digest declared in wave.json must be non-empty before proceeding to step 4b.
@@ -251,31 +239,28 @@ Write `$wave_dir/verify.json`:
 
 ## Step 6b — Calibration logging
 
-After writing `verify.json`, emit one calibration tuple per completed item to `$wave_dir/cascade/<item>.jsonl` (create `cascade/` directory lazily on first write):
+After writing `verify.json`, emit one calibration tuple per completed item (COMPLETE or PARTIAL only):
 
-```json
-{"item": "<item-id>", "agent": "<agent>", "confidence": "<high|medium|low>", "verify_pass": <true|false|null>, "compliance": <true|false>}
+```sh
+node tools/c-thru-plan-harness.js calibrate \
+  --item "<item-id>" --agent "<agent>" \
+  --confidence "<high|medium|low or absent→medium>" \
+  --verify-pass "<true|false|null>" \
+  [--has-confidence]   # flag: omit when CONFIDENCE was absent in STATUS block \
+  --wave-dir "$wave_dir"
 ```
 
-Field definitions:
-- `confidence`: extracted from worker STATUS block in step 5; `"medium"` when absent or unrecognized
-- `verify_pass`: `verify.json.tests_pass` for this item's target_resources; `null` when no tests declared
-- `compliance`: `true` if CONFIDENCE field was present in the worker STATUS block, `false` if absent (used to track rubric adoption rate — target ≥80%)
-
-Only emit for items with `STATUS: COMPLETE` or `STATUS: PARTIAL` (skip `failed` items — they have no STATUS block). Items without tests set `verify_pass: null` and are excluded from calibration formula (see Wave-1 measurement plan).
+Pass `--has-confidence` only when the CONFIDENCE field was present in the worker STATUS block (tracks rubric adoption; target ≥80%). See docs/agent-architecture.md §12.1.
 
 ---
 
 ## Step 7 — Concat findings and outputs
 
 ```sh
-shopt -s nullglob
-cat $wave_dir/findings/*.jsonl > $wave_dir/findings.jsonl 2>/dev/null || true
-cat $wave_dir/outputs/*.md    > $wave_dir/artifact.md 2>/dev/null || true
-shopt -u nullglob
+node tools/c-thru-plan-harness.js concat --wave-dir "$wave_dir"
 ```
 
-Pre-check: every declared output file exists and is non-empty. If any missing: write `artifact.md` with available outputs, set `decision=partial`.
+Writes `$wave_dir/findings.jsonl` (all `findings/*.jsonl` lines) and `$wave_dir/artifact.md` (all `outputs/*.md` content). Pre-check: if any declared output file is missing, set `decision=partial`.
 
 ---
 
