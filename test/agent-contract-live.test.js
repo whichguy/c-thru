@@ -297,7 +297,7 @@ async function main() {
     }
 
     const text = res.json && Array.isArray(res.json.content)
-      ? res.json.content.map(c => (typeof c === 'object' && c.text) ? c.text : '').join('')
+      ? res.json.content.map(c => (c != null && typeof c === 'object' && c.text) ? c.text : '').join('')
       : res.bodyText;
 
     const block = parseStatusBlock(text);
