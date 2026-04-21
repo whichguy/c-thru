@@ -475,6 +475,55 @@ async function main() {
     } finally {
       if (tiebreakerStub) await tiebreakerStub.close().catch(() => {});
     }
+    // ── 10. Pre-flight + active: single-entry chain (degenerate) uses local terminal ─
+    // Chain has only the primary model. After filter the set is empty.
+    // Both pre-flight (resolveFallbackModel) and active (buildFallbackCandidatesFromChain)
+    // must still append disconnect_model as local terminal and serve the request.
+    console.log('\n10. Degenerate single-entry chain: local terminal appended when filtered set is empty');
+    let singleEntryStub;
+    try {
+      singleEntryStub = await modelSelectiveStub('se-primary', 429);
+      const seConfig = {
+        backends: {
+          cloud: { kind: 'anthropic', url: `http://127.0.0.1:${singleEntryStub.port}` },
+          local: { kind: 'ollama',    url: `http://127.0.0.1:${singleEntryStub.port}` },
+        },
+        model_routes: { 'se-primary': 'cloud', 'se-local': 'local' },
+        llm_profiles: {
+          '64gb': {
+            workhorse: {
+              connected_model:  'se-primary',
+              disconnect_model: 'se-local',   // guard appends this
+            },
+          },
+        },
+        fallback_chains: {
+          '64gb': {
+            // Degenerate: only the primary is in the chain
+            workhorse: [{ model: 'se-primary', quality_score: 80, speed_score: 60 }],
+          },
+        },
+      };
+      const seConfigPath = writeConfig(tmpDir, seConfig);
+      await withProxy(
+        { configPath: seConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'connected' } },
+        async ({ port }) => {
+          const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
+          const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 5000);
+          assert(resp.status === 200,
+            `single-entry chain → local terminal → 200 (got status=${resp.status})`);
+          const reqs = singleEntryStub.requests;
+          assert(reqs.length >= 2,
+            `≥2 calls: primary (429) then local terminal (200) (got ${reqs.length})`);
+          assert(reqs[0].model_used === 'se-primary',
+            `first call was se-primary (got ${reqs[0].model_used})`);
+          assert(reqs[reqs.length - 1].model_used === 'se-local',
+            `last call was se-local (local terminal) (got ${reqs[reqs.length - 1].model_used})`);
+        }
+      );
+    } finally {
+      if (singleEntryStub) await singleEntryStub.close().catch(() => {});
+    }
   } finally {
     if (stub) await stub.close().catch(() => {});
     if (errorStub) await errorStub.close().catch(() => {});
