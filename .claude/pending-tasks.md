@@ -84,6 +84,29 @@ Flag any divergence. If clean, remove the pending memory entry.
 
 ---
 
+## Task 6 — Clean up stale test/run artifacts
+
+**Context:** Integration test runs accumulate temp files and proxy logs that aren't
+automatically swept on test exit or machine restart.
+
+**Audit checklist:**
+- `~/.claude/proxy.*.log` — 24 stale log files found (from prior proxy runs/tests).
+  Safe to delete files older than 7 days: `find ~/.claude -name 'proxy.*.log' -mtime +7 -delete`
+- `~/.claude/proxy.pid` — check if live; if stale PID, remove.
+- `~/.claude/proxy-health.json` — check mtime; stale if older than last real proxy start.
+- `/tmp/c-thru-*` dirs — test harness cleans up via `withProxy` finally block, but
+  any tests killed mid-run leave orphans. Sweep with: `rm -rf /tmp/c-thru-*`
+
+**Ongoing fix:** Consider adding a `c-thru-test-cleanup` make target or a
+`test/cleanup.sh` that sweeps all known artifact locations — to run after test suite.
+
+**Note on test isolation:** The `withProxy` harness sandboxes each spawn under a
+`HOME=<tmpdir>` so proxy logs and PID files from test runs land in the tmpdir
+(cleaned on exit), not in `~/.claude/`. Stale logs in `~/.claude/` are from
+pre-harness runs or manual proxy invocations — not from the new test suite.
+
+---
+
 ## Task 5 — Security: verify proxy only binds to 127.0.0.1
 
 Both HTTP listeners currently bind to `127.0.0.1` (main API: line 2587, hooks: line 2714),
