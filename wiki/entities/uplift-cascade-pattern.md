@@ -7,7 +7,7 @@ confidence: high
 last_verified: 2026-04-21
 created: 2026-04-21
 last_updated: 2026-04-21
-sources: [1558f542, a82cecbf]
+sources: [1558f542, a82cecbf, 22924d75, a183dfe6]
 related: [planner-signals-design, capability-profile-model-layers, fallback-event-system, cascade-scope-contraction, self-recusal-chain, implementer-lint-directive]
 ---
 
@@ -28,4 +28,8 @@ A three-tier decision cascade where a local worker produces output, verify.json 
 
 - **From Session a82cecbf:** Wave-2 cascade routing shipped (PR #34, 6 commits, 13 files, 684 lines). Implemented: self-recusal chain in all 4 worker agents (RECUSE STATUS + RECOMMEND field), Step 4b pre-dispatch classification + Step 5r recusal handling in orchestrator, 4 new agents (uplift-decider, implementer-cloud, test-writer-cloud, converger), 2 new capability aliases (deep-coder-cloud, code-analyst-cloud). Review-fix found 6 critical bugs: uplift-decider accept path missing in orchestrator, judge-tier sentinel not blocking non-dispatchable RECOMMEND values, converger missing self-recusal section, cloud worker agents missing improvement directives. All fixed in commits `cd4c0ac` + `63f0fea`.
 
-→ See also: [[planner-signals-design]], [[agent-prompt-construction]], [[capability-profile-model-layers]], [[fallback-event-system]], [[declared-rewrites]], [[cascade-scope-contraction]], [[self-recusal-chain]], [[implementer-lint-directive]]
+- **From Session 22924d75:** Audit found test-writer-cloud doesn't branch `uplift` vs `restart` — it uses a single cloud path, breaking the anchoring-prevention invariant where restart mode must omit `local_output_path`. This means all cloud escalations from test-writer are effectively uplift mode, even when restart would be the correct verdict. Fix: add branching to test-writer-cloud dispatch (Batch A2 of the prompt audit plan).
+
+- **From Session a183dfe6:** test-writer-cloud anchoring-prevention fix shipped (Batch A2): the agent now explicitly branches on `mode=uplift` (read `local_output_path`, produce patch), `mode=restart` (no local output path in context — fresh from digest), and `mode=direct` (no escalation context). This closes the gap identified in 22924d75 where all cloud escalations from test-writer were effectively uplift mode. Anchoring grep assertion added to `tools/c-thru-contract-check.sh` scoped to restart-mode sections only — not the full file — to avoid false-positives on prose describing the pattern.
+
+→ See also: [[planner-signals-design]], [[agent-prompt-construction]], [[capability-profile-model-layers]], [[fallback-event-system]], [[declared-rewrites]], [[cascade-scope-contraction]], [[self-recursal-chain]], [[implementer-lint-directive]], [[dispatch-site-contract-gap]]

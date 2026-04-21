@@ -8,7 +8,7 @@ last_verified: 2026-04-21
 created: 2026-04-21
 last_updated: 2026-04-21
 sources: [b1731578]
-related: [agent-prompt-construction, self-recusal-chain, uplift-cascade-pattern, cascade-scope-contraction, implementer-lint-loop, implementer-lint-directive]
+related: [agent-prompt-construction, agent-structural-testing, self-recusal-chain, uplift-cascade-pattern, cascade-scope-contraction, implementer-lint-loop, implementer-lint-directive]
 ---
 
 # Agent Contract Testing
@@ -21,4 +21,10 @@ Two-tier test system that validates agent prompt files against the STATUS contra
 - **From Session b1731578:** Live contract test (`test/agent-contract-live.test.js`): opt-in via `C_THRU_LIVE_AGENT_TESTS=1`, POSTs each agent's system prompt to a running proxy at `CLAUDE_PROXY_URL` or `CLAUDE_PROXY_PORT`, validates that responses contain parseable STATUS blocks with valid STATUS values (COMPLETE|PARTIAL|ERROR|RECUSE), valid CONFIDENCE (high|medium|low), SUMMARY, and agent-specific fields. Strips `<think>` blocks before parsing. 12 agents in LIVE_ROSTER with tailored userMessages and per-agent `extraChecks`.
 - **From Session b1731578:** Roster-CONFIG synchronization: the static test cross-references its ROSTER object against `CONFIG.agent_to_capability` — any agent name present in config but missing from the roster causes a hard failure. This ensures the test stays in sync with agent configuration, not just with agent files on disk.
 
-→ See also: [[agent-prompt-construction]], [[self-recusal-chain]], [[uplift-cascade-pattern]], [[cascade-scope-contraction]], [[implementer-lint-loop]], [[implementer-lint-directive]]
+- **From Session b1731578:** Behavioral gap analysis post-implementation: the live test only validates structural conformance, not behavioral correctness. Identified 6 uncovered paths: (1) no PARTIAL/crisis trigger — no test gives implementer a task with a deliberate blocker; (2) no RECUSE trigger — no test gives scaffolder a task requiring design decisions; (3) no ITERATIONS/LINT_ITERATIONS verification; (4) no CONFIDENCE rubric test (task with unverifiable criteria should produce low/medium); (5) no agent-specific output validation (discovery-advisor should return `GAPS: N`; planner-local should return `VERDICT: ready|done`). Three testing dimensions identified: (1) **prompt correctness** — fixture digests per agent, assert STATUS value matches; (2) **routing correctness** — already covered by proxy unit tests; (3) **behavioral quality** — requires a judge, not a unit test. Recommendation: fixture-based prompt correctness is the highest-value gap to fill next, by creating one realistic digest per worker agent and asserting the expected STATUS value.
+
+- **From Session b1731578:** Fixture design constraint for planned `test/agent-contract-behavioral.test.js`: every behavioral test fixture must append `shared/_worker-contract.md` to the digest written to tmpdir before dispatch. Without it, agents lack their recusal rubric and response structure rules and will not behave correctly — e.g. will not RECUSE on ambiguous tasks. This makes `shared/_worker-contract.md` a required dependency for any behavioral test, not just for production dispatch. (`shared/` was chosen over `agents/` to avoid inflating the fail-closed roster count in the static linter.)
+
+- **From Session a183dfe6:** Post-ship corrections to both test files: (1) static test: `reviewer-fix` entry in ROSTER renamed to `wave-reviewer` (D4 — agent file was renamed in PR #40); (2) live test: `MAX_TOKENS` bumped from 800 → 1200 (some judge-tier agents were truncating STATUS blocks under the lower limit); (3) live test: 401/403 responses now cause an agent-level `skip` rather than `fail` — cloud backends may not be configured in all environments. These are maintenance fixes to track the wave-reviewer rename and tune test robustness.
+
+→ See also: [[agent-prompt-construction]], [[self-recusal-chain]], [[uplift-cascade-pattern]], [[cascade-scope-contraction]], [[implementer-lint-loop]], [[implementer-lint-directive]], [[agent-tier-budget-frontmatter]]
