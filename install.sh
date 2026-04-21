@@ -666,16 +666,17 @@ echo "Ollama GC state:"
 
 echo ""
 echo "Ollama:"
-_tag_count=$(curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" 2>/dev/null \
+_ollama_host="${OLLAMA_HOST:-127.0.0.1:11434}"
+_tag_count=$(curl -sf --max-time 2 "http://${_ollama_host}/api/tags" 2>/dev/null \
   | jq -r '.models | length' 2>/dev/null || true)
 if [ -n "$_tag_count" ]; then
     echo -e "  ${GREEN}✓  Ollama running — ${_tag_count} model(s) available${NC}"
 else
-    echo -e "  ${YELLOW}⚠️  Ollama not detected at http://127.0.0.1:11434${NC}"
+    echo -e "  ${YELLOW}⚠️  Ollama not detected at http://${_ollama_host}${NC}"
     echo -e "  ${YELLOW}   Install: https://ollama.com  |  Then: ollama pull <model>${NC}"
     echo -e "  ${YELLOW}   c-thru will use cloud-only (Anthropic/OpenRouter) until Ollama is running.${NC}"
 fi
-unset _tag_count
+unset _ollama_host _tag_count
 
 echo ""
 echo "MCP server:"

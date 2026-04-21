@@ -50,11 +50,6 @@ verify the install worked without running a separate command.
 
 ## Reliability
 
-**[ollama] Probe port configurability**
-The Ollama probe hardcodes `127.0.0.1:11434`. If the user runs Ollama on a custom port (via
-`OLLAMA_HOST`), the probe reports "not detected" falsely. Read `OLLAMA_HOST` env if set, fall
-back to `:11434`.
-
 **[node-guard] Node version warning fires on every re-install**
 The Node version warning is intentional on first install but noisy on idempotent re-runs where
 the user already knows about the version. No action needed unless it becomes a pain point —
