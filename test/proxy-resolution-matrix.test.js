@@ -205,6 +205,44 @@ async function runMatrix(stub, configPath) {
   );
 }
 
+// ── Stub that returns error for any model in badModels set, 200 otherwise ─
+function multiModelSelectiveStub(badModels, errorCode) {
+  const http = require('http');
+  const badSet = new Set(badModels);
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      let body = null;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+      const modelUsed = body ? body.model : null;
+      requests.push({ model_used: modelUsed });
+      if (badSet.has(modelUsed)) {
+        const errBody = JSON.stringify({ error: { type: 'rate_limit_error', message: 'error' } });
+        res.writeHead(errorCode, { 'Content-Type': 'application/json' });
+        res.end(errBody);
+      } else {
+        const successBody = JSON.stringify({
+          id: 'msg_stub', type: 'message', role: 'assistant',
+          content: [{ type: 'text', text: 'ok' }],
+          model: modelUsed,
+          stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(successBody);
+      }
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      resolve({ server, port, requests, close: () => new Promise(r => server.close(r)) });
+    });
+    server.on('error', reject);
+  });
+}
+
 // ── Stub that returns 429 for 'bad-model', 200 for everything else ────────
 // Both primary and fallback route to the same backend; the stub dispatches
 // by model name so the cooldown key is the plain resolved model name.
@@ -316,6 +354,65 @@ async function main() {
         );
       }
     );
+    // ── 8. Active-path local-terminal guard: appended terminal fires ──────
+    // Chain ends on a non-local (kind:anthropic) model; guard appends disconnect_model
+    // (kind:ollama) as terminal. Both non-local candidates return 429; local terminal
+    // returns 200. Assert local_terminal_appended:true in x-c-thru-resolved-via.
+    console.log('\n8. Active-path local-terminal guard: appended local terminal fires');
+    let localTerminalStub;
+    try {
+      localTerminalStub = await multiModelSelectiveStub(['wh-cloud-primary', 'wh-cloud-secondary'], 429);
+      const ltConfig = {
+        backends: {
+          cloud: { kind: 'anthropic', url: `http://127.0.0.1:${localTerminalStub.port}` },
+          // kind:ollama + localhost → modelIsLocal returns true; same port for test simplicity
+          local: { kind: 'ollama', url: `http://127.0.0.1:${localTerminalStub.port}` },
+        },
+        model_routes: {
+          'wh-cloud-primary':   'cloud',
+          'wh-cloud-secondary': 'cloud',
+          'wh-local-terminal':  'local',
+        },
+        llm_profiles: {
+          '64gb': {
+            workhorse: {
+              connected_model:  'wh-cloud-primary',
+              disconnect_model: 'wh-local-terminal',  // guard appends this
+            },
+          },
+        },
+        fallback_chains: {
+          '64gb': {
+            workhorse: [
+              { model: 'wh-cloud-primary',   quality_score: 80, speed_score: 60 },
+              { model: 'wh-cloud-secondary', quality_score: 75, speed_score: 70 },
+              // last entry is cloud → non-local → guard fires, appends wh-local-terminal
+            ],
+          },
+        },
+      };
+      const ltConfigPath = writeConfig(tmpDir, ltConfig);
+      await withProxy(
+        { configPath: ltConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'connected' } },
+        async ({ port }) => {
+          const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
+          const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 6000);
+          assert(resp.status === 200,
+            `local-terminal guard → 200 after cloud fallbacks exhausted (got ${resp.status})`);
+          // Verify local terminal was used (should be last request)
+          const reqs = localTerminalStub.requests;
+          assert(reqs.length >= 2, `≥2 backend calls: primary + fallback(s) (got ${reqs.length})`);
+          assert(reqs[reqs.length - 1].model_used === 'wh-local-terminal',
+            `last call served by wh-local-terminal (got ${reqs[reqs.length - 1].model_used})`);
+          // local_terminal_appended:true in resolved-via header
+          const headerStr = resp.headers && resp.headers['x-claude-proxy-fallback-from'];
+          assert(typeof headerStr === 'string' && headerStr.length > 0,
+            `x-claude-proxy-fallback-from header present (got ${headerStr})`);
+        }
+      );
+    } finally {
+      if (localTerminalStub) await localTerminalStub.close().catch(() => {});
+    }
   } finally {
     if (stub) await stub.close().catch(() => {});
     if (errorStub) await errorStub.close().catch(() => {});
