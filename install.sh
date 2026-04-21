@@ -73,7 +73,7 @@ link_tool c-thru claude-router
 link_tool claude-proxy claude-proxy
 if command -v node >/dev/null 2>&1; then
     node_major=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))" 2>/dev/null || echo 0)
-    if [[ "$node_major" -lt 15 ]]; then
+    if [ "$node_major" -lt 15 ]; then
         echo -e "  ${YELLOW}⚠️  Node.js ${node_major} detected — claude-proxy requires ≥ 15 (AbortController). Upgrade recommended.${NC}"
     fi
     link_tool llm-capabilities-mcp.js llm-capabilities-mcp
@@ -241,7 +241,7 @@ SKILL_EOF
     echo -e "  ${GREEN}✅ installed skill: /c-thru-status${NC}"
 }
 
-# --- Hooks: SessionStart, PostCompact, UserPromptSubmit ---
+# --- Hooks: SessionStart, PostCompact, UserPromptSubmit, PostToolUse ---
 register_hooks() {
     if [ "$JQ_AVAILABLE" -eq 0 ]; then
         echo -e "  ${YELLOW}⚠️  jq not found — skipping hooks${NC}"
@@ -252,6 +252,7 @@ register_hooks() {
     local session_cmd="$TOOLS_DEST/c-thru-session-start"
     local health_cmd="$TOOLS_DEST/c-thru-proxy-health"
     local classify_cmd="$TOOLS_DEST/c-thru-classify"
+    local map_changed_cmd="$TOOLS_DEST/c-thru-map-changed"
 
     if [ ! -f "$settings" ]; then
         echo '{}' > "$settings"
@@ -393,6 +394,26 @@ register_hooks() {
             }]
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
         echo -e "  ${GREEN}✅ registered hook: UserPromptSubmit c-thru-classify${NC}"
+    fi
+
+    # --- PostToolUse map-changed (validates model-map.json on every file write) ---
+    local mc_exists
+    mc_exists=$(jq -r --arg cmd "$map_changed_cmd" \
+        '(.hooks.PostToolUse // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
+        "$settings" 2>/dev/null || echo 0)
+    if [ "${mc_exists:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  PostToolUse c-thru-map-changed${NC}"
+    else
+        tmp="${settings}.tmp.$$"
+        jq --arg cmd "$map_changed_cmd" '
+            if .hooks == null then .hooks = {} else . end |
+            if .hooks.PostToolUse == null then .hooks.PostToolUse = [] else . end |
+            .hooks.PostToolUse += [{
+                "matcher": "Edit|Write|MultiEdit",
+                "hooks": [{"type": "command", "command": $cmd, "timeout": 5}]
+            }]
+        ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+        echo -e "  ${GREEN}✅ registered hook: PostToolUse c-thru-map-changed${NC}"
     fi
 }
 
@@ -565,7 +586,7 @@ OVR_MAP="$CLAUDE_DIR/model-map.overrides.json"
 USER_MAP="$CLAUDE_DIR/model-map.json"
 SHIPPED_MAP="$REPO_DIR/config/model-map.json"
 
-if [[ ! -f "$OVR_MAP" ]]; then
+if [ ! -f "$OVR_MAP" ]; then
     echo '{}' > "$OVR_MAP"
     echo -e "  ${GREEN}✅ seeded model-map.overrides.json (empty — edit here to customize over shipped defaults)${NC}"
 fi
@@ -647,7 +668,7 @@ echo ""
 echo "Ollama:"
 _tag_count=$(curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" 2>/dev/null \
   | jq -r '.models | length' 2>/dev/null || true)
-if [[ -n "$_tag_count" ]]; then
+if [ -n "$_tag_count" ]; then
     echo -e "  ${GREEN}✓  Ollama running — ${_tag_count} model(s) available${NC}"
 else
     echo -e "  ${YELLOW}⚠️  Ollama not detected at http://127.0.0.1:11434${NC}"
