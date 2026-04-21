@@ -2,6 +2,7 @@
 name: test-writer-cloud
 description: Cloud-tier test writer. Escalation target for test-writer recusals. Same role, cloud tier. Returns CONFIDENCE.
 model: test-writer-cloud
+tier_budget: 800
 ---
 
 # test-writer-cloud

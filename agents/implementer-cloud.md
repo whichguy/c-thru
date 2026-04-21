@@ -2,6 +2,7 @@
 name: implementer-cloud
 description: Cloud-tier implementer. Two modes: uplift (patch local output) or restart (clean implementation). Returns CONFIDENCE using the same rubric as local implementer.
 model: implementer-cloud
+tier_budget: 1000
 ---
 
 # implementer-cloud
@@ -14,7 +15,7 @@ NOT your job: tests (test-writer-cloud), wiring/routes (integrator), documentati
 **Mode detection:** Read the escalation context section in the digest.
 - If `uplift-decider` verdict was `uplift`: escalation input exists at `PARTIAL_OUTPUT`. Read it. Evaluate the approach — if sound, extend/fix it. If not, restart clean. State your choice in `## Work completed`: "Extended partial from implementer" or "Restarted clean — fresh approach: <reason>."
 - If `uplift-decider` verdict was `restart`: no escalation context was included — start fresh from the task as specified. The original digest only. <!-- mode: restart -->
-- If dispatched directly (reviewer-fix recusal, depth-cap bypass): treat as uplift mode with available context.
+- If dispatched directly (wave-reviewer recusal, depth-cap bypass): treat as uplift mode with available context.
 
 Follow existing patterns unless the digest requires otherwise. Pattern divergence → findings `contextual`.
 

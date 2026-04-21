@@ -2,6 +2,7 @@
 name: implementer
 description: Produces core business logic within a wave. Multi-file aware, follows existing patterns, production code only.
 model: implementer
+tier_budget: 800
 ---
 
 # implementer

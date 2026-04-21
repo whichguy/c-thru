@@ -27,7 +27,7 @@ request time.
 | learnings-consolidator | pattern-coder | Refreshes learnings.md from prior findings; spawned by planner (step 2 of algorithm) |
 | scaffolder | pattern-coder | Mechanical file/directory scaffolding (stubs, boilerplate) |
 | test-writer | code-analyst | Tests that catch subtle bugs; reads implementation first |
-| reviewer-fix | code-analyst | Iterative review+fix loop (max 5 rounds per item) |
+| wave-reviewer | code-analyst | Iterative review+fix loop (max 5 rounds per item) |
 | implementer | deep-coder | Core business logic; multi-file aware |
 | uplift-decider | judge | †Wave-2: routing judge; reads local partial output, emits accept\|uplift\|restart + CLOUD_CONFIDENCE |
 | implementer-cloud | deep-coder-cloud | †Wave-2: cloud-tier implementer; uplift (patch) or restart (clean) mode |
@@ -133,7 +133,7 @@ ${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/
 
 ## Worker STATUS contract
 
-All worker agents (implementer, reviewer-fix, test-writer, scaffolder, converger, implementer-cloud, test-writer-cloud, integrator, doc-writer, security-reviewer) return a structured STATUS block. Required fields:
+All worker agents (implementer, wave-reviewer, test-writer, scaffolder, converger, implementer-cloud, test-writer-cloud, integrator, doc-writer, security-reviewer) return a structured STATUS block. Required fields:
 
 ```
 STATUS: COMPLETE|PARTIAL|ERROR
@@ -148,7 +148,7 @@ SUMMARY: <≤20 words>
 
 `CONFIDENCE` is worker self-assessment via the §12.1 rubric embedded in each agent prompt. Absent CONFIDENCE is treated as `medium` by the orchestrator (migration shim — graceful degradation). The orchestrator logs `{item, agent, confidence, verify_pass, compliance}` tuples to `$wave_dir/cascade/<item>.jsonl` after step 6 for Wave-1 calibration measurement.
 
-`reviewer-fix` additionally returns `ITERATIONS: N`.
+`wave-reviewer` additionally returns `ITERATIONS: N`.
 
 `security-reviewer` uses capability alias `judge-strict` with `hard_fail` — no cascade target exists. On recusal (missing threat-model context for a privilege boundary), it returns `STATUS: RECUSE` with no `RECOMMEND` field. The orchestrator marks the item `blocked` and surfaces to the user; it does NOT attempt further escalation.
 
@@ -158,12 +158,12 @@ SUMMARY: <≤20 words>
 
 ## Escalation chain (Wave-2)
 
-Self-recusal triggers a cascading re-dispatch through capability tiers. The chain never terminates early — it exhausts all tiers before surfacing to the user. Exception: `reviewer-fix` skips `deep-coder` (recusal = redesign, not re-implementation).
+Self-recusal triggers a cascading re-dispatch through capability tiers. The chain never terminates early — it exhausts all tiers before surfacing to the user. Exception: `wave-reviewer` skips `deep-coder` (recusal = redesign, not re-implementation).
 
 ```
 pattern-coder    (scaffolder, discovery-advisor)
       ↓ recuse
-code-analyst     (test-writer, reviewer-fix)
+code-analyst     (test-writer, wave-reviewer)
       ↓ recuse
 deep-coder       (implementer)
       ↓ recuse
@@ -179,7 +179,7 @@ judge            (planner, auditor, review-plan)
 |---|---|---|
 | `scaffolder` | `implementer` | Task requires design decision, not scaffolding |
 | `implementer` | `uplift-decider` → `implementer-cloud` | uplift-decider reads partial work, routes accept\|uplift\|restart |
-| `reviewer-fix` | `implementer-cloud` | Skips deep-coder — recusal = redesign |
+| `wave-reviewer` | `implementer-cloud` | Skips deep-coder — recusal = redesign |
 | `test-writer` | `test-writer-cloud` | Same role, cloud tier |
 | `converger` | `implementer-cloud` | Unresolvable conflict between parallel outputs |
 | `planner-local` | `planner` | Natural outcome_risk path |
@@ -217,7 +217,7 @@ SUMMARY: <≤20 words>
 | STATUS | Required fields | Notes |
 |---|---|---|
 | COMPLETE | STATUS, CONFIDENCE, WROTE, INDEX, FINDINGS, FINDING_CATS, SUMMARY | UNCERTAINTY_REASONS omit when high |
-| PARTIAL | Same as COMPLETE | Crisis finding — orchestrator marks item failed after reviewer-fix cap |
+| PARTIAL | Same as COMPLETE | Crisis finding — orchestrator marks item failed after wave-reviewer cap |
 | ERROR | STATUS, SUMMARY | Unrecoverable setup failure |
 | RECUSE | STATUS, ATTEMPTED, RECUSAL_REASON, RECOMMEND, SUMMARY | PARTIAL_OUTPUT only when ATTEMPTED=yes; no WROTE/INDEX/FINDINGS. Exception: `security-reviewer` omits ATTEMPTED, PARTIAL_OUTPUT, and RECOMMEND (recuses before any work; no cascade target) |
 
@@ -231,6 +231,24 @@ SUMMARY: <≤20 words>
 | RATIONALE | string | One sentence — why this routing decision |
 | PATCH_SCOPE | string | What to patch; omit when VERDICT=accept or restart |
 | SUMMARY | string | ≤20 words |
+
+## Non-standard STATUS shapes by agent
+
+Agents that don't use the standard worker STATUS block:
+
+| Agent | STATUS shape | Key non-standard fields |
+|---|---|---|
+| `auditor` | `VERDICT: continue\|extend\|revise` + `WROTE` + `SUMMARY` | No CONFIDENCE, no FINDINGS |
+| `final-reviewer` | `RECOMMENDATION: complete\|needs_items` + `WROTE` + `GAP_COUNT` + `SUMMARY` | No CONFIDENCE |
+| `review-plan` | `VERDICT: APPROVED\|NEEDS_REVISION` + `WROTE` + `FINDINGS_COUNT` + `SUMMARY` | No CONFIDENCE |
+| `explorer` | `STATUS: COMPLETE\|PARTIAL\|ERROR` + `WROTE` + `SUMMARY` | No CONFIDENCE, no FINDING_CATS |
+| `discovery-advisor` | `STATUS: COMPLETE\|ERROR` + `WROTE` + `GAPS: N` + `SUMMARY` | No CONFIDENCE |
+| `planner` | `STATUS: COMPLETE\|CYCLE\|ERROR` + `VERDICT: ready\|done` + `READY_ITEMS` + `COMMIT_MESSAGE` + `DELTA_*` + `SUMMARY` + `PARALLEL_WAVES` | No CONFIDENCE, no FINDING_CATS |
+| `planner-local` | Same shape as `planner` | Same notes |
+| `journal-digester` | `STATUS: COMPLETE\|ERROR` + `THEMES: N` + `PROPOSALS: N` + `WROTE` + `SUMMARY` | No CONFIDENCE |
+| `wave-synthesizer` | `STATUS: COMPLETE\|ERROR` + `AFFECTED_ITEMS: [...]` + `WROTE` + `SUMMARY` | No CONFIDENCE |
+| `learnings-consolidator` | `STATUS: COMPLETE\|ERROR` + `WROTE` + `INDEX` + `TOPICS` + `NEW_TOPICS` + `SUPERSEDED` + `SUMMARY` | No CONFIDENCE, no FINDING_CATS |
+| `uplift-decider` | `STATUS: COMPLETE` + `VERDICT: accept\|uplift\|restart` + `CLOUD_CONFIDENCE` + `RATIONALE` + `PATCH_SCOPE` + `SUMMARY` | Uses STATUS: COMPLETE for routing decisions |
 
 ---
 

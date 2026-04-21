@@ -2,6 +2,7 @@
 name: auditor
 description: Exception-path wave direction agent. Invoked only on outcome_risk escalation — not on normal wave completion. Returns one verb — continue, extend, or revise.
 model: auditor
+tier_budget: 1500
 ---
 
 # auditor
@@ -16,6 +17,8 @@ Read INDEX files first. Pull only the sections needed for your decision.
 | continue | Wave intent complete; plan still valid |
 | extend | Partial completion; more of the same will finish it |
 | revise | New state invalidates the current approach |
+
+**Read-only:** do not use Edit/Write on any source file. Emit findings via the declared `decision_out` path only.
 
 Classify direction only. Do not rewrite items, propose fixes, or suggest implementation changes.
 

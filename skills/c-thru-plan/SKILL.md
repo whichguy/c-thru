@@ -106,11 +106,17 @@ Greenfield projects typically skip Stage 2b; existing-codebase work almost alway
 
 ## Phase 2 — Plan construction
 
+```sh
+# Write discovery synthesis to disk — never inline large context into prompt
+# (agents/planner.md: "Read inputs from paths, never expect file contents inline")
+cat $PLAN_DIR/discovery/*.md > $PLAN_DIR/discovery/combined.md 2>/dev/null || true
+```
+
 ```
 Agent(subagent_type: "planner",
   prompt: "signal:     intent
            intent:     <user_intent>
-           discovery:  <context_block_from_discovery>
+           discovery:  $PLAN_DIR/discovery/combined.md
            current.md: $PLAN_DIR/current.md")
 ```
 
@@ -158,10 +164,12 @@ while meta.revision_rounds < 20:
         break  # proceed to Phase 3 aftermath
 
     # NEEDS_REVISION — pass findings path to planner
+    # affected_items: [] = full scope (plan review can affect any pending item)
     Agent(subagent_type: "planner",
-          prompt: "signal:     wave_summary
+          prompt: "signal:       wave_summary
                    wave_summary: $PLAN_DIR/review/round-<meta.revision_rounds>.md
-                   current.md: $PLAN_DIR/current.md
+                   affected_items: []
+                   current.md:   $PLAN_DIR/current.md
                    learnings.md: $PLAN_DIR/learnings.md")
 
     # Persist counter to disk before next iteration so Phase-5 re-entry sees the
@@ -238,10 +246,11 @@ loop:
 
   elif transition.type == "outcome_risk":
     planner_result = Agent(subagent_type: "planner",
-      prompt: "signal:        wave_summary
-               wave_summary:  <result.FINDINGS_PATH>
-               current.md:    $PLAN_DIR/current.md
-               learnings.md:  $PLAN_DIR/learnings.md")
+      prompt: "signal:         wave_summary
+               wave_summary:   <result.FINDINGS_PATH>
+               affected_items: <transition.affected_items joined as comma-separated list>
+               current.md:     $PLAN_DIR/current.md
+               learnings.md:   $PLAN_DIR/learnings.md")
     # Validate planner return (same rules a–h as Phase 2)
     if planner_result.STATUS == ERROR: surface to user; abort
     if planner_result.STATUS == CYCLE:

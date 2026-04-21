@@ -1,10 +1,11 @@
 ---
-name: reviewer-fix
+name: wave-reviewer
 description: Iterative code review and fix loop for a single item. Reviews for correctness, security, conventions; applies fixes; rechecks until clean or cap hit.
-model: reviewer-fix
+model: wave-reviewer
+tier_budget: 800
 ---
 
-# reviewer-fix
+# wave-reviewer
 
 Input: digest path. Review the code described for correctness, security, and project conventions. Apply fixes inline. Recheck your own fixes before reporting clean.
 

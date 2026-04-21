@@ -50075,3 +50075,423 @@ claude-router"
 [2026-04-21 13:30] EXTRACT session:ddd426f8: runtime-control(created), skill-config-reload-gaps(updated), ollama-http-api-migration(updated), sighup-config-reload(updated), config-swap-invariant(updated)
 [2026-04-21 06:59] READ_GATE session:c6237d83 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
 [2026-04-21 07:03] EXTRACT session:feat/best-quality-modes: added cloud-best-quality + local-best-quality modes; fallback_chains; local-terminal guard; quality-tolerance tiebreaker; new entity best-quality-modes.md; updated capability-profile-model-layers, fallback-event-system, declared-rewrites, moe-speed-capability-dual
+[2026-04-21 07:12] SESSION_END session:c6237d83: closed in c-thru
+[2026-04-21 07:12] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,readme-installer-alignment dur:0ms
+[2026-04-21 07:12] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,readme-installer-alignment dur:0ms
+[2026-04-21 07:12] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,readme-installer-alignment dur:0ms
+[2026-04-21 07:13] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,readme-installer-alignment dur:0ms
+[2026-04-21 07:13] SESSION_START session:8bd2049b: opened in c-thru
+[2026-04-21 07:13] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,planner-default-integration,readme-installer-alignment dur:0ms
+[2026-04-21 07:13] READ_GATE session:2a5c31f5 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-21 07:13] READ_GATE session:2a5c31f5 path:skills/c-thru-config/SKILL.md slugs:planner-default-integration dur:0ms
+[2026-04-21 07:14] READ_GATE session:2a5c31f5 path:skills/c-thru-config/SKILL.md slugs:planner-default-integration dur:0ms
+[2026-04-21 07:15] SESSION_END session:2a5c31f5: closed in c-thru
+[2026-04-21 07:16] AMPLIFIER_MATCH session:2a5c31f5: matched=model-map-test-pattern prompt="add todo task: enhance the status for c-thru-config to validate the agent model "
+[2026-04-21 07:16] SESSION_START session:0afc29f9: opened in c-thru
+[2026-04-21 07:20] EXTRACT session:1558f542: agent-prompt-construction (created), planner-signals-design (updated cross-links), uplift-cascade-pattern (updated cross-links)
+[2026-04-21 07:27] SESSION_START session:78fe41f0: opened in c-thru
+[2026-04-21 07:27] SESSION_START session:86a5ab49: opened in c-thru
+[2026-04-21 07:31] READ_GATE session:c6237d83 path:test/llm-mode-resolution-matrix.test.js slugs:llm-mode-resolution,model-map-test-pattern dur:0ms
+[2026-04-21 07:32] READ_GATE session:c6237d83 path:test/llm-mode-resolution-matrix.test.js slugs:llm-mode-resolution,model-map-test-pattern dur:0ms
+[2026-04-21 07:32] READ_GATE session:c6237d83 path:test/llm-mode-resolution-matrix.test.js slugs:llm-mode-resolution,model-map-test-pattern dur:0ms
+[2026-04-21 07:35] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,planner-default-integration,readme-installer-alignment dur:0ms
+[2026-04-21 07:35] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,planner-default-integration,readme-installer-alignment dur:0ms
+[2026-04-21 07:41] SESSION_START session:62acb9d5: opened in c-thru
+[2026-04-21 07:41] SESSION_START session:587ff7f4: opened in c-thru
+[2026-04-21 07:44] SESSION_START session:4b727d0b: opened in c-thru
+[2026-04-21 07:46] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,planner-default-integration,readme-installer-alignment dur:0ms
+[2026-04-21 07:46] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,planner-default-integration,readme-installer-alignment dur:0ms
+[2026-04-21 07:46] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,planner-default-integration,readme-installer-alignment dur:0ms
+[2026-04-21 07:48] PERIODIC session:1558f542: probabilistic trigger fired (mod=17)
+[2026-04-21 07:48] SESSION_START session:90ce973f: opened in c-thru
+[2026-04-21 07:48] SESSION_START session:b4ad29b4: opened in c-thru
+[2026-04-21 07:48] SESSION_START session:901b8cd0: opened in c-thru
+[2026-04-21 07:15] EXTRACT session:408250c4: llm-mode-resolution(created), capability-profile-model-layers(updated), model-tag-audit-gap(updated), connectivity-vs-cascade(updated), moe-speed-capability-dual(updated)
+[2026-04-21 07:56] SESSION_START session:51f81437: opened in c-thru
+[2026-04-21 07:56] SESSION_START session:8e3fdcca: opened in c-thru
+[2026-04-21 07:56] SESSION_START session:78e02025: opened in c-thru
+[2026-04-21 17:30] EXTRACT session:408250c4: best-quality-modes (updated — added fallback_chains top-level placement rationale)
+[2026-04-21 07:59] READ_GATE session:c6237d83 path:test/llm-mode-resolution-matrix.test.js slugs:best-quality-modes,connectivity-vs-cascade,llm-mode-resolution,model-map-test-pattern dur:0ms
+[2026-04-21 08:00] READ_GATE session:c6237d83 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+2 dur:0ms
+[2026-04-21 08:00] READ_GATE session:c6237d83 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+2 dur:0ms
+[2026-04-21 08:02] SESSION_START session:9f2ff307: opened in c-thru
+[2026-04-21 08:02] SESSION_START session:e5680ea5: opened in c-thru
+[2026-04-21 08:02] SESSION_START session:3b9d2340: opened in c-thru
+[2026-04-21 09:30] EXTRACT session:1558f542: cascade-scope-contraction (created), uplift-cascade-pattern (updated self-review bullet + crosslink), planner-signals-design (updated crosslink), agent-prompt-construction (updated crosslink)
+[2026-04-21 10:00] EXTRACT session:2a5c31f5: planner-default-integration (rewritten to schema + session bullets), hook-safety-posture (crosslink added), index.md (updated summary)
+[2026-04-21 08:23] SESSION_START session:b59d7adf: opened in c-thru
+[2026-04-21 08:23] SESSION_START session:16c279a4: opened in c-thru
+[2026-04-21 08:23] SESSION_START session:41747f88: opened in c-thru
+[2026-04-21 08:23] AMPLIFIER_MATCH session:41747f88: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 08:23] AMPLIFIER_MATCH session:b59d7adf: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 08:23] AMPLIFIER_MATCH session:16c279a4: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 08:29] SESSION_START session:4e3475aa: opened in c-thru
+[2026-04-21 08:29] READ_GATE session:2a5c31f5 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,planner-default-integration,readme-installer-alignment dur:0ms
+[2026-04-21 08:29] AMPLIFIER_MATCH session:4e3475aa: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 21:00] EXTRACT session:1558f542: updated agent-prompt-construction (added confidence self-report validation principle), cascade-scope-contraction (added pre-measure advisory), best-quality-modes (cross-link to uplift-cascade-pattern)
+[2026-04-21 08:40] SESSION_START session:2a5c31f5: opened in c-thru
+[2026-04-21 08:40] SESSION_START session:c6237d83: opened in c-thru
+[2026-04-21 14:35] EXTRACT session:c6237d83: model-map-test-pattern (mirror-drift guard, @backend sigil pitfall), fallback-event-system (active-path dead-code fix), best-quality-modes (validator gap, null-score tolerance)
+[2026-04-21 08:40] SESSION_START session:0c1f42a3: opened in c-thru
+[2026-04-21 08:40] SESSION_START session:9ad126e7: opened in c-thru
+[2026-04-21 08:40] AMPLIFIER_MATCH session:9ad126e7: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 08:40] AMPLIFIER_MATCH session:0c1f42a3: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:30] EXTRACT session:2a5c31f5: planner-default-integration (updated — session bullets already present), readme-installer-alignment (updated — CLAUDE_DIR path divergence fix + idempotent hook registration)
+[2026-04-21 08:46] SESSION_START session:746c7884: opened in c-thru
+[2026-04-21 08:46] SESSION_CLEAR session:746c7884: /clear boundary in c-thru
+[2026-04-21 08:46] SESSION_START session:cf3f87f1: opened in c-thru
+[2026-04-21 08:46] SESSION_START session:cfa35bfa: opened in c-thru
+[2026-04-21 08:46] SESSION_START session:d33ecb3b: opened in c-thru
+[2026-04-21 08:46] AMPLIFIER_MATCH session:cf3f87f1: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 08:46] AMPLIFIER_MATCH session:d33ecb3b: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 08:46] AMPLIFIER_MATCH session:cfa35bfa: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 08:46] READ_GATE session:746c7884 path:agents/plan-orchestrator.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 08:46] READ_GATE session:746c7884 path:agents/implementer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 08:46] READ_GATE session:746c7884 path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 08:46] READ_GATE session:746c7884 path:agents/reviewer-fix.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 08:46] READ_GATE session:746c7884 path:agents/test-writer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 08:46] READ_GATE session:746c7884 path:agents/scaffolder.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 08:47] READ_GATE session:746c7884 path:docs/agent-architecture.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 08:30] EXTRACT session:c6237d83: best-quality-modes, fallback-event-system, model-map-test-pattern
+[2026-04-21 08:49] SESSION_END session:746c7884: closed in c-thru
+[2026-04-21 18:00] EXTRACT session:ddd426f8: ollama-http-api-migration(updated), sighup-config-reload(updated)
+[2026-04-22 08:30] EXTRACT session:1558f542: cascade-scope-contraction (updated — consolidated pre-measure advisory into experiments bullet, added categorical agreement for small-n)
+[2026-04-22 09:15] EXTRACT session:ddd426f8: model-map-edit-key-whitelist (created), planner-default-integration (updated — review-plan findings), config-swap-invariant (updated cross-link), skill-config-reload-gaps (updated cross-link), capability-profile-model-layers (updated cross-link)
+[2026-04-21 21:00] EXTRACT session:1558f542: cascade-scope-contraction (updated — pre-Wave-1 experiments A/B, 7 decisions D1-D7, plan consolidation), uplift-cascade-pattern (updated — Wave-2 target architecture)
+[2026-04-21 09:19] SESSION_START session:3f327232: opened in c-thru
+[2026-04-21 09:19] SESSION_START session:229d8174: opened in c-thru
+[2026-04-21 09:19] SESSION_START session:2bca31b3: opened in c-thru
+[2026-04-21 09:19] AMPLIFIER_MATCH session:229d8174: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:19] AMPLIFIER_MATCH session:2bca31b3: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:19] AMPLIFIER_MATCH session:3f327232: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:28] SESSION_START session:5b30a6ce: opened in c-thru
+[2026-04-21 09:28] SESSION_START session:fe438483: opened in c-thru
+[2026-04-21 09:28] SESSION_START session:1b8f516e: opened in c-thru
+[2026-04-21 09:28] SESSION_START session:b072c22e: opened in c-thru
+[2026-04-21 09:28] SESSION_START session:377df1da: opened in c-thru
+[2026-04-21 09:28] SESSION_START session:2e54cf7c: opened in c-thru
+[2026-04-21 09:28] SESSION_START session:d8c231fa: opened in c-thru
+[2026-04-21 09:28] READ_GATE session:746c7884 path:CLAUDE.md slugs:cascade-scope-contraction,declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-21 09:28] AMPLIFIER_MATCH session:b072c22e: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:28] AMPLIFIER_MATCH session:5b30a6ce: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:28] READ_GATE session:746c7884 path:CLAUDE.md slugs:cascade-scope-contraction,declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-21 09:28] AMPLIFIER_MATCH session:1b8f516e: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:28] AMPLIFIER_MATCH session:fe438483: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:28] AMPLIFIER_MATCH session:d8c231fa: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:28] AMPLIFIER_MATCH session:377df1da: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:28] AMPLIFIER_MATCH session:2e54cf7c: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:30] SESSION_START session:595e0d1c: opened in c-thru
+[2026-04-21 09:31] SESSION_START session:7eee4c76: opened in c-thru
+[2026-04-21 09:31] SESSION_CLEAR session:7eee4c76: /clear boundary in c-thru
+[2026-04-21 09:31] AMPLIFIER_MATCH session:595e0d1c: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:33] SESSION_START session:bc9d25ba: opened in c-thru
+[2026-04-21 09:33] SESSION_START session:5ac75f79: opened in c-thru
+[2026-04-21 09:33] SESSION_START session:38e1b0e7: opened in c-thru
+[2026-04-21 09:33] AMPLIFIER_MATCH session:38e1b0e7: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:33] AMPLIFIER_MATCH session:5ac75f79: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:33] AMPLIFIER_MATCH session:bc9d25ba: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:35] SESSION_END session:7eee4c76: closed in c-thru
+[2026-04-21 09:35] READ_GATE session:2a5c31f5 path:agents/test-writer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 09:35] READ_GATE session:2a5c31f5 path:agents/reviewer-fix.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 09:37] SESSION_START session:7197d1cf: opened in c-thru
+[2026-04-21 09:37] SESSION_START session:0f728364: opened in c-thru
+[2026-04-21 09:37] SESSION_START session:b2d5c762: opened in c-thru
+[2026-04-21 09:37] SESSION_START session:92e20029: opened in c-thru
+[2026-04-21 09:37] SESSION_START session:62163200: opened in c-thru
+[2026-04-21 09:37] SESSION_START session:c2718e37: opened in c-thru
+[2026-04-21 09:37] SESSION_START session:560431a5: opened in c-thru
+[2026-04-21 09:37] READ_GATE session:2a5c31f5 path:agents/scaffolder.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 09:37] AMPLIFIER_MATCH session:7197d1cf: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:37] AMPLIFIER_MATCH session:c2718e37: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:37] AMPLIFIER_MATCH session:b2d5c762: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:37] AMPLIFIER_MATCH session:0f728364: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:37] PERIODIC session:0f728364: probabilistic trigger fired (mod=17)
+[2026-04-21 09:37] AMPLIFIER_MATCH session:560431a5: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:37] AMPLIFIER_MATCH session:62163200: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:37] AMPLIFIER_MATCH session:92e20029: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:37] PERIODIC session:62163200: probabilistic trigger fired (mod=17)
+[2026-04-21 09:38] SESSION_START session:644aaa84: opened in c-thru
+[2026-04-21 09:38] SESSION_START session:8fe99e0a: opened in c-thru
+[2026-04-21 09:38] PERIODIC session:644aaa84: probabilistic trigger fired (mod=17)
+[2026-04-21 09:38] AMPLIFIER_MATCH session:644aaa84: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:38] AMPLIFIER_MATCH session:8fe99e0a: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:39] SESSION_START session:447e9380: opened in c-thru
+[2026-04-21 09:39] AMPLIFIER_MATCH session:447e9380: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 09:40] SESSION_START session:076025ee: opened in c-thru
+[2026-04-21 09:40] AMPLIFIER_MATCH session:076025ee: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:01] AMPLIFIER_MATCH session:746c7884: matched=model-map-edit-key-whitelist, model-map-test-pattern, model-tag-audit-gap prompt="i guess we could skip in the high confidence version or have a flag to force it "
+[2026-04-21 10:02] SESSION_START session:944c43f8: opened in c-thru
+[2026-04-21 10:02] AMPLIFIER_MATCH session:944c43f8: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:04] SESSION_START session:d04d03b0: opened in c-thru
+[2026-04-21 10:04] AMPLIFIER_MATCH session:d04d03b0: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:05] SESSION_START session:dea67480: opened in c-thru
+[2026-04-21 10:05] AMPLIFIER_MATCH session:dea67480: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:07] SESSION_START session:7a460338: opened in c-thru
+[2026-04-21 10:07] AMPLIFIER_MATCH session:7a460338: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:10] SESSION_START session:d2713634: opened in c-thru
+[2026-04-21 10:10] AMPLIFIER_MATCH session:d2713634: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:13] SESSION_START session:603fb4b6: opened in c-thru
+[2026-04-21 10:13] AMPLIFIER_MATCH session:603fb4b6: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:15] SESSION_START session:1f91d164: opened in c-thru
+[2026-04-21 10:15] AMPLIFIER_MATCH session:1f91d164: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:18] SESSION_START session:63b787bb: opened in c-thru
+[2026-04-21 10:18] AMPLIFIER_MATCH session:63b787bb: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:20] READ_GATE session:746c7884 path:agents/reviewer-fix.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 10:20] READ_GATE session:746c7884 path:agents/test-writer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 10:24] SESSION_START session:0eba19cd: opened in c-thru
+[2026-04-21 10:24] AMPLIFIER_MATCH session:0eba19cd: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:26] READ_GATE session:746c7884 path:agents/scaffolder.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 10:30] SESSION_START session:e288f2ec: opened in c-thru
+[2026-04-21 10:30] AMPLIFIER_MATCH session:e288f2ec: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:34] SESSION_START session:ca03c216: opened in c-thru
+[2026-04-21 10:34] SESSION_CLEAR session:ca03c216: /clear boundary in c-thru
+[2026-04-21 10:34] READ_GATE session:746c7884 path:agents/implementer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 10:34] SESSION_START session:09909848: opened in c-thru
+[2026-04-21 10:34] SESSION_START session:f998cf91: opened in c-thru
+[2026-04-21 10:34] SESSION_START session:a34a8070: opened in c-thru
+[2026-04-21 10:34] SESSION_START session:ca03c216: opened in c-thru
+[2026-04-21 10:34] AMPLIFIER_MATCH session:09909848: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:34] AMPLIFIER_MATCH session:a34a8070: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:34] AMPLIFIER_MATCH session:f998cf91: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:35] AMPLIFIER_MATCH session:ca03c216: matched=model-map-edit-key-whitelist, model-map-test-pattern prompt="research the models that are used in the model-map, particuarly the local ones, "
+[2026-04-21 10:35] SESSION_START session:62477bd9: opened in c-thru
+[2026-04-21 10:35] READ_GATE session:ca03c216 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 10:35] AMPLIFIER_MATCH session:62477bd9: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:36] AMPLIFIER_MATCH session:746c7884: matched=review-plan-banner-alignment prompt="ok, let's review the larger plan"
+[2026-04-21 10:36] SESSION_START session:a78f4dea: opened in c-thru
+[2026-04-21 10:37] AMPLIFIER_MATCH session:a78f4dea: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:43] SESSION_END session:ca03c216: closed in c-thru
+[2026-04-21 10:44] SESSION_START session:aed07b3d: opened in c-thru
+[2026-04-21 10:44] AMPLIFIER_MATCH session:aed07b3d: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:47] SESSION_START session:25a68892: opened in c-thru
+[2026-04-21 10:47] AMPLIFIER_MATCH session:25a68892: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:55] AMPLIFIER_MATCH session:ca03c216: matched=model-map-edit-key-whitelist prompt="specifically explore these models as used with ollama for any key lessons on pro"
+[2026-04-21 10:55] SESSION_START session:32cd7b25: opened in c-thru
+[2026-04-21 10:55] SESSION_START session:7a3af2a9: opened in c-thru
+[2026-04-21 10:55] AMPLIFIER_MATCH session:32cd7b25: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 10:55] AMPLIFIER_MATCH session:7a3af2a9: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:06] AMPLIFIER_MATCH session:ca03c216: matched=model-map-edit-key-whitelist prompt="specifically explore these models as used with ollama for any key lessons on pro"
+[2026-04-21 11:06] SESSION_START session:bd83e842: opened in c-thru
+[2026-04-21 11:06] SESSION_START session:62434fb8: opened in c-thru
+[2026-04-21 11:06] AMPLIFIER_MATCH session:62434fb8: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:06] AMPLIFIER_MATCH session:bd83e842: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:11] SESSION_START session:a82cecbf: opened in c-thru
+[2026-04-21 11:11] SESSION_CLEAR session:a82cecbf: /clear boundary in c-thru
+[2026-04-21 11:11] SESSION_START session:94597c4a: opened in c-thru
+[2026-04-21 11:11] SESSION_START session:e59449b6: opened in c-thru
+[2026-04-21 11:11] SESSION_START session:ef179aa1: opened in c-thru
+[2026-04-21 11:11] AMPLIFIER_MATCH session:94597c4a: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:11] AMPLIFIER_MATCH session:e59449b6: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:11] AMPLIFIER_MATCH session:ef179aa1: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:11] READ_GATE session:a82cecbf path:agents/plan-orchestrator.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 11:11] READ_GATE session:a82cecbf path:agents/implementer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 11:11] READ_GATE session:a82cecbf path:agents/reviewer-fix.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 11:11] READ_GATE session:a82cecbf path:agents/test-writer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 11:11] READ_GATE session:a82cecbf path:agents/scaffolder.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 11:12] READ_GATE session:a82cecbf path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 11:12] READ_GATE session:a82cecbf path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 11:12] READ_GATE session:a82cecbf path:docs/agent-architecture.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 11:12] READ_GATE session:a82cecbf path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 11:13] SESSION_END session:a82cecbf: closed in c-thru
+[2026-04-21 11:14] SESSION_START session:4ea6f898: opened in c-thru
+[2026-04-21 11:14] AMPLIFIER_MATCH session:4ea6f898: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:14] READ_GATE session:a82cecbf path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 11:19] SESSION_START session:1c29568f: opened in c-thru
+[2026-04-21 11:19] SESSION_START session:7d5b2ce4: opened in c-thru
+[2026-04-21 11:19] AMPLIFIER_MATCH session:1c29568f: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:19] AMPLIFIER_MATCH session:7d5b2ce4: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:20] READ_GATE session:a82cecbf path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 11:20] READ_GATE session:a82cecbf path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 11:23] SESSION_START session:27a00923: opened in c-thru
+[2026-04-21 11:23] SESSION_START session:86e867d6: opened in c-thru
+[2026-04-21 11:23] AMPLIFIER_MATCH session:86e867d6: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:23] AMPLIFIER_MATCH session:27a00923: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:27] SESSION_START session:23b70e02: opened in c-thru
+[2026-04-21 11:27] AMPLIFIER_MATCH session:23b70e02: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:27] READ_GATE session:ca03c216 path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 11:30] SESSION_START session:e9f2e43a: opened in c-thru
+[2026-04-21 11:30] AMPLIFIER_MATCH session:e9f2e43a: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:37] PERIODIC session:ca03c216: probabilistic trigger fired (mod=17)
+[2026-04-21 11:37] SESSION_START session:b72b9368: opened in c-thru
+[2026-04-21 11:37] SESSION_START session:e5bd4527: opened in c-thru
+[2026-04-21 11:37] SESSION_START session:85f30f44: opened in c-thru
+[2026-04-21 11:37] SESSION_START session:0fabb753: opened in c-thru
+[2026-04-21 11:37] AMPLIFIER_MATCH session:b72b9368: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:37] AMPLIFIER_MATCH session:85f30f44: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:37] AMPLIFIER_MATCH session:0fabb753: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:37] AMPLIFIER_MATCH session:e5bd4527: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:38] SESSION_START session:cb1c45f8: opened in c-thru
+[2026-04-21 11:38] AMPLIFIER_MATCH session:cb1c45f8: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:44] SESSION_START session:5c1b0450: opened in c-thru
+[2026-04-21 11:44] PERIODIC session:a82cecbf: probabilistic trigger fired (mod=17)
+[2026-04-21 11:44] AMPLIFIER_MATCH session:5c1b0450: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:51] EXTRACT session:a82cecbf: compaction — 2 queue entries written
+[2026-04-21 11:51] SESSION_START session:eb903ef6: opened in c-thru
+[2026-04-21 11:51] SESSION_CLEAR session:eb903ef6: /clear boundary in c-thru
+[2026-04-21 11:51] SESSION_START session:c9e5996e: opened in c-thru
+[2026-04-21 11:51] SESSION_START session:4ee4c5fd: opened in c-thru
+[2026-04-21 11:51] SESSION_START session:50dee697: opened in c-thru
+[2026-04-21 11:51] SESSION_START session:f0c93ef5: opened in c-thru
+[2026-04-21 11:51] SESSION_START session:011c3e19: opened in c-thru
+[2026-04-21 11:51] SESSION_START session:eb903ef6: opened in c-thru
+[2026-04-21 11:51] AMPLIFIER_MATCH session:4ee4c5fd: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:51] AMPLIFIER_MATCH session:c9e5996e: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:51] AMPLIFIER_MATCH session:50dee697: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:51] AMPLIFIER_MATCH session:011c3e19: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:51] AMPLIFIER_MATCH session:f0c93ef5: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:51] PERIODIC session:f0c93ef5: probabilistic trigger fired (mod=17)
+[2026-04-21 11:52] SESSION_START session:eb903ef6: opened in c-thru
+[2026-04-21 11:52] SESSION_START session:340ee28b: opened in c-thru
+[2026-04-21 11:52] AMPLIFIER_MATCH session:340ee28b: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:53] SESSION_START session:a82cecbf: opened in c-thru
+[2026-04-21 11:53] SESSION_END session:eb903ef6: closed in c-thru
+[2026-04-21 11:54] SESSION_START session:ee500681: opened in c-thru
+[2026-04-21 11:54] AMPLIFIER_MATCH session:ee500681: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:55] PERIODIC session:a82cecbf: probabilistic trigger fired (mod=17)
+[2026-04-21 11:55] SESSION_START session:33d2b06f: opened in c-thru
+[2026-04-21 11:55] SESSION_START session:ae506ba8: opened in c-thru
+[2026-04-21 11:55] AMPLIFIER_MATCH session:33d2b06f: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:55] AMPLIFIER_MATCH session:ae506ba8: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 11:55] SESSION_START session:6babb40e: opened in c-thru
+[2026-04-21 11:56] AMPLIFIER_MATCH session:6babb40e: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:00] EXTRACT session:ca03c216: compaction — 2 queue entries written
+[2026-04-21 12:02] SESSION_START session:ca03c216: opened in c-thru
+[2026-04-21 12:02] SESSION_START session:5808c16f: opened in c-thru
+[2026-04-21 12:02] SESSION_START session:6a125270: opened in c-thru
+[2026-04-21 12:02] SESSION_START session:f4cb4cad: opened in c-thru
+[2026-04-21 12:02] SESSION_START session:5f7b8d02: opened in c-thru
+[2026-04-21 12:02] SESSION_START session:9ef3f739: opened in c-thru
+[2026-04-21 12:02] AMPLIFIER_MATCH session:6a125270: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:02] AMPLIFIER_MATCH session:5808c16f: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:02] AMPLIFIER_MATCH session:5f7b8d02: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:02] AMPLIFIER_MATCH session:9ef3f739: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:02] AMPLIFIER_MATCH session:f4cb4cad: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:06] SESSION_START session:a3f43713: opened in c-thru
+[2026-04-21 12:06] AMPLIFIER_MATCH session:a3f43713: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:09] SESSION_START session:3dfdb834: opened in c-thru
+[2026-04-21 12:09] SESSION_CLEAR session:3dfdb834: /clear boundary in c-thru
+[2026-04-21 12:09] SESSION_START session:8e9ebe9e: opened in c-thru
+[2026-04-21 12:09] SESSION_START session:68d4be6e: opened in c-thru
+[2026-04-21 12:09] READ_GATE session:3dfdb834 path:agents/implementer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 12:09] READ_GATE session:3dfdb834 path:docs/agent-architecture.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 12:09] AMPLIFIER_MATCH session:68d4be6e: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:09] AMPLIFIER_MATCH session:8e9ebe9e: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:10] READ_GATE session:3dfdb834 path:docs/agent-architecture.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 12:15] AMPLIFIER_MATCH session:ca03c216: matched=gpt-oss-model, model-map-edit-key-whitelist, model-map-test-pattern prompt="add todo task: consider the model-mapping and variables which can be passed thro"
+[2026-04-21 12:15] SESSION_START session:e4739415: opened in c-thru
+[2026-04-21 12:15] AMPLIFIER_MATCH session:e4739415: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:15] READ_GATE session:3dfdb834 path:agents/implementer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 12:17] READ_GATE session:3dfdb834 path:docs/agent-architecture.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 12:17] EXTRACT session:ca03c216: compaction — 2 queue entries written
+[2026-04-21 12:18] SESSION_START session:22924d75: opened in c-thru
+[2026-04-21 12:18] SESSION_START session:d391ccd9: opened in c-thru
+[2026-04-21 12:18] SESSION_START session:8e5464c5: opened in c-thru
+[2026-04-21 12:18] SESSION_START session:1a2eb15e: opened in c-thru
+[2026-04-21 12:18] SESSION_START session:5a3b9be1: opened in c-thru
+[2026-04-21 12:18] AMPLIFIER_MATCH session:8e5464c5: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:18] AMPLIFIER_MATCH session:d391ccd9: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:18] AMPLIFIER_MATCH session:1a2eb15e: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:18] AMPLIFIER_MATCH session:5a3b9be1: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:19] SESSION_END session:3dfdb834: closed in c-thru
+[2026-04-21 12:19] READ_GATE session:22924d75 path:docs/agent-architecture.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 12:19] SESSION_START session:956b6458: opened in c-thru
+[2026-04-21 12:19] SESSION_START session:ca03c216: opened in c-thru
+[2026-04-21 12:19] AMPLIFIER_MATCH session:956b6458: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:20] SESSION_START session:b5f4774d: opened in c-thru
+[2026-04-21 12:20] PERIODIC session:b5f4774d: probabilistic trigger fired (mod=17)
+[2026-04-21 12:20] AMPLIFIER_MATCH session:b5f4774d: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:34] SESSION_START session:69bfbcd1: opened in c-thru
+[2026-04-21 12:34] SESSION_CLEAR session:69bfbcd1: /clear boundary in c-thru
+[2026-04-21 12:34] SESSION_START session:a2715966: opened in c-thru
+[2026-04-21 12:34] SESSION_START session:2bb97ad5: opened in c-thru
+[2026-04-21 12:34] READ_GATE session:69bfbcd1 path:test/planner-return-schema.test.js slugs:implementer-lint-loop dur:0ms
+[2026-04-21 12:34] READ_GATE session:69bfbcd1 path:test/model-map-v12-adapter.test.js slugs:capability-profile-model-layers,model-map-test-pattern dur:0ms
+[2026-04-21 12:34] AMPLIFIER_MATCH session:a2715966: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:34] AMPLIFIER_MATCH session:2bb97ad5: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:35] READ_GATE session:69bfbcd1 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 12:35] READ_GATE session:69bfbcd1 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 12:36] READ_GATE session:69bfbcd1 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 12:36] READ_GATE session:69bfbcd1 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 12:36] READ_GATE session:69bfbcd1 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+3 dur:0ms
+[2026-04-21 12:36] READ_GATE session:69bfbcd1 path:test/planner-return-schema.test.js slugs:implementer-lint-loop dur:0ms
+[2026-04-21 12:37] READ_GATE session:69bfbcd1 path:tools/model-map-resolve.js slugs:best-quality-modes,llm-mode-resolution,model-map-test-pattern dur:0ms
+[2026-04-21 12:45] READ_GATE session:69bfbcd1 path:docs/agent-architecture.md slugs:cascade-scope-contraction,implementer-lint-loop dur:0ms
+[2026-04-21 12:45] READ_GATE session:69bfbcd1 path:test/planner-return-schema.test.js slugs:implementer-lint-loop dur:0ms
+[2026-04-21 12:48] SESSION_END session:69bfbcd1: closed in c-thru
+[2026-04-21 12:49] SESSION_START session:a183dfe6: opened in c-thru
+[2026-04-21 12:49] SESSION_CLEAR session:a183dfe6: /clear boundary in c-thru
+[2026-04-21 12:49] SESSION_START session:9e822d58: opened in c-thru
+[2026-04-21 12:49] SESSION_START session:8cc4c1e2: opened in c-thru
+[2026-04-21 12:49] SESSION_START session:b1750b0d: opened in c-thru
+[2026-04-21 12:49] READ_GATE session:a183dfe6 path:agents/implementer.md slugs:cascade-scope-contraction,implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 12:49] READ_GATE session:a183dfe6 path:agents/implementer-cloud.md slugs:implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 12:49] AMPLIFIER_MATCH session:8cc4c1e2: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:49] AMPLIFIER_MATCH session:b1750b0d: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:49] AMPLIFIER_MATCH session:9e822d58: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:51] READ_GATE session:a183dfe6 path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 12:51] READ_GATE session:a183dfe6 path:skills/review-plan/SKILL.md slugs:review-plan-banner-alignment dur:0ms
+[2026-04-21 12:51] READ_GATE session:a183dfe6 path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 12:51] READ_GATE session:a183dfe6 path:skills/review-plan/SKILL.md slugs:review-plan-banner-alignment dur:0ms
+[2026-04-21 12:51] READ_GATE session:a183dfe6 path:docs/agent-architecture.md slugs:cascade-scope-contraction,implementer-lint-loop dur:0ms
+[2026-04-21 12:52] READ_GATE session:a183dfe6 path:docs/agent-architecture.md slugs:cascade-scope-contraction,implementer-lint-loop dur:0ms
+[2026-04-21 12:53] READ_GATE session:a183dfe6 path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:15] EXTRACT session:3dfdb834: implementer-lint-loop (created), review-fix-intent-alignment (created), agent-prompt-construction (updated), uplift-cascade-pattern (updated), cascade-scope-contraction (updated)
+[2026-04-21 12:58] SESSION_END session:a183dfe6: closed in c-thru
+[2026-04-21 13:04] READ_GATE session:a183dfe6 path:agents/plan-orchestrator.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:07] READ_GATE session:a183dfe6 path:agents/reviewer-fix.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:07] READ_GATE session:a183dfe6 path:agents/scaffolder.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:11] SESSION_START session:660e17c5: opened in c-thru
+[2026-04-21 13:11] SESSION_START session:b895f75f: opened in c-thru
+[2026-04-21 13:11] AMPLIFIER_MATCH session:660e17c5: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 13:11] AMPLIFIER_MATCH session:b895f75f: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 13:13] SESSION_START session:f4aadff0: opened in c-thru
+[2026-04-21 13:13] AMPLIFIER_MATCH session:f4aadff0: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 13:14] READ_GATE session:a183dfe6 path:agents/implementer.md slugs:cascade-scope-contraction,implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 13:14] READ_GATE session:a183dfe6 path:agents/test-writer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:15] READ_GATE session:a183dfe6 path:agents/implementer.md slugs:cascade-scope-contraction,implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 13:15] READ_GATE session:a183dfe6 path:agents/implementer.md slugs:cascade-scope-contraction,implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 13:18] READ_GATE session:69bfbcd1 path:agents/implementer.md slugs:cascade-scope-contraction,implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 13:20] EXTRACT session:ca03c216: ollama-endpoint-divergence (created), local-model-prompt-research (created), gpt-oss-model (updated), qwen-series-selection (updated), ollama-http-api-migration (updated), model-tag-audit-gap (updated)
+[2026-04-21 13:22] SESSION_START session:b1731578: opened in c-thru
+[2026-04-21 13:22] SESSION_CLEAR session:b1731578: /clear boundary in c-thru
+[2026-04-21 13:22] SESSION_START session:96fbc1df: opened in c-thru
+[2026-04-21 13:22] SESSION_START session:6bfc531f: opened in c-thru
+[2026-04-21 13:22] SESSION_START session:40e40e14: opened in c-thru
+[2026-04-21 13:22] READ_GATE session:b1731578 path:docs/agent-architecture.md slugs:cascade-scope-contraction,implementer-lint-loop dur:0ms
+[2026-04-21 13:22] READ_GATE session:b1731578 path:agents/implementer.md slugs:cascade-scope-contraction,implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 13:22] READ_GATE session:b1731578 path:agents/reviewer-fix.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:22] AMPLIFIER_MATCH session:96fbc1df: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 13:22] AMPLIFIER_MATCH session:40e40e14: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 13:22] AMPLIFIER_MATCH session:6bfc531f: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 13:22] READ_GATE session:b1731578 path:agents/scaffolder.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:22] READ_GATE session:b1731578 path:agents/test-writer.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:22] READ_GATE session:b1731578 path:agents/implementer-cloud.md slugs:implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 13:25] READ_GATE session:b1731578 path:agents/implementer-cloud.md slugs:implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 13:33] SESSION_START session:267f4ea0: opened in c-thru
+[2026-04-21 13:33] SESSION_START session:badb6ebe: opened in c-thru
+[2026-04-21 13:33] PERIODIC session:267f4ea0: probabilistic trigger fired (mod=17)
+[2026-04-21 13:33] AMPLIFIER_MATCH session:267f4ea0: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 13:33] AMPLIFIER_MATCH session:badb6ebe: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 13:33] READ_GATE session:a183dfe6 path:agents/implementer-cloud.md slugs:implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 13:34] READ_GATE session:a183dfe6 path:agents/implementer-cloud.md slugs:implementer-lint-loop,review-fix-intent-alignment dur:0ms
+[2026-04-21 13:37] READ_GATE session:a183dfe6 path:skills/review-plan/SKILL.md slugs:review-plan-banner-alignment dur:0ms
+[2026-04-21 13:38] SESSION_END session:b1731578: closed in c-thru
+[2026-04-21 13:38] READ_GATE session:a183dfe6 path:skills/review-plan/SKILL.md slugs:review-plan-banner-alignment dur:0ms
+[2026-04-21 13:38] READ_GATE session:a183dfe6 path:skills/review-plan/SKILL.md slugs:review-plan-banner-alignment dur:0ms
+[2026-04-21 19:40] EXTRACT session:a9bb05a0: proxy-health-function-semantics (jq null-string injection guard)
+[2026-04-21 13:39] READ_GATE session:a183dfe6 path:skills/review-plan/SKILL.md slugs:review-plan-banner-alignment dur:0ms
+[2026-04-21 13:42] SESSION_START session:5adc4a8a: opened in c-thru
+[2026-04-21 13:42] SESSION_START session:b3c57bfe: opened in c-thru
+[2026-04-21 13:42] AMPLIFIER_MATCH session:5adc4a8a: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 13:42] AMPLIFIER_MATCH session:b3c57bfe: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 12:39] EXTRACT session:ca03c216: local-model-prompt-research (updated: +3 bullets — client-actionability scope, Phase 5 model-map defaults, Modelfile→API reframing), ollama-http-api-migration (updated: +2 bullets — version-fix re-pull invariant, endpoint divergence), gpt-oss-model (updated: fixed cross-links), qwen-series-selection (updated: fixed cross-links), model-map-edit-key-whitelist (updated: +1 bullet — Phase 5 per-model defaults key), ollama-endpoint-divergence (cross-link update)
+[2026-04-21 13:48] READ_GATE session:a183dfe6 path:skills/review-plan/SKILL.md slugs:review-plan-banner-alignment dur:0ms
+[2026-04-21 12:50] EXTRACT session:69bfbcd1: kind-anthropic-invariant (updated), model-map-test-pattern (updated), agent-prompt-construction (updated), agent-structural-testing (created)
+[2026-04-21 13:49] READ_GATE session:a183dfe6 path:skills/review-plan/SKILL.md slugs:review-plan-banner-alignment dur:0ms
+[2026-04-21 13:50] READ_GATE session:a183dfe6 path:agents/planner.md slugs:cascade-scope-contraction,planner-signals-design dur:0ms
+[2026-04-21 13:50] READ_GATE session:a183dfe6 path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:52] READ_GATE session:a183dfe6 path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:52] READ_GATE session:a183dfe6 path:agents/planner.md slugs:cascade-scope-contraction,planner-signals-design dur:0ms
+[2026-04-21 13:53] READ_GATE session:a183dfe6 path:agents/plan-orchestrator.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 13:53] READ_GATE session:a183dfe6 path:docs/agent-architecture.md slugs:agent-contract-testing,cascade-scope-contraction,implementer-lint-loop dur:0ms
+[2026-04-21 13:54] READ_GATE session:a183dfe6 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+4 dur:0ms
