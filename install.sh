@@ -409,7 +409,7 @@ register_hooks() {
             if .hooks == null then .hooks = {} else . end |
             if .hooks.PostToolUse == null then .hooks.PostToolUse = [] else . end |
             .hooks.PostToolUse += [{
-                "matcher": "Edit|Write|MultiEdit",
+                "matcher": "*",
                 "hooks": [{"type": "command", "command": $cmd, "timeout": 5}]
             }]
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
