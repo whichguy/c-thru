@@ -2391,37 +2391,32 @@ cmd_restart() {
     return 1
   fi
 
-  local startup_tag temp_log ready_pipe ready_line
+  local startup_tag temp_log
   startup_tag="${$}.$RANDOM"
   temp_log="$(mktemp "${TMPDIR:-/tmp}/claude-proxy-restart-${startup_tag}.log" 2>/dev/null || true)"
   [[ -n "$temp_log" ]] || temp_log="/dev/null"
-  ready_pipe="$CLAUDE_PROFILE_DIR/proxy.ready.restart-${startup_tag}.pipe"
-  rm -f "$ready_pipe"
-  mkfifo "$ready_pipe"
 
-  # Pass explicit port so the new process binds to the same port.
-  "$proxy_js" --port "$proxy_port" >"$ready_pipe" 2>"$temp_log" &
+  # Spawn without --port: CLAUDE_PROXY_PORT is already exported (default 9997),
+  # so the proxy inherits it and binds to the same port. --port would suppress
+  # the READY line and complicate readiness detection.
+  "$proxy_js" >/dev/null 2>"$temp_log" &
   local new_pid="$!"
   disown "$new_pid" 2>/dev/null || true
 
-  if IFS= read -r -t 5 ready_line <"$ready_pipe" && [[ "$ready_line" =~ ^READY\ ([0-9]+)$ ]]; then
-    if wait_proxy_ping_ready "$proxy_port" 20; then
-      local ping_json new_tier=""
-      ping_json="$(proxy_ping_json "$proxy_port")"
-      if command -v jq >/dev/null 2>&1; then
-        new_tier="$(jq -r '.active_tier // empty' 2>/dev/null <<< "$ping_json" || true)"
-      fi
-      echo "c-thru restart: proxy started (pid $new_pid, port $proxy_port${new_tier:+, tier: $new_tier})"
-      rm -f "$ready_pipe" 2>/dev/null || true
-      return 0
+  if wait_proxy_ping_ready "$proxy_port" 50; then
+    local ping_json new_tier=""
+    ping_json="$(proxy_ping_json "$proxy_port")"
+    if command -v jq >/dev/null 2>&1; then
+      new_tier="$(jq -r '.active_tier // empty' 2>/dev/null <<< "$ping_json" || true)"
     fi
+    echo "c-thru restart: proxy started (pid $new_pid, port $proxy_port${new_tier:+, tier: $new_tier})"
+    return 0
   fi
 
-  echo "c-thru restart: proxy did not become ready" >&2
+  echo "c-thru restart: proxy did not become ready within 5s" >&2
   if [[ -s "$temp_log" ]]; then
     tail -5 "$temp_log" | sed 's/^/  /' >&2
   fi
-  rm -f "$ready_pipe" 2>/dev/null || true
   return 1
 }
 

@@ -177,7 +177,7 @@ function main() {
 
   if (reloadFlag) {
     const { spawnSync } = require('child_process');
-    const cthru = path.join(path.dirname(effectivePath), '..', 'tools', 'c-thru');
+    const cthru = path.join(path.dirname(effectivePath), 'tools', 'c-thru');
     const result = spawnSync(cthru, ['reload'], { stdio: 'inherit' });
     if (result.status !== 0) {
       process.stderr.write('model-map-edit: --reload: c-thru reload exited ' + (result.status ?? 'null') + '\n');
