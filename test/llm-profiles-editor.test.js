@@ -87,8 +87,7 @@ console.log('\n3. Null tier is rejected');
 {
   // applyUpdates calls fail() which does process.exit(1) — we need to intercept
   // by catching the exit via a spawned process. Instead, test the helper directly.
-  const { } = require('../tools/model-map-edit.js'); // already imported above
-  // We can't easily catch process.exit, so test via child_process
+  // already imported above; testing via child_process to capture process.exit
   const { execFileSync } = require('child_process');
   const specJson = JSON.stringify({ llm_profiles: { '64gb': null } });
   const tmpDefaults = path.join(os.tmpdir(), `test-defaults-${process.pid}.json`);

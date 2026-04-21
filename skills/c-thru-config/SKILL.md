@@ -46,7 +46,6 @@ Run the bash block below, substituting `<CAPABILITY>` with the actual argument
 
 ```bash
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-MAP="$CLAUDE_DIR/model-map.json"
 node -e "
 'use strict';
 const fs = require('fs'), os = require('os'), path = require('path');
@@ -225,17 +224,53 @@ Steps:
 3. Merge: copy the existing entry (or `{}` if new), then set
    `connected_model = <MODEL>` and `disconnect_model = <MODEL>`.
 
-4. Build the spec and run `model-map-edit`:
+4. Build the spec and run `model-map-edit`. Use node inline to construct valid JSON
+   that preserves any extra fields from the existing entry:
 
 ```bash
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-SPEC='{"llm_profiles": {"<TIER>": {"<CAPABILITY>": {"connected_model": "<MODEL>", "disconnect_model": "<MODEL>", <OTHER_FIELDS_FROM_EXISTING_ENTRY>}}}}'
+node -e "
+'use strict';
+const fs = require('fs'), os = require('os'), path = require('path');
+const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
+const mapPath = CLAUDE_DIR + '/model-map.json';
+let config = {};
+try { config = JSON.parse(fs.readFileSync(mapPath, 'utf8')); } catch {}
+const tier = process.argv[1];
+const cap  = process.argv[2];
+const model = process.argv[3];
+const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
+const entry = Object.assign({}, existing, { connected_model: model, disconnect_model: model });
+process.stdout.write(JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } }));
+" -- "<TIER>" "<CAPABILITY>" "<MODEL>" | xargs -0 -I SPEC \
 node "$CLAUDE_DIR/tools/model-map-edit" \
   "$CLAUDE_DIR/model-map.system.json" \
   "$CLAUDE_DIR/model-map.overrides.json" \
   "$CLAUDE_DIR/model-map.json" \
-  "$SPEC"
+  SPEC
 ```
+
+> **Alternative (simpler):** If you are constructing the spec interactively, build the
+> JSON string using node and pass it directly:
+>
+> ```bash
+> CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+> SPEC=$(node -e "
+> 'use strict';
+> const fs = require('fs'), os = require('os'), path = require('path');
+> const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
+> const config = JSON.parse(fs.readFileSync(CLAUDE_DIR + '/model-map.json', 'utf8'));
+> const tier = process.argv[1], cap = process.argv[2], model = process.argv[3];
+> const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
+> const entry = Object.assign({}, existing, { connected_model: model, disconnect_model: model });
+> process.stdout.write(JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } }));
+> " -- "<TIER>" "<CAPABILITY>" "<MODEL>")
+> node "$CLAUDE_DIR/tools/model-map-edit" \
+>   "$CLAUDE_DIR/model-map.system.json" \
+>   "$CLAUDE_DIR/model-map.overrides.json" \
+>   "$CLAUDE_DIR/model-map.json" \
+>   "$SPEC"
+> ```
 
 On success, print:
 ```
