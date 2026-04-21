@@ -2,6 +2,7 @@
 name: test-writer
 description: Writes tests for implemented code. Reads the implementation first; writes tests that catch subtle bugs, not format-matching templates.
 model: test-writer
+tier_budget: 800
 ---
 
 # test-writer

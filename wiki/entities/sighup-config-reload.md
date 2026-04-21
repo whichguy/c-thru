@@ -4,10 +4,10 @@ type: entity
 description: "SIGHUP handler for claude-proxy triggers in-process config reload (not re-exec); full restart is pkill + router auto-respawn"
 tags: [proxy, sighup, config-reload, lifecycle]
 confidence: high
-last_verified: 2026-04-18
+last_verified: 2026-04-21
 created: 2026-04-18
-last_updated: 2026-04-18
-sources: [6d09913f, b8f0466a, 386b8e16]
+last_updated: 2026-04-21
+sources: [6d09913f, b8f0466a, 386b8e16, ddd426f8]
 related: [router-lock-handshake, load-bearing-invariant, declared-rewrites]
 ---
 
@@ -21,5 +21,6 @@ related: [router-lock-handshake, load-bearing-invariant, declared-rewrites]
 - **From Session 386b8e16:** All three advisory items from b8f0466a resolved in three commits: (1) `0c79fde` — `validateRouteGraph` throws `Error` instead of `process.exit`; `validateWithNode` returns `bool` instead of `process.exit`. Both are now safe to call from hot-reload paths (SIGHUP + fs.watch). (2) `8409ce0` — `reloadConfigFromDisk` captures `mtime` before validation (via `fs.statSync` at read time) and validates `nextConfig` before assigning to `CONFIG`, eliminating the validate-after-swap and stat-after-failure bugs. (3) `9594a42` — `validateWithNode` accepts explicit `pathToValidate` arg; `reloadConfigFromDisk` writes `nextConfig` to a tmpfile (`os.tmpdir()/claude-proxy-validate-$PID.json`) for the validator, closing the TOCTOU. Silent `catch {}` replaced with logged error. Dead `try/catch` around `reloadConfigFromDisk()` in `fs.watch` callback removed (the function handles its own errors).
 
 - **From Session 9d601210:** v1.2 plan review finding (N8): SIGHUP hot-reload × v1.2 resolver interaction not addressed — resolver should snapshot CONFIG at entry (not re-read global on each fallback step). Verification should include a reload-during-request test. Plan edited to add this constraint.
+- **From Session ddd426f8:** First-class CLI surface: `c-thru reload` reads `~/.claude/proxy.pid`, sends SIGHUP, then polls `/ping` for up to 2s to confirm the proxy is alive and the new config is loaded. Prints the new active tier/mode on success. Exits non-zero on stale PID or proxy crash. Skill equivalent: `/c-thru-config reload`. The `/ping` verification step closes the "no post-reload verification" gap — the proxy confirms the reloaded config_path and mtime match what's on disk.
 
-→ See also: [[router-lock-handshake]], [[load-bearing-invariant]], [[declared-rewrites]], [[capability-profile-model-layers]]
+→ See also: [[router-lock-handshake]], [[load-bearing-invariant]], [[declared-rewrites]], [[capability-profile-model-layers]], [[runtime-control]], [[skill-config-reload-gaps]]

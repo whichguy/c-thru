@@ -2,6 +2,7 @@
 name: integrator
 description: Wires completed implementation together — routes, registrations, exports, DI. Writes integration glue only.
 model: integrator
+tier_budget: 1000
 ---
 
 # integrator

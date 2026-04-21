@@ -2,6 +2,7 @@
 name: plan-orchestrator
 description: Pure wave executor. Receives READY_ITEMS[] + commit_message from driver; runs topo-sort → batch → progressive injection → workers → verify → commit. Returns compact STATUS block.
 model: plan-orchestrator
+tier_budget: 1000
 ---
 
 # plan-orchestrator
@@ -192,10 +193,13 @@ If `STATUS: RECUSE`:
 6. **Depth cap:** if `escalation_depth >= 3` (default `max_escalations`) → mark item `blocked`; log to `$wave_dir/batch-abort.log`.
 7. **Cloud unavailability:** if `RECOMMEND` names a cloud agent and cloud is unreachable → mark item `blocked` (not `failed`).
 8. **Malformed RECUSE** (missing `RECUSAL_REASON`): mark item `failed`, write raw to failures/.
-9. Otherwise: append escalation context to next agent's digest. Use this template:
-   - `uplift` verdict from uplift-decider (or ATTEMPTED=yes): append to digest as `## Escalation context\nPrior partial output: <PARTIAL_OUTPUT path>\nRecusal reason: <RECUSAL_REASON>`. Include all prior escalation_log entries as context.
-   - `restart` verdict from uplift-decider (or ATTEMPTED=no with no prior output): use original task digest unchanged — no prior context included.
-   - When dispatched directly (no uplift-decider step, e.g. reviewer-fix → implementer-cloud): append `## Escalation context\nRecusal reason: <RECUSAL_REASON>` if partial output exists.
+9. Otherwise: build a well-formed `## Escalation context` section and append it to the digest before dispatch. Every cloud agent dispatch **must** have this section — ambiguous context is worse than no context.
+   - `uplift` verdict from uplift-decider (or ATTEMPTED=yes): append `## Escalation context\nmode: uplift\nPrior partial output: <PARTIAL_OUTPUT path>\nRecusal reason: <RECUSAL_REASON>`. Include all prior escalation_log entries as context.
+   - `restart` verdict from uplift-decider (or ATTEMPTED=no with no prior output): append `## Escalation context\nmode: restart\n(no partial output — fresh start)` — explicitly marks restart so the cloud agent branches deterministically.
+   - Direct dispatch (no uplift-decider step, e.g. wave-reviewer → implementer-cloud): append `## Escalation context\nmode: direct\nRecusal reason: <RECUSAL_REASON>` and include PARTIAL_OUTPUT path if present.
+
+   **Digest pre-check before uplift-decider dispatch:** `grep -q '^## Escalation context' <digest>` — if absent, do not dispatch; mark item `blocked` with reason `malformed-digest:missing-escalation-context`.
+
    Fire `Agent(subagent_type: RECOMMEND, prompt: <digest-path>, timeout: ${WORKER_TIMEOUT_SEC:-600})`. Apply this same Step 5r check to the new response — recursive re-dispatch until STATUS is not RECUSE, depth cap hit, or cloud unavailable.
 
 **RECUSE idempotency on resume:** On orchestrator crash between RECUSE receipt and next dispatch, re-read `escalation_log` in wave.json. Use `findings/<next-agent>-<item>.jsonl` absence as canonical "not yet dispatched" signal — do not re-dispatch already-attempted tiers.
@@ -214,9 +218,9 @@ After each batch, scan `FINDING_CATS` counts returned by successful workers:
 - **plan-material** → continue to next batch.
 - **contextual/trivial** → continue to next batch.
 
-**reviewer-fix loop** (for code items only, max 5 iterations):
+**wave-reviewer loop** (for code items only, max 5 iterations):
 ```
-Agent(subagent_type: "reviewer-fix",
+Agent(subagent_type: "wave-reviewer",
   prompt: "<code-review-digest path>")
 ```
 Iterate until no plan-material/crisis findings, or cap hit.

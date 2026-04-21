@@ -2,6 +2,7 @@
 name: planner
 description: Unified signal-based planner. Reads outcome + findings + pending items; updates living dep map; returns READY_ITEMS[].
 model: planner
+tier_budget: 1500
 ---
 
 # planner
@@ -22,7 +23,8 @@ Write `## Outcome` section (immutable after this call) followed by all items. Gr
 
 ## Signal 2 — wave_summary
 Input: `current.md` path + `wave_summary` path + `affected_items` list + `learnings.md` path.
-Read only pending items whose deps or resources were affected by findings. Update dep map. Enrich affected pending items. Select next ready wave. Do NOT modify `## Outcome` or `[x]` completed items.
+`affected_items`: comma-separated item IDs whose deps or resources were changed. Pass `[]` when all pending items may be affected (e.g. plan-review revision — full scope).
+Read only the specified affected items (or all pending when `[]`). Update dep map. Enrich affected pending items. Select next ready wave. Do NOT modify `## Outcome` or `[x]` completed items.
 
 ## Signal 3 — final_review
 Input: `current.md` path + `final_review` path + `learnings.md` path.
@@ -38,8 +40,16 @@ Append gap items only. New items must declare `depends_on` on relevant complete 
 
 ## Algorithm
 
-1. Re-read `## Outcome` section — hold as north star for every decision.
-2. Spawn `learnings-consolidator` (local 7B, 600s timeout); stale-OK fallback if absent or timeout — wave must not block.
+1. Re-read `## Outcome` section and any CLAUDE.md sections referenced by the current outcome (per `wiki/entities/planner-signals-design.md`) — hold as north star for every decision.
+2. Spawn `learnings-consolidator` with a concrete dispatch (stale-OK if absent or timeout — wave must not block):
+   ```
+   Agent(subagent_type: "learnings-consolidator",
+     prompt: "existing_learnings_path: $plan_dir/learnings.md
+              prior_findings_paths:    $wave_dir/findings.jsonl [list all prior wave paths if available]
+              journal_path:            $plan_dir/journal.md",
+     timeout: 600)
+   ```
+   On timeout or error: proceed with existing learnings.md unchanged.
 3. Read signal source: intent+discovery OR wave_summary path OR final_review path.
 4. **Update dep map** (wave_summary only):
    - For each dep_discovery in findings: enrich affected pending item's `target_resources`, `notes`
@@ -51,6 +61,23 @@ Append gap items only. New items must declare `depends_on` on relevant complete 
 7. Write `current.md` atomically (tmp→rename): updated items + enriched deps/notes. `## Outcome` section is never touched. `[x]` items are never modified.
 8. Write `READY_ITEMS` return (ordered list of item IDs for this wave).
 9. If no ready items: return `VERDICT: done`.
+
+**outcome_risk escalation (wave_summary signal only):** When findings include `outcome_risk: true` items requiring re-evaluation of whether the outcome is still achievable:
+1. If context is insufficient to judge outcome integrity → invoke `wave-synthesizer` to compress context:
+   ```
+   Agent(subagent_type: "wave-synthesizer",
+     prompt: "wave_summary: $wave_dir/wave-summary.md
+              current.md:   $plan_dir/current.md
+              replan_out:   $wave_dir/replan-brief.md")
+   ```
+2. Invoke `auditor` with the replan brief to get a continue/extend/revise verdict:
+   ```
+   Agent(subagent_type: "auditor",
+     prompt: "replan_brief: $wave_dir/replan-brief.md
+              current.md:   $plan_dir/current.md
+              decision_out: $wave_dir/decision.json")
+   ```
+3. Apply auditor VERDICT: `continue` → proceed with current plan; `extend` → add items as blocking prerequisites; `revise` → restructure current.md before selecting next wave.
 
 **Context compression for wave_summary:** receive only pending items affected by findings + `## Outcome` (verbatim, ~50 tokens) + structured `dep_discoveries` JSON (no `prose_notes`) + learnings.md as bullet list (max 20 items, ~300 tokens). Do NOT receive `[x]` completed items or full wave history.
 

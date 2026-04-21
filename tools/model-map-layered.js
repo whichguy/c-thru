@@ -183,10 +183,6 @@ function syncLayeredConfig(defaultsPath, overridesPath, effectivePath, bootstrap
 }
 
 module.exports = {
-  deepClone,
-  deepEqual,
-  readJson,
-  readJsonOrEmpty,
   mergeConfigLayers,
   computeOverrideDiff,
   loadLayeredConfig,

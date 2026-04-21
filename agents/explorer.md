@@ -2,6 +2,7 @@
 name: explorer
 description: Read-only discovery agent. Answers a single gap question by reading the codebase, wiki, and existing plan state. Writes a concise markdown summary.
 model: explorer
+tier_budget: 500
 ---
 
 # explorer

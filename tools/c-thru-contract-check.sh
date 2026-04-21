@@ -41,7 +41,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 1 — Skill("review-plan") regression
 # ---------------------------------------------------------------------------
-echo "1/8  Skill(\"review-plan\") regression..."
+echo "1/9  Skill(\"review-plan\") regression..."
 if grep -qE 'Skill\([[:space:]]*["'"'"']review-plan["'"'"']' "$SKILL" 2>/dev/null; then
     fail 'skills/c-thru-plan/SKILL.md: Skill("review-plan") found — must use Agent(subagent_type: "review-plan") here (Skill() path invokes the interactive human plan-mode tool, not the c-thru wave agent)'
 else
@@ -51,7 +51,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 1b — No hardcoded .c-thru/plans/ paths in agents/*.md
 # ---------------------------------------------------------------------------
-echo "1b/8 Hardcoded .c-thru/plans/ in agents/*.md..."
+echo "1b/9 Hardcoded .c-thru/plans/ in agents/*.md..."
 hardcoded_agents=$(grep -l '\.c-thru/plans/' "$AGENTS_DIR"/*.md 2>/dev/null || true)
 if [ -n "$hardcoded_agents" ]; then
     for f in $hardcoded_agents; do
@@ -64,7 +64,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 2 — Dangling subagent_type references
 # ---------------------------------------------------------------------------
-echo "2/8  Dangling agent reference check..."
+echo "2/9  Dangling agent reference check..."
 
 # Claude Code built-in subagent types — no agents/*.md expected for these
 BUILTIN="general-purpose Explore"
@@ -106,7 +106,7 @@ done < <(grep -oE 'subagent_type:[[:space:]]*"[^"]+"' "$SKILL" \
 # sides. Accepts false negatives on compound names like journal_offset; the
 # check catches obvious structural gaps (missing whole input categories).
 # ---------------------------------------------------------------------------
-echo "3/8  Agent prompt key check..."
+echo "3/9  Agent prompt key check..."
 
 # Returns newline-separated input tokens for an agent file.
 # Strategy:
@@ -327,7 +327,7 @@ done < "$tmpblocks"
 # Canonical source: config/model-map.json#agent_to_capability.
 # agents/*.md count must match; docs must not hardcode a different number.
 # ---------------------------------------------------------------------------
-echo "4/8  Agent-count consistency check..."
+echo "4/9  Agent-count consistency check..."
 
 MODEL_MAP="$REPO_DIR/config/model-map.json"
 if [ ! -f "$MODEL_MAP" ]; then
@@ -363,7 +363,7 @@ fi
 # Every $PLAN_DIR/<subdir>/ referenced in SKILL.md must have a corresponding
 # mkdir in Phase 0. Wave-scoped dirs ($wave_dir/...) are excluded.
 # ---------------------------------------------------------------------------
-echo "5/8  Phase 0 mkdir coverage check..."
+echo "5/9  Phase 0 mkdir coverage check..."
 
 # Extract subdirectory names referenced as $PLAN_DIR/<name>/ in SKILL.md
 referenced=$(grep -oE '\$PLAN_DIR/[a-z_-]+/' "$SKILL" 2>/dev/null \
@@ -395,7 +395,7 @@ done
 #     Search SKILL.md + plan-orchestrator.md for the literal string V as a
 #     whole-word match. FAIL if the value is absent from both caller files.
 # ---------------------------------------------------------------------------
-echo "6/8  STATUS/VERDICT value coverage check..."
+echo "6/9  STATUS/VERDICT value coverage check..."
 
 # Extract STATUS/VERDICT values from an agent's Return block.
 # Matches both "**Return:**" (most agents) and "## Step N — Return STATUS"
@@ -458,7 +458,7 @@ done
 # Allowlist: subagent_type, prompt, description, mode
 # (model, run_in_background, timeout are agent-level params, not prompt-body keys)
 # ---------------------------------------------------------------------------
-echo "7/8  Undeclared prompt key check..."
+echo "7/9  Undeclared prompt key check..."
 
 # Built-in prompt keys never in an agent's Input: line
 BUILTIN_PROMPT_KEYS="subagent_type prompt description mode"
@@ -515,7 +515,7 @@ done < "$tmpblocks"
 # (test/c-thru-plan-harness.test.js), not here.
 # Reference: wiki/entities/uplift-cascade-pattern.md
 # ---------------------------------------------------------------------------
-echo "8/8  Restart-mode anchor check in cloud agents..."
+echo "8/9  Restart-mode anchor check in cloud agents..."
 
 CLOUD_AGENTS=("$AGENTS_DIR/implementer-cloud.md" "$AGENTS_DIR/test-writer-cloud.md")
 for cloud_agent in "${CLOUD_AGENTS[@]}"; do
@@ -536,6 +536,39 @@ for cloud_agent in "${CLOUD_AGENTS[@]}"; do
         ok "$agent_base: no anchoring-grep false-positive terms outside restart-mode anchor"
     fi
 done
+
+# ---------------------------------------------------------------------------
+# Check 9 — Tier-budget declarations + soft over-budget warning
+#
+# Every agents/*.md must declare tier_budget: N in frontmatter.
+# WARNs (not FAILs) when estimated tokens (lines * 10) exceed 1.3 * declared budget.
+# Estimation is approximate; per-agent calibration may adjust the 10-tokens/line factor.
+# ---------------------------------------------------------------------------
+echo "9/9  Tier-budget frontmatter check..."
+
+BUDGET_WARNS=0
+for agent_file in "$AGENTS_DIR"/*.md; do
+    agent_base=$(basename "$agent_file")
+    # Extract tier_budget from frontmatter (first ---...--- block)
+    budget=$(awk '/^---/{fc++; if(fc==2) exit} fc==1 && /^tier_budget:/{print $2}' "$agent_file" 2>/dev/null || true)
+    if [ -z "$budget" ]; then
+        fail "$agent_base: missing tier_budget: field in frontmatter — add per D7"
+        continue
+    fi
+    ok "$agent_base: tier_budget=$budget"
+    # Soft over-budget check: lines * 10 vs 1.3 * budget
+    line_count=$(wc -l < "$agent_file" | tr -d ' ')
+    estimated_tokens=$((line_count * 10))
+    threshold=$(echo "$budget * 1.3 / 1" | awk '{printf "%d", $1 * 1.3}' 2>/dev/null || echo $((budget * 13 / 10)))
+    if [ "$estimated_tokens" -gt "$threshold" ]; then
+        warn "$agent_base: estimated ~${estimated_tokens} tokens (${line_count} lines) exceeds 1.3× budget (budget=${budget}, threshold=${threshold})"
+        BUDGET_WARNS=$((BUDGET_WARNS + 1))
+    fi
+done
+
+if [ "$BUDGET_WARNS" -gt 0 ]; then
+    echo -e "${YELLOW}  (${BUDGET_WARNS} over-budget agent(s) — warnings only, not failures)${NC}"
+fi
 
 # ---------------------------------------------------------------------------
 # Summary

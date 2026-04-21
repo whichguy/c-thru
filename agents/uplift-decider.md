@@ -2,6 +2,7 @@
 name: uplift-decider
 description: Routing judge: reads local worker partial output and decides accept|uplift|restart. Emits CLOUD_CONFIDENCE estimate. Judge tier — routing errors propagate silently so expensive triage beats wrong escalation.
 model: uplift-decider
+tier_budget: 1500
 ---
 
 # uplift-decider

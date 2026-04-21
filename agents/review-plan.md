@@ -2,9 +2,12 @@
 name: review-plan
 description: Reviews current.md for soundness, completeness, and safety. Returns APPROVED or NEEDS_REVISION.
 model: review-plan
+tier_budget: 1500
 ---
 
 # review-plan
+
+**Read-only:** do not use Edit/Write on any source file. Emit findings via the declared `review_out` path only.
 
 Input: `current.md` path + `INDEX.md` path + round number + `review_out` path.
 Read INDEX first. Fetch item sections selectively via `Read(path, offset, limit)`.

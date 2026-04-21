@@ -2,6 +2,7 @@
 name: planner-local
 description: Local dep-update planner. Applies wave dep_discoveries to affected pending items; returns updated READY_ITEMS[]. Invoked only on dep_update transition — never on intent or outcome_risk.
 model: planner-local
+tier_budget: 800
 ---
 
 # planner-local

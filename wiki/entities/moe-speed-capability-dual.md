@@ -19,4 +19,4 @@ Design principle for c-thru role assignments: MoE (Mixture-of-Experts) models bl
 
 The MoE speed advantage is directly encoded in `speed_score` values in `fallback_chains`: `gpt-oss:20b` (speed=90) and `qwen3.5:35b-a3b-coding-nvfp4` (speed=85) sit above `qwen3.6:35b` (speed=60) and dense 26B models (speed=55) despite having comparable or higher quality scores. The quality-tolerance tiebreaker in `cloud-best-quality`/`local-best-quality` modes exploits this: within the quality band, the MoE candidate is preferred for its inference speed. See [[best-quality-modes]] for tiebreaker algorithm.
 
-→ See also: [[capability-profile-model-layers]], [[gpt-oss-model]], [[qwen-series-selection]], [[best-quality-modes]]
+→ See also: [[capability-profile-model-layers]], [[gpt-oss-model]], [[qwen-series-selection]], [[best-quality-modes]], [[llm-mode-resolution]]
