@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+'use strict';
+// CLI wrapper: resolve a capability alias to a concrete model under the current config.
+// Usage: CLAUDE_LLM_MODE=<mode> CLAUDE_MODEL_MAP_DEFAULTS_PATH=<path> node tools/c-thru-resolve <capability>
+// Exit 0: resolved model on stdout. Exit 2: unknown capability. Exit 1: config/profile error.
+
+const fs   = require('fs');
+const os   = require('os');
+const path = require('path');
+const {
+  resolveProfileModel,
+  resolveLlmMode,
+  resolveActiveTier,
+  resolveCapabilityAlias,
+} = require('./model-map-resolve.js');
+
+const defaultsPath = process.env.CLAUDE_MODEL_MAP_DEFAULTS_PATH;
+const profileDir   = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
+const mapPath      = defaultsPath || path.join(profileDir, 'model-map.json');
+
+let config;
+try { config = JSON.parse(fs.readFileSync(mapPath, 'utf8')); }
+catch (e) {
+  process.stderr.write('c-thru-resolve: cannot read ' + mapPath + ': ' + e.message + '\n');
+  process.exit(1);
+}
+
+const cap = process.argv[2];
+if (!cap) {
+  process.stderr.write('usage: c-thru-resolve <capability>\n');
+  process.exit(1);
+}
+
+const tier     = resolveActiveTier(config);
+const mode     = resolveLlmMode(config);
+const capAlias = resolveCapabilityAlias(cap, config, tier);
+
+if (!capAlias) {
+  process.stderr.write('c-thru-resolve: unknown capability or agent: ' + JSON.stringify(cap) + '\n');
+  process.exit(2);
+}
+
+const profile = (config.llm_profiles || {})[tier];
+if (!profile) {
+  process.stderr.write('c-thru-resolve: no llm_profiles entry for tier ' + tier + '\n');
+  process.exit(1);
+}
+
+const aliasKey = capAlias === 'general-default' ? 'default' : capAlias;
+const entry = profile[aliasKey];
+if (!entry || typeof entry !== 'object') {
+  process.stderr.write('c-thru-resolve: no profile entry for ' + JSON.stringify(capAlias) + ' in tier ' + tier + '\n');
+  process.exit(2);
+}
+
+const resolved = resolveProfileModel(entry, mode);
+if (typeof resolved !== 'string' || !resolved) {
+  process.stderr.write('c-thru-resolve: resolveProfileModel returned empty for ' + JSON.stringify(capAlias) + '\n');
+  process.exit(1);
+}
+
+process.stdout.write(resolved + '\n');

@@ -59,62 +59,13 @@ catch (e) { process.stderr.write('c-thru-config: cannot read ' + mapPath + ': ' 
 const input = process.argv[1];
 if (!input) { process.stderr.write('usage: /c-thru-config resolve <capability>\n'); process.exit(1); }
 
-// Mode resolution — mirrors claude-proxy resolveLlmMode() precedence
-// TODO: dedupe with claude-proxy:403-420 (Phase 2 extraction)
-const LLM_MODE_ENUM = new Set(['connected','semi-offload','cloud-judge-only','offline']);
-function resolveLlmMode() {
-  const e = process.env.CLAUDE_LLM_MODE;
-  if (e && LLM_MODE_ENUM.has(e)) return e;
-  if (e) process.stderr.write('c-thru-config: unknown CLAUDE_LLM_MODE ' + JSON.stringify(e) + ', ignoring\n');
-  const leg = process.env.CLAUDE_CONNECTIVITY_MODE || process.env.CLAUDE_LLM_CONNECTIVITY_MODE;
-  if (leg) return leg === 'disconnect' ? 'offline' : 'connected';
-  if (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) return config.llm_mode;
-  if (config.llm_connectivity_mode) return config.llm_connectivity_mode === 'disconnect' ? 'offline' : 'connected';
-  return 'connected';
-}
+const {
+  resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, LLM_MODE_ENUM,
+} = require(path.join(CLAUDE_DIR, 'tools', 'model-map-resolve.js'));
 
-// Tier resolution
-function tierForGb(gb) {
-  if (gb < 24) return '16gb'; if (gb < 40) return '32gb';
-  if (gb < 56) return '48gb'; if (gb < 96) return '64gb'; return '128gb';
-}
-function resolveActiveTier() {
-  const o = process.env.CLAUDE_LLM_MEMORY_GB; const gb = o && parseInt(o,10) > 0 ? parseInt(o,10) : null;
-  if (gb) return tierForGb(gb);
-  const ap = config.llm_active_profile; if (ap && ap !== 'auto') return ap;
-  return tierForGb(Math.ceil(os.totalmem()/(1024**3)));
-}
-
-// Capability alias resolution — mirrors claude-proxy resolveCapabilityAlias()
-// TODO: dedupe with claude-proxy:445-452 (Phase 2 extraction)
-const KNOWN_CAP_ALIASES = new Set([
-  'judge','judge-strict','orchestrator','local-planner','code-analyst',
-  'pattern-coder','deep-coder','commit-message-generator',
-  'default','classifier','explorer','reviewer','workhorse','coder',
-]);
-function resolveCapabilityAlias(model) {
-  if (KNOWN_CAP_ALIASES.has(model)) return model;
-  const a2c = config.agent_to_capability;
-  if (a2c && Object.prototype.hasOwnProperty.call(a2c, model)) return a2c[model];
-  const tier = resolveActiveTier();
-  const profile = (config.llm_profiles || {})[tier];
-  if (profile && Object.prototype.hasOwnProperty.call(profile, model)) return model;
-  return null;
-}
-
-// Profile model selection — mirrors claude-proxy resolveProfileModel()
-// TODO: dedupe with claude-proxy:428-438 (Phase 2 extraction)
-function resolveProfileModel(entry, mode) {
-  if (entry.modes && Object.prototype.hasOwnProperty.call(entry.modes, mode)) return entry.modes[mode];
-  if (mode === 'offline') return entry.disconnect_model;
-  if (mode === 'connected') return entry.connected_model;
-  if (mode === 'semi-offload' || mode === 'cloud-judge-only') return entry.disconnect_model;
-  return entry.connected_model;
-}
-
-const mode = resolveLlmMode();
-const tier = resolveActiveTier();
-const capAlias = resolveCapabilityAlias(input);
+const mode = resolveLlmMode(config);
+const tier = resolveActiveTier(config);
+const capAlias = resolveCapabilityAlias(input, config, tier);
 
 if (!capAlias) {
   process.stderr.write('c-thru-config: unknown capability or agent: ' + JSON.stringify(input) + '\n');
@@ -126,7 +77,8 @@ if (!profile) {
   process.stderr.write('c-thru-config: no llm_profiles entry for tier ' + tier + '\n');
   process.exit(1);
 }
-const entry = profile[capAlias];
+const aliasKey = capAlias === 'general-default' ? 'default' : capAlias;
+const entry = profile[aliasKey];
 if (!entry || typeof entry !== 'object') {
   process.stderr.write('c-thru-config: no profile entry for ' + JSON.stringify(capAlias) + ' in tier ' + tier + '\n');
   process.exit(2);
@@ -348,7 +300,7 @@ const ovrPath = CLAUDE_DIR + '/model-map.overrides.json';
 let config = {}; try { config = JSON.parse(fs.readFileSync(mapPath,'utf8')); } catch {}
 let overrides = {}; try { overrides = JSON.parse(fs.readFileSync(ovrPath,'utf8')); } catch {}
 
-const LLM_MODE_ENUM = new Set(['connected','semi-offload','cloud-judge-only','offline']);
+const { resolveActiveTier, resolveProfileModel, LLM_MODE_ENUM } = require(path.join(CLAUDE_DIR, 'tools', 'model-map-resolve.js'));
 const envMode = process.env.CLAUDE_LLM_MODE;
 let mode, modeSource;
 if (envMode && LLM_MODE_ENUM.has(envMode)) {
@@ -359,14 +311,9 @@ if (envMode && LLM_MODE_ENUM.has(envMode)) {
   mode = config.llm_mode; modeSource = mapPath + ' (system default)';
 } else { mode = 'connected'; modeSource = 'built-in default'; }
 
-function tierForGb(gb) {
-  if (gb < 24) return '16gb'; if (gb < 40) return '32gb';
-  if (gb < 56) return '48gb'; if (gb < 96) return '64gb'; return '128gb';
-}
 const gbOverride = process.env.CLAUDE_LLM_MEMORY_GB;
 const gb = gbOverride && parseInt(gbOverride,10) > 0 ? parseInt(gbOverride,10) : Math.ceil(os.totalmem()/(1024**3));
-const activeProfile = config.llm_active_profile;
-const tier = (activeProfile && activeProfile !== 'auto') ? activeProfile : tierForGb(gb);
+const tier = resolveActiveTier(config);
 
 console.log('mode:     ' + mode + '  (source: ' + modeSource + ')');
 console.log('hw tier:  ' + tier + '  (' + gb + ' GB RAM)');
@@ -381,13 +328,6 @@ try {
 } catch {}
 
 // Capability → model table
-function resolveProfileModel(entry, m) {
-  if (entry.modes && Object.prototype.hasOwnProperty.call(entry.modes, m)) return entry.modes[m];
-  if (m === 'offline') return entry.disconnect_model;
-  if (m === 'connected') return entry.connected_model;
-  if (m === 'semi-offload' || m === 'cloud-judge-only') return entry.disconnect_model;
-  return entry.connected_model;
-}
 const CAPS = [
   'judge','judge-strict','orchestrator','local-planner','deep-coder',
   'code-analyst','pattern-coder','commit-message-generator',
