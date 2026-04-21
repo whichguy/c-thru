@@ -59,10 +59,10 @@ Phase 1 Stage 1 reads `CLAUDE.md` into `recon.md`; Stage 3 merges into planner c
 
 | File | Change |
 |---|---|
-| `agents/implementer.md` | CONFIDENCE rubric + STATUS schema |
-| `agents/reviewer-fix.md` | Same |
-| `agents/test-writer.md` | Same |
-| `agents/scaffolder.md` | Scaffold-specific rubric variant (tracked separately) |
+| `agents/implementer.md` | CONFIDENCE rubric + STATUS schema (includes role-canonical medium bullet: "guessed at API surface") |
+| `agents/reviewer-fix.md` | CONFIDENCE rubric + STATUS schema + `ITERATIONS: N`; medium/low bullets role-adapted for review+fix work |
+| `agents/test-writer.md` | CONFIDENCE rubric + STATUS schema; medium/low bullets role-adapted for test-writing (no ITERATIONS — single-pass role) |
+| `agents/scaffolder.md` | Scaffold-specific rubric variant + STATUS schema (no ITERATIONS — single-pass role; tracked separately) |
 | `agents/plan-orchestrator.md` | Step 5: extract CONFIDENCE (absent→`medium`); Step 6b: emit calibration tuples |
 | `docs/agent-architecture.md` | STATUS contract section |
 | `CLAUDE.md` | CONFIDENCE field note |
@@ -88,6 +88,9 @@ compliance       = items_with_CONFIDENCE / total  (target ≥80%)
 ```
 
 `verify_pass: null` excluded — items without tests produce meaningless signal.
+Note: `high_items` is computed as a subset of `eligible` — the `verify_pass ≠ null`
+guard is inherited. Any code implementation must apply the `eligible` filter before
+computing `high_items` or the null-exclusion silently breaks.
 
 ### Wave-1 measurement steps (pending — run after merge)
 
@@ -193,16 +196,19 @@ Escalation never terminates early. The chain exhausts all capability tiers befor
 surfacing to the user. Surface to user only when judge tier (highest) also recuses —
 indicating genuine definitional ambiguity requiring human input.
 
+Tiers marked † are Wave-2 additions — not yet in `config/model-map.json`.
+See §3.8 for required config changes before activating.
+
 ```
-pattern-coder  (1.7B  — scaffolder, discovery-advisor)
+pattern-coder    (live — scaffolder, discovery-advisor)
       ↓ recuse
-code-analyst   (9B   — test-writer, reviewer-fix)
+code-analyst     (live — test-writer, reviewer-fix)
       ↓ recuse
-deep-coder     (27B–35B local — implementer)
+deep-coder       (live — implementer)
       ↓ recuse
-deep-coder-cloud (cloud — implementer-cloud)
+deep-coder-cloud (†Wave-2 — implementer-cloud)
       ↓ recuse
-judge          (cloud, highest — planner, auditor, review-plan)
+judge            (live — planner, auditor, review-plan)
       ↓ recuse ← only here: genuine ambiguity, needs human
 surface to user
 ```
@@ -279,7 +285,7 @@ from the confidence signal, enabling offline calibration:
 
 | Agent | Capability alias | Role |
 |---|---|---|
-| `uplift-decider` | `judge` | Reads partial local output; emits accept\|uplift\|restart + CLOUD_CONFIDENCE |
+| `uplift-decider` | `judge` | Reads partial local output; emits accept\|uplift\|restart + CLOUD_CONFIDENCE. Judge-tier intentional: routing errors on bad local output propagate silently — expensive triage is preferable to wrong escalation decision |
 | `implementer-cloud` | `deep-coder-cloud` | Two prompt modes: uplift (patch) vs restart (clean); returns CONFIDENCE |
 | `converger` | `code-analyst` | Aggregates parallel explorer/implementer outputs |
 
@@ -385,7 +391,12 @@ Bullets must use comma or `/` separator. Enforced in all agent prompts.
 
 ---
 
-## Appendix B — §12.1 Confidence rubric (worker agents)
+## Appendix B — §12.1 Confidence rubric (implementer canonical)
+
+> **Note:** This is the implementer-canonical rubric. `reviewer-fix.md`,
+> `test-writer.md`, and `scaffolder.md` use role-adapted variants — see those
+> files directly. The medium bullet "guessed at an API surface" is implementer-specific;
+> other roles substitute an equivalent signal appropriate to their job.
 
 ```markdown
 ## Confidence self-assessment
