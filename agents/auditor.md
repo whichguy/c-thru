@@ -22,7 +22,7 @@ Read both files. `replan_brief` is the compressed context summary produced by wa
 
 Classify direction only. Do not rewrite items, propose fixes, or suggest implementation changes.
 
-**Write:** `waves/<NNN>/decision.json`
+**Write:** `<decision_out>` path given in prompt (e.g. `waves/<NNN>/decision.json`)
 ```json
 { "action": "continue|extend|revise", "rationale": "<1-2 sentences>" }
 ```
