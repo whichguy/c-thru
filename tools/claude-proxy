@@ -1496,6 +1496,7 @@ function addResolvedViaHeader(respHeaders, resolved) {
     capability,
     profile: resolved.logicalRole || capability,
     served_by: resolved.effectiveModel || resolved.served_by || null,
+    tier: resolveActiveTier(CONFIG),
   });
 }
 
