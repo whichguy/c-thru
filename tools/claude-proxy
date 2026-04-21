@@ -390,11 +390,6 @@ function profileAliasKey(alias) {
   return alias === 'general-default' ? 'default' : alias;
 }
 
-function resolveConnectivityMode() {
-  const m = resolveLlmMode(CONFIG);
-  return m === 'offline' ? 'disconnect' : 'connected';
-}
-
 function resolveLogicalAlias(model) {
   const tier     = resolveActiveTier(CONFIG);
   const capAlias = resolveCapabilityAlias(model, CONFIG, tier);
