@@ -1297,23 +1297,40 @@ function applyQualityTolerance(candidates, tolerancePct) {
 // Build active-path fallback candidates from a fallback_chains entry.
 // Filters out the primary (terminalModel), applies local-terminal guard, returns
 // {candidates: string[], appendedTerminalIdx: number} (-1 if no terminal appended).
-function buildFallbackCandidatesFromChain(chain, terminalModel, capKey, hwTier) {
-  const filtered = chain.map(c => c.model).filter(
-    m => resolveLogicalAlias(resolveRouteModel(m)) !== terminalModel
+// Build active-path fallback candidates from a fallback_chains entry.
+// Filters out the primary (terminalModel), applies quality-tolerance tiebreaker in
+// best-quality modes (mirrors resolveFallbackModel pre-flight), then applies the
+// local-terminal guard — including when filtered is empty (single-entry chain case).
+// Returns {candidates: string[], appendedTerminalIdx: number} (-1 if guard did not fire).
+function buildFallbackCandidatesFromChain(chain, terminalModel, capKey, hwTier, isBestQualityMode = false, tolerancePct = DEFAULT_QUALITY_TOLERANCE_PCT) {
+  // Keep full objects until after tiebreaker so scores are available for sorting
+  const filteredObjs = chain.filter(
+    c => resolveLogicalAlias(resolveRouteModel(c.model)) !== terminalModel
   );
-  if (filtered.length === 0) return { candidates: [], appendedTerminalIdx: -1 };
-  const lastResolved = resolveLogicalAlias(resolveRouteModel(filtered[filtered.length - 1]));
-  if (!modelIsLocal(lastResolved) && capKey) {
+
+  // Quality-tolerance tiebreaker: same semantics as pre-flight resolveFallbackModel
+  const sortedObjs = (isBestQualityMode && filteredObjs.some(c => c.quality_score != null))
+    ? applyQualityTolerance(filteredObjs, tolerancePct)
+    : filteredObjs;
+
+  let candidates = sortedObjs.map(c => c.model);
+  let appendedTerminalIdx = -1;
+
+  // Local-terminal guard: applies even when candidates is empty (degenerate chain edge case).
+  // If last remaining candidate is non-local, append disconnect_model as a local terminal.
+  const lastModel = candidates.length > 0
+    ? resolveLogicalAlias(resolveRouteModel(candidates[candidates.length - 1]))
+    : null;
+  if ((!lastModel || !modelIsLocal(lastModel)) && capKey) {
     const profiles = CONFIG.llm_profiles?.[hwTier] || {};
     const profileEntry = profiles[capKey];
     if (profileEntry?.disconnect_model) {
-      return {
-        candidates: [...filtered, profileEntry.disconnect_model],
-        appendedTerminalIdx: filtered.length,
-      };
+      candidates = [...candidates, profileEntry.disconnect_model];
+      appendedTerminalIdx = candidates.length - 1;
     }
   }
-  return { candidates: filtered, appendedTerminalIdx: -1 };
+
+  return { candidates, appendedTerminalIdx };
 }
 
 // ARCH: fallback walk — capability-layer chains preferred; local-terminal guard, see wiki/entities/fallback-event-system.md
@@ -1927,6 +1944,9 @@ function handleRequestWithFallback(req, res, body, resolved) {
   const _hwTier = resolveActiveTier(CONFIG);
   const _capKey = logicalRole ? profileAliasKey(logicalRole) : null;
   const hasCapabilityChain = !!(_capKey && CONFIG.fallback_chains?.[_hwTier]?.[_capKey]);
+  const _activeMode = resolveLlmMode(CONFIG);
+  const _isBqMode = _activeMode === 'cloud-best-quality' || _activeMode === 'local-best-quality';
+  const _tolerancePct = typeof CONFIG.quality_tolerance_pct === 'number' ? CONFIG.quality_tolerance_pct : DEFAULT_QUALITY_TOLERANCE_PCT;
 
   if (!strategy && !hasCapabilityChain) {
     return doForward(backend, effectiveModel, body);
@@ -2182,7 +2202,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
         let appendedTerminalIdx = -1;
         if (candidates.length === 0 && _capKey) {
           const chain = CONFIG.fallback_chains?.[_hwTier]?.[_capKey] || [];
-          ({ candidates, appendedTerminalIdx } = buildFallbackCandidatesFromChain(chain, terminalModel, _capKey, _hwTier));
+          ({ candidates, appendedTerminalIdx } = buildFallbackCandidatesFromChain(chain, terminalModel, _capKey, _hwTier, _isBqMode, _tolerancePct));
         }
         if (candidates.length > 0) {
           proxyLog('fallback.chain_start', { terminal_model: terminalModel, failure_class: failureClass, trigger: 'classified_error', candidate_count: candidates.length, source: CONFIG.fallback_strategies?.[terminalModel] ? 'fallback_strategies' : 'fallback_chains', local_terminal_guard: appendedTerminalIdx !== -1 });
@@ -2296,6 +2316,9 @@ function handleRequestWithFallback(req, res, body, resolved) {
     else res.end();
   });
 
+  // Fire-and-forget warm-up for Ollama backends so a cold model starts loading
+  // in parallel with the request. Mirrors what attemptCandidate does for fallback candidates.
+  if (backend.kind === 'ollama') warmOllamaModel(effectiveModel || clientModel, backend.id, backend.url);
   up.write(bodyStr);
   up.end();
 }

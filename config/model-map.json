@@ -359,8 +359,8 @@
   "fallback_chains": {
     "48gb": {
       "default":      [
-        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
         { "model": "gpt-oss:20b",   "quality_score": 75, "speed_score": 90 },
+        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
         { "model": "gemma4:e4b",    "quality_score": 45, "speed_score": 70 }
       ],
       "judge":        [
@@ -375,8 +375,8 @@
       ],
       "deep-coder":   [
         { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 }
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
       ],
       "local-planner": [
         { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
@@ -396,8 +396,8 @@
     },
     "64gb": {
       "default":      [
-        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
         { "model": "gpt-oss:20b",   "quality_score": 75, "speed_score": 90 },
+        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
         { "model": "gemma4:26b",    "quality_score": 65, "speed_score": 55 }
       ],
       "judge":        [
@@ -412,8 +412,8 @@
       ],
       "deep-coder":   [
         { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 }
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
       ],
       "local-planner": [
         { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
@@ -433,8 +433,8 @@
     },
     "128gb": {
       "default":      [
-        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
         { "model": "gpt-oss:20b",   "quality_score": 75, "speed_score": 90 },
+        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
         { "model": "gemma4:26b",    "quality_score": 65, "speed_score": 55 }
       ],
       "judge":        [
@@ -458,14 +458,14 @@
         { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
       ],
       "coder":         [
-        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
         { "model": "qwen3-coder:30b",              "quality_score": 85,  "speed_score": 65 },
+        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
         { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
       ],
       "workhorse":     [
         { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
-        { "model": "gemma4:31b",                   "quality_score": 70,  "speed_score": 50 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
+        { "model": "gemma4:31b",                   "quality_score": 70,  "speed_score": 50 }
       ]
     }
   },
