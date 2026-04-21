@@ -4,11 +4,10 @@ type: entity
 description: "3-layer model resolution: capability (alias) → profile (hardware-tier binding) → model (concrete name). Fallbacks belong at the capability layer, not the model layer."
 tags: [architecture, model-map, fallback, layers, schema]
 confidence: high
-last_verified: 2026-04-18
-last_updated: 2026-04-18
+last_verified: 2026-04-21
+last_updated: 2026-04-21
 created: 2026-04-18
-last_updated: 2026-04-18
-sources: [386b8e16, 9d601210]
+sources: [386b8e16, 9d601210, 64f2589b]
 related: [logical-role-exclusivity, declared-rewrites, fallback-event-system, ollama-http-api-migration]
 ---
 
@@ -24,6 +23,7 @@ The model resolution architecture has three distinct layers. **Capability** (log
 - **From Session 9d601210:** Review-plan FULL evaluation: Gate 1 clear (approach soundness PASS, existing code examined PASS). 6 Gate 2 findings resolved via plan edits: Q-G22 (commit Outputs/Pre-check markers), N8 (SIGHUP × v12 resolver: snapshot CONFIG at entry), N9 (env var docs), N34 (statusline/Stop-hook consumer lockstep), Q-C19 (Phase B reminder idempotency), Q-E2 (spurious — matches CLAUDE.md POST_IMPLEMENT).
 - **From Session 9d601210:** Major design pivot: since nothing ships on v1.2 yet, the generational machinery is eliminatable. Instead of dual-gate (`CLAUDE_PROXY_SCHEMA_V12` + `schema_version`), phased A/B/C rollout, and migration script, use a **loader-level adapter**: when `model-map-layered.js` reads a tier with `fallback_strategies` but no `tool_capability_to_profile`, it synthesizes the new shape in-memory before returning. Legacy user overrides still work — transformed on read, never written back. Shipped config goes in new shape only. Removes: schema_version field, env gate, dual-resolver, migration script, deprecation warnings, Phase B/C reminder mechanism. Plan collapses from ~550 lines to ~250. Single resolver, single code path. Residual risk: legacy override that doesn't map cleanly to per-model `equivalents` — mitigated by one-line stderr warning on synthesis.
 
+- **From Session 64f2589b:** Comprehensive model-map rewrite grounded in `ollama list` audit: 6 config tags replaced with actually-installed models. `gpt-oss:20b` (3.6B active MoE, o3-mini class) added as reviewer/orchestrator/deep-coder; `qwen3.5:35b-a3b-coding-nvfp4` (3B active MoE, code-specialized) added as coder on 48gb+; `qwen3.6:35b` replaces `qwen3.5:27b`/`qwen3.5:122b` in disconnect slots. Design principle: MoE models with 3-4B active params serve both speed-first and capability-first roles. See [[model-tag-audit-gap]] and [[moe-speed-capability-dual]].
 - **From Session feat/hardware-profile-defaults (2026-04-18):** Loader-level adapter shipped. `maybeSynthesizeV12Keys` in `model-map-layered.js:loadLayeredConfig` synthesizes `tool_capability_to_profile` and `models[].equivalents` when legacy `fallback_strategies` present and `tool_capability_to_profile` absent. Module-scope `_v12WarnedOnce` guard ensures the stderr warning fires at most once per process. Legacy proxy code continues reading `fallback_strategies` unmodified — adapter is purely additive. Shipped `config/model-map.json` migrated to v1.2 (fallback_strategies removed, v1.2 keys added). Proxy detection aligned: `detectMemoryProfile` now delegates to `tools/hw-profile.js:tierForGb` for full 5-tier support instead of the previous 2-tier collapse. Hardware-tier banner added to `claude-router --list`. Three-file install layout (`model-map.system.json` / `model-map.overrides.json` / `model-map.json`) landed in `install.sh` with bootstrap migration and SIGHUP re-sync. 16-test fixture suite at `test/model-map-v12-adapter.test.js`.
 
 ## Connectivity decision
@@ -36,4 +36,16 @@ Profile entries may add a sparse `modes` sub-map: `modes[mode]` overrides the se
 
 See also: [[connectivity-vs-cascade]] (now closed by this decision).
 
-→ See also: [[logical-role-exclusivity]], [[declared-rewrites]], [[fallback-event-system]], [[ollama-http-api-migration]], [[config-swap-invariant]], [[sighup-config-reload]], [[connectivity-vs-cascade]]
+**Extended (2026-04-21, feat/best-quality-modes):** Two new modes added to the 4-value enum, making it 6-value: `connected` | `semi-offload` | `cloud-judge-only` | `offline` | `cloud-best-quality` | `local-best-quality`.
+
+Fallthrough rule for new modes when `modes[mode]` absent:
+| Mode | Fallthrough |
+|---|---|
+| `cloud-best-quality` | `entry.cloud_best_model ?? entry.connected_model` |
+| `local-best-quality` | `entry.local_best_model ?? entry.disconnect_model` |
+
+Profile entries gain two optional convenience fields: `cloud_best_model` (string) and `local_best_model` (string). These are additive — omitting them leaves existing behavior intact.
+
+The open TODO at lines 17–19 (fallbacks belong at capability layer) is now addressed: top-level `fallback_chains[tier][capability]` provides an ordered-by-quality fallback list at the capability level, superseding per-model `fallback_strategies` synthesis for covered `(tier, capability)` pairs. See [[best-quality-modes]] for schema detail and [[fallback-event-system]] for coexistence rules.
+
+→ See also: [[logical-role-exclusivity]], [[declared-rewrites]], [[fallback-event-system]], [[best-quality-modes]], [[ollama-http-api-migration]], [[config-swap-invariant]], [[sighup-config-reload]], [[connectivity-vs-cascade]], [[model-map-test-pattern]], [[skill-config-reload-gaps]]

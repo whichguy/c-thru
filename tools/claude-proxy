@@ -1262,25 +1262,98 @@ function shouldBypassCooldownForRecoveryProbe(backend, effectiveModel) {
   return nowMs() >= (entry.next_probe_at_ms || 0);
 }
 
+const DEFAULT_QUALITY_TOLERANCE_PCT = 5;
+
+// Returns true if the model routes to a local Ollama backend (not cloud, not anthropic).
+function modelIsLocal(model) {
+  if (typeof model !== 'string' || !model) return false;
+  const modelRoutes = CONFIG.model_routes || {};
+  const backends = CONFIG.backends || {};
+  let backendId = modelRoutes[model];
+  if (!backendId) backendId = lookupPatternValue('model_routes', model);
+  if (!backendId) {
+    // Unrouted: claude-* → anthropic path (not local); others → ollama fallback (local)
+    return !/^claude-/i.test(model) && !model.endsWith(':cloud');
+  }
+  const backend = backends[backendId];
+  if (!backend) return false;
+  if ((backend.kind || 'anthropic') !== 'ollama') return false;
+  return isLocalOllamaBackend(model, backend.url);
+}
+
+// Within-tolerance tiebreaker: sort quality band by speed_score desc, then strict quality rank.
+function applyQualityTolerance(candidates, tolerancePct) {
+  if (candidates.length <= 1) return candidates;
+  const topScore = candidates[0].quality_score ?? 0;
+  const threshold = topScore * (1 - tolerancePct / 100);
+  const inBand = candidates.filter(c => (c.quality_score ?? 0) >= threshold);
+  const outBand = candidates.filter(c => (c.quality_score ?? 0) < threshold);
+  inBand.sort((a, b) => (b.speed_score ?? 0) - (a.speed_score ?? 0));
+  return [...inBand, ...outBand];
+}
+
+// ARCH: fallback walk — capability-layer chains preferred; local-terminal guard, see wiki/entities/fallback-event-system.md
+// Returns {model, localTerminalAppended} on success or null when no candidate is available.
 function resolveFallbackModel(model, failureClass, logicalRole = null) {
-  // Per-profile hard_fail gate: classifier must error rather than cascade to a non-equivalent model.
+  const cfg = CONFIG;
+  const hw = resolveActiveTier(CONFIG);
+
+  // Per-profile hard_fail gate: capability must error rather than cascade to a non-equivalent model.
   if (logicalRole) {
-    const cfg = CONFIG;
-    const hw = resolveActiveTier(CONFIG);
     const profiles = cfg.llm_profiles?.[hw] || {};
     const profileEntry = profiles[profileAliasKey(logicalRole)];
     if (profileEntry?.on_failure === 'hard_fail') return null;
   }
-  const strategies = CONFIG.fallback_strategies || {};
-  const strategy = strategies[model];
-  if (!strategy || !strategy.event) return null;
+
   if (failureClass && !VALID_FAILURE_CLASSES.has(failureClass)) return null;
-  const candidates = strategy.event[failureClass];
-  if (!Array.isArray(candidates) || candidates.length === 0) return null;
-  for (const candidate of candidates) {
-    const resolved = resolveLogicalAlias(resolveRouteModel(candidate));
-    if (!isCooledDown(resolved)) return resolved;
+
+  const mode = resolveLlmMode(cfg);
+  const isBestQualityMode = mode === 'cloud-best-quality' || mode === 'local-best-quality';
+  const tolerancePct = typeof cfg.quality_tolerance_pct === 'number' ? cfg.quality_tolerance_pct : DEFAULT_QUALITY_TOLERANCE_PCT;
+
+  const capKey = logicalRole ? profileAliasKey(logicalRole) : null;
+  let candidateObjects;
+
+  if (capKey && cfg.fallback_chains?.[hw]?.[capKey]) {
+    // Capability-layer chain wins over legacy per-model strategy
+    const rawChain = cfg.fallback_chains[hw][capKey];
+    candidateObjects = rawChain.map(c => ({ model: c.model, quality_score: c.quality_score, speed_score: c.speed_score }));
+  } else {
+    // Legacy fallback_strategies[model].event[failureClass]
+    const strategies = cfg.fallback_strategies || {};
+    const strategy = strategies[model];
+    if (!strategy || !strategy.event) return null;
+    const legacyCandidates = strategy.event[failureClass];
+    if (!Array.isArray(legacyCandidates) || legacyCandidates.length === 0) return null;
+    candidateObjects = legacyCandidates.map(m => ({ model: m }));
   }
+
+  if (!candidateObjects || candidateObjects.length === 0) return null;
+
+  // Quality-tolerance tiebreaker applies only in best-quality modes with scored candidates
+  if (isBestQualityMode && candidateObjects.some(c => c.quality_score != null)) {
+    candidateObjects = applyQualityTolerance(candidateObjects, tolerancePct);
+  }
+
+  // Local-terminal guard: if the last candidate is non-local, append disconnect_model as terminal
+  const lastRaw = candidateObjects[candidateObjects.length - 1];
+  const lastResolved = resolveLogicalAlias(resolveRouteModel(lastRaw.model));
+  if (!modelIsLocal(lastResolved) && capKey) {
+    const profiles = cfg.llm_profiles?.[hw] || {};
+    const profileEntry = profiles[capKey];
+    if (profileEntry?.disconnect_model) {
+      candidateObjects = [...candidateObjects, { model: profileEntry.disconnect_model, _isAppended: true }];
+    }
+  }
+
+  // Walk candidates, skipping cooled-down models
+  for (const c of candidateObjects) {
+    const resolved = resolveLogicalAlias(resolveRouteModel(c.model));
+    if (!isCooledDown(resolved)) {
+      return { model: resolved, localTerminalAppended: !!c._isAppended };
+    }
+  }
+
   return null;
 }
 
@@ -1497,6 +1570,8 @@ function addResolvedViaHeader(respHeaders, resolved) {
     profile: resolved.logicalRole || capability,
     served_by: resolved.effectiveModel || resolved.served_by || null,
     tier: resolveActiveTier(CONFIG),
+    mode: resolveLlmMode(CONFIG),
+    local_terminal_appended: resolved.localTerminalAppended || false,
   });
 }
 
@@ -1792,7 +1867,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
   const clientModel = body.model;
   const endpoint = req.url;
 
-  const doForward = (b, em, fwdBody) => {
+  const doForward = (b, em, fwdBody, extras = {}) => {
     res._statsBackend = b;
     res._statsEffectiveModel = em || fwdBody.model || clientModel;
     const requestMeta = {
@@ -1804,6 +1879,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
       startedAtMs: nowMs(),
       capability: logicalRole,
       logicalRole,
+      localTerminalAppended: extras.localTerminalAppended || false,
     };
     if (b.kind === 'ollama') {
       (async () => {
@@ -1907,7 +1983,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
           setCooldown(candidateModel, cFailureClass, upRes.statusCode, upRes.headers);
           return tryFallbackChain(candidates, failureClass, currentIdx + 1);
         }
-        proxyLog('fallback.candidate_success', { candidate: candidateModel, terminal_model: terminalModel, status_code: upRes.statusCode, elapsed_ms: nowMs() - cStart, capability: logicalRole, profile: logicalRole });
+        proxyLog('fallback.candidate_success', { candidate: candidateModel, terminal_model: terminalModel, status_code: upRes.statusCode, elapsed_ms: nowMs() - cStart, capability: logicalRole, profile: logicalRole, local_terminal_appended: false });
         recordFallbackEvent(terminalModel, candidateModel, 'chain_success');
         const respHeaders = { ...upRes.headers };
         if (ANNOTATE_MODEL) respHeaders['x-claude-proxy-served-by'] = candidateModel;
@@ -1951,8 +2027,9 @@ function handleRequestWithFallback(req, res, body, resolved) {
   });
 
   if (shouldPreferFallbackForHealth(backend, terminalModel)) {
-    const fallbackModel = resolveFallbackModel(terminalModel, healthEntry?.last_failure_class || 'network_failure', logicalRole);
-    if (fallbackModel) {
+    const fallbackResult = resolveFallbackModel(terminalModel, healthEntry?.last_failure_class || 'network_failure', logicalRole);
+    if (fallbackResult) {
+      const { model: fallbackModel, localTerminalAppended } = fallbackResult;
       const fallbackResolved = resolveBackend(fallbackModel);
       if (!fallbackResolved.error) {
         debugLog('proxy.remap.selected', {
@@ -1961,16 +2038,18 @@ function handleRequestWithFallback(req, res, body, resolved) {
           fallback_model: fallbackModel,
           fallback_backend_id: fallbackResolved.backend.id,
           fallback_effective_model: fallbackResolved.effectiveModel,
+          local_terminal_appended: localTerminalAppended,
         });
         res.setHeader('x-claude-proxy-fallback-reason', `health-${healthEntry.state}`);
-        return doForward(fallbackResolved.backend, fallbackResolved.effectiveModel, { ...body, model: fallbackModel });
+        return doForward(fallbackResolved.backend, fallbackResolved.effectiveModel, { ...body, model: fallbackModel }, { localTerminalAppended });
       }
     }
   }
 
   if (cooldownActive && !recoveryProbeDue) {
-    const fallbackModel = resolveFallbackModel(terminalModel, cooldowns.get(terminalModel)?.failureClass || 'rate_limit', logicalRole);
-    if (fallbackModel) {
+    const fallbackResult = resolveFallbackModel(terminalModel, cooldowns.get(terminalModel)?.failureClass || 'rate_limit', logicalRole);
+    if (fallbackResult) {
+      const { model: fallbackModel, localTerminalAppended } = fallbackResult;
       const fallbackResolved = resolveBackend(fallbackModel);
       if (!fallbackResolved.error) {
         debugLog('proxy.remap.selected', {
@@ -1979,8 +2058,9 @@ function handleRequestWithFallback(req, res, body, resolved) {
           fallback_model: fallbackModel,
           fallback_backend_id: fallbackResolved.backend.id,
           fallback_effective_model: fallbackResolved.effectiveModel,
+          local_terminal_appended: localTerminalAppended,
         });
-        return doForward(fallbackResolved.backend, fallbackResolved.effectiveModel, { ...body, model: fallbackModel });
+        return doForward(fallbackResolved.backend, fallbackResolved.effectiveModel, { ...body, model: fallbackModel }, { localTerminalAppended });
       }
     }
   }

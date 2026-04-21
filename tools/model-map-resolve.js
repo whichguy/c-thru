@@ -7,7 +7,7 @@
 
 const os = require('os');
 
-const LLM_MODE_ENUM = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline']);
+const LLM_MODE_ENUM = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline', 'cloud-best-quality', 'local-best-quality']);
 
 // Static set covers the original five aliases + general-default for backward compat.
 // Dynamic profile-key lookup in resolveCapabilityAlias catches all other aliases.
@@ -15,6 +15,7 @@ const LLM_PROFILE_ALIASES = new Set([
   'classifier', 'explorer', 'reviewer', 'workhorse', 'coder', 'general-default',
 ]);
 
+// ARCH: resolveProfileModel — mode→concrete model, see wiki/entities/capability-profile-model-layers.md
 // Pure: select a concrete model from a profile entry given the active mode.
 function resolveProfileModel(entry, mode) {
   if (entry.modes && Object.prototype.hasOwnProperty.call(entry.modes, mode)) {
@@ -24,6 +25,8 @@ function resolveProfileModel(entry, mode) {
   if (mode === 'connected') return entry.connected_model;
   // semi-offload and cloud-judge-only default to local unless modes[] overrides
   if (mode === 'semi-offload' || mode === 'cloud-judge-only') return entry.disconnect_model;
+  if (mode === 'cloud-best-quality') return entry.cloud_best_model ?? entry.connected_model;
+  if (mode === 'local-best-quality') return entry.local_best_model ?? entry.disconnect_model;
   return entry.connected_model; // conservative default for unknown modes
 }
 

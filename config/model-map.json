@@ -54,14 +54,14 @@
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "hard_fail" },
-      "judge-strict":            { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "hard_fail" },
-      "orchestrator":            { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
-      "code-analyst":            { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
-      "pattern-coder":           { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
-      "deep-coder":              { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
-      "commit-message-generator":{ "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" }
+      "judge":                   { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "hard_fail" },
+      "judge-strict":            { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "hard_fail" },
+      "orchestrator":            { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
+      "code-analyst":            { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
+      "pattern-coder":           { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
+      "deep-coder":              { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
+      "local-planner":           { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
+      "commit-message-generator":{ "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" }
     },
     "32gb": {
       "default": {
@@ -80,8 +80,8 @@
         "on_failure": "cascade"
       },
       "reviewer": {
-        "connected_model": "deepseek-r1:14b",
-        "disconnect_model": "gemma4:e2b",
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
         "on_failure": "cascade"
       },
       "workhorse": {
@@ -90,18 +90,18 @@
         "on_failure": "cascade"
       },
       "coder": {
-        "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b",
+        "connected_model": "qwen3.5:9b",
+        "disconnect_model": "qwen3.5:9b",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "hard_fail" },
-      "judge-strict":            { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "hard_fail" },
-      "orchestrator":            { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
-      "code-analyst":            { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
-      "pattern-coder":           { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
-      "deep-coder":              { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" },
-      "commit-message-generator":{ "connected_model": "qwen3.5:1.7b", "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" }
+      "judge":                   { "connected_model": "qwen3:1.7b",  "disconnect_model": "qwen3:1.7b",  "on_failure": "hard_fail" },
+      "judge-strict":            { "connected_model": "qwen3:1.7b",  "disconnect_model": "qwen3:1.7b",  "on_failure": "hard_fail" },
+      "orchestrator":            { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "cascade" },
+      "code-analyst":            { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "cascade" },
+      "pattern-coder":           { "connected_model": "qwen3.5:9b",  "disconnect_model": "qwen3.5:9b",  "on_failure": "cascade" },
+      "deep-coder":              { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "cascade" },
+      "local-planner":           { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "cascade" },
+      "commit-message-generator":{ "connected_model": "qwen3:1.7b",  "disconnect_model": "qwen3:1.7b",  "on_failure": "cascade" }
     },
     "48gb": {
       "default": {
@@ -120,8 +120,8 @@
         "on_failure": "cascade"
       },
       "reviewer": {
-        "connected_model": "gemma4:e4b",
-        "disconnect_model": "gemma4:e4b",
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
         "on_failure": "cascade"
       },
       "workhorse": {
@@ -130,18 +130,18 @@
         "on_failure": "cascade"
       },
       "coder": {
-        "connected_model": "gemma4:e4b",
-        "disconnect_model": "gemma4:e4b",
+        "connected_model": "qwen3.5:35b-a3b-coding-nvfp4",
+        "disconnect_model": "qwen3.5:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
-      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",  "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
-      "orchestrator":            { "connected_model": "qwen3.5:9b",       "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
-      "code-analyst":            { "connected_model": "qwen3.5:9b",       "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade" },
-      "pattern-coder":           { "connected_model": "qwen3.5:9b",       "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade" },
-      "deep-coder":              { "connected_model": "devstral-small:2",  "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.5:27b",      "disconnect_model": "qwen3.5:27b",  "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
-      "commit-message-generator":{ "connected_model": "qwen3.5:1.7b",     "disconnect_model": "qwen3.5:1.7b", "on_failure": "cascade" }
+      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
+      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
+      "orchestrator":            { "connected_model": "gpt-oss:20b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
+      "code-analyst":            { "connected_model": "gpt-oss:20b",      "disconnect_model": "qwen3.6:35b",  "on_failure": "cascade" },
+      "pattern-coder":           { "connected_model": "qwen3.5:9b",       "disconnect_model": "qwen3.6:35b",  "on_failure": "cascade" },
+      "deep-coder":              { "connected_model": "gpt-oss:20b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.5:35b-a3b-coding-nvfp4", "on_failure": "cascade" },
+      "local-planner":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
+      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",   "on_failure": "cascade" }
     },
     "64gb": {
       "default": {
@@ -166,22 +166,22 @@
       },
       "workhorse": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gemma4:26b-a4b",
+        "disconnect_model": "gemma4:26b-mxfp8",
         "on_failure": "cascade"
       },
       "coder": {
-        "connected_model": "qwen3-coder:30b",
-        "disconnect_model": "qwen3-coder:30b",
+        "connected_model": "qwen3.5:35b-a3b-coding-nvfp4",
+        "disconnect_model": "qwen3.5:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",      "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
-      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:27b",      "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
-      "orchestrator":            { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.5:27b",      "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
-      "code-analyst":            { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
-      "pattern-coder":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
-      "deep-coder":              { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.5:27b",      "disconnect_model": "qwen3.5:27b",      "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
-      "commit-message-generator":{ "connected_model": "qwen3.5:1.7b",     "disconnect_model": "qwen3.5:1.7b",     "on_failure": "cascade" }
+      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
+      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
+      "orchestrator":            { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
+      "code-analyst":            { "connected_model": "gpt-oss:20b",      "disconnect_model": "gpt-oss:20b",  "on_failure": "cascade" },
+      "pattern-coder":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "gpt-oss:20b",  "on_failure": "cascade" },
+      "deep-coder":              { "connected_model": "gpt-oss:20b",      "disconnect_model": "gpt-oss:20b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.5:35b-a3b-coding-nvfp4", "on_failure": "cascade" },
+      "local-planner":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
+      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",   "on_failure": "cascade" }
     },
     "128gb": {
       "default": {
@@ -190,8 +190,8 @@
         "on_failure": "cascade"
       },
       "classifier": {
-        "connected_model": "gemma4:26b-a4b",
-        "disconnect_model": "gemma4:26b-a4b",
+        "connected_model": "gemma4:26b-mxfp8",
+        "disconnect_model": "gemma4:26b-mxfp8",
         "on_failure": "hard_fail"
       },
       "explorer": {
@@ -200,8 +200,8 @@
         "on_failure": "cascade"
       },
       "reviewer": {
-        "connected_model": "deepseek-r1:14b",
-        "disconnect_model": "deepseek-r1:14b",
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
         "on_failure": "cascade"
       },
       "workhorse": {
@@ -210,18 +210,18 @@
         "on_failure": "cascade"
       },
       "coder": {
-        "connected_model": "gemma4:26b-a4b",
-        "disconnect_model": "gemma4:26b-a4b",
+        "connected_model": "qwen3.5:35b-a3b-coding-nvfp4",
+        "disconnect_model": "qwen3.5:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
-      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.5:122b",    "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",    "cloud-judge-only": "claude-opus-4-6"   } },
-      "orchestrator":            { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
-      "code-analyst":            { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
-      "pattern-coder":           { "connected_model": "qwen3-coder:30b",  "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
-      "deep-coder":              { "connected_model": "devstral-small:2", "disconnect_model": "devstral-small:2", "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.5:27b",      "disconnect_model": "qwen3.5:122b",    "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6"  } },
-      "commit-message-generator":{ "connected_model": "qwen3.5:1.7b",     "disconnect_model": "qwen3.5:1.7b",    "on_failure": "cascade" }
+      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",     "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
+      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",     "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
+      "orchestrator":            { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",     "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
+      "code-analyst":            { "connected_model": "gpt-oss:20b",      "disconnect_model": "gpt-oss:20b",     "on_failure": "cascade" },
+      "pattern-coder":           { "connected_model": "qwen3-coder:30b",  "disconnect_model": "gpt-oss:20b",     "on_failure": "cascade" },
+      "deep-coder":              { "connected_model": "qwen3-coder:30b",  "disconnect_model": "qwen3-coder:30b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3-coder:30b",             "on_failure": "cascade" },
+      "local-planner":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",     "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
+      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",      "on_failure": "cascade" }
     }
   },
   "model_routes": {
@@ -239,6 +239,7 @@
     "deepseek/deepseek-v3": "openrouter",
     "qwen3-coder-next:cloud": "ollama_cloud",
     "gemma4:26b-a4b": "ollama_local",
+    "gemma4:26b-mxfp8": "ollama_local",
     "gemma4:e4b": "ollama_local",
     "gemma4:31b": "ollama_local",
     "qwen3.6:35b": "ollama_local",
@@ -246,6 +247,8 @@
     "qwen3.5:27b": "ollama_local",
     "qwen3.5:9b": "ollama_local",
     "qwen3.5:1.7b": "ollama_local",
+    "qwen3.5:35b-a3b-coding-nvfp4": "ollama_local",
+    "gpt-oss:20b": "ollama_local",
     "devstral-small:2": "ollama_local"
   },
   "routes": {
@@ -332,19 +335,118 @@
   "models": [
     {
       "name": "glm-5.1:cloud",
-      "equivalents": ["gemma4:26b-a4b"]
+      "equivalents": ["gemma4:26b-mxfp8"]
     },
     {
       "name": "claude-sonnet-4-6",
-      "equivalents": ["glm-5.1:cloud", "gemma4:26b-a4b"]
+      "equivalents": ["glm-5.1:cloud", "gemma4:26b-mxfp8"]
     },
     {
       "name": "claude-opus-4-6",
-      "equivalents": ["qwen3.5:27b", "qwen3.5:122b"]
+      "equivalents": ["qwen3.6:35b"]
     }
   ],
   "ollama_defaults": {
     "num_ctx": 65536
+  },
+  "quality_tolerance_pct": 5,
+  "fallback_chains": {
+    "48gb": {
+      "judge":        [
+        { "model": "claude-opus-4-6",              "quality_score": 100, "speed_score": 50 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "orchestrator": [
+        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "deep-coder":   [
+        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 }
+      ],
+      "local-planner": [
+        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "coder":         [
+        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
+        { "model": "qwen3.5:9b",                   "quality_score": 55,  "speed_score": 95 }
+      ],
+      "workhorse":     [
+        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
+        { "model": "gemma4:26b",                   "quality_score": 65,  "speed_score": 55 }
+      ]
+    },
+    "64gb": {
+      "judge":        [
+        { "model": "claude-opus-4-6",              "quality_score": 100, "speed_score": 50 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "orchestrator": [
+        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "deep-coder":   [
+        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 }
+      ],
+      "local-planner": [
+        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "coder":         [
+        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
+        { "model": "qwen3.5:9b",                   "quality_score": 55,  "speed_score": 95 }
+      ],
+      "workhorse":     [
+        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
+        { "model": "gemma4:26b-mxfp8",             "quality_score": 65,  "speed_score": 60 }
+      ]
+    },
+    "128gb": {
+      "judge":        [
+        { "model": "claude-opus-4-6",              "quality_score": 100, "speed_score": 50 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "orchestrator": [
+        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "deep-coder":   [
+        { "model": "qwen3-coder:30b",              "quality_score": 85,  "speed_score": 65 },
+        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "local-planner": [
+        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
+        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "coder":         [
+        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
+        { "model": "qwen3-coder:30b",              "quality_score": 85,  "speed_score": 65 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ],
+      "workhorse":     [
+        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
+        { "model": "gemma4:31b",                   "quality_score": 70,  "speed_score": 50 },
+        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      ]
+    }
   },
   "model_overrides": {},
   "agent_to_capability": {

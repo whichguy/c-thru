@@ -4,9 +4,9 @@ type: entity
 description: "Architectural rule: c-thru only transforms a declared list of request/response fields; everything else passes byte-for-byte (transparent proxy, no policy)"
 tags: [architecture, transparency, proxy, rfc9110]
 confidence: high
-last_verified: 2026-04-18
+last_verified: 2026-04-21
 created: 2026-04-18
-last_updated: 2026-04-18
+last_updated: 2026-04-21
 sources: [be297e50, ed761c3c, 386b8e16, 9d601210]
 related: [load-bearing-invariant, release-roadmap, kind-anthropic-invariant, narrow-threat-model, capability-profile-model-layers, config-swap-invariant]
 ---
@@ -26,4 +26,6 @@ c-thru is a non-transparent/transforming HTTP proxy per RFC 9110 §3.7. It opera
 
 - **From Session 48948541:** `model_overrides` is the sixth declared rewrite (seventh if counting `x-c-thru-resolved-via` as a separate entry): a flat `{"concrete-model": "replacement"}` map in `config/model-map.json` applied unconditionally at the top of `resolveRouteModel`, before the routes graph traversal. Covers primary requests and fallback candidates (because `resolveFallbackModel` calls `resolveRouteModel`). No cycle guard needed here — override applies once; the downstream routes traversal carries its own cycle detection. Emits `proxy.model_overrides.remap` debug event with `{from, to}` fields. Self-loops (`"A": "A"`) are rejected by the validator. Absent or empty key is valid.
 
-→ See also: [[load-bearing-invariant]], [[release-roadmap]], [[kind-anthropic-invariant]], [[narrow-threat-model]], [[hook-model-rewriting-removal]], [[capability-profile-model-layers]]
+- **From Session feat/best-quality-modes (2026-04-21):** `x-c-thru-resolved-via` gains two new keys — `mode` (the active `llm_mode` string at call time) and `local_terminal_appended` (boolean, `true` when the proxy appended a local-terminal model to the fallback chain). Full schema: `{capability, profile, served_by, tier, mode, local_terminal_appended}`. All keys always present on capability responses; `local_terminal_appended` is `false` when the local-terminal guard did not fire.
+
+→ See also: [[load-bearing-invariant]], [[release-roadmap]], [[kind-anthropic-invariant]], [[narrow-threat-model]], [[hook-model-rewriting-removal]], [[capability-profile-model-layers]], [[best-quality-modes]], [[planner-signals-design]]

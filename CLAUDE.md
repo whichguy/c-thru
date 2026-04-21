@@ -122,7 +122,7 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 | `CLAUDE_MODEL_MAP_OVERRIDES_PATH` | Override `~/.claude/model-map.overrides.json` path |
 | `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for Phase 2 HTTP hooks listener (default `9998`) |
 | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection (positive integer GB). Malformed values fall through to `os.totalmem()`. |
-| `CLAUDE_LLM_MODE` | Override connectivity mode: `connected` \| `semi-offload` \| `cloud-judge-only` \| `offline`. Replaces `CLAUDE_CONNECTIVITY_MODE` (legacy alias still accepted). |
+| `CLAUDE_LLM_MODE` | Override connectivity mode: `connected` \| `semi-offload` \| `cloud-judge-only` \| `offline` \| `cloud-best-quality` \| `local-best-quality`. Replaces `CLAUDE_CONNECTIVITY_MODE` (legacy alias still accepted). |
 | `CLAUDE_ROUTER_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). Also settable via `/map-model update off` (writes `self_update: false` to model-map.overrides.json). |
 | `CLAUDE_ROUTER_UPDATE_INTERVAL` | Seconds between self-update fetches (default `3600`). Debounced via `.git/FETCH_HEAD` mtime. |
 
@@ -132,7 +132,7 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 
 ## Proxy Observability
 
-`claude-proxy` emits `x-c-thru-resolved-via` on capability responses (model alias requests): `{"capability": "workhorse", "profile": "workhorse", "served_by": "claude-sonnet-4-6"}`. Absent on non-capability requests. Consumed by hooks and statusline without log-parsing.
+`claude-proxy` emits `x-c-thru-resolved-via` on capability responses (model alias requests): `{"capability": "workhorse", "profile": "workhorse", "served_by": "claude-sonnet-4-6", "tier": "64gb", "mode": "connected", "local_terminal_appended": false}`. Absent on non-capability requests. Consumed by hooks and statusline without log-parsing.
 
 Per-profile `on_failure` field in `llm_profiles[hw][profile]`: `"cascade"` (default) walks the fallback chain; `"hard_fail"` returns null immediately so the proxy returns a clean error instead of a non-equivalent substitute.
 

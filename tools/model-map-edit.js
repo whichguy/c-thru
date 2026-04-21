@@ -87,7 +87,7 @@ function applyUpdates(config, spec) {
     next.llm_active_profile = spec.active_profile;
   }
 
-  const LLM_MODES = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline']);
+  const LLM_MODES = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline', 'cloud-best-quality', 'local-best-quality']);
   if (spec.llm_mode != null) {
     if (typeof spec.llm_mode !== 'string' || !LLM_MODES.has(spec.llm_mode)) {
       fail(`'llm_mode' must be one of: ${[...LLM_MODES].join(', ')}`);
