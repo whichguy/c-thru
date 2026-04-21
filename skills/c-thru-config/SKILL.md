@@ -4,7 +4,7 @@ description: |
   Unified c-thru configuration: diagnose the active setup, resolve what a
   capability alias maps to, switch connectivity modes, remap per-capability
   models, validate the config, or reload the running proxy.
-  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] | validate | reload
+  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | validate | reload | restart [--force]
 color: cyan
 ---
 
@@ -20,12 +20,13 @@ print the usage block:
 Usage:
   /c-thru-config diag [--verbose]                                 full diagnostics view
   /c-thru-config resolve <capability>                             what does X resolve to right now?
-  /c-thru-config mode [<mode>] [--reload]                         read or set connectivity mode
-  /c-thru-config remap <cap> <model> [--tier <tier>] [--reload]   rebind a capability → model
-  /c-thru-config route <model> <backend>                          bind a model name → backend
-  /c-thru-config backend <name> <url> [--kind <kind>] [--auth-env <VAR>]  add/update a backend
-  /c-thru-config validate                                         schema check
-  /c-thru-config reload                                           SIGHUP the running proxy
+  /c-thru-config mode [<mode>] [--reload]                              read or set connectivity mode
+  /c-thru-config remap <cap> <model> [--tier <tier>] [--reload]        rebind a capability → model
+  /c-thru-config route <model> <backend> [--reload]                    bind a model name → backend
+  /c-thru-config backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload]  add/update a backend
+  /c-thru-config validate                                              schema check
+  /c-thru-config reload                                                SIGHUP the running proxy
+  /c-thru-config restart [--force]                                     full proxy restart
 
 Modes: connected | semi-offload | cloud-judge-only | offline
 ```
@@ -262,12 +263,12 @@ If `--reload` is present, also send SIGHUP immediately after a successful edit (
 
 ## Subcommand: `route`
 
-**Usage:** `/c-thru-config route <model> <backend>`
+**Usage:** `/c-thru-config route <model> <backend> [--reload]`
 
 Binds a specific model name to a named backend in `model_routes`. Any request using that
 exact model string will be forwarded to `<backend>` regardless of the route graph.
 
-Extract `<MODEL>` and `<BACKEND>` from `$ARGUMENTS`. Both are required.
+Extract `<MODEL>`, `<BACKEND>`, and optional `--reload` from `$ARGUMENTS`. Both `<MODEL>` and `<BACKEND>` are required.
 
 ```bash
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
@@ -279,11 +280,9 @@ node "$CLAUDE_DIR/tools/model-map-edit" \
   "$SPEC"
 ```
 
-On success, print:
-```
-bound <MODEL> → backend '<BACKEND>'
-run '/c-thru-config reload' to apply to running proxy
-```
+On success:
+- If `--reload` is absent: print `bound <MODEL> → backend '<BACKEND>'` and `run '/c-thru-config reload' to apply to running proxy`
+- If `--reload` is present: print `bound <MODEL> → backend '<BACKEND>'` then run `c-thru reload` (same inline bash as `mode --reload` block above).
 
 To remove a binding, delete the key directly from `~/.claude/model-map.overrides.json`
 (setting it to an empty string will be rejected by model-map-edit — use `null` in a raw
@@ -293,7 +292,7 @@ JSON edit instead).
 
 ## Subcommand: `backend`
 
-**Usage:** `/c-thru-config backend <name> <url> [--kind <kind>] [--auth-env <VAR>]`
+**Usage:** `/c-thru-config backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload]`
 
 Adds or updates a backend entry in `backends`. Default `kind` is `ollama` when omitted.
 `--auth-env` sets the env var name that holds the API key (e.g. `OPENROUTER_API_KEY`).
@@ -303,8 +302,8 @@ the existing one. If the backend already has fields (e.g. `auth_env`) that you w
 keep, you must re-pass them explicitly, or edit `~/.claude/model-map.overrides.json`
 directly.
 
-Extract `<NAME>`, `<URL>`, optional `--kind <KIND>`, and optional `--auth-env <VAR>` from
-`$ARGUMENTS`. `<NAME>` and `<URL>` are required.
+Extract `<NAME>`, `<URL>`, optional `--kind <KIND>`, optional `--auth-env <VAR>`, and
+optional `--reload` from `$ARGUMENTS`. `<NAME>` and `<URL>` are required.
 
 ```bash
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
@@ -327,11 +326,23 @@ node "$CLAUDE_DIR/tools/model-map-edit" \
 Substitute `<KIND_OR_EMPTY>` with the `--kind` value (or empty string to use default `ollama`),
 and `<AUTH_ENV_OR_EMPTY>` with the `--auth-env` value (or empty string to omit).
 
-On success, print:
+On success:
+- If `--reload` is absent: print `backend '<NAME>' set  (url: <URL>, kind: <KIND>)` and `run '/c-thru-config reload' to apply to running proxy`
+- If `--reload` is present: print `backend '<NAME>' set  (url: <URL>, kind: <KIND>)` then run `c-thru reload` (same inline bash as `mode --reload` block above).
+
+---
+
+## Subcommand: `restart`
+
+**Usage:** `/c-thru-config restart [--force]`
+
+Performs a full proxy restart: SIGTERM + waits for listener to vanish + re-spawns on `$CLAUDE_PROXY_PORT`.
+
+```bash
+~/.claude/tools/c-thru restart ${FORCE_FLAG}
 ```
-backend '<NAME>' set  (url: <URL>, kind: <KIND>)
-run '/c-thru-config reload' to apply to running proxy
-```
+
+Substitute `${FORCE_FLAG}` with `--force` if present in `$ARGUMENTS`, otherwise leave empty.
 
 ---
 

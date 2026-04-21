@@ -223,7 +223,7 @@ add_permission() {
 install_skill() {
     local commands_dir="$CLAUDE_DIR/commands"
     local skill_file="$commands_dir/c-thru-status.md"
-    local canonical_line='Run: ~/.claude/tools/c-thru --list $ARGUMENTS'
+    local canonical_line='~/.claude/tools/c-thru --list $ARGUMENTS'
 
     mkdir -p "$commands_dir"
 
@@ -234,13 +234,45 @@ install_skill() {
 
     cat > "$skill_file" << 'SKILL_EOF'
 ---
-description: "Show c-thru routes, models, and backend health"
+description: "Show c-thru routes, models, and backend health. Use 'fix' to pull missing models and reload."
 allowed-tools: "Bash"
 ---
 
 # c-thru Status
 
-Run: ~/.claude/tools/c-thru --list $ARGUMENTS
+If `$ARGUMENTS` is empty or `--verbose`, run:
+
+```bash
+~/.claude/tools/c-thru --list $ARGUMENTS
+```
+
+If `$ARGUMENTS` is `fix`, run the following steps in order:
+
+**Step 1 — Apply recommended mappings for the active tier:**
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+node "$CLAUDE_DIR/tools/model-map-edit" \
+  "$CLAUDE_DIR/model-map.system.json" \
+  "$CLAUDE_DIR/model-map.overrides.json" \
+  "$CLAUDE_DIR/model-map.json" \
+  '{}' 2>/dev/null && echo "config: up to date" || echo "config: no changes needed"
+```
+
+**Step 2 — Reload the running proxy:**
+
+```bash
+~/.claude/tools/c-thru reload
+```
+
+If `c-thru reload` exits non-zero (proxy not running), print:
+`proxy not running — will auto-spawn on next use`
+
+**Step 3 — Show current status:**
+
+```bash
+~/.claude/tools/c-thru --list
+```
 SKILL_EOF
     echo -e "  ${GREEN}✅ installed skill: /c-thru-status${NC}"
 }
