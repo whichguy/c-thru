@@ -34,6 +34,7 @@ chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TOOLS_SRC/c-thru-statusline-overlay.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/model-map-apply-recommendations.js" "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
 
 mkdir -p "$TOOLS_DEST"
 
@@ -71,6 +72,10 @@ link_tool c-thru c-thru
 link_tool c-thru claude-router
 link_tool claude-proxy claude-proxy
 if command -v node >/dev/null 2>&1; then
+    node_major=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))" 2>/dev/null || echo 0)
+    if [[ "$node_major" -lt 15 ]]; then
+        echo -e "  ${YELLOW}⚠️  Node.js ${node_major} detected — claude-proxy requires ≥ 15 (AbortController). Upgrade recommended.${NC}"
+    fi
     link_tool llm-capabilities-mcp.js llm-capabilities-mcp
     link_tool model-map-validate.js model-map-validate
     link_tool model-map-sync.js model-map-sync
@@ -89,6 +94,7 @@ link_tool c-thru-statusline-overlay.sh c-thru-statusline-overlay
 link_tool c-thru-ollama-gc.sh c-thru-ollama-gc
 link_tool c-thru-contract-check.sh c-thru-contract-check
 link_tool c-thru-self-update.sh c-thru-self-update
+link_tool verify-lmstudio-ollama-compat.sh verify-lmstudio-ollama-compat
 
 # --- Migrate legacy providers schema ---
 # Guard: jq -e '.providers' is a no-op if key is absent — idempotent by design.
@@ -559,6 +565,11 @@ OVR_MAP="$CLAUDE_DIR/model-map.overrides.json"
 USER_MAP="$CLAUDE_DIR/model-map.json"
 SHIPPED_MAP="$REPO_DIR/config/model-map.json"
 
+if [[ ! -f "$OVR_MAP" ]]; then
+    echo '{}' > "$OVR_MAP"
+    echo -e "  ${GREEN}✅ seeded model-map.overrides.json (empty — edit here to customize over shipped defaults)${NC}"
+fi
+
 if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
     local_sync="$TOOLS_SRC/model-map-sync.js"
     local_validate="$TOOLS_SRC/model-map-validate.js"
@@ -631,6 +642,19 @@ fi
 echo ""
 echo "Ollama GC state:"
 "$TOOLS_DEST/c-thru-ollama-gc" init
+
+echo ""
+echo "Ollama:"
+_tag_count=$(curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" 2>/dev/null \
+  | jq -r '.models | length' 2>/dev/null || true)
+if [[ -n "$_tag_count" ]]; then
+    echo -e "  ${GREEN}✓  Ollama running — ${_tag_count} model(s) available${NC}"
+else
+    echo -e "  ${YELLOW}⚠️  Ollama not detected at http://127.0.0.1:11434${NC}"
+    echo -e "  ${YELLOW}   Install: https://ollama.com  |  Then: ollama pull <model>${NC}"
+    echo -e "  ${YELLOW}   c-thru will use cloud-only (Anthropic/OpenRouter) until Ollama is running.${NC}"
+fi
+unset _tag_count
 
 echo ""
 echo "MCP server:"
@@ -718,10 +742,27 @@ detect_user_config
 
 echo ""
 echo -e "${YELLOW}Quick reference:${NC}"
-echo "  ~/.claude/tools/c-thru --list   list routes / local models"
-echo "  ~/.claude/tools/model-map-validate     validate profile/project model-map configs"
-echo "  tail ~/.claude/proxy.*.log             troubleshoot proxy startup"
-echo "  pkill -f claude-proxy                  restart proxy after config edits"
-echo "  CLAUDE_PROXY_BYPASS=1 claude ...       bypass proxy for direct Anthropic access"
+echo "  /c-thru-config diag                       full diagnostics (mode, tier, capabilities, proxy)"
+echo "  /c-thru-config resolve <cap>              what does deep-coder resolve to right now?"
+echo "  ~/.claude/tools/c-thru --list             list routes, active profile, local models"
+echo ""
+echo "Configuration:"
+echo "  ~/.claude/model-map.overrides.json        edit here to override shipped defaults"
+echo "  /c-thru-config mode <connected|semi-offload|cloud-judge-only|offline>"
+echo "  /c-thru-config remap <cap> <model>        rebind a capability to a different model"
+echo "  /c-thru-config reload                     apply config changes to running proxy"
+echo ""
+echo "Agents & skills (c-thru namespace):"
+echo "  ~/.claude/agents/c-thru/                  agent overrides"
+echo "  ~/.claude/skills/c-thru/                  skill files"
+echo ""
+echo "Troubleshooting:"
+echo "  tail ~/.claude/proxy.*.log                proxy startup / request logs"
+echo "  pkill -f claude-proxy                     restart proxy after config edits"
+echo "  CLAUDE_PROXY_BYPASS=1 claude ...          bypass proxy for direct Anthropic"
+echo ""
+echo "Optional (not auto-enabled — add to ~/.claude/settings.json manually):"
+echo "  c-thru-stop-hook                          token-usage summary on session stop"
+echo "  c-thru-statusline / c-thru-statusline-overlay   live proxy status in editor statusbar"
 echo ""
 echo -e "${GREEN}✅ Done.${NC}"
