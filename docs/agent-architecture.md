@@ -143,7 +143,6 @@ WROTE: <output.md path>
 INDEX: <INDEX.md path>
 FINDINGS: <findings.jsonl path>
 FINDING_CATS: {crisis:N,plan-material:N,contextual:N,trivial:N,augmentation:N,improvement:N}
-LINT_ITERATIONS: N
 SUMMARY: <≤20 words>
 ```
 

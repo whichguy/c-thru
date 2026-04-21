@@ -654,7 +654,7 @@ console.log('\n7. LINT_ITERATIONS fixtures');
   const raw = `STATUS: COMPLETE\nCONFIDENCE: high\nWROTE: waves/001/outputs/implementer-item-E.md\nINDEX: waves/001/outputs/implementer-item-E.INDEX.md\nFINDINGS: waves/001/findings/implementer-item-E.jsonl\nFINDING_CATS: {crisis:0,plan-material:1,contextual:0,trivial:0,augmentation:0,improvement:1}\nLINT_ITERATIONS: 5\nSUMMARY: cap hit, lint errors remain`;
   const r = parseWorkerStatus(raw);
   const findingCats = r.FINDING_CATS || '';
-  const hasCapHitFinding = findingCats.includes('plan-material:1');
+  const hasCapHitFinding = /plan-material:[1-9]\d*/.test(findingCats);
   const lintIter = parseInt(r.LINT_ITERATIONS, 10);
   // Validation: cap hit (5) + plan-material finding + CONFIDENCE=high → invalid combination
   const isInvalid = lintIter >= 5 && hasCapHitFinding && r.CONFIDENCE === 'high';
