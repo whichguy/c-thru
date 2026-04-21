@@ -421,7 +421,35 @@ console.log('\n18. buildFallbackCandidatesFromChain: tiebreaker applied in best-
   }
 }
 
-// ── 19. Mirror-drift guard: test stub resolveProfileModel === real resolver ─
+// ── 19. resolveFallbackModel: primary filtered before tiebreaker ──────
+// Chains include all quality-ranked candidates (different modes have different
+// primaries from the same chain). The code filter in resolveFallbackModel removes
+// whichever model is the current primary before walking — so a health-degraded-but-
+// not-cooled primary is never returned as its own fallback.
+// Behavioral check: after filtering, every capability chain must have ≥1 candidate
+// that differs from each possible primary (connected_model and cloud_best_model).
+console.log('\n19. resolveFallbackModel primary-filter: chain has candidates other than the primary');
+{
+  const chains = shipped.fallback_chains || {};
+  for (const tier of ['48gb', '64gb', '128gb']) {
+    const tierProfile = profiles[tier] || {};
+    const tierChains = chains[tier] || {};
+    for (const [cap, chain] of Object.entries(tierChains)) {
+      const entry = tierProfile[cap];
+      if (!entry || !Array.isArray(chain) || chain.length === 0) continue;
+      // Test each plausible primary (connected_model and cloud_best_model)
+      for (const primaryField of ['connected_model', 'cloud_best_model', 'local_best_model']) {
+        const primary = entry[primaryField];
+        if (!primary) continue;
+        const afterFilter = chain.filter(c => c.model !== primary);
+        assert(afterFilter.length > 0,
+          `fallback_chains[${tier}][${cap}]: after filtering '${primaryField}'='${primary}', ≥1 candidate remains`);
+      }
+    }
+  }
+}
+
+// ── 20. Mirror-drift guard: test stub resolveProfileModel === real resolver ─
 // If the real resolveProfileModel changes and the test stub above is not updated,
 // this section catches the divergence before it silently invalidates §1-§17.
 console.log('\n18. Mirror-drift guard: test stub matches real resolveProfileModel');

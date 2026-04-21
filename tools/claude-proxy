@@ -1356,9 +1356,14 @@ function resolveFallbackModel(model, failureClass, logicalRole = null) {
   let candidateObjects;
 
   if (capKey && cfg.fallback_chains?.[hw]?.[capKey]) {
-    // Capability-layer chain wins over legacy per-model strategy
+    // Capability-layer chain wins over legacy per-model strategy.
+    // Filter out the primary (model) so health-degraded-but-not-cooled primaries
+    // don't get returned as their own fallback before isCooledDown can skip them.
     const rawChain = cfg.fallback_chains[hw][capKey];
-    candidateObjects = rawChain.map(c => ({ model: c.model, quality_score: c.quality_score, speed_score: c.speed_score }));
+    const primaryResolved = resolveLogicalAlias(resolveRouteModel(model));
+    candidateObjects = rawChain
+      .map(c => ({ model: c.model, quality_score: c.quality_score, speed_score: c.speed_score }))
+      .filter(c => resolveLogicalAlias(resolveRouteModel(c.model)) !== primaryResolved);
   } else {
     // Legacy fallback_strategies[model].event[failureClass]
     const strategies = cfg.fallback_strategies || {};
