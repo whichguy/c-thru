@@ -131,9 +131,13 @@ function applyUpdates(config, spec) {
 }
 
 function main() {
-  const [, , defaultsPathArg, overridesPathArg, effectivePathArg, specArg] = process.argv;
+  const args = process.argv.slice(2);
+  const reloadFlag = args.includes('--reload');
+  const filteredArgs = args.filter(a => a !== '--reload' && a !== '--no-reload');
+  const [defaultsPathArg, overridesPathArg, effectivePathArg, specArg] = filteredArgs;
+
   if (!defaultsPathArg || !overridesPathArg || !effectivePathArg || !specArg) {
-    fail('usage: model-map-edit.js <defaults-path> <overrides-path> <effective-output-path> \'<json-edit-spec>\'');
+    fail('usage: model-map-edit.js <defaults-path> <overrides-path> <effective-output-path> \'<json-edit-spec>\' [--reload]');
   }
 
   const defaultsPath = path.resolve(defaultsPathArg);
@@ -169,6 +173,15 @@ function main() {
     }, null, 2)}\n`);
   } catch (error) {
     fail(error.message);
+  }
+
+  if (reloadFlag) {
+    const { spawnSync } = require('child_process');
+    const cthru = path.join(path.dirname(effectivePath), 'tools', 'c-thru');
+    const result = spawnSync(cthru, ['reload'], { stdio: 'inherit' });
+    if (result.status !== 0) {
+      process.stderr.write('model-map-edit: --reload: c-thru reload exited ' + (result.status ?? 'null') + '\n');
+    }
   }
 }
 
