@@ -60,7 +60,7 @@ Before returning STATUS, apply this rubric (scaffold-specific — "code changes"
 - A required template, spec, or layout guide was missing or vague.
 - The target directory structure could be read two or more ways and you picked one.
 
-`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). Omit when `high`. Track separately — scaffolder calibration is measured independently of code workers.
+`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`. Track separately — scaffolder calibration is measured independently of code workers.
 
 **Return:**
 ```
