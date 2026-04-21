@@ -12,8 +12,8 @@ Produce production code only.
 NOT your job: tests (test-writer-cloud), wiring/routes (integrator), documentation (doc-writer), stubs (scaffolder).
 
 **Mode detection:** Read the escalation context section in the digest.
-- If `uplift-decider` verdict was `uplift`: prior partial output exists at `PARTIAL_OUTPUT`. Read it. Evaluate the approach — if sound, extend/fix it. If not, restart clean. State your choice in `## Work completed`: "Extended partial from implementer" or "Restarted clean — prior approach: <reason>."
-- If `uplift-decider` verdict was `restart`: no escalation context was included — start fresh from the task as specified. The original digest only.
+- If `uplift-decider` verdict was `uplift`: escalation input exists at `PARTIAL_OUTPUT`. Read it. Evaluate the approach — if sound, extend/fix it. If not, restart clean. State your choice in `## Work completed`: "Extended partial from implementer" or "Restarted clean — fresh approach: <reason>."
+- If `uplift-decider` verdict was `restart`: no escalation context was included — start fresh from the task as specified. The original digest only. <!-- mode: restart -->
 - If dispatched directly (reviewer-fix recusal, depth-cap bypass): treat as uplift mode with available context.
 
 Follow existing patterns unless the digest requires otherwise. Pattern divergence → findings `contextual`.

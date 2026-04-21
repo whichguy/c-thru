@@ -505,6 +505,39 @@ while IFS='|' read -r agent keys; do
 done < "$tmpblocks"
 
 # ---------------------------------------------------------------------------
+# Check 8 — Restart-mode anchor presence in cloud agent files
+#
+# Static check: agents/implementer-cloud.md and agents/test-writer-cloud.md
+# must contain a <!-- mode: restart --> anchor in their restart-mode branch.
+# This anchor guards against anchoring-grep false positives from terms like
+# "prior", "previous", or "attempt" bleeding into restart-mode sections.
+# Runtime verification of rendered prompt digests belongs in the harness
+# (test/c-thru-plan-harness.test.js), not here.
+# Reference: wiki/entities/uplift-cascade-pattern.md
+# ---------------------------------------------------------------------------
+echo "8/8  Restart-mode anchor check in cloud agents..."
+
+CLOUD_AGENTS=("$AGENTS_DIR/implementer-cloud.md" "$AGENTS_DIR/test-writer-cloud.md")
+for cloud_agent in "${CLOUD_AGENTS[@]}"; do
+    [ -f "$cloud_agent" ] || continue
+    agent_base=$(basename "$cloud_agent")
+    if ! grep -q '<!-- mode: restart -->' "$cloud_agent" 2>/dev/null; then
+        fail "$agent_base: missing <!-- mode: restart --> anchor in restart-mode branch — add to the restart bullet in Mode detection section"
+    else
+        ok "$agent_base: <!-- mode: restart --> anchor present"
+    fi
+    # Anchoring-grep: verify no banned terms appear OUTSIDE a <!-- mode: restart --> anchor region.
+    # Strategy: strip the restart-mode line (which legitimately describes the restart branch),
+    # then check that no "prior approach" / "prior partial output" phrasing remains.
+    stripped=$(grep -v '<!-- mode: restart -->' "$cloud_agent" 2>/dev/null || true)
+    if echo "$stripped" | grep -qE 'prior (partial output|approach)'; then
+        fail "$agent_base: contains 'prior partial output' or 'prior approach' outside restart-mode anchor — rephrase to avoid anchoring-grep false positive (use 'escalation input' or 'fresh approach')"
+    else
+        ok "$agent_base: no anchoring-grep false-positive terms outside restart-mode anchor"
+    fi
+done
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
