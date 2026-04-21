@@ -625,7 +625,7 @@ Infer the user's intent from the meaning of the words — do not require exact k
 |---|---|
 | "off", "disable", "turn off", "remove", "stop", "quiet", "no hint", "opt out", "silence" | → **disable** |
 | "on", "enable", "turn on", "add", "register", "activate", "restore" | → **enable** |
-| "toggle", "flip", "switch", "invert" | → **invert**: run `status` bash block, then call `enable` if currently off or `disable` if currently on |
+| "toggle", "flip", "switch", "invert" | → **invert** (see Action: invert below) |
 | "status", "check", "what", "show", "is it", "current", "state" | → **status** |
 | empty arguments | → **status** |
 
@@ -659,12 +659,68 @@ fi
 
 echo "planning hint hook:  $hook_registered"
 echo "planner_hint pref:   $hint_pref"
-if [ "$hook_registered" = "yes" ] && [ "$hint_pref" != "false" ]; then
+if [ "${CLAUDE_ROUTER_PLANNER_HINT:-1}" = "0" ]; then
+  echo "effective:           suppressed  (CLAUDE_ROUTER_PLANNER_HINT=0 env — hook runs but exits silently)"
+elif [ "$hook_registered" = "yes" ] && [ "$hint_pref" != "false" ]; then
   echo "effective:           on"
 elif [ "$hint_pref" = "false" ]; then
   echo "effective:           off  (opt-out in overrides)"
 else
   echo "effective:           off  (hook not registered)"
+fi
+```
+
+---
+
+### Action: invert
+
+Read current state, then enable if off or disable if on. Single deterministic block — do not split into two steps.
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+SETTINGS="$CLAUDE_DIR/settings.json"
+OVERRIDES="$CLAUDE_DIR/model-map.overrides.json"
+HOOK_CMD="$CLAUDE_DIR/tools/c-thru-enter-plan-hook"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "planning: jq not found" >&2; exit 1
+fi
+
+[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+[ -f "$OVERRIDES" ] || echo '{}' > "$OVERRIDES"
+
+count=$(jq -r --arg cmd "$HOOK_CMD" \
+  '(.hooks.PreToolUse // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
+  "$SETTINGS" 2>/dev/null || echo 0)
+hint_pref=$(jq -r '.planner_hint // "unset"' "$OVERRIDES" 2>/dev/null || echo unset)
+
+if [ "${count:-0}" -gt 0 ] && [ "$hint_pref" != "false" ]; then
+  # currently on → disable
+  tmp="${SETTINGS}.tmp.$$"
+  jq --arg cmd "$HOOK_CMD" '
+    if .hooks.PreToolUse then
+      .hooks.PreToolUse |= map(.hooks |= map(select((.command // "") != $cmd)))
+      | .hooks.PreToolUse |= map(select(.hooks | length > 0))
+    else . end
+  ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+  tmp="${OVERRIDES}.tmp.$$"
+  jq '.planner_hint = false' "$OVERRIDES" > "$tmp" && mv "$tmp" "$OVERRIDES"
+  echo "planning hint: toggled off"
+  echo "  re-enable: /c-thru-config planning on"
+else
+  # currently off → enable
+  if [ "${count:-0}" -eq 0 ]; then
+    tmp="${SETTINGS}.tmp.$$"
+    jq --arg cmd "$HOOK_CMD" '
+      if .hooks == null then .hooks = {} else . end |
+      if .hooks.PreToolUse == null then .hooks.PreToolUse = [] else . end |
+      .hooks.PreToolUse += [{"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": $cmd, "timeout": 3}]}]
+    ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+  fi
+  tmp="${OVERRIDES}.tmp.$$"
+  jq 'del(.planner_hint)' "$OVERRIDES" > "$tmp" && mv "$tmp" "$OVERRIDES"
+  echo "planning hint: toggled on"
+  echo "  disable: /c-thru-config planning off"
 fi
 ```
 
