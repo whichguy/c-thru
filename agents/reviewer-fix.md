@@ -58,14 +58,14 @@ Before returning STATUS, apply this rubric:
 **medium** — ANY of:
 - You improvised a pattern not seen elsewhere in the codebase.
 - One or more success_criteria required interpretation.
-- You guessed at an API surface and didn't verify it (no Read, no tests).
+- You inferred author intent in ambiguous code rather than finding a definitive reference (test, spec, or caller).
 - You added error handling or edge-case logic you weren't sure was needed.
 
 **low** — ANY of:
 - You hit an unfamiliar domain (cryptography, concurrency, accounting, parsing) and inferred behavior rather than verified it.
 - A required resource (spec, API doc, upstream dep) was missing or vague.
 - The item's description could be read two or more ways and you picked one.
-- You couldn't find the calling site of what you built.
+- You couldn't find tests or callers to validate that your fix preserved existing behavior.
 
 `UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`.
 
