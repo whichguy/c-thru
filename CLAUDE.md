@@ -142,6 +142,21 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 
 `claude-proxy` is a long-running HTTP server auto-spawned by `c-thru` when the backend needs it. The router coordinates via a `/ping` handshake on a dynamically-selected port. Logs land at `~/.claude/proxy.*.log`. Kill a stuck proxy with `pkill -f claude-proxy`.
 
+## Runtime Control
+
+| Command | Effect |
+|---|---|
+| `c-thru reload` | Sends SIGHUP to the running proxy, waits up to 2s for `/ping` to confirm it's alive, prints new tier. Exits non-zero if proxy is not running or crashes. |
+| `c-thru restart` | SIGTERM + waits for listener to vanish, then re-spawns on `$CLAUDE_PROXY_PORT` (default 9997). `--force` escalates to SIGKILL after timeout. |
+| `/c-thru-config reload` | Skill equivalent of `c-thru reload` — usable from a Claude session. |
+| `/c-thru-status fix` | Apply recommended mappings, reload proxy, show current status. |
+
+**Ollama defaults (changed):** `CLAUDE_ROUTER_OLLAMA_AUTOSTART` now defaults to `1` — Ollama is started automatically when unreachable. Opt out with `CLAUDE_ROUTER_OLLAMA_AUTOSTART=0`.
+
+**Bulk pre-pull:** On each router invocation, `ensure_active_tier_prepulled()` runs all active-tier local Ollama models through `ensure_ollama_running` in the background. Guarded by a stamp file at `$CLAUDE_PROFILE_DIR/.prepull-stamp-<tier>` invalidated on `model-map.json` mtime change. Set `C_THRU_SKIP_PREPULL=1` to disable (CI/tests).
+
+**`/map-model` is deprecated.** Use `/c-thru-config` for all model-map edits. `/map-model` now prints a migration table and exits without writing config.
+
 ## Contract integrity
 
 Before committing changes to `skills/c-thru-plan/SKILL.md` or any `agents/*.md` file, run:
