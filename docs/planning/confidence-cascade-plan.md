@@ -1,7 +1,7 @@
 # c-thru CONFIDENCE + Cascade — Wave Plan
 
-> **Wave-1 status: COMPLETE** (merged PR #33). Wave-2 design settled; implementation pending
-> Wave-1 gate. §§ Appendix A–B contain original research. This document is the living plan.
+> **Wave-1 status: SHIPPED** (merged PR #33). Measurement steps 6–8 run post-merge (ongoing — see §2).
+> Wave-2 design settled; implementation gated on step 8 passing. §§ Appendix A–B contain original research.
 
 ---
 
@@ -79,17 +79,19 @@ Phase 1 Stage 1 reads `CLAUDE.md` into `recon.md`; Stage 3 merges into planner c
 ### Calibration formula
 
 ```
-eligible   = items where CONFIDENCE present AND verify_pass ≠ null
-high_items = eligible WHERE confidence = "high"
-high_fail  = high_items WHERE verify_pass = false
+eligible    = items where CONFIDENCE present AND verify_pass ≠ null   -- set
+high_items  = eligible WHERE confidence = "high"                       -- set
+high_fail   = high_items WHERE verify_pass = false                     -- set
+n_high      = |high_items|
+n_high_fail = |high_fail|
 
-calibration_rate = (high_items - high_fail) / high_items
+calibration_rate = (n_high - n_high_fail) / n_high
 compliance       = items_with_CONFIDENCE / total  (target ≥80%)
 ```
 
 `verify_pass: null` excluded — items without tests produce meaningless signal.
-Note: `high_items` is computed as a subset of `eligible` — the `verify_pass ≠ null`
-guard is inherited. Any code implementation must apply the `eligible` filter before
+`high_items` is a subset of `eligible` — the `verify_pass ≠ null` guard is
+inherited. Any code implementation must apply the `eligible` filter before
 computing `high_items` or the null-exclusion silently breaks.
 
 ### Wave-1 measurement steps (pending — run after merge)
@@ -108,6 +110,8 @@ computing `high_items` or the null-exclusion silently breaks.
 ```
 
 ---
+
+> **Pre-condition:** §2 step 8 decision gate must pass before Wave-2 implementation begins.
 
 ## 3. Wave-2 target architecture (build after Wave-1 gate passes)
 
@@ -219,7 +223,7 @@ surface to user
 |---|---|---|
 | `scaffolder` | `implementer` | Task type changes: design decision needed |
 | `implementer` | `uplift-decider` → `implementer-cloud` | Reads partial work, patch\|restart |
-| `reviewer-fix` | `implementer-cloud` | Recuse = approach broken, not style; restart |
+| `reviewer-fix` | `implementer-cloud` | Approach broken → restart at cloud implementer. Skips `deep-coder` tier: review recusal means the code requires redesign — a local re-implementation attempt would reproduce the same failure |
 | `test-writer` | `test-writer-cloud` | Same role, higher tier |
 | `planner-local` | `planner` | Cloud judge; already natural `outcome_risk` path |
 | `implementer-cloud` | `judge` | Cloud judge as high-capability implementer |
@@ -271,15 +275,20 @@ from the confidence signal, enabling offline calibration:
   "item": "item-B",
   "agent": "implementer",
   "confidence": "low",          // local worker self-report
-  "verify_pass": null,
+  "verify_pass": null,          // null = no tests; this item excluded from local calibration
   "compliance": true,
   "escalated": true,
   "cloud_agent": "implementer-cloud",
   "cloud_confidence": "high",   // cloud worker self-report
   "uplift_decision": "restart", // uplift-decider routing
-  "cloud_verify_pass": true
+  "cloud_verify_pass": true     // used for cloud-worker calibration only
 }
 ```
+
+`verify_pass` (local) and `cloud_verify_pass` are used for independent calibration streams.
+Local worker calibration uses `verify_pass`; cloud worker calibration uses `cloud_verify_pass`.
+Do not combine — escalated items with `verify_pass: null` are excluded from local calibration
+but included in cloud calibration via `cloud_verify_pass`.
 
 ### 3.7 New agents (Wave-2)
 
@@ -301,6 +310,9 @@ from the confidence signal, enabling offline calibration:
 - `WAVE_CLOUD_ESCALATION_BUDGET: 3` per wave; overflow → `blocked` item flagged for
   user review (not silent failure)
 - `escalation_policy` per item: `local | pre-escalate | never-cloud`
+  - `local`: default; Step 4b classifier did not flag strategic signals
+  - `pre-escalate`: Step 4b flagged one or more strategic signals; skip local worker
+  - `never-cloud`: set manually by user or future policy layer (e.g., proprietary code, cost cap); orchestrator fails item as `blocked` rather than escalating. Step 4b does not emit this value.
 - CONFIDENCE field optional for 1 release post-Wave-1; absent → `medium` (migration shim)
 
 ---
@@ -341,6 +353,10 @@ sometimes correlates; the rubric targets outcome verifiability directly.
 The escalation chain exhausts all capability tiers (pattern-coder → code-analyst →
 deep-coder → deep-coder-cloud → judge) before surfacing to user. User escalation
 is reserved for genuine definitional ambiguity after judge tier also recuses.
+**Exception (review recusal):** `reviewer-fix` escalates directly to `implementer-cloud`,
+skipping `deep-coder`. When a reviewer recuses, the item's approach is structurally
+broken — a local deep-coder re-attempt would reproduce the same failure. The tier skip
+is justified because recusal here implies redesign, not re-implementation.
 
 **D4. Self-recusal is a general agent capability, not orchestrator-only.**
 Every worker and orchestrating agent carries the recusal rubric. The mechanism is

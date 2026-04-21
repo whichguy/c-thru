@@ -42,11 +42,11 @@ Template-following work. Use existing project conventions exactly. Do not add lo
 
 ## Confidence self-assessment
 
-Before returning STATUS, apply this rubric (scaffold-specific — "code changes" means structural outputs: files, stubs, directories):
+Before returning STATUS, apply this rubric:
 
 **high** — ALL of:
 - You followed existing project naming and file-layout conventions exactly.
-- Every declared target file/directory was produced.
+- Every declared target file/directory was produced and `success_criteria` (if present in the digest) map directly to the structure you produced.
 - You made no assumptions about content that weren't listed in the digest.
 - All `// TODO` markers are scoped to what implementer needs; nothing is pre-filled with guessed logic.
 
@@ -60,7 +60,7 @@ Before returning STATUS, apply this rubric (scaffold-specific — "code changes"
 - A required template, spec, or layout guide was missing or vague.
 - The target directory structure could be read two or more ways and you picked one.
 
-`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`. Track separately — scaffolder calibration is measured independently of code workers.
+`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`.
 
 **Return:**
 ```

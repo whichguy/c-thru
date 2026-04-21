@@ -60,6 +60,7 @@ Before returning STATUS, apply this rubric:
 - One or more success_criteria required interpretation.
 - You inferred author intent in ambiguous code rather than finding a definitive reference (test, spec, or caller).
 - You applied a fix that calls a function or uses an API whose signature you didn't read (no Read, no tests).
+- You could not determine the root cause of an issue and applied a speculative fix (hypothesis not confirmed by a test, trace, or definitive pattern match).
 - You added error handling or edge-case logic you weren't sure was needed.
 
 **low** — ANY of:

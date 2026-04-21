@@ -47,13 +47,13 @@ NOT your job: rewriting implementation (implementer). If you find a bug while re
 Before returning STATUS, apply this rubric (test-writer-specific — "code changes" means test files written):
 
 **high** — ALL of:
-- You reused existing patterns visible in the codebase.
-- The success_criteria map directly to concrete code changes you made.
-- You can state, in one sentence each, why each success criterion is satisfied.
-- You made no assumptions that weren't listed in the digest.
+- You reused existing test patterns visible in the codebase.
+- The success_criteria map directly to concrete test cases you wrote.
+- You can state, in one sentence each, which test(s) would catch a regression in each success criterion.
+- You made no assumptions about implementation behavior that weren't confirmed by reading the implementation.
 
 **medium** — ANY of:
-- You improvised a pattern not seen elsewhere in the codebase.
+- You improvised a test structure not seen in existing tests and cannot point to a precedent.
 - One or more success_criteria required interpretation.
 - You couldn't fully read the implementation before writing tests (missing file, truncated read).
 - You inferred implementation behavior from the file name or task description rather than reading the code path.
@@ -64,6 +64,7 @@ Before returning STATUS, apply this rubric (test-writer-specific — "code chang
 - A required resource (spec, API doc, upstream dep) was missing or vague.
 - The item's description could be read two or more ways and you picked one.
 - The test targets behavior you couldn't verify — written from the task description alone, not the implementation.
+- You wrote tests that only assert the function does not throw — no output values, return types, or state changes are asserted.
 
 `UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`.
 
