@@ -1594,6 +1594,54 @@ run_background_ollama_prep_sweep() {
   disown 2>/dev/null || true
 }
 
+ensure_active_tier_prepulled() {
+  # Pre-pull all active-tier local Ollama models in the background so the first
+  # request after a config change or fresh install does not block on a multi-GB pull.
+  # Guarded by a stamp file (<profile-dir>/.prepull-stamp-<tier>) that is invalidated
+  # whenever model-map.json is updated. Set C_THRU_SKIP_PREPULL=1 to disable (CI/tests).
+  [[ "${C_THRU_SKIP_PREPULL:-0}" == "1" ]] && return 0
+  [[ -f "$CONFIG" ]] || return 0
+  command -v ollama >/dev/null 2>&1 || return 0
+  llm_profiles_defined || return 0
+
+  ensure_llm_profile_context || return 0
+  local tier="$LLM_PROFILE_CACHE_NAME"
+  [[ -n "$tier" ]] || return 0
+
+  local stamp_file="$CLAUDE_PROFILE_DIR/.prepull-stamp-${tier}"
+  if [[ -f "$stamp_file" && -f "$CONFIG" ]]; then
+    local stamp_mtime config_mtime
+    stamp_mtime="$(stat -f %m "$stamp_file" 2>/dev/null || stat -c %Y "$stamp_file" 2>/dev/null || echo 0)"
+    config_mtime="$(stat -f %m "$CONFIG" 2>/dev/null || stat -c %Y "$CONFIG" 2>/dev/null || echo 0)"
+    if (( stamp_mtime >= config_mtime )); then
+      return 0
+    fi
+  fi
+
+  local lines
+  lines="$(collect_active_profile_local_ollama_models)"
+  [[ -n "$lines" ]] || { touch "$stamp_file" 2>/dev/null || true; return 0; }
+
+  # Touch stamp before launching background job to prevent concurrent runs.
+  touch "$stamp_file" 2>/dev/null || true
+
+  local count
+  count="$(printf '%s\n' "$lines" | sed '/^$/d' | wc -l | tr -d ' ')"
+  [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )) || return 0
+
+  claude_router_debug_event "ollama prepull start tier=$tier count=$count"
+  (
+    local model cli_host cli_key backend_id
+    while IFS=$'\t' read -r model cli_host cli_key backend_id _caps; do
+      [[ -n "$model" && -n "$cli_host" ]] || continue
+      cli_key="$(tab_field_decode "$cli_key")"
+      ensure_ollama_running "$model" "$cli_host" "$cli_key" "prepull" "$backend_id"
+    done <<< "$lines"
+    claude_router_debug_event "ollama prepull done tier=$tier count=$count"
+  ) >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+}
+
 ollama_router_is_interactive() {
   [[ "${CLAUDE_ROUTER_FORCE_INTERACTIVE:-0}" == "1" ]] && return 0
   [[ -t 0 && -t 1 ]]
@@ -1872,7 +1920,7 @@ ensure_ollama_running() {
   # Optional: if local Ollama isn't reachable, start it once and retry.
   # Opt-in to avoid unexpectedly spawning daemons in CI/tests or when users
   # intentionally point at remote Ollama hosts.
-  local autostart="${CLAUDE_ROUTER_OLLAMA_AUTOSTART:-0}"
+  local autostart="${CLAUDE_ROUTER_OLLAMA_AUTOSTART:-1}"
 
   # 3s timeout prevents unreachable-host hangs (~75s default TCP). Fall back to direct
   # invocation if no timeout CLI is available (bare macOS) — the `ollama` CLI itself
@@ -2250,6 +2298,143 @@ if [[ "${1:-}" == "--list" ]]; then
   show_models
   exit 0
 fi
+
+# --- reload / restart management subcommands ---
+# Placed before ORIG_ARGS parsing so they're accessible even if the main launch path
+# would be blocked (e.g., stale config causing validate_model_map_config to error).
+
+cmd_reload() {
+  local proxy_port="${CLAUDE_PROXY_PORT:-9997}"
+  local pid_file="$CLAUDE_PROFILE_DIR/proxy.pid"
+
+  if [[ ! -f "$pid_file" ]]; then
+    echo "c-thru reload: no proxy PID file at $pid_file — proxy may not be running" >&2
+    echo "  the next 'c-thru' invocation will auto-spawn a fresh proxy" >&2
+    return 1
+  fi
+
+  local proxy_pid
+  proxy_pid="$(cat "$pid_file" 2>/dev/null)"
+  if [[ -z "$proxy_pid" ]]; then
+    echo "c-thru reload: PID file is empty — proxy may not be running" >&2
+    return 1
+  fi
+
+  if ! kill -0 "$proxy_pid" 2>/dev/null; then
+    echo "c-thru reload: pid $proxy_pid is not running (stale PID file at $pid_file)" >&2
+    return 1
+  fi
+
+  if ! kill -HUP "$proxy_pid" 2>/dev/null; then
+    echo "c-thru reload: failed to send SIGHUP to pid $proxy_pid" >&2
+    return 1
+  fi
+
+  # Poll /ping for up to 2s to confirm proxy is still alive after config reload.
+  local i
+  local ping_json=""
+  for ((i = 0; i < 20; i++)); do
+    if ping_json="$(proxy_ping_json "$proxy_port")"; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  if [[ -z "$ping_json" ]]; then
+    echo "c-thru reload: SIGHUP sent but proxy not responding on :$proxy_port — may have crashed" >&2
+    return 1
+  fi
+
+  local new_tier=""
+  if command -v jq >/dev/null 2>&1; then
+    new_tier="$(jq -r '.active_tier // empty' 2>/dev/null <<< "$ping_json" || true)"
+  fi
+  echo "c-thru reload: proxy reloaded (pid $proxy_pid, port $proxy_port${new_tier:+, tier: $new_tier})"
+  return 0
+}
+
+cmd_restart() {
+  local force=0
+  [[ "${2:-}" == "--force" ]] && force=1
+
+  local proxy_port="${CLAUDE_PROXY_PORT:-9997}"
+  local pid_file="$CLAUDE_PROFILE_DIR/proxy.pid"
+  local proxy_pid=""
+
+  if [[ -f "$pid_file" ]]; then
+    proxy_pid="$(cat "$pid_file" 2>/dev/null)"
+  fi
+  if [[ -z "$proxy_pid" ]] || ! kill -0 "$proxy_pid" 2>/dev/null; then
+    proxy_pid="$(proxy_listener_pid "$proxy_port" || true)"
+  fi
+
+  if [[ -n "$proxy_pid" ]] && kill -0 "$proxy_pid" 2>/dev/null; then
+    echo "c-thru restart: stopping proxy (pid $proxy_pid)..." >&2
+    kill -TERM "$proxy_pid" 2>/dev/null || true
+    if ! wait_proxy_listener_gone "$proxy_port" 50; then
+      if [[ "$force" -eq 1 ]]; then
+        echo "c-thru restart: proxy did not stop after SIGTERM — sending SIGKILL" >&2
+        kill -KILL "$proxy_pid" 2>/dev/null || true
+        wait_proxy_listener_gone "$proxy_port" 30 || true
+      else
+        echo "c-thru restart: proxy did not stop within 5s — use 'c-thru restart --force'" >&2
+        return 1
+      fi
+    fi
+  else
+    echo "c-thru restart: no running proxy found on :$proxy_port — spawning fresh..." >&2
+  fi
+
+  local proxy_js="$CLAUDE_PROFILE_DIR/tools/claude-proxy"
+  if [[ ! -f "$proxy_js" ]]; then
+    echo "c-thru restart: claude-proxy not found at $proxy_js — run install.sh" >&2
+    return 1
+  fi
+
+  local startup_tag temp_log ready_pipe ready_line
+  startup_tag="${$}.$RANDOM"
+  temp_log="$(mktemp "${TMPDIR:-/tmp}/claude-proxy-restart-${startup_tag}.log" 2>/dev/null || true)"
+  [[ -n "$temp_log" ]] || temp_log="/dev/null"
+  ready_pipe="$CLAUDE_PROFILE_DIR/proxy.ready.restart-${startup_tag}.pipe"
+  rm -f "$ready_pipe"
+  mkfifo "$ready_pipe"
+
+  # Pass explicit port so the new process binds to the same port.
+  "$proxy_js" --port "$proxy_port" >"$ready_pipe" 2>"$temp_log" &
+  local new_pid="$!"
+  disown "$new_pid" 2>/dev/null || true
+
+  if IFS= read -r -t 5 ready_line <"$ready_pipe" && [[ "$ready_line" =~ ^READY\ ([0-9]+)$ ]]; then
+    if wait_proxy_ping_ready "$proxy_port" 20; then
+      local ping_json new_tier=""
+      ping_json="$(proxy_ping_json "$proxy_port")"
+      if command -v jq >/dev/null 2>&1; then
+        new_tier="$(jq -r '.active_tier // empty' 2>/dev/null <<< "$ping_json" || true)"
+      fi
+      echo "c-thru restart: proxy started (pid $new_pid, port $proxy_port${new_tier:+, tier: $new_tier})"
+      rm -f "$ready_pipe" 2>/dev/null || true
+      return 0
+    fi
+  fi
+
+  echo "c-thru restart: proxy did not become ready" >&2
+  if [[ -s "$temp_log" ]]; then
+    tail -5 "$temp_log" | sed 's/^/  /' >&2
+  fi
+  rm -f "$ready_pipe" 2>/dev/null || true
+  return 1
+}
+
+if [[ "${1:-}" == "reload" ]]; then
+  cmd_reload; exit $?
+fi
+
+if [[ "${1:-}" == "restart" ]]; then
+  cmd_restart "$@"; exit $?
+fi
+
+# Pre-pull active-tier Ollama models in background (stamp-guarded, once per config version).
+ensure_active_tier_prepulled
 
 # --- Parse --model / --route; strip --route from forwarded args ---
 ORIG_ARGS=("$@")
