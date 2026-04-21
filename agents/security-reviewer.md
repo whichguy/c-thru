@@ -50,9 +50,47 @@ Per finding: vulnerability class, code location, attack vector, recommended fix.
    <section>: <start>-<end>
    ```
 
+## Self-recusal
+
+Apply before starting work if threat-model context is critically absent.
+
+**Recuse if ALL of:**
+- No threat model or trust-boundary context is available in the digest AND
+- The code under review spans an auth or privilege boundary where context is required to assess exploitability.
+
+On recusal, DO NOT emit RECOMMEND. Surface the gap as a finding. Architecture: `judge-strict` with `hard_fail` — there is no cascade target. Return:
+```
+STATUS: RECUSE
+RECUSAL_REASON: <one sentence: which threat-model context is missing>
+SUMMARY: <≤20 words>
+```
+
+## Confidence self-assessment
+
+Before returning STATUS, apply this rubric:
+
+**high** — ALL of:
+- Attack surface fully traced — all entry points, data flows, and trust boundaries read directly.
+- No inferred vulnerability; each finding maps to a specific code location and confirmed attack vector.
+- Threat model or trust boundary context was available or derivable from the digest.
+
+**medium** — ANY of:
+- One or more attack vectors assessed by inference — could not fully trace the data flow.
+- Missing threat-model context for one boundary; assessed risk conservatively.
+- Dependency versions present but CVE database not checked (noted in findings).
+
+**low** — ANY of:
+- Threat-model context absent for a privilege boundary — attack surface is uncharacterized.
+- A required resource (spec, dependency manifest, auth flow) was missing or vague.
+- Code reviewed from description only — implementation file unreadable.
+
+`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). Omit when high.
+
 **Return:**
 ```
 STATUS: COMPLETE|PARTIAL|ERROR
+CONFIDENCE: high|medium|low
+UNCERTAINTY_REASONS: <comma-separated rubric bullets; omit when high>
 WROTE: <output.md path>
 INDEX: <INDEX.md path>
 FINDINGS: <findings.jsonl path>
