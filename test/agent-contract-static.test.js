@@ -54,7 +54,7 @@ const ROSTER = {
   // ── Full-contract worker agents ──────────────────────────────────────────────
   'implementer':       { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'uplift-decider',  extraFields: ['LINT_ITERATIONS'] },
   'implementer-cloud': { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'judge',            extraFields: ['LINT_ITERATIONS'] },
-  'reviewer-fix':      { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer-cloud', extraFields: ['ITERATIONS'] },
+  'wave-reviewer':     { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer-cloud', extraFields: ['ITERATIONS'] },
   'test-writer':       { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'test-writer-cloud' },
   'test-writer-cloud': { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'judge' },
   'scaffolder':        { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer' },
