@@ -107,6 +107,8 @@
       "default": {
         "connected_model": "glm-5.1:cloud",
         "disconnect_model": "gemma4:e4b",
+        "cloud_best_model": "glm-5.1:cloud",
+        "local_best_model": "gpt-oss:20b",
         "on_failure": "cascade"
       },
       "classifier": {
@@ -147,6 +149,8 @@
       "default": {
         "connected_model": "glm-5.1:cloud",
         "disconnect_model": "gemma4:26b",
+        "cloud_best_model": "glm-5.1:cloud",
+        "local_best_model": "gpt-oss:20b",
         "on_failure": "cascade"
       },
       "classifier": {
@@ -187,6 +191,8 @@
       "default": {
         "connected_model": "glm-5.1:cloud",
         "disconnect_model": "gemma4:26b",
+        "cloud_best_model": "glm-5.1:cloud",
+        "local_best_model": "gpt-oss:20b",
         "on_failure": "cascade"
       },
       "classifier": {
@@ -352,6 +358,11 @@
   "quality_tolerance_pct": 5,
   "fallback_chains": {
     "48gb": {
+      "default":      [
+        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
+        { "model": "gpt-oss:20b",   "quality_score": 75, "speed_score": 90 },
+        { "model": "gemma4:e4b",    "quality_score": 45, "speed_score": 70 }
+      ],
       "judge":        [
         { "model": "claude-opus-4-6",              "quality_score": 100, "speed_score": 50 },
         { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
@@ -384,6 +395,11 @@
       ]
     },
     "64gb": {
+      "default":      [
+        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
+        { "model": "gpt-oss:20b",   "quality_score": 75, "speed_score": 90 },
+        { "model": "gemma4:26b",    "quality_score": 65, "speed_score": 55 }
+      ],
       "judge":        [
         { "model": "claude-opus-4-6",              "quality_score": 100, "speed_score": 50 },
         { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
@@ -416,6 +432,11 @@
       ]
     },
     "128gb": {
+      "default":      [
+        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
+        { "model": "gpt-oss:20b",   "quality_score": 75, "speed_score": 90 },
+        { "model": "gemma4:26b",    "quality_score": 65, "speed_score": 55 }
+      ],
       "judge":        [
         { "model": "claude-opus-4-6",              "quality_score": 100, "speed_score": 50 },
         { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },

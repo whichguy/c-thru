@@ -276,5 +276,81 @@ console.log('\n14. fallback_chains seeded for key capabilities');
   }
 }
 
+// ── 15. resolveProfileModel null-guard ────────────────────────────────
+console.log('\n15. resolveProfileModel: null entry returns null for all modes');
+{
+  for (const mode of ['connected', 'offline', 'semi-offload', 'cloud-judge-only', 'cloud-best-quality', 'local-best-quality']) {
+    assert(resolveProfileModel(null, mode) === null,
+      `resolveProfileModel(null, '${mode}') === null`);
+  }
+  assert(resolveProfileModel(undefined, 'connected') === null,
+    'resolveProfileModel(undefined, connected) === null');
+}
+
+// ── 16. applyQualityTolerance: all-null scores preserves original order ──
+console.log('\n16. applyQualityTolerance: all-null scores preserves original chain order');
+{
+  function applyQualityTolerance(candidates, tolerancePct) {
+    if (candidates.length <= 1) return candidates;
+    const topScore = candidates[0].quality_score ?? 0;
+    const threshold = topScore * (1 - tolerancePct / 100);
+    const inBand = candidates.filter(c => (c.quality_score ?? 0) >= threshold);
+    const outBand = candidates.filter(c => (c.quality_score ?? 0) < threshold);
+    inBand.sort((a, b) => (b.speed_score ?? 0) - (a.speed_score ?? 0));
+    return [...inBand, ...outBand];
+  }
+
+  // When no candidate has quality_score, some() is false → tiebreaker skipped
+  // (tested by proxy code branch: isBestQualityMode && candidateObjects.some(c => c.quality_score != null))
+  // The pure tolerance function receives all-zero scores; original order preserved via stable sort.
+  const nullChain = [
+    { model: 'P', quality_score: null, speed_score: null },
+    { model: 'Q', quality_score: null, speed_score: null },
+    { model: 'R', quality_score: null, speed_score: null },
+  ];
+  const result = applyQualityTolerance(nullChain, 5);
+  assert(result[0].model === 'P', 'null-score chain: position 0 unchanged (got ' + result[0].model + ')');
+  assert(result[1].model === 'Q', 'null-score chain: position 1 unchanged (got ' + result[1].model + ')');
+  assert(result[2].model === 'R', 'null-score chain: position 2 unchanged (got ' + result[2].model + ')');
+
+  // Partially scored chain: null scores treated as 0 → fall out of band of a scored top
+  const partialChain = [
+    { model: 'A', quality_score: 90, speed_score: 50 },
+    { model: 'B', quality_score: null, speed_score: 99 },
+  ];
+  const partialResult = applyQualityTolerance(partialChain, 5);
+  // threshold = 90 * 0.95 = 85.5; B has effective score 0 → out-of-band → stays after A
+  assert(partialResult[0].model === 'A', 'partially-scored: in-band A stays first');
+  assert(partialResult[1].model === 'B', 'partially-scored: null-score B stays after A');
+}
+
+// ── 17. general-default fallback chains seeded ────────────────────────
+console.log('\n17. general-default fallback chains seeded at 48gb/64gb/128gb');
+{
+  const chains = shipped.fallback_chains || {};
+  for (const tier of ['48gb', '64gb', '128gb']) {
+    const chain = chains[tier] && chains[tier]['default'];
+    assert(Array.isArray(chain), `fallback_chains[${tier}][default] is an array`);
+    assert(chain && chain.length >= 2, `fallback_chains[${tier}][default] has ≥2 candidates`);
+
+    // Last candidate must be a local model (terminates on local)
+    const last = chain && chain[chain.length - 1];
+    const modelRoutes = shipped.model_routes || {};
+    const backends = shipped.backends || {};
+    const lastBackendId = last && modelRoutes[last.model];
+    const lastBackend = lastBackendId && backends[lastBackendId];
+    const lastIsLocal = lastBackend && lastBackend.kind === 'ollama' && !last.model.endsWith(':cloud');
+    assert(lastIsLocal, `fallback_chains[${tier}][default] terminates on local model (got ${last && last.model})`);
+  }
+  // cloud_best_model and local_best_model set on default profile entries
+  for (const tier of ['48gb', '64gb', '128gb']) {
+    const entry = profiles[tier] && profiles[tier]['default'];
+    assert(entry && typeof entry.cloud_best_model === 'string',
+      `llm_profiles[${tier}].default has cloud_best_model`);
+    assert(entry && typeof entry.local_best_model === 'string',
+      `llm_profiles[${tier}].default has local_best_model`);
+  }
+}
+
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

@@ -18,6 +18,7 @@ const LLM_PROFILE_ALIASES = new Set([
 // ARCH: resolveProfileModel — mode→concrete model, see wiki/entities/capability-profile-model-layers.md
 // Pure: select a concrete model from a profile entry given the active mode.
 function resolveProfileModel(entry, mode) {
+  if (!entry) return null;
   if (entry.modes && Object.prototype.hasOwnProperty.call(entry.modes, mode)) {
     return entry.modes[mode];
   }

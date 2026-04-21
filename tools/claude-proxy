@@ -1282,6 +1282,8 @@ function modelIsLocal(model) {
 }
 
 // Within-tolerance tiebreaker: sort quality band by speed_score desc, then strict quality rank.
+// When all quality_score values are null, the tiebreaker is skipped (no .some() match) and the
+// original chain order is preserved — this is intentional: the author's ordering is authoritative.
 function applyQualityTolerance(candidates, tolerancePct) {
   if (candidates.length <= 1) return candidates;
   const topScore = candidates[0].quality_score ?? 0;
@@ -1290,6 +1292,28 @@ function applyQualityTolerance(candidates, tolerancePct) {
   const outBand = candidates.filter(c => (c.quality_score ?? 0) < threshold);
   inBand.sort((a, b) => (b.speed_score ?? 0) - (a.speed_score ?? 0));
   return [...inBand, ...outBand];
+}
+
+// Build active-path fallback candidates from a fallback_chains entry.
+// Filters out the primary (terminalModel), applies local-terminal guard, returns
+// {candidates: string[], appendedTerminalIdx: number} (-1 if no terminal appended).
+function buildFallbackCandidatesFromChain(chain, terminalModel, capKey, hwTier) {
+  const filtered = chain.map(c => c.model).filter(
+    m => resolveLogicalAlias(resolveRouteModel(m)) !== terminalModel
+  );
+  if (filtered.length === 0) return { candidates: [], appendedTerminalIdx: -1 };
+  const lastResolved = resolveLogicalAlias(resolveRouteModel(filtered[filtered.length - 1]));
+  if (!modelIsLocal(lastResolved) && capKey) {
+    const profiles = CONFIG.llm_profiles?.[hwTier] || {};
+    const profileEntry = profiles[capKey];
+    if (profileEntry?.disconnect_model) {
+      return {
+        candidates: [...filtered, profileEntry.disconnect_model],
+        appendedTerminalIdx: filtered.length,
+      };
+    }
+  }
+  return { candidates: filtered, appendedTerminalIdx: -1 };
 }
 
 // ARCH: fallback walk — capability-layer chains preferred; local-terminal guard, see wiki/entities/fallback-event-system.md
@@ -1908,9 +1932,10 @@ function handleRequestWithFallback(req, res, body, resolved) {
     return doForward(backend, effectiveModel, body);
   }
 
-  // Chain fallback: iterate all candidates in strategy.event[failureClass],
+  // Chain fallback: iterate all candidates in strategy.event[failureClass] or fallback_chains,
   // skipping dead ones, marking each failure as dead and continuing.
-  const tryFallbackChain = (candidates, failureClass, startIdx = 0) => {
+  // appendedTerminalIdx: index of a local-terminal candidate appended by the guard (-1 if none).
+  const tryFallbackChain = (candidates, failureClass, startIdx = 0, appendedTerminalIdx = -1) => {
     for (let i = startIdx; i < candidates.length; i++) {
       const rawCandidate = candidates[i];
       const candidateModel = resolveLogicalAlias(resolveRouteModel(rawCandidate));
@@ -1923,14 +1948,14 @@ function handleRequestWithFallback(req, res, body, resolved) {
         proxyLog('fallback.skip_unresolvable', { candidate: candidateModel, error: cResolved.error });
         continue;
       }
-      return attemptCandidate(candidateModel, cResolved, candidates, failureClass, i);
+      return attemptCandidate(candidateModel, cResolved, candidates, failureClass, i, appendedTerminalIdx);
     }
     proxyLog('fallback.chain_exhausted', { terminal_model: terminalModel, count: candidates.length });
     if (!res.headersSent) send(res, 502, { error: `all ${candidates.length} fallback candidates exhausted or dead` });
     else res.end();
   };
 
-  const attemptCandidate = (candidateModel, cResolved, candidates, failureClass, currentIdx) => {
+  const attemptCandidate = (candidateModel, cResolved, candidates, failureClass, currentIdx, appendedTerminalIdx = -1) => {
     const cBackend = cResolved.backend;
     const cBody = { ...body, model: candidateModel };
     const cBodyStr = JSON.stringify(cBody);
@@ -1984,14 +2009,15 @@ function handleRequestWithFallback(req, res, body, resolved) {
         if (cFailureClass) {
           proxyLog('fallback.candidate_failed', { candidate: candidateModel, status_code: upRes.statusCode, failure_class: cFailureClass });
           setCooldown(candidateModel, cFailureClass, upRes.statusCode, upRes.headers);
-          return tryFallbackChain(candidates, failureClass, currentIdx + 1);
+          return tryFallbackChain(candidates, failureClass, currentIdx + 1, appendedTerminalIdx);
         }
-        proxyLog('fallback.candidate_success', { candidate: candidateModel, terminal_model: terminalModel, status_code: upRes.statusCode, elapsed_ms: nowMs() - cStart, capability: logicalRole, profile: logicalRole, local_terminal_appended: false });
+        const localTerminalFired = appendedTerminalIdx !== -1 && currentIdx === appendedTerminalIdx;
+        proxyLog('fallback.candidate_success', { candidate: candidateModel, terminal_model: terminalModel, status_code: upRes.statusCode, elapsed_ms: nowMs() - cStart, capability: logicalRole, profile: logicalRole, local_terminal_appended: localTerminalFired });
         recordFallbackEvent(terminalModel, candidateModel, 'chain_success');
         const respHeaders = { ...upRes.headers };
         if (ANNOTATE_MODEL) respHeaders['x-claude-proxy-served-by'] = candidateModel;
         respHeaders['x-claude-proxy-fallback-from'] = terminalModel;
-        addResolvedViaHeader(respHeaders, { capability: logicalRole, logicalRole, effectiveModel: candidateModel });
+        addResolvedViaHeader(respHeaders, { capability: logicalRole, logicalRole, effectiveModel: candidateModel, localTerminalAppended: localTerminalFired });
         res.writeHead(upRes.statusCode, respHeaders);
         res.end(cRaw);
       });
@@ -2005,7 +2031,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
     cUp.on('error', e => {
       proxyLog('fallback.candidate_error', { candidate: candidateModel, error: e.message });
       setCooldown(candidateModel, 'network_failure', 502, {});
-      return tryFallbackChain(candidates, failureClass, currentIdx + 1);
+      return tryFallbackChain(candidates, failureClass, currentIdx + 1, appendedTerminalIdx);
     });
     // For Ollama candidates, fire-and-forget a warm-up so a cold local model
     // loads into memory in parallel with the first request. Debounced per-model.
@@ -2153,13 +2179,14 @@ function handleRequestWithFallback(req, res, body, resolved) {
         recordFailureClass(failureClass);
         setCooldown(terminalModel, failureClass, upRes.statusCode, upRes.headers);
         let candidates = (CONFIG.fallback_strategies?.[terminalModel]?.event?.[failureClass]) || [];
+        let appendedTerminalIdx = -1;
         if (candidates.length === 0 && _capKey) {
           const chain = CONFIG.fallback_chains?.[_hwTier]?.[_capKey] || [];
-          candidates = chain.map(c => c.model).filter(m => resolveLogicalAlias(resolveRouteModel(m)) !== terminalModel);
+          ({ candidates, appendedTerminalIdx } = buildFallbackCandidatesFromChain(chain, terminalModel, _capKey, _hwTier));
         }
         if (candidates.length > 0) {
-          proxyLog('fallback.chain_start', { terminal_model: terminalModel, failure_class: failureClass, trigger: 'classified_error', candidate_count: candidates.length, source: CONFIG.fallback_strategies?.[terminalModel] ? 'fallback_strategies' : 'fallback_chains' });
-          return tryFallbackChain(candidates, failureClass, 0);
+          proxyLog('fallback.chain_start', { terminal_model: terminalModel, failure_class: failureClass, trigger: 'classified_error', candidate_count: candidates.length, source: CONFIG.fallback_strategies?.[terminalModel] ? 'fallback_strategies' : 'fallback_chains', local_terminal_guard: appendedTerminalIdx !== -1 });
+          return tryFallbackChain(candidates, failureClass, 0, appendedTerminalIdx);
         }
       } else if (upRes.statusCode < 400) {
         noteBackendSuccess(backend, terminalModel, nowMs() - startedAt);
@@ -2240,9 +2267,10 @@ function handleRequestWithFallback(req, res, body, resolved) {
     recordFailureClass(failureClass);
     setCooldown(terminalModel, failureClass, 502, {});
     let candidates = (CONFIG.fallback_strategies?.[terminalModel]?.event?.[failureClass]) || [];
+    let appendedTerminalIdx = -1;
     if (candidates.length === 0 && _capKey) {
       const chain = CONFIG.fallback_chains?.[_hwTier]?.[_capKey] || [];
-      candidates = chain.map(c => c.model).filter(m => resolveLogicalAlias(resolveRouteModel(m)) !== terminalModel);
+      ({ candidates, appendedTerminalIdx } = buildFallbackCandidatesFromChain(chain, terminalModel, _capKey, _hwTier));
     }
     proxyLog('fallback.chain_start', {
       terminal_model: terminalModel,
@@ -2251,9 +2279,10 @@ function handleRequestWithFallback(req, res, body, resolved) {
       candidate_count: candidates.length,
       has_strategy: !!(CONFIG.fallback_strategies?.[terminalModel]),
       source: CONFIG.fallback_strategies?.[terminalModel] ? 'fallback_strategies' : 'fallback_chains',
+      local_terminal_guard: appendedTerminalIdx !== -1,
     });
     if (candidates.length > 0) {
-      return tryFallbackChain(candidates, failureClass, 0);
+      return tryFallbackChain(candidates, failureClass, 0, appendedTerminalIdx);
     }
     finalizeTrackedUsage({
       endpoint,
