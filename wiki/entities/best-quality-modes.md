@@ -6,7 +6,9 @@ tags: [proxy, llm-mode, fallback, config-schema, quality]
 confidence: high
 last_verified: 2026-04-21
 created: 2026-04-21
-related: [capability-profile-model-layers, fallback-event-system, declared-rewrites, moe-speed-capability-dual]
+last_updated: 2026-04-21
+sources: [408250c4]
+related: [capability-profile-model-layers, fallback-event-system, declared-rewrites, moe-speed-capability-dual, llm-mode-resolution]
 ---
 
 # Best-Quality Modes
@@ -60,6 +62,8 @@ Top-level key `fallback_chains` keyed by `(tier, capability)`:
 
 Capability-layer chains **win over** synthesized legacy `models[].equivalents` for matching `(tier, capability)` pairs (enforced in `model-map-layered.js:maybeSynthesizeV12Keys`).
 
+`fallback_chains` lives at the top level (not nested under `llm_profiles[tier][capability]`) for three architectural reasons: (1) matches the shape of the existing `fallback_strategies` key it supersedes, preserving reader intuition; (2) keeps `llm_profiles` entries purely declarative of *which model to pick*, with *what to do on failure* at a parallel level — separation of primary and fallback concerns; (3) the layered merge (`model-map-layered.js`) already composes top-level keys cleanly; nesting under profiles would force a second merge path for overrides.
+
 ## Quality-Tolerance Tiebreaker
 
 Active only when mode is `cloud-best-quality` or `local-best-quality` and at least one candidate has `quality_score`.
@@ -82,11 +86,14 @@ Hardcoded fallback constant: `DEFAULT_QUALITY_TOLERANCE_PCT = 5` in `tools/claud
 
 ## Local-Terminal Guard
 
-Applies to **all** modes in `resolveFallbackModel` (not just best-quality modes).
+Applies to **all** modes in both fallback paths:
 
-If the last candidate in the resolved chain routes to a non-local backend, `disconnect_model` from the capability's profile entry is appended as a terminal candidate. All `disconnect_model` values in the shipped config are verified to be `ollama_local` backends (no `:cloud` suffix, no `anthropic` kind).
+1. **Pre-flight path** (`resolveFallbackModel` in `tools/claude-proxy`) — fires when the primary model is known dead via cooldown or health state before the request is sent.
+2. **Active in-flight path** (`buildFallbackCandidatesFromChain` in `tools/claude-proxy`) — fires when the primary request fails during transmission (classified error or network failure). The guard is applied after filtering out the failed primary from the chain candidates.
 
-`x-c-thru-resolved-via` header gains `local_terminal_appended: true` when the appended terminal is the one returned.
+In both paths: if the last remaining candidate routes to a non-local backend, `disconnect_model` from the capability's profile entry is appended as a terminal candidate. All `disconnect_model` values in the shipped config are verified to be `ollama_local` backends (no `:cloud` suffix, no `anthropic` kind) — see §12 of `test/llm-mode-resolution-matrix.test.js`.
+
+`x-c-thru-resolved-via` header and `fallback.candidate_success` log both emit `local_terminal_appended: true` when the appended terminal serves the request.
 
 ## Seeded Capabilities (Spike Outcome)
 
@@ -105,7 +112,10 @@ Quality ordering derived from `wiki/entities/moe-speed-capability-dual.md`, `qwe
 | `qwen3.5:9b` | 55 | 95 | Small dense, coder last-resort |
 | `qwen3:1.7b` | 20 | 100 | Tiny, commit-message-generator |
 
-Chains seeded for: `judge`, `orchestrator`, `deep-coder`, `local-planner`, `coder`, `workhorse` at 48gb/64gb/128gb.
+Chains seeded for: `judge`, `orchestrator`, `deep-coder`, `local-planner`, `coder`, `workhorse`, `default` at 48gb/64gb/128gb.
+
+`default` chain (48gb): `glm-5.1:cloud` (q=72, s=80) → `gpt-oss:20b` (q=75, s=90) → `gemma4:e4b` (local terminal).
+`default` chain (64gb/128gb): `glm-5.1:cloud` (q=72, s=80) → `gpt-oss:20b` (q=75, s=90) → `gemma4:26b` (local terminal).
 
 ## Set Mode via Skill
 

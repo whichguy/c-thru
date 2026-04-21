@@ -264,8 +264,9 @@ console.log('\n13. quality-tolerance tiebreaker: within 5% band, higher speed_sc
 console.log('\n14. fallback_chains seeded for key capabilities');
 {
   const chains = shipped.fallback_chains || {};
+  // 'default' added as part of general-default fallback coverage
   for (const tier of ['48gb', '64gb', '128gb']) {
-    for (const cap of ['judge', 'orchestrator', 'deep-coder', 'local-planner', 'coder', 'workhorse']) {
+    for (const cap of ['default', 'judge', 'orchestrator', 'deep-coder', 'local-planner', 'coder', 'workhorse']) {
       assert(Array.isArray(chains[tier] && chains[tier][cap]),
         `fallback_chains[${tier}][${cap}] is an array`);
       const chain = chains[tier] && chains[tier][cap];
