@@ -205,3 +205,7 @@ no data is duplicated into `llm_profiles`.
 New Ollama tags used by agentic aliases: `devstral-small:2`, `qwen3.6:35b`,
 `qwen3.5:122b`, `qwen3.5:27b`, `qwen3.5:9b`, `qwen3.5:1.7b`.
 Run `ollama list` to confirm presence before first use.
+
+### Worker CONFIDENCE field (Wave-1)
+
+All worker agents (implementer, reviewer-fix, test-writer, scaffolder) return `CONFIDENCE: high|medium|low` in their STATUS block, derived from the §12.1 rubric embedded in each agent prompt. Absent CONFIDENCE is treated as `medium` (graceful degradation). The orchestrator logs calibration tuples to `$wave_dir/cascade/<item>.jsonl` joining worker confidence with `verify.json` test outcomes. See `docs/agent-architecture.md` for STATUS contract and calibration formula.
