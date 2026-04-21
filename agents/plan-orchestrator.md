@@ -189,6 +189,12 @@ For each response:
 
 **Step 5r — Self-recusal handling (checked before COMPLETE/PARTIAL/ERROR processing):**
 
+**uplift-decider special case (checked first):** `uplift-decider` returns `STATUS: COMPLETE` with a `VERDICT` field and no `## Work completed` / `## Findings` / `## Output INDEX` sections. Detect uplift-decider responses by checking for a `VERDICT` field in the STATUS block before any section parsing:
+- `VERDICT: accept` → local partial output is correct as written. Copy `PARTIAL_OUTPUT` (from escalation context) to `$wave_dir/outputs/<original-agent>-<item>.md`. Mark item `COMPLETE`. Do not dispatch further. No calibration tuple emitted for uplift-decider itself.
+- `VERDICT: uplift` → dispatch `implementer-cloud` with uplift escalation context (see step 9 below).
+- `VERDICT: restart` → dispatch `implementer-cloud` with clean original digest (see step 9 below).
+- If `VERDICT` is missing or unrecognized: mark item `failed`; write raw to `$wave_dir/failures/uplift-decider-<item>.raw`.
+
 If `STATUS: RECUSE`:
 1. Extract: `ATTEMPTED` (yes|no), `RECUSAL_REASON`, `RECOMMEND`, `PARTIAL_OUTPUT` (omitted when `ATTEMPTED=no`).
 2. Increment item's `escalation_depth` in wave.json.

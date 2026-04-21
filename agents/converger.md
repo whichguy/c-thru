@@ -34,6 +34,9 @@ Read all listed output files. Produce a single unified output that:
    {"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose>"}
    ```
    ```
+   `detail` is optional — omit when `text` is self-contained.
+
+   **Improvement required:** emit at least one `improvement` entry per task. What would make next wave's version of this work easier or higher-quality? If nothing, write `{"class":"improvement","text":"none — task was clean"}`.
 
 3. `## Output INDEX` section → `outputs/converger-<item>.INDEX.md`
 

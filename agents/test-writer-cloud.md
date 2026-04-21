@@ -36,6 +36,9 @@ NOT your job: rewriting implementation (implementer-cloud). If you find a bug wh
    {"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose>"}
    ```
    ```
+   `detail` is optional — omit when `text` is self-contained.
+
+   **Improvement required:** emit at least one `improvement` entry per task. What would make next wave's version of this work easier or higher-quality? If nothing, write `{"class":"improvement","text":"none — task was clean"}`.
 
 3. `## Output INDEX` section → `outputs/test-writer-cloud-<item>.INDEX.md`
 

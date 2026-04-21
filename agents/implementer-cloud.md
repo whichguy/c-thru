@@ -40,6 +40,9 @@ Follow existing patterns unless the digest requires otherwise. Pattern divergenc
    {"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose>"}
    ```
    ```
+   `detail` is optional. Use it when the full context exceeds 80 chars.
+
+   **Improvement required:** emit at least one `improvement` entry per task. What would make next wave's version of this work easier or higher-quality? If nothing, write `{"class":"improvement","text":"none — task was clean"}`.
 
 3. `## Output INDEX` section → `outputs/implementer-cloud-<item>.INDEX.md`
 

@@ -133,7 +133,7 @@ ${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/
 
 ## Worker STATUS contract
 
-All worker agents (implementer, reviewer-fix, test-writer, scaffolder, converger) return a structured STATUS block. Required fields:
+All worker agents (implementer, reviewer-fix, test-writer, scaffolder, converger, implementer-cloud, test-writer-cloud) return a structured STATUS block. Required fields:
 
 ```
 STATUS: COMPLETE|PARTIAL|ERROR
