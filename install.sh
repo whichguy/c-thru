@@ -31,7 +31,7 @@ fi
 chmod +x "$TOOLS_SRC/c-thru" "$TOOLS_SRC/claude-proxy" "$TOOLS_SRC/llm-capabilities-mcp.js" "$TOOLS_SRC/model-map-sync.js" "$TOOLS_SRC/model-map-validate.js" "$TOOLS_SRC/model-map-edit.js" "$TOOLS_SRC/model-map-layered.js" 2>/dev/null || true
 # llm-capabilities-shared.js is a library, not executable
 chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
-chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" "$TOOLS_SRC/c-thru-ollama-probe.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TOOLS_SRC/c-thru-statusline-overlay.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-apply-recommendations.js" "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
@@ -73,7 +73,7 @@ link_tool c-thru claude-router
 link_tool claude-proxy claude-proxy
 if command -v node >/dev/null 2>&1; then
     node_major=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))" 2>/dev/null || echo 0)
-    if [[ "$node_major" -lt 15 ]]; then
+    if [ "$node_major" -lt 15 ]; then
         echo -e "  ${YELLOW}⚠️  Node.js ${node_major} detected — claude-proxy requires ≥ 15 (AbortController). Upgrade recommended.${NC}"
     fi
     link_tool llm-capabilities-mcp.js llm-capabilities-mcp
@@ -95,6 +95,7 @@ link_tool c-thru-ollama-gc.sh c-thru-ollama-gc
 link_tool c-thru-contract-check.sh c-thru-contract-check
 link_tool c-thru-self-update.sh c-thru-self-update
 link_tool verify-lmstudio-ollama-compat.sh verify-lmstudio-ollama-compat
+link_tool c-thru-ollama-probe.sh c-thru-ollama-probe
 
 # --- Migrate legacy providers schema ---
 # Guard: jq -e '.providers' is a no-op if key is absent — idempotent by design.
@@ -241,7 +242,7 @@ SKILL_EOF
     echo -e "  ${GREEN}✅ installed skill: /c-thru-status${NC}"
 }
 
-# --- Hooks: SessionStart, PostCompact, UserPromptSubmit ---
+# --- Hooks: SessionStart, PostCompact, UserPromptSubmit, PostToolUse ---
 register_hooks() {
     if [ "$JQ_AVAILABLE" -eq 0 ]; then
         echo -e "  ${YELLOW}⚠️  jq not found — skipping hooks${NC}"
@@ -252,6 +253,7 @@ register_hooks() {
     local session_cmd="$TOOLS_DEST/c-thru-session-start"
     local health_cmd="$TOOLS_DEST/c-thru-proxy-health"
     local classify_cmd="$TOOLS_DEST/c-thru-classify"
+    local map_changed_cmd="$TOOLS_DEST/c-thru-map-changed"
 
     if [ ! -f "$settings" ]; then
         echo '{}' > "$settings"
@@ -393,6 +395,26 @@ register_hooks() {
             }]
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
         echo -e "  ${GREEN}✅ registered hook: UserPromptSubmit c-thru-classify${NC}"
+    fi
+
+    # --- PostToolUse map-changed (validates model-map.json on every file write) ---
+    local mc_exists
+    mc_exists=$(jq -r --arg cmd "$map_changed_cmd" \
+        '(.hooks.PostToolUse // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
+        "$settings" 2>/dev/null || echo 0)
+    if [ "${mc_exists:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  PostToolUse c-thru-map-changed${NC}"
+    else
+        tmp="${settings}.tmp.$$"
+        jq --arg cmd "$map_changed_cmd" '
+            if .hooks == null then .hooks = {} else . end |
+            if .hooks.PostToolUse == null then .hooks.PostToolUse = [] else . end |
+            .hooks.PostToolUse += [{
+                "matcher": "*",
+                "hooks": [{"type": "command", "command": $cmd, "timeout": 5}]
+            }]
+        ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+        echo -e "  ${GREEN}✅ registered hook: PostToolUse c-thru-map-changed${NC}"
     fi
 }
 
@@ -565,7 +587,7 @@ OVR_MAP="$CLAUDE_DIR/model-map.overrides.json"
 USER_MAP="$CLAUDE_DIR/model-map.json"
 SHIPPED_MAP="$REPO_DIR/config/model-map.json"
 
-if [[ ! -f "$OVR_MAP" ]]; then
+if [ ! -f "$OVR_MAP" ]; then
     echo '{}' > "$OVR_MAP"
     echo -e "  ${GREEN}✅ seeded model-map.overrides.json (empty — edit here to customize over shipped defaults)${NC}"
 fi
@@ -609,12 +631,8 @@ if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
     if [ -f "$local_validate" ] && [ -f "$USER_MAP" ]; then
         if node "$local_validate" "$USER_MAP" 2>/dev/null; then
             echo -e "  ${GREEN}✅ model-map.system.json updated (shipped defaults)${NC}"
-            if [ -f "$OVR_MAP" ]; then
-                override_keys="$(node -e 'try{const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(Object.keys(o).length);}catch{console.log(0);}' "$OVR_MAP" 2>/dev/null || echo 0)"
-                echo -e "  ${GRAY}✓  model-map.overrides.json (${override_keys} override keys)${NC}"
-            else
-                echo -e "  ${GRAY}ℹ  model-map.overrides.json absent — no user overrides${NC}"
-            fi
+            override_keys="$(node -e 'try{const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(Object.keys(o).length);}catch{console.log(0);}' "$OVR_MAP" 2>/dev/null || echo 0)"
+            echo -e "  ${GRAY}✓  model-map.overrides.json (${override_keys} override keys)${NC}"
             echo -e "  ${GRAY}✓  model-map.json (effective merged config, valid)${NC}"
         else
             echo -e "  ${YELLOW}⚠️  effective model-map.json failed validation — run: node ${local_validate} ${USER_MAP}${NC}"
@@ -645,16 +663,28 @@ echo "Ollama GC state:"
 
 echo ""
 echo "Ollama:"
-_tag_count=$(curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" 2>/dev/null \
-  | jq -r '.models | length' 2>/dev/null || true)
-if [[ -n "$_tag_count" ]]; then
-    echo -e "  ${GREEN}✓  Ollama running — ${_tag_count} model(s) available${NC}"
-else
-    echo -e "  ${YELLOW}⚠️  Ollama not detected at http://127.0.0.1:11434${NC}"
-    echo -e "  ${YELLOW}   Install: https://ollama.com  |  Then: ollama pull <model>${NC}"
-    echo -e "  ${YELLOW}   c-thru will use cloud-only (Anthropic/OpenRouter) until Ollama is running.${NC}"
+_probe_out=""
+if [ -x "$TOOLS_SRC/c-thru-ollama-probe.sh" ]; then
+    _probe_out=$("$TOOLS_SRC/c-thru-ollama-probe.sh")
 fi
-unset _tag_count
+case "$_probe_out" in
+    OK*)
+        _tag_count="${_probe_out#OK }"
+        echo -e "  ${GREEN}✓  Ollama running — ${_tag_count} model(s) available${NC}"
+        ;;
+    DOWN*)
+        _probe_host="${_probe_out#DOWN }"
+        echo -e "  ${YELLOW}⚠️  Ollama not detected at http://${_probe_host}${NC}"
+        echo -e "  ${YELLOW}   Install: https://ollama.com  |  Then: ollama pull <model>${NC}"
+        echo -e "  ${YELLOW}   c-thru will use cloud-only (Anthropic/OpenRouter) until Ollama is running.${NC}"
+        ;;
+    *)
+        _ollama_host="${OLLAMA_HOST:-127.0.0.1:11434}"
+        echo -e "  ${YELLOW}⚠️  Ollama probe unavailable; check manually: http://${_ollama_host}/api/tags${NC}"
+        unset _ollama_host
+        ;;
+esac
+unset _probe_out _tag_count _probe_host
 
 echo ""
 echo "MCP server:"
