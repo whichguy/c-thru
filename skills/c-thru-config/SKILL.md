@@ -4,7 +4,7 @@ description: |
   Unified c-thru configuration: diagnose the active setup, resolve what a
   capability alias maps to, switch connectivity modes, remap per-capability
   models, validate the config, or reload the running proxy.
-  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | validate | reload | restart [--force]
+  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | validate | reload | restart [--force]
 color: cyan
 ---
 
@@ -18,17 +18,19 @@ print the usage block:
 
 ```
 Usage:
-  /c-thru-config diag [--verbose]                                 full diagnostics view
-  /c-thru-config resolve <capability>                             what does X resolve to right now?
-  /c-thru-config mode [<mode>] [--reload]                              read or set connectivity mode
-  /c-thru-config remap <cap> <model> [--tier <tier>] [--reload]        rebind a capability → model
-  /c-thru-config route <model> <backend> [--reload]                    bind a model name → backend
+  /c-thru-config diag [--verbose]                                            full diagnostics view
+  /c-thru-config resolve <capability>                                        what does X resolve to right now?
+  /c-thru-config mode [<mode>] [--reload]                                    read or set connectivity mode
+  /c-thru-config remap <cap> <model> [--tier <tier>] [--reload]              rebind a capability → model
+  /c-thru-config set-cloud-best-model <cap> <model> [--tier <tier>] [--reload]  set cloud_best_model for a capability
+  /c-thru-config set-local-best-model <cap> <model> [--tier <tier>] [--reload]  set local_best_model for a capability
+  /c-thru-config route <model> <backend> [--reload]                          bind a model name → backend
   /c-thru-config backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload]  add/update a backend
-  /c-thru-config validate                                              schema check
-  /c-thru-config reload                                                SIGHUP the running proxy
-  /c-thru-config restart [--force]                                     full proxy restart
+  /c-thru-config validate                                                    schema check
+  /c-thru-config reload                                                      SIGHUP the running proxy
+  /c-thru-config restart [--force]                                           full proxy restart
 
-Modes: connected | semi-offload | cloud-judge-only | offline
+Modes: connected | semi-offload | cloud-judge-only | offline | cloud-best-quality | local-best-quality
 ```
 
 ---
@@ -124,7 +126,7 @@ const mapPath = CLAUDE_DIR + '/model-map.json';
 const ovrPath = CLAUDE_DIR + '/model-map.overrides.json';
 let config = {}; try { config = JSON.parse(fs.readFileSync(mapPath,'utf8')); } catch {}
 let overrides = {}; try { overrides = JSON.parse(fs.readFileSync(ovrPath,'utf8')); } catch {}
-const LLM_MODE_ENUM = new Set(['connected','semi-offload','cloud-judge-only','offline']);
+const LLM_MODE_ENUM = new Set(['connected','semi-offload','cloud-judge-only','offline','cloud-best-quality','local-best-quality']);
 const envMode = process.env.CLAUDE_LLM_MODE;
 if (envMode && LLM_MODE_ENUM.has(envMode)) {
   console.log('mode: ' + envMode + '  (source: CLAUDE_LLM_MODE env — transient, not persisted)');
@@ -138,7 +140,7 @@ if (envMode && LLM_MODE_ENUM.has(envMode)) {
 "
 ```
 
-### Write — validate `<mode>` is one of the four valid values, then:
+### Write — validate `<mode>` is one of the six valid values, then:
 
 ```bash
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
@@ -251,6 +253,72 @@ If `--reload` is present, also reload the running proxy immediately after a succ
 ```bash
 ~/.claude/tools/c-thru reload || echo "proxy not running — config saved, will apply on next spawn"
 ```
+
+---
+
+## Subcommand: `set-cloud-best-model`
+
+**Usage:** `/c-thru-config set-cloud-best-model <capability> <model> [--tier <tier>] [--reload]`
+
+Sets `cloud_best_model` on an existing profile entry. Used by `cloud-best-quality` mode when no explicit `modes[cloud-best-quality]` override is present.
+
+Extract `<CAPABILITY>`, `<MODEL>`, and optionally `--tier <TIER>` and `--reload` from `$ARGUMENTS`.
+
+Steps mirror `remap`: detect tier, read existing entry, merge in `cloud_best_model: <MODEL>`, pass to `model-map-edit`.
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+SPEC=$(node -e "
+'use strict';
+const fs = require('fs'), os = require('os'), path = require('path');
+const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
+const config = JSON.parse(fs.readFileSync(CLAUDE_DIR + '/model-map.json', 'utf8'));
+const tier = process.argv[1], cap = process.argv[2], model = process.argv[3];
+const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
+const entry = Object.assign({}, existing, { cloud_best_model: model });
+process.stdout.write(JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } }));
+" -- "<TIER>" "<CAPABILITY>" "<MODEL>")
+node "$CLAUDE_DIR/tools/model-map-edit" \
+  "$CLAUDE_DIR/model-map.system.json" \
+  "$CLAUDE_DIR/model-map.overrides.json" \
+  "$CLAUDE_DIR/model-map.json" \
+  "$SPEC"
+```
+
+On success, print `set cloud_best_model for <CAPABILITY> → <MODEL>  (tier: <TIER>)`.
+If `--reload` is present, also run `~/.claude/tools/c-thru reload`.
+
+---
+
+## Subcommand: `set-local-best-model`
+
+**Usage:** `/c-thru-config set-local-best-model <capability> <model> [--tier <tier>] [--reload]`
+
+Sets `local_best_model` on an existing profile entry. Used by `local-best-quality` mode when no explicit `modes[local-best-quality]` override is present.
+
+Same pattern as `set-cloud-best-model`, replacing the merged key:
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+SPEC=$(node -e "
+'use strict';
+const fs = require('fs'), os = require('os'), path = require('path');
+const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
+const config = JSON.parse(fs.readFileSync(CLAUDE_DIR + '/model-map.json', 'utf8'));
+const tier = process.argv[1], cap = process.argv[2], model = process.argv[3];
+const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
+const entry = Object.assign({}, existing, { local_best_model: model });
+process.stdout.write(JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } }));
+" -- "<TIER>" "<CAPABILITY>" "<MODEL>")
+node "$CLAUDE_DIR/tools/model-map-edit" \
+  "$CLAUDE_DIR/model-map.system.json" \
+  "$CLAUDE_DIR/model-map.overrides.json" \
+  "$CLAUDE_DIR/model-map.json" \
+  "$SPEC"
+```
+
+On success, print `set local_best_model for <CAPABILITY> → <MODEL>  (tier: <TIER>)`.
+If `--reload` is present, also run `~/.claude/tools/c-thru reload`.
 
 ---
 
@@ -413,7 +481,7 @@ const ovrPath = CLAUDE_DIR + '/model-map.overrides.json';
 let config = {}; try { config = JSON.parse(fs.readFileSync(mapPath,'utf8')); } catch {}
 let overrides = {}; try { overrides = JSON.parse(fs.readFileSync(ovrPath,'utf8')); } catch {}
 
-const { resolveActiveTier, resolveProfileModel, LLM_MODE_ENUM } = require(path.join(CLAUDE_DIR, 'tools', 'model-map-resolve.js'));
+const { resolveActiveTier, resolveLlmMode, resolveProfileModel, LLM_MODE_ENUM } = require(path.join(CLAUDE_DIR, 'tools', 'model-map-resolve.js'));
 const envMode = process.env.CLAUDE_LLM_MODE;
 let mode, modeSource;
 if (envMode && LLM_MODE_ENUM.has(envMode)) {

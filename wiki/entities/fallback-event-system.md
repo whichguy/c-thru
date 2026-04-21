@@ -19,4 +19,11 @@ The c-thru proxy records fallback chain events in two parallel channels: an in-m
 - **From Session b50c3df0:** `fallback_strategies` in `config/model-map.json` uses an `event` key (not `events` or `strategy`) to define each fallback chain. A commit (90c3df0) aligned config, validator, and router on this key after discovering they had drifted. The chain wires `glm→gemma4:26b-a4b` as the primary fallback path.
 - **From Session b50c3df0:** Correlation bug: `terminal_model` (the intended/primary model) was originally only logged in `chain_start`, but the Stop hook reads `candidate_success` lines. If `chain_start` was too old or missing, correlation broke. Fix: proxy now logs `terminal_model` directly into the `candidate_success` event so consumers read both fields from a single line (PR #7).
 
-→ See also: [[c-thru-statusline]], [[ollama-http-api-migration]], [[logical-role-exclusivity]], [[capability-profile-model-layers]]
+**Extended (2026-04-21, feat/best-quality-modes):**
+
+- **`fallback_chains` as capability-layer successor:** Top-level `fallback_chains[tier][capability]` (array of `{model, quality_score?, speed_score?}`) is the new capability-layer fallback source. In `resolveFallbackModel`, `fallback_chains[hw][capKey]` is checked first; if absent, the legacy `fallback_strategies[model].event[failureClass]` path is used. Coexistence is opt-in per capability — capabilities without a `fallback_chains` entry keep the synthesized legacy behavior untouched.
+- **`local_terminal_appended` in `fallback.candidate_success`:** The ring-buffer event and proxy log now include `local_terminal_appended: true|false`. `true` when `resolveFallbackModel` appended the profile entry's `disconnect_model` as a terminal candidate because the chain's last entry was non-local.
+- **Local-terminal guard:** If the last candidate in the resolved chain routes to a non-local backend, `resolveFallbackModel` appends `disconnect_model` from the capability's profile entry. This applies to all modes (not just best-quality modes) and runs in the pre-flight cooldown/health path.
+- **Quality-tolerance tiebreaker:** Active only in `cloud-best-quality` / `local-best-quality` modes. Within the `quality_tolerance_pct` (default 5%) band of the top candidate, the proxy prefers higher `speed_score`. Outside the band, strict quality rank applies.
+
+→ See also: [[c-thru-statusline]], [[ollama-http-api-migration]], [[logical-role-exclusivity]], [[capability-profile-model-layers]], [[best-quality-modes]], [[uplift-cascade-pattern]]

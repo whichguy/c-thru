@@ -54,7 +54,13 @@ function buildFixtureConfig(stubPort) {
   for (const tier of TIERS) {
     llm_profiles[tier] = {};
     for (const cap of CAPABILITIES) {
-      llm_profiles[tier][cap] = profileEntry(cap, tier, stubSuffix);
+      const entry = profileEntry(cap, tier, stubSuffix);
+      // Add best-quality convenience fields on the 64gb tier for new-mode tests
+      if (tier === '64gb') {
+        entry.cloud_best_model = `${cap}-${tier}-cloud-best@${stubSuffix}`;
+        entry.local_best_model = `${cap}-${tier}-local-best@${stubSuffix}`;
+      }
+      llm_profiles[tier][cap] = entry;
     }
   }
   return {
@@ -138,6 +144,63 @@ async function runMatrix(stub, configPath) {
         req && req.serving_url.startsWith('http://127.0.0.1:'),
         `agent chain request reached stub at ${req && req.serving_url}`
       );
+    }
+  );
+
+  // ── 4. cloud-best-quality: uses cloud_best_model ─────────────────────
+  console.log('\n4. cloud-best-quality uses cloud_best_model field');
+  await withProxy(
+    { configPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'cloud-best-quality' } },
+    async ({ port }) => {
+      for (const cap of CAPABILITIES) {
+        const body = Object.assign({ model: cap }, MSG_BODY);
+        await httpJson(port, 'POST', '/v1/messages', body);
+        const req = stub.lastRequest();
+        const expected = `${cap}-64gb-cloud-best`;
+        assert(
+          req && req.model_used === expected,
+          `cloud-best-quality cap=${cap} → model_used=${expected} (got ${req && req.model_used})`
+        );
+      }
+    }
+  );
+
+  // ── 5. local-best-quality: uses local_best_model ─────────────────────
+  console.log('\n5. local-best-quality uses local_best_model field');
+  await withProxy(
+    { configPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'local-best-quality' } },
+    async ({ port }) => {
+      for (const cap of CAPABILITIES) {
+        const body = Object.assign({ model: cap }, MSG_BODY);
+        await httpJson(port, 'POST', '/v1/messages', body);
+        const req = stub.lastRequest();
+        const expected = `${cap}-64gb-local-best`;
+        assert(
+          req && req.model_used === expected,
+          `local-best-quality cap=${cap} → model_used=${expected} (got ${req && req.model_used})`
+        );
+      }
+    }
+  );
+
+  // ── 6. x-c-thru-resolved-via header includes mode and local_terminal_appended ─
+  console.log('\n6. x-c-thru-resolved-via header includes mode + local_terminal_appended');
+  await withProxy(
+    { configPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'cloud-best-quality' } },
+    async ({ port }) => {
+      const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
+      const resp = await httpJson(port, 'POST', '/v1/messages', body);
+      const headerStr = resp.headers && resp.headers['x-c-thru-resolved-via'];
+      if (headerStr) {
+        let parsed;
+        try { parsed = JSON.parse(headerStr); } catch {}
+        assert(parsed && parsed.mode === 'cloud-best-quality',
+          `x-c-thru-resolved-via.mode is 'cloud-best-quality' (got ${parsed && parsed.mode})`);
+        assert(parsed && 'local_terminal_appended' in parsed,
+          `x-c-thru-resolved-via includes local_terminal_appended key`);
+      } else {
+        assert(false, 'x-c-thru-resolved-via header present on capability request');
+      }
     }
   );
 }
