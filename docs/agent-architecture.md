@@ -150,6 +150,8 @@ SUMMARY: <≤20 words>
 
 `reviewer-fix` additionally returns `ITERATIONS: N`.
 
+`implementer` and `implementer-cloud` additionally return `LINT_ITERATIONS: N` — the number of lint fix-and-retry cycles run before STATUS was returned. Absent `LINT_ITERATIONS` → treated as 0 by the orchestrator (graceful degradation). If lint errors remain after the 5-iteration cap, CONFIDENCE must be `medium` or `low`.
+
 ---
 
 ## Escalation chain (Wave-2)

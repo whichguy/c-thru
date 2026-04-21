@@ -100,6 +100,21 @@ Before returning STATUS, apply this rubric:
 
 `UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If no bullet triggered, you're `high`. Omit UNCERTAINTY_REASONS when high.
 
+## Post-work verification
+
+After completing all code edits, run available linters against each modified file before returning STATUS. Cap: 5 fix-and-retry iterations.
+
+- `.sh` / `.bash`: `bash -n <file>`; also `shellcheck <file>` if available
+- `.js` / `.mjs` / `.cjs`: `node --check <file>`
+- `.ts` / `.tsx`: `node --check <file>` (per-file tsc is unreliable without tsconfig — use node --check as fallback)
+- `.py`: `python3 -m py_compile <file>` if `python3` available
+- `.json`: `python3 -m json.tool <file> > /dev/null` if `python3` available; skip `.jsonc` files (comments cause false-positives)
+- Other types: no linter to run — skip
+
+Fix any errors found and re-run until clean or the cap is reached. A missing linter (`shellcheck` not installed, wrong file type, wrong language) is not a failure — skip it. Remaining unfixed errors after the cap → emit one `plan-material` finding per file. If lint errors remain at cap, CONFIDENCE cannot be `high` — downgrade to `medium` and add `"lint errors remained after cap"` to UNCERTAINTY_REASONS.
+
+Report `LINT_ITERATIONS: 0` when all files were clean on the first pass (or no applicable linters ran).
+
 **Return:**
 ```
 STATUS: COMPLETE|PARTIAL|ERROR
@@ -109,5 +124,6 @@ WROTE: <output.md path>
 INDEX: <INDEX.md path>
 FINDINGS: <findings.jsonl path>
 FINDING_CATS: {crisis:N,plan-material:N,contextual:N,trivial:N,augmentation:N,improvement:N}
+LINT_ITERATIONS: N
 SUMMARY: <≤20 words>
 ```
