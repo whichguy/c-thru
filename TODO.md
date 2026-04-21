@@ -5,9 +5,10 @@ Items identified from install.sh audit (2026-04-20). Ordered by impact.
 ## install.sh gaps / automation
 
 **[install] PostToolUse hook matcher could be self-documenting**
-`c-thru-map-changed.sh` has `# ARCH: FileChanged/PostToolUse hook` in its header. Rather
-than hardcoding `matcher: "Edit|Write|MultiEdit"` in `register_hooks`, consider parsing the
-`# ARCH:` annotation from the hook script so the two never drift.
+`c-thru-map-changed.sh` has `# ARCH: FileChanged/PostToolUse hook` in its header. The hook
+currently uses `matcher: "*"` (fires on all tools, script exits silently for non-model-map
+files). Consider parsing the `# ARCH:` annotation to derive the event name automatically,
+so adding a new hook script doesn't require a matching install.sh edit.
 
 **[install] Stale absolute-path hook detection**
 `register_hooks` checks for existence of a hook but not whether it points to the current
