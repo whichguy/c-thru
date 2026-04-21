@@ -454,6 +454,21 @@ See [`docs/model-map.md`](docs/model-map.md) for full schema.
 
 Proxy logs: `~/.claude/proxy.*.log`. Kill a stuck proxy: `pkill -f claude-proxy`.
 
+### Skill surface
+
+| Skill | Purpose |
+|---|---|
+| `/c-thru-status` | Read-only snapshot: routes, models, backend health |
+| `/c-thru-config diag` | Full diagnostics: mode, tier, capability→model table, proxy status |
+| `/c-thru-config resolve <cap>` | What does a capability or agent name resolve to right now? |
+| `/c-thru-config mode [<mode>]` | Read or persistently set connectivity mode |
+| `/c-thru-config remap <cap> <model>` | Rebind a per-capability model in `llm_profiles` |
+| `/c-thru-config validate` | Schema-check the effective model-map |
+| `/c-thru-config reload` | SIGHUP the running proxy to apply config changes |
+| `/c-thru-plan <intent>` | Wave-based agentic planning orchestrator |
+
+**Note on `/model-map`:** The external `/model-map edit` subcommand has a known argument mismatch and is non-functional. Use `/c-thru-config remap` instead. The `/model-map show` and `/model-map reload` subcommands continue to work if you have that skill installed.
+
 ---
 
 ## Further reading
