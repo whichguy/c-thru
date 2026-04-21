@@ -35,7 +35,11 @@
 | [runtime-control](entities/runtime-control.md) | First-class CLI verbs (c-thru reload/restart) for proxy lifecycle, bulk Ollama pre-pull, map-model deprecation, --reload unification | 2026-04-21 |
 | [planner-signals-design](entities/planner-signals-design.md) | Trigger-based planning decomposition (when, not who/what) vs BMAD persona-relay vs SDD artifact-pipeline; constitution file rejected | 2026-04-21 |
 | [uplift-cascade-pattern](entities/uplift-cascade-pattern.md) | Three-tier local→verify→decider cascade (accept|uplift|restart) with anchoring prevention; generalized across implementer/reviewer/test-writer/planner | 2026-04-21 |
+| [agent-prompt-construction](entities/agent-prompt-construction.md) | 10 foundational principles for c-thru agent prompts — tiered token budgets, forcing functions, failure-mode modeling, scope elimination, calibration | 2026-04-21 |
 | [best-quality-modes](entities/best-quality-modes.md) | cloud-best-quality and local-best-quality llm_mode values — cloud_best_model/local_best_model fields, fallback_chains schema, 5% tolerance tiebreaker, quality scores per tier | 2026-04-21 |
+| [llm-mode-resolution](entities/llm-mode-resolution.md) | 6-value llm_mode enum, resolveProfileModel() semantics, cloud/local best-quality fallthrough, mirror-drift guard test | 2026-04-21 |
+| [cascade-scope-contraction](entities/cascade-scope-contraction.md) | Decision to scope uplift-cascade Wave 1 to CONFIDENCE field + logging hook with kill-switch gate | 2026-04-21 |
+| [planner-default-integration](entities/planner-default-integration.md) | Planner default integration for c-thru-plan hooks | 2026-04-21 |
 
 ## About
 
