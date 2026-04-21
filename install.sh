@@ -323,16 +323,7 @@ install_planner_hint_hook() {
         echo '{}' > "$settings"
     fi
 
-    local already
-    already=$(jq -r --arg cmd "$hook_cmd" \
-        '(.hooks.PreToolUse // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
-        "$settings" 2>/dev/null || echo 0)
-    if [ "${already:-0}" -gt 0 ]; then
-        echo -e "  ${GRAY}✓  PreToolUse EnterPlanMode hook${NC}"
-        return 0
-    fi
-
-    # Respect existing opt-out.
+    # Opt-out check first — takes precedence even if hook is already registered.
     local ovr="$CLAUDE_DIR/model-map.overrides.json"
     if [ -f "$ovr" ]; then
         local hint_val
@@ -341,6 +332,15 @@ install_planner_hint_hook() {
             echo -e "  ${GRAY}✓  planner hint opted out — skipping hook (re-enable: /c-thru-config planning on)${NC}"
             return 0
         fi
+    fi
+
+    local already
+    already=$(jq -r --arg cmd "$hook_cmd" \
+        '(.hooks.PreToolUse // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
+        "$settings" 2>/dev/null || echo 0)
+    if [ "${already:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  PreToolUse EnterPlanMode hook${NC}"
+        return 0
     fi
 
     local tmp="${settings}.tmp.$$"
