@@ -2304,7 +2304,6 @@ fi
 # would be blocked (e.g., stale config causing validate_model_map_config to error).
 
 cmd_reload() {
-  local proxy_port="${CLAUDE_PROXY_PORT:-9997}"
   local pid_file="$CLAUDE_PROFILE_DIR/proxy.pid"
 
   if [[ ! -f "$pid_file" ]]; then
@@ -2329,6 +2328,15 @@ cmd_reload() {
     echo "c-thru reload: failed to send SIGHUP to pid $proxy_pid" >&2
     return 1
   fi
+
+  # Derive the actual listening port from lsof (proxy port is dynamic when CLAUDE_PROXY_PORT
+  # is unset — the router learns it from the READY <port> handshake, not a fixed default).
+  # Fall back to CLAUDE_PROXY_PORT or 9997 only when lsof is unavailable.
+  local proxy_port=""
+  if command -v lsof >/dev/null 2>&1; then
+    proxy_port="$(lsof -iTCP -sTCP:LISTEN -n -P -p "$proxy_pid" 2>/dev/null | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1 || true)"
+  fi
+  [[ -z "$proxy_port" ]] && proxy_port="${CLAUDE_PROXY_PORT:-9997}"
 
   # Poll /ping for up to 2s to confirm proxy is still alive after config reload.
   local i
@@ -2357,32 +2365,41 @@ cmd_restart() {
   local force=0
   [[ "${2:-}" == "--force" ]] && force=1
 
-  local proxy_port="${CLAUDE_PROXY_PORT:-9997}"
   local pid_file="$CLAUDE_PROFILE_DIR/proxy.pid"
   local proxy_pid=""
+  local old_port=""
 
   if [[ -f "$pid_file" ]]; then
     proxy_pid="$(cat "$pid_file" 2>/dev/null)"
   fi
+
+  # Derive the actual listening port from lsof before signaling; the proxy port is
+  # dynamic when CLAUDE_PROXY_PORT is unset — 9997 is not a safe default.
+  if [[ -n "$proxy_pid" ]] && kill -0 "$proxy_pid" 2>/dev/null && command -v lsof >/dev/null 2>&1; then
+    old_port="$(lsof -iTCP -sTCP:LISTEN -n -P -p "$proxy_pid" 2>/dev/null | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1 || true)"
+  fi
+  [[ -z "$old_port" ]] && old_port="${CLAUDE_PROXY_PORT:-9997}"
+
+  # If PID file didn't resolve a running process, fall back to lsof on the guessed port.
   if [[ -z "$proxy_pid" ]] || ! kill -0 "$proxy_pid" 2>/dev/null; then
-    proxy_pid="$(proxy_listener_pid "$proxy_port" || true)"
+    proxy_pid="$(proxy_listener_pid "$old_port" || true)"
   fi
 
   if [[ -n "$proxy_pid" ]] && kill -0 "$proxy_pid" 2>/dev/null; then
-    echo "c-thru restart: stopping proxy (pid $proxy_pid)..." >&2
+    echo "c-thru restart: stopping proxy (pid $proxy_pid, port $old_port)..." >&2
     kill -TERM "$proxy_pid" 2>/dev/null || true
-    if ! wait_proxy_listener_gone "$proxy_port" 50; then
+    if ! wait_proxy_listener_gone "$old_port" 50; then
       if [[ "$force" -eq 1 ]]; then
         echo "c-thru restart: proxy did not stop after SIGTERM — sending SIGKILL" >&2
         kill -KILL "$proxy_pid" 2>/dev/null || true
-        wait_proxy_listener_gone "$proxy_port" 30 || true
+        wait_proxy_listener_gone "$old_port" 30 || true
       else
         echo "c-thru restart: proxy did not stop within 5s — use 'c-thru restart --force'" >&2
         return 1
       fi
     fi
   else
-    echo "c-thru restart: no running proxy found on :$proxy_port — spawning fresh..." >&2
+    echo "c-thru restart: no running proxy found — spawning fresh..." >&2
   fi
 
   local proxy_js="$CLAUDE_PROFILE_DIR/tools/claude-proxy"
@@ -2391,26 +2408,53 @@ cmd_restart() {
     return 1
   fi
 
-  local startup_tag temp_log
+  local startup_tag temp_log ready_pipe ready_line
   startup_tag="${$}.$RANDOM"
   temp_log="$(mktemp "${TMPDIR:-/tmp}/claude-proxy-restart-${startup_tag}.log" 2>/dev/null || true)"
   [[ -n "$temp_log" ]] || temp_log="/dev/null"
+  ready_pipe="$CLAUDE_PROFILE_DIR/proxy.restart.${startup_tag}.pipe"
+  rm -f "$ready_pipe"
 
-  # Spawn without --port: CLAUDE_PROXY_PORT is already exported (default 9997),
-  # so the proxy inherits it and binds to the same port. --port would suppress
-  # the READY line and complicate readiness detection.
-  "$proxy_js" >/dev/null 2>"$temp_log" &
-  local new_pid="$!"
-  disown "$new_pid" 2>/dev/null || true
-
-  if wait_proxy_ping_ready "$proxy_port" 50; then
-    local ping_json new_tier=""
-    ping_json="$(proxy_ping_json "$proxy_port")"
-    if command -v jq >/dev/null 2>&1; then
-      new_tier="$(jq -r '.active_tier // empty' 2>/dev/null <<< "$ping_json" || true)"
+  if [[ -n "${CLAUDE_PROXY_PORT:-}" ]]; then
+    # Explicit port: proxy writes no READY line; poll directly.
+    "$proxy_js" >/dev/null 2>"$temp_log" &
+    local new_pid="$!"
+    disown "$new_pid" 2>/dev/null || true
+    local new_port="$CLAUDE_PROXY_PORT"
+    if wait_proxy_ping_ready "$new_port" 50; then
+      local ping_json new_tier=""
+      ping_json="$(proxy_ping_json "$new_port")"
+      if command -v jq >/dev/null 2>&1; then
+        new_tier="$(jq -r '.active_tier // empty' 2>/dev/null <<< "$ping_json" || true)"
+      fi
+      echo "c-thru restart: proxy started (pid $new_pid, port $new_port${new_tier:+, tier: $new_tier})"
+      return 0
     fi
-    echo "c-thru restart: proxy started (pid $new_pid, port $proxy_port${new_tier:+, tier: $new_tier})"
-    return 0
+  else
+    # Dynamic port: capture READY <port> line from stdout via a fifo.
+    if ! mkfifo "$ready_pipe" 2>/dev/null; then
+      # fifo unavailable — spawn without readiness detection (best-effort fallback)
+      "$proxy_js" >/dev/null 2>"$temp_log" &
+      disown $! 2>/dev/null || true
+      echo "c-thru restart: spawned proxy (readiness unknown — mkfifo unavailable)" >&2
+      return 0
+    fi
+    "$proxy_js" >"$ready_pipe" 2>"$temp_log" &
+    local new_pid="$!"
+    disown "$new_pid" 2>/dev/null || true
+    local ready_timeout="${CLAUDE_PROXY_READY_TIMEOUT_SECONDS:-5}"
+    if IFS= read -r -t "$ready_timeout" ready_line <"$ready_pipe" && [[ "$ready_line" =~ ^READY\ ([0-9]+)$ ]]; then
+      rm -f "$ready_pipe"
+      local new_port="${BASH_REMATCH[1]}"
+      local ping_json new_tier=""
+      ping_json="$(proxy_ping_json "$new_port" || true)"
+      if command -v jq >/dev/null 2>&1 && [[ -n "$ping_json" ]]; then
+        new_tier="$(jq -r '.active_tier // empty' 2>/dev/null <<< "$ping_json" || true)"
+      fi
+      echo "c-thru restart: proxy started (pid $new_pid, port $new_port${new_tier:+, tier: $new_tier})"
+      return 0
+    fi
+    rm -f "$ready_pipe"
   fi
 
   echo "c-thru restart: proxy did not become ready within 5s" >&2

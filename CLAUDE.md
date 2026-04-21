@@ -146,8 +146,8 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 
 | Command | Effect |
 |---|---|
-| `c-thru reload` | Sends SIGHUP to the running proxy, waits up to 2s for `/ping` to confirm it's alive, prints new tier. Exits non-zero if proxy is not running or crashes. |
-| `c-thru restart` | SIGTERM + waits for listener to vanish, then re-spawns on `$CLAUDE_PROXY_PORT` (default 9997). `--force` escalates to SIGKILL after timeout. |
+| `c-thru reload` | Sends SIGHUP to the running proxy, derives the actual listening port from `lsof`, waits up to 2s for `/ping` to confirm it's alive, prints new tier. Exits non-zero if proxy is not running or crashes. |
+| `c-thru restart` | SIGTERM + waits for listener to vanish, then re-spawns (port inherited from `CLAUDE_PROXY_PORT` env or auto-assigned). `--force` escalates to SIGKILL after timeout. |
 | `/c-thru-config reload` | Skill equivalent of `c-thru reload` — usable from a Claude session. |
 | `/c-thru-status fix` | Apply recommended mappings, reload proxy, show current status. |
 

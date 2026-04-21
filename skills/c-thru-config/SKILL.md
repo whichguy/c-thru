@@ -153,21 +153,10 @@ Substitute `<MODE>` with the actual mode argument. On success, print:
 - If `--reload` is absent: `mode set to <MODE> — run '/c-thru-config reload' to apply to running proxy`
 - If `--reload` is present: `mode set to <MODE>`
 
-If `--reload` is present in `$ARGUMENTS`, also send SIGHUP immediately after a successful edit:
+If `--reload` is present in `$ARGUMENTS`, also reload the running proxy immediately after a successful edit:
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-PID_FILE="$CLAUDE_DIR/proxy.pid"
-if [ -f "$PID_FILE" ]; then
-  PID=$(cat "$PID_FILE" 2>/dev/null)
-  if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-    kill -HUP "$PID" && echo "proxy reloaded (pid $PID)"
-  else
-    echo "proxy not running — config saved but not reloaded"
-  fi
-else
-  echo "proxy not running — config saved but not reloaded"
-fi
+~/.claude/tools/c-thru reload || echo "proxy not running — config saved, will apply on next spawn"
 ```
 
 If `model-map-edit` is not found at that path, print:
@@ -257,7 +246,11 @@ On success, print:
   remapped <CAPABILITY> → <MODEL>  (tier: <TIER>)
   ```
 
-If `--reload` is present, also send SIGHUP immediately after a successful edit (same inline bash as the `mode --reload` block above).
+If `--reload` is present, also reload the running proxy immediately after a successful edit:
+
+```bash
+~/.claude/tools/c-thru reload || echo "proxy not running — config saved, will apply on next spawn"
+```
 
 ---
 
@@ -282,7 +275,10 @@ node "$CLAUDE_DIR/tools/model-map-edit" \
 
 On success:
 - If `--reload` is absent: print `bound <MODEL> → backend '<BACKEND>'` and `run '/c-thru-config reload' to apply to running proxy`
-- If `--reload` is present: print `bound <MODEL> → backend '<BACKEND>'` then run `c-thru reload` (same inline bash as `mode --reload` block above).
+- If `--reload` is present: print `bound <MODEL> → backend '<BACKEND>'` then run:
+  ```bash
+  ~/.claude/tools/c-thru reload || echo "proxy not running — config saved, will apply on next spawn"
+  ```
 
 To remove a binding, delete the key directly from `~/.claude/model-map.overrides.json`
 (setting it to an empty string will be rejected by model-map-edit — use `null` in a raw
@@ -328,7 +324,10 @@ and `<AUTH_ENV_OR_EMPTY>` with the `--auth-env` value (or empty string to omit).
 
 On success:
 - If `--reload` is absent: print `backend '<NAME>' set  (url: <URL>, kind: <KIND>)` and `run '/c-thru-config reload' to apply to running proxy`
-- If `--reload` is present: print `backend '<NAME>' set  (url: <URL>, kind: <KIND>)` then run `c-thru reload` (same inline bash as `mode --reload` block above).
+- If `--reload` is present: print `backend '<NAME>' set  (url: <URL>, kind: <KIND>)` then run:
+  ```bash
+  ~/.claude/tools/c-thru reload || echo "proxy not running — config saved, will apply on next spawn"
+  ```
 
 ---
 
@@ -336,7 +335,7 @@ On success:
 
 **Usage:** `/c-thru-config restart [--force]`
 
-Performs a full proxy restart: SIGTERM + waits for listener to vanish + re-spawns on `$CLAUDE_PROXY_PORT`.
+Performs a full proxy restart: SIGTERM + waits for listener to vanish + re-spawns (port inherited from env or auto-assigned).
 
 ```bash
 ~/.claude/tools/c-thru restart ${FORCE_FLAG}
