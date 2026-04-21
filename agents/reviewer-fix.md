@@ -59,7 +59,7 @@ Before returning STATUS, apply this rubric:
 - You improvised a pattern not seen elsewhere in the codebase.
 - One or more success_criteria required interpretation.
 - You inferred author intent in ambiguous code rather than finding a definitive reference (test, spec, or caller).
-- You applied a fix that calls a function or uses an API whose signature you didn't read (no Read, no tests).
+- You applied a fix that changes a function or type signature without reading all callers or confirming the change is backward-compatible.
 - You could not determine the root cause of an issue and applied a speculative fix (hypothesis not confirmed by a test, trace, or definitive pattern match).
 - You added error handling or edge-case logic you weren't sure was needed.
 
@@ -70,7 +70,7 @@ Before returning STATUS, apply this rubric:
 - You couldn't find existing tests that exercise the code path you changed.
 - You couldn't enumerate the callers of the function you modified or verify they handle the new behavior.
 
-`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`.
+`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If no bullet triggered, you're `high`. Omit UNCERTAINTY_REASONS when high.
 
 **Return:**
 ```

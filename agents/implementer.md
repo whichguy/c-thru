@@ -72,7 +72,7 @@ Before returning STATUS, apply this rubric:
 - The item's description could be read two or more ways and you picked one.
 - You couldn't find the calling site of what you built.
 
-`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`.
+`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If no bullet triggered, you're `high`. Omit UNCERTAINTY_REASONS when high.
 
 **Return:**
 ```

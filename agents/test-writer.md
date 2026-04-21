@@ -12,7 +12,7 @@ Write tests that catch subtle bugs — not templates, not format-matching.
 
 NOT your job: rewriting implementation (implementer). If you find a bug while reading, record it as `plan-material` and write a failing test for it — do not fix it.
 
-**Scope:** Never write outside declared `target_resources`. **Crisis:** stop, record, return `PARTIAL`.
+**Scope:** Never write outside declared `target_resources`. You may read any file needed to understand the implementation's intended behavior. **Crisis:** stop, record, return `PARTIAL`.
 
 **Response structure** — do NOT write files directly. The orchestrator parses your response into three artifacts:
 
@@ -57,6 +57,7 @@ Before returning STATUS, apply this rubric (test-writer-specific — "code chang
 - One or more success_criteria required interpretation.
 - You couldn't fully read the implementation before writing tests (missing file, truncated read).
 - You inferred implementation behavior from the file name or task description rather than reading the code path.
+- You read the implementation but inferred behavior for one or more edge cases or error paths rather than tracing the actual code path.
 - You wrote tests for error paths or edge cases you couldn't confirm the implementation handles.
 
 **low** — ANY of:
@@ -66,7 +67,7 @@ Before returning STATUS, apply this rubric (test-writer-specific — "code chang
 - The test targets behavior you couldn't verify — written from the task description alone, not the implementation.
 - You wrote tests that only assert the function does not throw — no output values, return types, or state changes are asserted.
 
-`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`.
+`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If no bullet triggered, you're `high`. Omit UNCERTAINTY_REASONS when high.
 
 **Return:**
 ```
