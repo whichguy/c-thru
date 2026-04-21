@@ -19,7 +19,7 @@ if (!process.env.C_THRU_LIVE_AGENT_TESTS) {
 
 const REPO_ROOT  = path.resolve(__dirname, '..');
 const AGENTS_DIR = path.join(REPO_ROOT, 'agents');
-const MAX_TOKENS = 800;
+const MAX_TOKENS = 1200;
 const PER_AGENT_TIMEOUT_MS = 60_000;
 
 let passed  = 0;
@@ -150,7 +150,7 @@ const LIVE_ROSTER = [
     },
   },
   {
-    name: 'reviewer-fix',
+    name: 'wave-reviewer',
     userMessage: "Review this code: console.log('hello'). Return STATUS block.",
     extraChecks(r) {
       if (r.STATUS !== 'RECUSE' && r.ITERATIONS === undefined) return 'ITERATIONS absent on non-RECUSE response';
@@ -291,6 +291,10 @@ async function main() {
     }
     console.log(`HTTP ${res.status}`);
 
+    if (res.status === 401 || res.status === 403) {
+      skip(`${name}: HTTP ${res.status} — cloud backend auth not configured in this environment`);
+      continue;
+    }
     if (res.status !== 200) {
       fail(`${name}: proxy returned HTTP ${res.status}`, res.bodyText.slice(0, 300));
       continue;
