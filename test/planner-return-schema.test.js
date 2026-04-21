@@ -606,6 +606,64 @@ SUMMARY: accept local output`;
 }
 
 // ---------------------------------------------------------------------------
+// Section 7 — LINT_ITERATIONS field (implementer self-directed lint loop)
+// ---------------------------------------------------------------------------
+
+console.log('\n7. LINT_ITERATIONS fixtures');
+
+// 1. LINT_ITERATIONS: 0 — clean first pass (or no applicable linters)
+{
+  const raw = `STATUS: COMPLETE\nCONFIDENCE: high\nWROTE: waves/001/outputs/implementer-item-A.md\nINDEX: waves/001/outputs/implementer-item-A.INDEX.md\nFINDINGS: waves/001/findings/implementer-item-A.jsonl\nFINDING_CATS: {crisis:0,plan-material:0,contextual:0,trivial:0,augmentation:0,improvement:1}\nLINT_ITERATIONS: 0\nSUMMARY: implementation complete`;
+  const r = parseWorkerStatus(raw);
+  (r.LINT_ITERATIONS === '0' && r.CONFIDENCE === 'high')
+    ? ok('LINT_ITERATIONS: 0 — clean first pass parses correctly')
+    : fail('LINT_ITERATIONS: 0 — clean first pass parses correctly', JSON.stringify(r));
+}
+
+// 2. LINT_ITERATIONS: 3 — fixed after 3 rounds
+{
+  const raw = `STATUS: COMPLETE\nCONFIDENCE: high\nWROTE: waves/001/outputs/implementer-item-B.md\nINDEX: waves/001/outputs/implementer-item-B.INDEX.md\nFINDINGS: waves/001/findings/implementer-item-B.jsonl\nFINDING_CATS: {crisis:0,plan-material:0,contextual:0,trivial:0,augmentation:0,improvement:1}\nLINT_ITERATIONS: 3\nSUMMARY: implementation complete after 3 lint rounds`;
+  const r = parseWorkerStatus(raw);
+  (r.LINT_ITERATIONS === '3')
+    ? ok('LINT_ITERATIONS: 3 — fixed after 3 rounds parses correctly')
+    : fail('LINT_ITERATIONS: 3 — fixed after 3 rounds parses correctly', JSON.stringify(r));
+}
+
+// 3. Absent LINT_ITERATIONS → treated as 0 (backward-compat)
+{
+  const raw = `STATUS: COMPLETE\nCONFIDENCE: high\nWROTE: waves/001/outputs/implementer-item-C.md\nINDEX: waves/001/outputs/implementer-item-C.INDEX.md\nFINDINGS: waves/001/findings/implementer-item-C.jsonl\nFINDING_CATS: {crisis:0,plan-material:0,contextual:0,trivial:0,augmentation:0,improvement:1}\nSUMMARY: legacy response without lint field`;
+  const r = parseWorkerStatus(raw);
+  const lintIter = r.LINT_ITERATIONS !== undefined ? parseInt(r.LINT_ITERATIONS, 10) : 0;
+  (lintIter === 0 && r.LINT_ITERATIONS === undefined)
+    ? ok('absent LINT_ITERATIONS → treated as 0 (backward-compat)')
+    : fail('absent LINT_ITERATIONS → treated as 0', JSON.stringify(r));
+}
+
+// 4. CONFIDENCE=high with LINT_ITERATIONS present: valid (lint was clean)
+{
+  const raw = `STATUS: COMPLETE\nCONFIDENCE: high\nWROTE: waves/001/outputs/implementer-item-D.md\nINDEX: waves/001/outputs/implementer-item-D.INDEX.md\nFINDINGS: waves/001/findings/implementer-item-D.jsonl\nFINDING_CATS: {crisis:0,plan-material:0,contextual:0,trivial:0,augmentation:0,improvement:1}\nLINT_ITERATIONS: 2\nSUMMARY: lint clean after 2 rounds`;
+  const r = parseWorkerStatus(raw);
+  (r.CONFIDENCE === 'high' && r.LINT_ITERATIONS === '2')
+    ? ok('CONFIDENCE=high with LINT_ITERATIONS present: valid (lint was clean)')
+    : fail('CONFIDENCE=high with LINT_ITERATIONS present: valid', JSON.stringify(r));
+}
+
+// 5. LINT_ITERATIONS: 5 + plan-material finding "lint errors remained after cap" + CONFIDENCE: high → invalid
+//    (unfixed errors at cap force CONFIDENCE ≤ medium per agent directive)
+{
+  const raw = `STATUS: COMPLETE\nCONFIDENCE: high\nWROTE: waves/001/outputs/implementer-item-E.md\nINDEX: waves/001/outputs/implementer-item-E.INDEX.md\nFINDINGS: waves/001/findings/implementer-item-E.jsonl\nFINDING_CATS: {crisis:0,plan-material:1,contextual:0,trivial:0,augmentation:0,improvement:1}\nLINT_ITERATIONS: 5\nSUMMARY: cap hit, lint errors remain`;
+  const r = parseWorkerStatus(raw);
+  const findingCats = r.FINDING_CATS || '';
+  const hasCapHitFinding = /plan-material:[1-9]\d*/.test(findingCats);
+  const lintIter = parseInt(r.LINT_ITERATIONS, 10);
+  // Validation: cap hit (5) + plan-material finding + CONFIDENCE=high → invalid combination
+  const isInvalid = lintIter >= 5 && hasCapHitFinding && r.CONFIDENCE === 'high';
+  isInvalid
+    ? ok('LINT_ITERATIONS:5 + plan-material + CONFIDENCE:high → invalid (must be ≤medium at cap)')
+    : fail('LINT_ITERATIONS:5 + plan-material + CONFIDENCE:high → invalid', JSON.stringify(r));
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 
