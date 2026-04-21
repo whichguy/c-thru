@@ -133,7 +133,7 @@ ${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/
 
 ## Worker STATUS contract
 
-All worker agents (implementer, reviewer-fix, test-writer, scaffolder) return a structured STATUS block. Required fields:
+All worker agents (implementer, reviewer-fix, test-writer, scaffolder, converger) return a structured STATUS block. Required fields:
 
 ```
 STATUS: COMPLETE|PARTIAL|ERROR
@@ -177,11 +177,13 @@ judge            (planner, auditor, review-plan)
 | `implementer` | `uplift-decider` → `implementer-cloud` | uplift-decider reads partial work, routes accept\|uplift\|restart |
 | `reviewer-fix` | `implementer-cloud` | Skips deep-coder — recusal = redesign |
 | `test-writer` | `test-writer-cloud` | Same role, cloud tier |
+| `converger` | `implementer-cloud` | Unresolvable conflict between parallel outputs |
 | `planner-local` | `planner` | Natural outcome_risk path |
-| `implementer-cloud` | `judge` | Cloud judge as high-capability implementer |
+| `implementer-cloud` | `judge` (sentinel) | `RECOMMEND: judge` is a stop signal — orchestrator marks `blocked` + surfaces to user; does NOT dispatch a judge agent |
+| `test-writer-cloud` | `judge` (sentinel) | Same stop-signal semantics as implementer-cloud |
 | `judge` | surface to user | Last resort only |
 
-**Depth cap:** `max_escalations: 3` (default). Hit before judge tier → item marked `blocked` (not surfaced to user). Judge recuses → `blocked` + surface to user with full `escalation_log`.
+**Depth cap:** `max_escalations: 3` (default). Hit before judge tier → item marked `blocked` (not surfaced to user). Judge-tier RECOMMEND (sentinel value) → item marked `blocked` + surface to user with full `escalation_log` regardless of escalation_depth.
 
 ---
 

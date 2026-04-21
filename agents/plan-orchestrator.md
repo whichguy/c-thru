@@ -194,10 +194,15 @@ If `STATUS: RECUSE`:
 2. Increment item's `escalation_depth` in wave.json.
 3. Append to item's `escalation_log`: `{"agent": "<name>", "tier": "<capability-alias>", "attempted": <bool>, "recusal_reason": "<text>", "partial_output": "<path or null>"}`.
 4. Write raw RECUSE response to `$wave_dir/failures/<agent>-<item>.raw` for diagnostic trace.
-5. **Depth cap:** if `escalation_depth >= 3` (default `max_escalations`) → mark item `blocked`; log to `$wave_dir/batch-abort.log`. Exception: if the recusing agent resolves to `judge` tier → mark `blocked` AND surface to user with full `escalation_log`.
-6. **Cloud unavailability:** if `RECOMMEND` names a cloud agent and cloud is unreachable → mark item `blocked` (not `failed`).
-7. **Malformed RECUSE** (missing `RECUSAL_REASON`): mark item `failed`, write raw to failures/.
-8. Otherwise: append escalation context to next agent's digest using template from §2.4 (`restart` verdict from uplift-decider: fresh digest with no prior context; `uplift` verdict: append context including local output path). Fire `Agent(subagent_type: RECOMMEND, prompt: <digest-path>, timeout: ${WORKER_TIMEOUT_SEC:-600})`. Apply this same Step 5r check to the new response — recursive re-dispatch until STATUS is not RECUSE, depth cap hit, or cloud unavailable.
+5. **Judge-tier RECOMMEND (checked before depth cap):** if `RECOMMEND` resolves to `judge` tier (i.e., `RECOMMEND == "judge"` or the agent named in `RECOMMEND` maps to the `judge` capability alias in `agent_to_capability`) → mark item `blocked` AND surface to user with full `escalation_log`. Do not dispatch. This check fires regardless of `escalation_depth`.
+6. **Depth cap:** if `escalation_depth >= 3` (default `max_escalations`) → mark item `blocked`; log to `$wave_dir/batch-abort.log`.
+7. **Cloud unavailability:** if `RECOMMEND` names a cloud agent and cloud is unreachable → mark item `blocked` (not `failed`).
+8. **Malformed RECUSE** (missing `RECUSAL_REASON`): mark item `failed`, write raw to failures/.
+9. Otherwise: append escalation context to next agent's digest. Use this template:
+   - `uplift` verdict from uplift-decider (or ATTEMPTED=yes): append to digest as `## Escalation context\nPrior partial output: <PARTIAL_OUTPUT path>\nRecusal reason: <RECUSAL_REASON>`. Include all prior escalation_log entries as context.
+   - `restart` verdict from uplift-decider (or ATTEMPTED=no with no prior output): use original task digest unchanged — no prior context included.
+   - When dispatched directly (no uplift-decider step, e.g. reviewer-fix → implementer-cloud): append `## Escalation context\nRecusal reason: <RECUSAL_REASON>` if partial output exists.
+   Fire `Agent(subagent_type: RECOMMEND, prompt: <digest-path>, timeout: ${WORKER_TIMEOUT_SEC:-600})`. Apply this same Step 5r check to the new response — recursive re-dispatch until STATUS is not RECUSE, depth cap hit, or cloud unavailable.
 
 **RECUSE idempotency on resume:** On orchestrator crash between RECUSE receipt and next dispatch, re-read `escalation_log` in wave.json. Use `findings/<next-agent>-<item>.jsonl` absence as canonical "not yet dispatched" signal — do not re-dispatch already-attempted tiers.
 

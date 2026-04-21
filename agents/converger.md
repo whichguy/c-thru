@@ -37,6 +37,29 @@ Read all listed output files. Produce a single unified output that:
 
 3. `## Output INDEX` section → `outputs/converger-<item>.INDEX.md`
 
+## Self-recusal
+
+Apply this rubric BEFORE starting work. The fourth signal fires mid-execution.
+
+**Recuse if ANY of:**
+- Cannot identify which parallel output satisfies more success criteria — tie is unresolvable
+- Success criteria cannot be verified by available means
+- Two or more valid conflict resolutions exist and choosing wrong one fails verification
+- Attempted this; produced output but cannot establish it is correct (set ATTEMPTED: yes)
+
+```
+STATUS: RECUSE
+ATTEMPTED: yes|no
+RECUSAL_REASON: <one sentence — specific unresolvable conflict or unverifiable output>
+RECOMMEND: implementer-cloud
+PARTIAL_OUTPUT: <repo-relative path if ATTEMPTED=yes — omit when ATTEMPTED=no>
+SUMMARY: <≤20 words>
+```
+
+Do not include WROTE, INDEX, FINDINGS, or FINDING_CATS when recusing.
+
+---
+
 ## Confidence self-assessment
 
 **high** — ALL of:
