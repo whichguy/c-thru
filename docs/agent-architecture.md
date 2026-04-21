@@ -143,12 +143,15 @@ WROTE: <output.md path>
 INDEX: <INDEX.md path>
 FINDINGS: <findings.jsonl path>
 FINDING_CATS: {crisis:N,plan-material:N,contextual:N,trivial:N,augmentation:N,improvement:N}
+LINT_ITERATIONS: N
 SUMMARY: <≤20 words>
 ```
 
 `CONFIDENCE` is worker self-assessment via the §12.1 rubric embedded in each agent prompt. Absent CONFIDENCE is treated as `medium` by the orchestrator (migration shim — graceful degradation). The orchestrator logs `{item, agent, confidence, verify_pass, compliance}` tuples to `$wave_dir/cascade/<item>.jsonl` after step 6 for Wave-1 calibration measurement.
 
 `reviewer-fix` additionally returns `ITERATIONS: N`.
+
+`implementer` and `implementer-cloud` additionally return `LINT_ITERATIONS: N` — the number of lint fix-and-retry cycles run before STATUS was returned. Absent `LINT_ITERATIONS` → treated as 0 by the orchestrator (graceful degradation). If lint errors remain after the 5-iteration cap, CONFIDENCE must be `medium` or `low`.
 
 ---
 
