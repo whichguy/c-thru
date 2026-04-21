@@ -49991,3 +49991,87 @@ claude-router"
 [2026-04-20 20:49] READ_GATE session:5121f779 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
 [2026-04-20 20:54] SESSION_END session:5121f779: closed in c-thru
 [2026-04-20 21:16] PERIODIC session:5121f779: probabilistic trigger fired (mod=17)
+[2026-04-20 21:41] SESSION_START session:961929c3: opened in c-thru
+[2026-04-20 21:41] SESSION_CLEAR session:961929c3: /clear boundary in c-thru
+[2026-04-20 21:43] SESSION_END session:961929c3: closed in c-thru
+[2026-04-20 21:51] SESSION_START session:558c93f8: opened in c-thru
+[2026-04-20 21:51] SESSION_END session:558c93f8: closed in c-thru
+[2026-04-20 21:52] PERIODIC session:558c93f8: probabilistic trigger fired (mod=17)
+[2026-04-20 21:52] SESSION_START session:e362ca72: opened in c-thru
+[2026-04-20 21:52] SESSION_START session:0d5aa095: opened in c-thru
+[2026-04-20 21:52] SESSION_START session:fa85c2b9: opened in c-thru
+[2026-04-20 21:53] SESSION_START session:64f2589b: opened in c-thru
+[2026-04-20 21:53] SESSION_CLEAR session:64f2589b: /clear boundary in c-thru
+[2026-04-20 21:53] SESSION_START session:bfcc5d00: opened in c-thru
+[2026-04-20 21:53] SESSION_START session:aab60b1c: opened in c-thru
+[2026-04-20 21:53] SESSION_START session:412f58d5: opened in c-thru
+[2026-04-20 21:54] READ_GATE session:64f2589b path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,hook-model-rewriting-removal dur:0ms
+[2026-04-20 21:57] SESSION_END session:64f2589b: closed in c-thru
+[2026-04-20 21:58] SESSION_START session:1f6488ac: opened in c-thru
+[2026-04-20 21:59] PERIODIC session:64f2589b: probabilistic trigger fired (mod=17)
+[2026-04-20 21:59] SESSION_START session:fd181ad7: opened in c-thru
+[2026-04-20 21:59] SESSION_START session:1d2be050: opened in c-thru
+[2026-04-20 22:02] SESSION_START session:ceaa73bb: opened in c-thru
+[2026-04-20 22:03] SESSION_START session:7a0315b1: opened in c-thru
+[2026-04-20 22:05] SESSION_START session:edea5041: opened in c-thru
+[2026-04-20 22:06] SESSION_START session:cb1b3287: opened in c-thru
+[2026-04-20 22:06] PERIODIC session:64f2589b: probabilistic trigger fired (mod=17)
+[2026-04-20 22:07] READ_GATE session:64f2589b path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,hook-model-rewriting-removal dur:0ms
+[2026-04-21 04:53] EXTRACT session:558c93f8: readme-installer-alignment (updated — gap #8: stale claude-router symlink)
+[2026-04-20 22:09] SESSION_START session:e3961b89: opened in c-thru
+[2026-04-20 22:09] SESSION_START session:575fc130: opened in c-thru
+[2026-04-20 22:10] READ_GATE session:64f2589b path:test/model-map-v12-adapter.test.js slugs:capability-profile-model-layers dur:0ms
+[2026-04-20 22:11] SESSION_START session:b55715bd: opened in c-thru
+[2026-04-20 22:12] SESSION_START session:a0180ef7: opened in c-thru
+[2026-04-21 04:53] EXTRACT session:558c93f8: readme-installer-alignment
+[2026-04-20 22:19] READ_GATE session:1f6488ac path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+1 dur:0ms
+[2026-04-21 05:00] EXTRACT session:64f2589b: model-tag-audit-gap, gpt-oss-model, moe-speed-capability-dual (created); capability-profile-model-layers (updated)
+[2026-04-20 22:55] EXTRACT session:961929c3: review-plan-banner-alignment (created)
+[2026-04-21 05:10] EXTRACT session:64f2589b: model-map-test-pattern (created); ollama-http-api-migration (updated)
+[2026-04-21 05:15] EXTRACT session:64f2589b: qwen-series-selection (created); gpt-oss-model, moe-speed-capability-dual (cross-links fixed: qwen3-series-evolution → qwen-series-selection)
+[2026-04-21 05:15] EXTRACT session:64f2589b: skill-config-reload-gaps (created); sighup-config-reload, config-swap-invariant (updated cross-links)
+[2026-04-21 18:00] EXTRACT session:64f2589b: no new content — all entities already captured (model-tag-audit-gap, gpt-oss-model, moe-speed-capability-dual, model-map-test-pattern, qwen-series-selection created; capability-profile-model-layers, ollama-http-api-migration updated); duplicate qwen3-series-evolution removed (subsumed by qwen-series-selection)
+[2026-04-21 05:20] EXTRACT session:64f2589b: skill-config-reload-gaps (created)
+[2026-04-21 19:30] EXTRACT session:64f2589b: no new content — all 8 entities already fully captured and cross-linked from prior passes (model-tag-audit-gap, gpt-oss-model, moe-speed-capability-dual, model-map-test-pattern, qwen-series-selection, skill-config-reload-gaps created; capability-profile-model-layers, ollama-http-api-migration updated)
+[2026-04-21 20:00] EXTRACT session:64f2589b: capability-profile-model-layers, ollama-http-api-migration (cross-links added: skill-config-reload-gaps)
+[2026-04-21 06:17] SESSION_START session:408250c4: opened in c-thru
+[2026-04-21 06:22] AMPLIFIER_MATCH session:408250c4: matched=model-tag-audit-gap prompt="i want to plan out a couiple more modes for the proxy to run in: cloud-best-qual"
+[2026-04-21 06:23] SESSION_START session:ddd426f8: opened in c-thru
+[2026-04-21 06:23] SESSION_CLEAR session:ddd426f8: /clear boundary in c-thru
+[2026-04-21 06:23] SESSION_START session:e96930d4: opened in c-thru
+[2026-04-21 06:23] SESSION_START session:6ec1219d: opened in c-thru
+[2026-04-21 06:23] READ_GATE session:408250c4 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+2 dur:0ms
+[2026-04-21 06:24] READ_GATE session:ddd426f8 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,readme-installer-alignment dur:0ms
+[2026-04-21 06:30] READ_GATE session:ddd426f8 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-21 06:30] READ_GATE session:ddd426f8 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-21 06:30] READ_GATE session:ddd426f8 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-21 06:30] SESSION_END session:408250c4: closed in c-thru
+[2026-04-21 06:31] SESSION_START session:8ac7dffe: opened in c-thru
+[2026-04-21 07:15] EXTRACT session:64f2589b: moe-speed-capability-dual (cross-link fix), capability-profile-model-layers (date fix, duplicate last_updated removed, sources updated)
+[2026-04-21 06:38] AMPLIFIER_MATCH session:1558f542: matched=claude-code-hook-channels, logical-role-exclusivity, model-map-test-pattern prompt="consider all these finding, keepin c-thru optimized for sufficient quality outco"
+[2026-04-21 06:38] PERIODIC session:1558f542: probabilistic trigger fired (mod=17)
+[2026-04-21 06:38] SESSION_START session:89e7d969: opened in c-thru
+[2026-04-21 06:38] SESSION_START session:80213825: opened in c-thru
+[2026-04-21 06:38] PERIODIC session:89e7d969: probabilistic trigger fired (mod=17)
+[2026-04-21 06:42] SESSION_END session:ddd426f8: closed in c-thru
+[2026-04-21 06:44] PERIODIC session:1558f542: probabilistic trigger fired (mod=17)
+[2026-04-21 06:44] SESSION_START session:a17340bc: opened in c-thru
+[2026-04-21 06:44] SESSION_START session:cb6aef91: opened in c-thru
+[2026-04-21 06:44] SESSION_START session:e52d5cb5: opened in c-thru
+[2026-04-21 06:45] SESSION_START session:c6237d83: opened in c-thru
+[2026-04-21 06:45] SESSION_CLEAR session:c6237d83: /clear boundary in c-thru
+[2026-04-21 06:45] SESSION_START session:c995f10d: opened in c-thru
+[2026-04-21 06:45] SESSION_START session:4da1f16c: opened in c-thru
+[2026-04-21 06:45] READ_GATE session:c6237d83 path:test/llm-mode-resolution-matrix.test.js slugs:model-map-test-pattern dur:0ms
+[2026-04-21 06:45] READ_GATE session:c6237d83 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+2 dur:0ms
+[2026-04-21 06:46] READ_GATE session:8ac7dffe path:test/llm-mode-resolution-matrix.test.js slugs:model-map-test-pattern dur:0ms
+[2026-04-21 06:46] READ_GATE session:8ac7dffe path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+2 dur:0ms
+[2026-04-21 06:47] SESSION_START session:838cd44f: opened in c-thru
+[2026-04-21 06:47] READ_GATE session:8ac7dffe path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+2 dur:0ms
+[2026-04-21 06:47] READ_GATE session:8ac7dffe path:test/llm-mode-resolution-matrix.test.js slugs:model-map-test-pattern dur:0ms
+[2026-04-21 06:49] READ_GATE session:8ac7dffe path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+2 dur:0ms
+[2026-04-21 06:50] READ_GATE session:8ac7dffe path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+2 dur:0ms
+[2026-04-21 06:55] WIKI_LOAD session:: /wiki-load moe-speed-capability-dual qwen-series-selection gpt-oss-model
+[2026-04-21 13:30] EXTRACT session:ddd426f8: runtime-control(created), skill-config-reload-gaps(updated), ollama-http-api-migration(updated), sighup-config-reload(updated), config-swap-invariant(updated)
+[2026-04-21 06:59] READ_GATE session:c6237d83 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-21 07:03] EXTRACT session:feat/best-quality-modes: added cloud-best-quality + local-best-quality modes; fallback_chains; local-terminal guard; quality-tolerance tiebreaker; new entity best-quality-modes.md; updated capability-profile-model-layers, fallback-event-system, declared-rewrites, moe-speed-capability-dual

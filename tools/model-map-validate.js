@@ -28,7 +28,7 @@ const CAPABILITY_KEYS = new Set([
 ]);
 const CONNECTIVITY_MODES = new Set(['connected', 'disconnect']);
 const BACKEND_SIGIL_RE = /^(.+)@([A-Za-z0-9_-]+)$/;
-const LLM_MODES = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline']);
+const LLM_MODES = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline', 'cloud-best-quality', 'local-best-quality']);
 
 function fail(message) {
   console.error(`model-map-validate: ${message}`);
@@ -61,6 +61,36 @@ function validateProfileEntry(profileName, aliasName, entry) {
   if (!isObject(entry)) fail(`'llm_profiles.${profileName}.${aliasName}' must be an object`);
   expectNonEmptyString(entry, 'connected_model', `llm_profiles.${profileName}.${aliasName}`);
   expectNonEmptyString(entry, 'disconnect_model', `llm_profiles.${profileName}.${aliasName}`);
+}
+
+function validateQualityScore(value, context) {
+  if (value == null) return;
+  if (typeof value !== 'number' || value < 0 || value > 100) {
+    throw new Error(`'${context}' must be a number in 0..100`);
+  }
+}
+
+function validateFallbackChains(chains, report) {
+  if (!isObject(chains)) { report("'fallback_chains' must be an object when present"); return; }
+  for (const [tier, capMap] of Object.entries(chains)) {
+    if (!isObject(capMap)) { report(`'fallback_chains.${tier}' must be an object`); continue; }
+    for (const [cap, candidates] of Object.entries(capMap)) {
+      if (!Array.isArray(candidates)) {
+        report(`'fallback_chains.${tier}.${cap}' must be an array`);
+        continue;
+      }
+      for (let i = 0; i < candidates.length; i++) {
+        const c = candidates[i];
+        const ctx = `fallback_chains.${tier}.${cap}[${i}]`;
+        if (!isObject(c)) { report(`'${ctx}' must be an object`); continue; }
+        if (typeof c.model !== 'string' || !c.model.trim()) {
+          report(`'${ctx}.model' must be a non-empty string`);
+        }
+        try { validateQualityScore(c.quality_score, `${ctx}.quality_score`); } catch (e) { report(e.message); }
+        try { validateQualityScore(c.speed_score, `${ctx}.speed_score`); } catch (e) { report(e.message); }
+      }
+    }
+  }
 }
 
 function resolveRoute(routes, start) {
@@ -206,6 +236,12 @@ function validateConfig(config, _errors) {
                 }
               }
             }
+            for (const optKey of ['cloud_best_model', 'local_best_model']) {
+              const v = profileValue[aliasName][optKey];
+              if (v != null && (typeof v !== 'string' || !v.trim())) {
+                report(`'llm_profiles.${profileName}.${aliasName}.${optKey}' must be a non-empty string when present`);
+              }
+            }
           }
         }
       }
@@ -263,6 +299,16 @@ function validateConfig(config, _errors) {
         }
       }
     }
+  }
+
+  if (config.quality_tolerance_pct != null) {
+    if (typeof config.quality_tolerance_pct !== 'number' || config.quality_tolerance_pct < 0 || config.quality_tolerance_pct > 100) {
+      report("'quality_tolerance_pct' must be a number in 0..100 when present");
+    }
+  }
+
+  if (config.fallback_chains != null) {
+    validateFallbackChains(config.fallback_chains, report);
   }
 
   // agent_to_capability: flat map of agent-name → capability-alias, used for 2-hop resolution.
