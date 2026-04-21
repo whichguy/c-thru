@@ -4,9 +4,9 @@ type: entity
 description: "Architectural rule: c-thru only transforms a declared list of request/response fields; everything else passes byte-for-byte (transparent proxy, no policy)"
 tags: [architecture, transparency, proxy, rfc9110]
 confidence: high
-last_verified: 2026-04-18
+last_verified: 2026-04-21
 created: 2026-04-18
-last_updated: 2026-04-18
+last_updated: 2026-04-21
 sources: [be297e50, ed761c3c, 386b8e16, 9d601210]
 related: [load-bearing-invariant, release-roadmap, kind-anthropic-invariant, narrow-threat-model, capability-profile-model-layers, config-swap-invariant]
 ---

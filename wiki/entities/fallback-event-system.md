@@ -4,9 +4,9 @@ type: entity
 description: "Proxy's in-memory ring buffer + log-based event pipeline for recording and consuming fallback chain events (candidate_success, chain_start, liveness)"
 tags: [proxy, fallback, events, ring-buffer, logging]
 confidence: high
-last_verified: 2026-04-18
+last_verified: 2026-04-21
 created: 2026-04-18
-last_updated: 2026-04-18
+last_updated: 2026-04-21
 sources: [b50c3df0]
 related: [c-thru-statusline, ollama-http-api-migration, logical-role-exclusivity, capability-profile-model-layers]
 ---
