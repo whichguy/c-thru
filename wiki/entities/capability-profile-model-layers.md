@@ -28,7 +28,7 @@ The model resolution architecture has three distinct layers. **Capability** (log
 
 ## Connectivity decision
 
-**Resolved (2026-04-20, feat/llm-mode-multi-provider):** The `reactive-only` branch was chosen. `llm_connectivity_mode` (binary `connected`/`disconnect`) is replaced by `llm_mode` (4-value enum: `connected` | `semi-offload` | `cloud-judge-only` | `offline`). Per-request cascade on cloud failures (`classifyError` → `tryFallbackChain`) is retained and extended (401 + 400-credit-balance gaps filled). No proactive liveness prober, no global auto-flip. Mode is set statically via config/env or via `/map-model mode <value>` and applies per-request via `resolveProfileModel(entry, mode)`.
+**Resolved (2026-04-20, feat/llm-mode-multi-provider):** The `reactive-only` branch was chosen. `llm_connectivity_mode` (binary `connected`/`disconnect`) is replaced by `llm_mode` (initially 4 values: `connected` | `semi-offload` | `cloud-judge-only` | `offline`; extended to 6 in feat/best-quality-modes — see addendum below). Per-request cascade on cloud failures (`classifyError` → `tryFallbackChain`) is retained and extended (401 + 400-credit-balance gaps filled). No proactive liveness prober, no global auto-flip. Mode is set statically via config/env or via `/map-model mode <value>` and applies per-request via `resolveProfileModel(entry, mode)`.
 
 `llm_mode` resolution precedence: `CLAUDE_LLM_MODE` env → `CLAUDE_CONNECTIVITY_MODE` (legacy) → `CONFIG.llm_mode` → `CONFIG.llm_connectivity_mode` (legacy) → `'connected'`.
 
@@ -48,4 +48,4 @@ Profile entries gain two optional convenience fields: `cloud_best_model` (string
 
 The open TODO at lines 17–19 (fallbacks belong at capability layer) is now addressed: top-level `fallback_chains[tier][capability]` provides an ordered-by-quality fallback list at the capability level, superseding per-model `fallback_strategies` synthesis for covered `(tier, capability)` pairs. See [[best-quality-modes]] for schema detail and [[fallback-event-system]] for coexistence rules.
 
-→ See also: [[logical-role-exclusivity]], [[declared-rewrites]], [[fallback-event-system]], [[best-quality-modes]], [[ollama-http-api-migration]], [[config-swap-invariant]], [[sighup-config-reload]], [[connectivity-vs-cascade]], [[model-map-test-pattern]], [[skill-config-reload-gaps]]
+→ See also: [[logical-role-exclusivity]], [[declared-rewrites]], [[fallback-event-system]], [[best-quality-modes]], [[ollama-http-api-migration]], [[config-swap-invariant]], [[sighup-config-reload]], [[connectivity-vs-cascade]], [[model-map-test-pattern]], [[skill-config-reload-gaps]], [[llm-mode-resolution]]
