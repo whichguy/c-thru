@@ -6,13 +6,13 @@ file_path=""
 
 # Parse file_path from stdin JSON safely
 if command -v jq >/dev/null 2>&1; then
-    file_path=$(jq -r '.file_path // empty' 2>/dev/null)
+    file_path=$(jq -r '(.tool_input.file_path // .file_path) // empty' 2>/dev/null)
 elif command -v node >/dev/null 2>&1; then
     file_path=$(node -e "
         let d=''; process.stdin.setEncoding('utf8');
         process.stdin.on('data',c=>d+=c);
         process.stdin.on('end',()=>{
-            try{process.stdout.write(JSON.parse(d).file_path||'')}catch(e){}
+            try{const p=JSON.parse(d);process.stdout.write((p.tool_input&&p.tool_input.file_path)||p.file_path||'')}catch(e){}
         });
     " 2>/dev/null)
 else
