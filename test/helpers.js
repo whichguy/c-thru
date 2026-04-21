@@ -222,7 +222,12 @@ async function withProxy(opts, fn) {
     ]).catch(() => {
       try { child.kill('SIGKILL'); } catch {}
     });
-    await exitPromise;
+    // Second bounded wait: SIGKILL should be near-instant, but cap at 1s to
+    // prevent an indefinite hang if the kernel delays signal delivery.
+    await Promise.race([
+      exitPromise,
+      new Promise(resolve => setTimeout(resolve, 1000)),
+    ]);
     try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
   }
   if (fnError) throw fnError;
