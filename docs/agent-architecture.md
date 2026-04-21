@@ -29,6 +29,10 @@ request time.
 | test-writer | code-analyst | Tests that catch subtle bugs; reads implementation first |
 | reviewer-fix | code-analyst | Iterative review+fix loop (max 5 rounds per item) |
 | implementer | deep-coder | Core business logic; multi-file aware |
+| uplift-decider | judge | †Wave-2: routing judge; reads local partial output, emits accept\|uplift\|restart + CLOUD_CONFIDENCE |
+| implementer-cloud | deep-coder-cloud | †Wave-2: cloud-tier implementer; uplift (patch) or restart (clean) mode |
+| test-writer-cloud | code-analyst-cloud | †Wave-2: cloud-tier test writer; escalation target for test-writer recusals |
+| converger | code-analyst | †Wave-2: aggregates parallel explorer/implementer outputs into unified synthesis |
 
 ## 4-layer resolution
 
@@ -145,6 +149,82 @@ SUMMARY: <≤20 words>
 `CONFIDENCE` is worker self-assessment via the §12.1 rubric embedded in each agent prompt. Absent CONFIDENCE is treated as `medium` by the orchestrator (migration shim — graceful degradation). The orchestrator logs `{item, agent, confidence, verify_pass, compliance}` tuples to `$wave_dir/cascade/<item>.jsonl` after step 6 for Wave-1 calibration measurement.
 
 `reviewer-fix` additionally returns `ITERATIONS: N`.
+
+---
+
+## Escalation chain (Wave-2)
+
+Self-recusal triggers a cascading re-dispatch through capability tiers. The chain never terminates early — it exhausts all tiers before surfacing to the user. Exception: `reviewer-fix` skips `deep-coder` (recusal = redesign, not re-implementation).
+
+```
+pattern-coder    (scaffolder, discovery-advisor)
+      ↓ recuse
+code-analyst     (test-writer, reviewer-fix)
+      ↓ recuse
+deep-coder       (implementer)
+      ↓ recuse
+deep-coder-cloud (implementer-cloud)  †Wave-2
+      ↓ recuse
+judge            (planner, auditor, review-plan)
+      ↓ recuse ← only here: surface to user
+```
+
+**Per-role escalation paths:**
+
+| Agent | Recuses to | Notes |
+|---|---|---|
+| `scaffolder` | `implementer` | Task requires design decision, not scaffolding |
+| `implementer` | `uplift-decider` → `implementer-cloud` | uplift-decider reads partial work, routes accept\|uplift\|restart |
+| `reviewer-fix` | `implementer-cloud` | Skips deep-coder — recusal = redesign |
+| `test-writer` | `test-writer-cloud` | Same role, cloud tier |
+| `planner-local` | `planner` | Natural outcome_risk path |
+| `implementer-cloud` | `judge` | Cloud judge as high-capability implementer |
+| `judge` | surface to user | Last resort only |
+
+**Depth cap:** `max_escalations: 3` (default). Hit before judge tier → item marked `blocked` (not surfaced to user). Judge recuses → `blocked` + surface to user with full `escalation_log`.
+
+---
+
+## RECUSE STATUS contract
+
+All worker agents carry a self-recusal rubric. Recusal is outcome-focused — signal: "cannot verify output satisfies criteria."
+
+```
+STATUS: RECUSE
+ATTEMPTED: yes|no
+RECUSAL_REASON: <one sentence — specific unverifiable outcome condition>
+RECOMMEND: <next agent name>
+PARTIAL_OUTPUT: <repo-relative path if ATTEMPTED=yes — omit when ATTEMPTED=no>
+SUMMARY: <≤20 words>
+```
+
+**RECOMMEND is hardcoded per agent** — each agent names its immediate successor only. No agent needs a full escalation table.
+
+**Formatting rules:** Every STATUS block appears AFTER `## Work completed`, `## Findings (jsonl)`, and `## Output INDEX` sections. Each STATUS key on its own line (`^([A-Z_]+): (.*)$`). No markdown formatting inside STATUS key values. `<think>...</think>` blocks appear BEFORE work sections and are stripped by the orchestrator before parsing.
+
+**uplift-decider** does NOT use STATUS: RECUSE. It uses STATUS: COMPLETE with VERDICT: accept|uplift|restart.
+
+---
+
+## Agent I/O contracts — STATUS value table
+
+| STATUS | Required fields | Notes |
+|---|---|---|
+| COMPLETE | STATUS, CONFIDENCE, WROTE, INDEX, FINDINGS, FINDING_CATS, SUMMARY | UNCERTAINTY_REASONS omit when high |
+| PARTIAL | Same as COMPLETE | Crisis finding — orchestrator marks item failed after reviewer-fix cap |
+| ERROR | STATUS, SUMMARY | Unrecoverable setup failure |
+| RECUSE | STATUS, ATTEMPTED, RECUSAL_REASON, RECOMMEND, SUMMARY | PARTIAL_OUTPUT only when ATTEMPTED=yes; no WROTE/INDEX/FINDINGS |
+
+**uplift-decider contract (distinct):**
+
+| Field | Values | Notes |
+|---|---|---|
+| STATUS | COMPLETE | Always COMPLETE — routing decisions are not recusals |
+| VERDICT | accept\|uplift\|restart | Routing outcome |
+| CLOUD_CONFIDENCE | high\|medium\|low | Estimate of implementer-cloud confidence on this task |
+| RATIONALE | string | One sentence — why this routing decision |
+| PATCH_SCOPE | string | What to patch; omit when VERDICT=accept or restart |
+| SUMMARY | string | ≤20 words |
 
 ---
 

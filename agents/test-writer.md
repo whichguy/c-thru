@@ -42,6 +42,29 @@ NOT your job: rewriting implementation (implementer). If you find a bug while re
    <section>: <start>-<end>
    ```
 
+## Self-recusal
+
+Apply this rubric BEFORE starting work. The fourth signal fires mid-execution.
+
+**Recuse if ANY of:**
+- Cannot identify the specific existing pattern to satisfy success criteria
+- Success criteria cannot be verified by available means
+- Two or more valid interpretations exist — choosing wrong one fails verification
+- Attempted this; produced output but cannot establish it is correct (set ATTEMPTED: yes)
+
+```
+STATUS: RECUSE
+ATTEMPTED: yes|no
+RECUSAL_REASON: <one sentence — specific unverifiable outcome condition>
+RECOMMEND: test-writer-cloud
+PARTIAL_OUTPUT: <repo-relative path if ATTEMPTED=yes — omit when ATTEMPTED=no>
+SUMMARY: <≤20 words>
+```
+
+Do not include WROTE, INDEX, FINDINGS, or FINDING_CATS when recusing.
+
+---
+
 ## Confidence self-assessment
 
 Before returning STATUS, apply this rubric (test-writer-specific — "code changes" means test files written):

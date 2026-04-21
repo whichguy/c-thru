@@ -91,11 +91,22 @@ Write `$wave_dir/wave.json` atomically:
   "commit_message": "<commit_message from input>",
   "batches": [
     { "parallel": true, "items": [
-      { "agent": "<role>", "item": "<id>", "target_resources": [...], "depends_on": [...] }
+      {
+        "agent": "<role>",
+        "item": "<id>",
+        "target_resources": [...],
+        "depends_on": [...],
+        "escalation_policy": "local",
+        "escalation_policy_source": "step4b",
+        "escalation_depth": 0,
+        "escalation_log": []
+      }
     ]}
   ]
 }
 ```
+
+**Backward-compatible defaults:** Wave-1 items lacking escalation fields → `escalation_policy: "local"`, `escalation_depth: 0`, `escalation_log: []` on read. Step 4b never emits `never-cloud` — that is user/policy-set only.
 
 Validate schema (wave_id, commit_message, batches array all present).
 
@@ -132,7 +143,29 @@ target_resources: [<repo-relative file paths>]
  Read only relevant sections. If learnings.md is empty or absent, omit this section.>
 ```
 
-Pre-check: every digest declared in wave.json must be non-empty before proceeding to step 5.
+Pre-check: every digest declared in wave.json must be non-empty before proceeding to step 4b.
+
+---
+
+## Step 4b — Tactical pre-dispatch classification
+
+After all digests are assembled (Step 4), before dispatch (Step 5):
+
+For each item in `wave.json.batches[].items` where `escalation_policy` is absent or `"local"` — skip items already carrying `"never-cloud"` (user/policy-set; orchestrator never overwrites these):
+
+Read the item's assembled digest. Classify as `pre-escalate` if ANY of:
+- No existing pattern cited by file/line/function for the core operation
+- Success criteria cannot be verified (no test, no structural check)
+- Two or more valid interpretations exist — choosing wrong one fails verify
+- Judgment language in criteria: "appropriately", "determine how to", "choose a/the"
+- New external interface with no existing equivalent to copy
+- Approach unspecified: "figure out", "implement a solution"
+
+If pre-escalate signal fires: set `escalation_policy: "pre-escalate"`, `escalation_policy_source: "step4b"` on the item in wave.json. Otherwise leave `"local"`.
+
+Write back updated wave.json after all items are classified.
+
+**Cloud unavailability:** When a `pre-escalate` item is about to dispatch and the cloud agent is unreachable (no API key, degraded backend) → mark item `blocked`. Do NOT escalate to `judge` tier as a coder substitute. Surface `blocked` items in wave summary for user review. `WAVE_CLOUD_ESCALATION_BUDGET` counter is not charged for error-blocked items.
 
 ---
 
@@ -150,9 +183,25 @@ Agent(subagent_type: "<agent-name>",
 ```
 
 For each response:
+- Strip `<think>...</think>` blocks (including empty pairs) from raw output BEFORE any STATUS parsing — Qwen/gpt-oss models can emit thinking content even with thinking disabled.
 - If timeout or missing STATUS block: write raw output to `$wave_dir/failures/<agent>-<item>.raw`; mark item `failed`; continue.
 - If malformed STATUS: write raw output to `$wave_dir/failures/<agent>-<item>.raw`; mark item `failed`; continue.
-- If valid STATUS: parse the structured response into three artifacts:
+
+**Step 5r — Self-recusal handling (checked before COMPLETE/PARTIAL/ERROR processing):**
+
+If `STATUS: RECUSE`:
+1. Extract: `ATTEMPTED` (yes|no), `RECUSAL_REASON`, `RECOMMEND`, `PARTIAL_OUTPUT` (omitted when `ATTEMPTED=no`).
+2. Increment item's `escalation_depth` in wave.json.
+3. Append to item's `escalation_log`: `{"agent": "<name>", "tier": "<capability-alias>", "attempted": <bool>, "recusal_reason": "<text>", "partial_output": "<path or null>"}`.
+4. Write raw RECUSE response to `$wave_dir/failures/<agent>-<item>.raw` for diagnostic trace.
+5. **Depth cap:** if `escalation_depth >= 3` (default `max_escalations`) → mark item `blocked`; log to `$wave_dir/batch-abort.log`. Exception: if the recusing agent resolves to `judge` tier → mark `blocked` AND surface to user with full `escalation_log`.
+6. **Cloud unavailability:** if `RECOMMEND` names a cloud agent and cloud is unreachable → mark item `blocked` (not `failed`).
+7. **Malformed RECUSE** (missing `RECUSAL_REASON`): mark item `failed`, write raw to failures/.
+8. Otherwise: append escalation context to next agent's digest using template from §2.4 (`restart` verdict from uplift-decider: fresh digest with no prior context; `uplift` verdict: append context including local output path). Fire `Agent(subagent_type: RECOMMEND, prompt: <digest-path>, timeout: ${WORKER_TIMEOUT_SEC:-600})`. Apply this same Step 5r check to the new response — recursive re-dispatch until STATUS is not RECUSE, depth cap hit, or cloud unavailable.
+
+**RECUSE idempotency on resume:** On orchestrator crash between RECUSE receipt and next dispatch, re-read `escalation_log` in wave.json. Use `findings/<next-agent>-<item>.jsonl` absence as canonical "not yet dispatched" signal — do not re-dispatch already-attempted tiers.
+
+- If valid STATUS (COMPLETE, PARTIAL, or ERROR): parse the structured response into three artifacts:
   - `## Work completed` section (including any `### Learnings` subsection) → write to `$wave_dir/outputs/<agent>-<item>.md`
   - `## Findings (jsonl)` fenced code block → extract each line → write to `$wave_dir/findings/<agent>-<item>.jsonl`
   - `## Output INDEX` section → write to `$wave_dir/outputs/<agent>-<item>.INDEX.md`
