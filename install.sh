@@ -12,7 +12,7 @@ GRAY='\033[0;90m'
 NC='\033[0m'
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-${CLAUDE_DIR:-$HOME/.claude}}"
 TOOLS_SRC="$REPO_DIR/tools"
 TOOLS_DEST="$CLAUDE_DIR/tools"
 
@@ -283,7 +283,7 @@ SKILL_EOF
 install_cplan_command() {
     local commands_dir="$CLAUDE_DIR/commands"
     local cmd_file="$commands_dir/cplan.md"
-    local canonical_line='Skill(skill="c-thru-plan", args="$ARGUMENTS")'
+    local canonical_line='skill="c-thru-plan"'
 
     mkdir -p "$commands_dir"
 
@@ -298,9 +298,11 @@ description: "Shortcut for /c-thru-plan — wave-based agentic planner"
 allowed-tools: "Skill"
 ---
 
-Invoke the c-thru-plan skill with the user's arguments:
+The user wants to run the c-thru-plan skill with this intent: $ARGUMENTS
 
-Skill(skill="c-thru-plan", args="$ARGUMENTS")
+Invoke it now:
+
+Skill(skill="c-thru-plan")
 CPLAN_EOF
     echo -e "  ${GREEN}✅ installed command: /cplan${NC}"
 }
