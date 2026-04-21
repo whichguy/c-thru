@@ -70,7 +70,7 @@ function validateQualityScore(value, context) {
   }
 }
 
-function validateFallbackChains(chains, report) {
+function validateFallbackChains(chains, report, modelRoutes) {
   if (!isObject(chains)) { report("'fallback_chains' must be an object when present"); return; }
   for (const [tier, capMap] of Object.entries(chains)) {
     if (!isObject(capMap)) { report(`'fallback_chains.${tier}' must be an object`); continue; }
@@ -85,6 +85,20 @@ function validateFallbackChains(chains, report) {
         if (!isObject(c)) { report(`'${ctx}' must be an object`); continue; }
         if (typeof c.model !== 'string' || !c.model.trim()) {
           report(`'${ctx}.model' must be a non-empty string`);
+        } else if (isObject(modelRoutes)) {
+          const sigilMatch = c.model.match(BACKEND_SIGIL_RE);
+          if (sigilMatch) {
+            // @backend sigil is self-routing — no model_routes entry needed
+          } else {
+            const directMatch = modelRoutes[c.model] !== undefined;
+            const patternMatch = !directMatch && Object.keys(modelRoutes).some(k => {
+              if (!k.startsWith('re:')) return false;
+              try { return new RegExp(k.slice(3)).test(c.model); } catch { return false; }
+            });
+            if (!directMatch && !patternMatch) {
+              report(`'${ctx}.model' value '${c.model}' is not in model_routes — add a route entry or fix the model name`);
+            }
+          }
         }
         try { validateQualityScore(c.quality_score, `${ctx}.quality_score`); } catch (e) { report(e.message); }
         try { validateQualityScore(c.speed_score, `${ctx}.speed_score`); } catch (e) { report(e.message); }
@@ -308,7 +322,7 @@ function validateConfig(config, _errors) {
   }
 
   if (config.fallback_chains != null) {
-    validateFallbackChains(config.fallback_chains, report);
+    validateFallbackChains(config.fallback_chains, report, config.model_routes);
   }
 
   // agent_to_capability: flat map of agent-name → capability-alias, used for 2-hop resolution.

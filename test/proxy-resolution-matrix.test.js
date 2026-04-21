@@ -205,11 +205,55 @@ async function runMatrix(stub, configPath) {
   );
 }
 
+// ── Stub that returns 429 for 'bad-model', 200 for everything else ────────
+// Both primary and fallback route to the same backend; the stub dispatches
+// by model name so the cooldown key is the plain resolved model name.
+function modelSelectiveStub(badModel, errorCode) {
+  const http = require('http');
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      let body = null;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+      const modelUsed = body ? body.model : null;
+      requests.push({ model_used: modelUsed });
+      if (modelUsed === badModel) {
+        const errBody = JSON.stringify({ error: { type: 'rate_limit_error', message: 'rate limited' } });
+        res.writeHead(errorCode, { 'Content-Type': 'application/json' });
+        res.end(errBody);
+      } else {
+        const successBody = JSON.stringify({
+          id: 'msg_stub', type: 'message', role: 'assistant',
+          content: [{ type: 'text', text: 'ok' }],
+          model: modelUsed,
+          stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(successBody);
+      }
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      resolve({
+        server, port, requests,
+        lastRequest: () => requests[requests.length - 1] || null,
+        close: () => new Promise(r => server.close(r)),
+      });
+    });
+    server.on('error', reject);
+  });
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-matrix-'));
   let stub;
+  let errorStub;
 
   try {
     stub = await stubBackend();
@@ -217,8 +261,64 @@ async function main() {
     const configPath = writeConfig(tmpDir, config);
 
     await runMatrix(stub, configPath);
+
+    // ── 7. Active-path fallback: fallback_chains consulted on in-flight 429 ─
+    // Both primary and fallback route to the SAME smart backend that returns 429
+    // for 'wh-primary' and 200 for 'wh-fallback'. Cooldown key = plain model name.
+    console.log('\n7. Active-path fallback: fallback_chains consulted on in-flight 429');
+    errorStub = await modelSelectiveStub('wh-primary', 429);
+    const fallbackConfig = {
+      backends: {
+        smart: { kind: 'anthropic', url: `http://127.0.0.1:${errorStub.port}` },
+      },
+      model_routes: {
+        'wh-primary': 'smart',
+        'wh-fallback': 'smart',
+      },
+      llm_profiles: {
+        '64gb': {
+          workhorse: {
+            connected_model: 'wh-primary',
+            disconnect_model: 'wh-fallback',
+          },
+        },
+      },
+      fallback_chains: {
+        '64gb': {
+          workhorse: [
+            { model: 'wh-primary',  quality_score: 80, speed_score: 60 },
+            { model: 'wh-fallback', quality_score: 70, speed_score: 90 },
+          ],
+        },
+      },
+    };
+    const fallbackConfigPath = writeConfig(tmpDir, fallbackConfig);
+    await withProxy(
+      { configPath: fallbackConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'connected' } },
+      async ({ port }) => {
+        const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
+        const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 5000);
+        assert(
+          resp.status === 200,
+          `active-path 429 on wh-primary → fallback_chains → 200 (got status=${resp.status})`
+        );
+        assert(
+          errorStub.requests.length >= 2,
+          `two backend calls made (primary attempted then fallback, got ${errorStub.requests.length})`
+        );
+        assert(
+          errorStub.requests[0] && errorStub.requests[0].model_used === 'wh-primary',
+          `first call was wh-primary (got ${errorStub.requests[0] && errorStub.requests[0].model_used})`
+        );
+        assert(
+          errorStub.requests[errorStub.requests.length - 1].model_used === 'wh-fallback',
+          `last call was wh-fallback (got ${errorStub.requests[errorStub.requests.length - 1].model_used})`
+        );
+      }
+    );
   } finally {
     if (stub) await stub.close().catch(() => {});
+    if (errorStub) await errorStub.close().catch(() => {});
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
 

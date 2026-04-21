@@ -1896,12 +1896,15 @@ function handleRequestWithFallback(req, res, body, resolved) {
 
   if (!backend) return send(res, 500, { error: 'no backend resolved' });
 
-  // Check if this model has fallback strategies
+  // Check if this model has fallback strategies or capability-layer chains
   const terminalModel = effectiveModel || clientModel;
   const strategies = CONFIG.fallback_strategies || {};
   const strategy = strategies[terminalModel];
+  const _hwTier = resolveActiveTier(CONFIG);
+  const _capKey = logicalRole ? profileAliasKey(logicalRole) : null;
+  const hasCapabilityChain = !!(_capKey && CONFIG.fallback_chains?.[_hwTier]?.[_capKey]);
 
-  if (!strategy) {
+  if (!strategy && !hasCapabilityChain) {
     return doForward(backend, effectiveModel, body);
   }
 
@@ -2149,9 +2152,13 @@ function handleRequestWithFallback(req, res, body, resolved) {
         noteBackendFailure(backend, terminalModel, failureClass, nowMs() - startedAt, `status_${upRes.statusCode}`);
         recordFailureClass(failureClass);
         setCooldown(terminalModel, failureClass, upRes.statusCode, upRes.headers);
-        const candidates = (CONFIG.fallback_strategies?.[terminalModel]?.event?.[failureClass]) || [];
+        let candidates = (CONFIG.fallback_strategies?.[terminalModel]?.event?.[failureClass]) || [];
+        if (candidates.length === 0 && _capKey) {
+          const chain = CONFIG.fallback_chains?.[_hwTier]?.[_capKey] || [];
+          candidates = chain.map(c => c.model).filter(m => resolveLogicalAlias(resolveRouteModel(m)) !== terminalModel);
+        }
         if (candidates.length > 0) {
-          proxyLog('fallback.chain_start', { terminal_model: terminalModel, failure_class: failureClass, trigger: 'classified_error', candidate_count: candidates.length });
+          proxyLog('fallback.chain_start', { terminal_model: terminalModel, failure_class: failureClass, trigger: 'classified_error', candidate_count: candidates.length, source: CONFIG.fallback_strategies?.[terminalModel] ? 'fallback_strategies' : 'fallback_chains' });
           return tryFallbackChain(candidates, failureClass, 0);
         }
       } else if (upRes.statusCode < 400) {
@@ -2232,13 +2239,18 @@ function handleRequestWithFallback(req, res, body, resolved) {
     noteBackendFailure(backend, terminalModel, failureClass, nowMs() - startedAt, e.message || 'network_error');
     recordFailureClass(failureClass);
     setCooldown(terminalModel, failureClass, 502, {});
-    const candidates = (CONFIG.fallback_strategies?.[terminalModel]?.event?.[failureClass]) || [];
+    let candidates = (CONFIG.fallback_strategies?.[terminalModel]?.event?.[failureClass]) || [];
+    if (candidates.length === 0 && _capKey) {
+      const chain = CONFIG.fallback_chains?.[_hwTier]?.[_capKey] || [];
+      candidates = chain.map(c => c.model).filter(m => resolveLogicalAlias(resolveRouteModel(m)) !== terminalModel);
+    }
     proxyLog('fallback.chain_start', {
       terminal_model: terminalModel,
       failure_class: failureClass,
       trigger: 'network_error',
       candidate_count: candidates.length,
       has_strategy: !!(CONFIG.fallback_strategies?.[terminalModel]),
+      source: CONFIG.fallback_strategies?.[terminalModel] ? 'fallback_strategies' : 'fallback_chains',
     });
     if (candidates.length > 0) {
       return tryFallbackChain(candidates, failureClass, 0);
@@ -2472,11 +2484,14 @@ const server = http.createServer(async (req, res) => {
     return originalWriteHead(statusCode, ...args);
   };
 
-  // Use fallback-aware forwarding for models with strategies
+  // Use fallback-aware forwarding for models with strategies or capability-layer chains
   const terminalModel = effectiveModel || model;
   const strategies = CONFIG.fallback_strategies || {};
-  proxyLog('dispatch', { terminal_model: terminalModel, has_strategy: !!strategies[terminalModel], backend_kind: backend.kind });
-  if (strategies[terminalModel]) {
+  const _dispatchHw = resolveActiveTier(CONFIG);
+  const _dispatchCapKey = logicalRole ? profileAliasKey(logicalRole) : null;
+  const hasCapChain = !!(_dispatchCapKey && CONFIG.fallback_chains?.[_dispatchHw]?.[_dispatchCapKey]);
+  proxyLog('dispatch', { terminal_model: terminalModel, has_strategy: !!strategies[terminalModel], has_cap_chain: hasCapChain, backend_kind: backend.kind });
+  if (strategies[terminalModel] || hasCapChain) {
     handleRequestWithFallback(req, res, fwdBody, resolved);
   } else {
     if (backend.kind === 'ollama' && !(await ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url, logicalRole))) return;
