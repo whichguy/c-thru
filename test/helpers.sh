@@ -52,6 +52,9 @@ EOF
 # simulating Ollama /api/tags. Returns the server PID.
 start_ollama_stub() {
     local port="$1" model_count="${2:-0}"
+    # Redirect stdin/stdout/stderr so the background process does not
+    # inherit the pipe used by command substitution $(start_ollama_stub ...),
+    # which would hang the substitution waiting for EOF.
     python3 -c "
 import http.server, json
 count = $model_count
@@ -63,8 +66,8 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({'models': models}).encode())
     def log_message(self, *a): pass
 http.server.HTTPServer(('127.0.0.1', $port), H).serve_forever()
-" &
+" </dev/null >/dev/null 2>&1 &
     echo $!
-    sleep 0.3
+    sleep 0.4
 }
 stop_ollama_stub() { kill "$1" 2>/dev/null || true; }
