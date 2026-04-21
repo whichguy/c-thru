@@ -157,6 +157,7 @@ For each response:
   - `## Findings (jsonl)` fenced code block → extract each line → write to `$wave_dir/findings/<agent>-<item>.jsonl`
   - `## Output INDEX` section → write to `$wave_dir/outputs/<agent>-<item>.INDEX.md`
   - If any section header is missing from the response: write raw output to `$wave_dir/failures/<agent>-<item>.raw` (per Resilience policy); mark item `failed`; continue.
+  - Extract `CONFIDENCE` from STATUS block. Valid values: `high`, `medium`, `low`. Absent or unrecognized → treat as `medium` (graceful degradation). Store per-item alongside agent and item ID for calibration logging in step 6b.
 
 Apply **batch-abort threshold** (see above) after each batch.
 
@@ -185,6 +186,23 @@ Write `$wave_dir/verify.json`:
 ```json
 { "files_present": true|false, "tests_pass": true|false|null, "syntax_valid": true|false }
 ```
+
+---
+
+## Step 6b — Calibration logging
+
+After writing `verify.json`, emit one calibration tuple per completed item to `$wave_dir/cascade/<item>.jsonl` (create `cascade/` directory lazily on first write):
+
+```json
+{"item": "<item-id>", "agent": "<agent>", "confidence": "<high|medium|low>", "verify_pass": <true|false|null>, "compliance": <true|false>}
+```
+
+Field definitions:
+- `confidence`: extracted from worker STATUS block in step 5; `"medium"` when absent or unrecognized
+- `verify_pass`: `verify.json.tests_pass` for this item's target_resources; `null` when no tests declared
+- `compliance`: `true` if CONFIDENCE field was present in the worker STATUS block, `false` if absent (used to track rubric adoption rate — target ≥80%)
+
+Only emit for items with `STATUS: COMPLETE` or `STATUS: PARTIAL` (skip `failed` items — they have no STATUS block). Items without tests set `verify_pass: null` and are excluded from calibration formula (see Wave-1 measurement plan).
 
 ---
 

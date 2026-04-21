@@ -45,9 +45,35 @@ Input: digest path. Review the code described for correctness, security, and pro
    <section>: <start>-<end>
    ```
 
+## Confidence self-assessment
+
+Before returning STATUS, apply this rubric:
+
+**high** — ALL of:
+- You reused existing patterns visible in the codebase.
+- The success_criteria map directly to concrete code changes you made.
+- You can state, in one sentence each, why each success criterion is satisfied.
+- You made no assumptions that weren't listed in the digest.
+
+**medium** — ANY of:
+- You improvised a pattern not seen elsewhere in the codebase.
+- One or more success_criteria required interpretation.
+- You guessed at an API surface and didn't verify it (no Read, no tests).
+- You added error handling or edge-case logic you weren't sure was needed.
+
+**low** — ANY of:
+- You hit an unfamiliar domain (cryptography, concurrency, accounting, parsing) and inferred behavior rather than verified it.
+- A required resource (spec, API doc, upstream dep) was missing or vague.
+- The item's description could be read two or more ways and you picked one.
+- You couldn't find the calling site of what you built.
+
+`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`.
+
 **Return:**
 ```
 STATUS: COMPLETE|PARTIAL|ERROR
+CONFIDENCE: high|medium|low
+UNCERTAINTY_REASONS: <comma-separated rubric bullets; omit when high>
 WROTE: <output.md path>
 INDEX: <INDEX.md path>
 FINDINGS: <findings.jsonl path>

@@ -127,6 +127,27 @@ ${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/
       replan-brief.md — wave-synthesizer output (exception path only)
 ```
 
+## Worker STATUS contract
+
+All worker agents (implementer, reviewer-fix, test-writer, scaffolder) return a structured STATUS block. Required fields:
+
+```
+STATUS: COMPLETE|PARTIAL|ERROR
+CONFIDENCE: high|medium|low
+UNCERTAINTY_REASONS: <comma-separated rubric bullets; omit when high>
+WROTE: <output.md path>
+INDEX: <INDEX.md path>
+FINDINGS: <findings.jsonl path>
+FINDING_CATS: {crisis:N,plan-material:N,contextual:N,trivial:N,augmentation:N,improvement:N}
+SUMMARY: <≤20 words>
+```
+
+`CONFIDENCE` is worker self-assessment via the §12.1 rubric embedded in each agent prompt. Absent CONFIDENCE is treated as `medium` by the orchestrator (migration shim — graceful degradation). The orchestrator logs `{item, agent, confidence, verify_pass, compliance}` tuples to `$wave_dir/cascade/<item>.jsonl` after step 6 for Wave-1 calibration measurement.
+
+`reviewer-fix` additionally returns `ITERATIONS: N`.
+
+---
+
 ## Cross-wave communication
 
 `current.md` only. Agents never read each other's outputs directly.
