@@ -33,11 +33,11 @@ if ! command -v node >/dev/null 2>&1 || [ ! -f "$validator" ]; then
     exit 0  # validator unavailable — skip silently
 fi
 
-# Run validation
-if node "$validator" "$file_path" >/dev/null 2>&1; then
+# Run validation (single invocation — capture output, check exit code)
+if validator_out=$(node "$validator" "$file_path" 2>&1); then
     msg="model-map.json valid — restart proxy to apply: pkill -f claude-proxy"
 else
-    msg=$(node "$validator" "$file_path" 2>&1 | head -5)
+    msg=$(printf '%s' "$validator_out" | head -5)
 fi
 
 printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}' \

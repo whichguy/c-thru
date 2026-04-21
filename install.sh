@@ -630,12 +630,8 @@ if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
     if [ -f "$local_validate" ] && [ -f "$USER_MAP" ]; then
         if node "$local_validate" "$USER_MAP" 2>/dev/null; then
             echo -e "  ${GREEN}✅ model-map.system.json updated (shipped defaults)${NC}"
-            if [ -f "$OVR_MAP" ]; then
-                override_keys="$(node -e 'try{const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(Object.keys(o).length);}catch{console.log(0);}' "$OVR_MAP" 2>/dev/null || echo 0)"
-                echo -e "  ${GRAY}✓  model-map.overrides.json (${override_keys} override keys)${NC}"
-            else
-                echo -e "  ${GRAY}ℹ  model-map.overrides.json absent — no user overrides${NC}"
-            fi
+            override_keys="$(node -e 'try{const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(Object.keys(o).length);}catch{console.log(0);}' "$OVR_MAP" 2>/dev/null || echo 0)"
+            echo -e "  ${GRAY}✓  model-map.overrides.json (${override_keys} override keys)${NC}"
             echo -e "  ${GRAY}✓  model-map.json (effective merged config, valid)${NC}"
         else
             echo -e "  ${YELLOW}⚠️  effective model-map.json failed validation — run: node ${local_validate} ${USER_MAP}${NC}"
