@@ -625,6 +625,7 @@ Infer the user's intent from the meaning of the words — do not require exact k
 |---|---|
 | "off", "disable", "turn off", "remove", "stop", "quiet", "no hint", "opt out", "silence" | → **disable** |
 | "on", "enable", "turn on", "add", "register", "activate", "restore" | → **enable** |
+| "toggle", "flip", "switch", "invert" | → **invert**: run `status` bash block, then call `enable` if currently off or `disable` if currently on |
 | "status", "check", "what", "show", "is it", "current", "state" | → **status** |
 | empty arguments | → **status** |
 
