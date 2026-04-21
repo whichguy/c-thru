@@ -41,7 +41,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 1 — Skill("review-plan") regression
 # ---------------------------------------------------------------------------
-echo "1/5  Skill(\"review-plan\") regression..."
+echo "1/8  Skill(\"review-plan\") regression..."
 if grep -qE 'Skill\([[:space:]]*["'"'"']review-plan["'"'"']' "$SKILL" 2>/dev/null; then
     fail 'skills/c-thru-plan/SKILL.md: Skill("review-plan") found — must use Agent(subagent_type: "review-plan") here (Skill() path invokes the interactive human plan-mode tool, not the c-thru wave agent)'
 else
@@ -51,7 +51,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 1b — No hardcoded .c-thru/plans/ paths in agents/*.md
 # ---------------------------------------------------------------------------
-echo "1b/5 Hardcoded .c-thru/plans/ in agents/*.md..."
+echo "1b/8 Hardcoded .c-thru/plans/ in agents/*.md..."
 hardcoded_agents=$(grep -l '\.c-thru/plans/' "$AGENTS_DIR"/*.md 2>/dev/null || true)
 if [ -n "$hardcoded_agents" ]; then
     for f in $hardcoded_agents; do
@@ -64,7 +64,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 2 — Dangling subagent_type references
 # ---------------------------------------------------------------------------
-echo "2/5  Dangling agent reference check..."
+echo "2/8  Dangling agent reference check..."
 
 # Claude Code built-in subagent types — no agents/*.md expected for these
 BUILTIN="general-purpose Explore"
@@ -106,7 +106,7 @@ done < <(grep -oE 'subagent_type:[[:space:]]*"[^"]+"' "$SKILL" \
 # sides. Accepts false negatives on compound names like journal_offset; the
 # check catches obvious structural gaps (missing whole input categories).
 # ---------------------------------------------------------------------------
-echo "3/7  Agent prompt key check..."
+echo "3/8  Agent prompt key check..."
 
 # Returns newline-separated input tokens for an agent file.
 # Strategy:
@@ -327,7 +327,7 @@ done < "$tmpblocks"
 # Canonical source: config/model-map.json#agent_to_capability.
 # agents/*.md count must match; docs must not hardcode a different number.
 # ---------------------------------------------------------------------------
-echo "4/7  Agent-count consistency check..."
+echo "4/8  Agent-count consistency check..."
 
 MODEL_MAP="$REPO_DIR/config/model-map.json"
 if [ ! -f "$MODEL_MAP" ]; then
@@ -363,7 +363,7 @@ fi
 # Every $PLAN_DIR/<subdir>/ referenced in SKILL.md must have a corresponding
 # mkdir in Phase 0. Wave-scoped dirs ($wave_dir/...) are excluded.
 # ---------------------------------------------------------------------------
-echo "5/7  Phase 0 mkdir coverage check..."
+echo "5/8  Phase 0 mkdir coverage check..."
 
 # Extract subdirectory names referenced as $PLAN_DIR/<name>/ in SKILL.md
 referenced=$(grep -oE '\$PLAN_DIR/[a-z_-]+/' "$SKILL" 2>/dev/null \
@@ -395,7 +395,7 @@ done
 #     Search SKILL.md + plan-orchestrator.md for the literal string V as a
 #     whole-word match. FAIL if the value is absent from both caller files.
 # ---------------------------------------------------------------------------
-echo "6/7  STATUS/VERDICT value coverage check..."
+echo "6/8  STATUS/VERDICT value coverage check..."
 
 # Extract STATUS/VERDICT values from an agent's Return block.
 # Matches both "**Return:**" (most agents) and "## Step N — Return STATUS"
@@ -458,7 +458,7 @@ done
 # Allowlist: subagent_type, prompt, description, mode
 # (model, run_in_background, timeout are agent-level params, not prompt-body keys)
 # ---------------------------------------------------------------------------
-echo "7/7  Undeclared prompt key check..."
+echo "7/8  Undeclared prompt key check..."
 
 # Built-in prompt keys never in an agent's Input: line
 BUILTIN_PROMPT_KEYS="subagent_type prompt description mode"
@@ -503,6 +503,39 @@ while IFS='|' read -r agent keys; do
         fi
     done
 done < "$tmpblocks"
+
+# ---------------------------------------------------------------------------
+# Check 8 — Restart-mode anchor presence in cloud agent files
+#
+# Static check: agents/implementer-cloud.md and agents/test-writer-cloud.md
+# must contain a <!-- mode: restart --> anchor in their restart-mode branch.
+# This anchor guards against anchoring-grep false positives from terms like
+# "prior", "previous", or "attempt" bleeding into restart-mode sections.
+# Runtime verification of rendered prompt digests belongs in the harness
+# (test/c-thru-plan-harness.test.js), not here.
+# Reference: wiki/entities/uplift-cascade-pattern.md
+# ---------------------------------------------------------------------------
+echo "8/8  Restart-mode anchor check in cloud agents..."
+
+CLOUD_AGENTS=("$AGENTS_DIR/implementer-cloud.md" "$AGENTS_DIR/test-writer-cloud.md")
+for cloud_agent in "${CLOUD_AGENTS[@]}"; do
+    [ -f "$cloud_agent" ] || continue
+    agent_base=$(basename "$cloud_agent")
+    if ! grep -q '<!-- mode: restart -->' "$cloud_agent" 2>/dev/null; then
+        fail "$agent_base: missing <!-- mode: restart --> anchor in restart-mode branch — add to the restart bullet in Mode detection section"
+    else
+        ok "$agent_base: <!-- mode: restart --> anchor present"
+    fi
+    # Anchoring-grep: verify no banned terms appear OUTSIDE a <!-- mode: restart --> anchor region.
+    # Strategy: strip the restart-mode line (which legitimately describes the restart branch),
+    # then check that no "prior approach" / "prior partial output" phrasing remains.
+    stripped=$(grep -v '<!-- mode: restart -->' "$cloud_agent" 2>/dev/null || true)
+    if echo "$stripped" | grep -qE 'prior (partial output|approach)'; then
+        fail "$agent_base: contains 'prior partial output' or 'prior approach' outside restart-mode anchor — rephrase to avoid anchoring-grep false positive (use 'escalation input' or 'fresh approach')"
+    else
+        ok "$agent_base: no anchoring-grep false-positive terms outside restart-mode anchor"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # Summary

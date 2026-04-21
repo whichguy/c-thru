@@ -140,13 +140,19 @@ echo "2" > $PLAN_DIR/.c-thru-contract-version
 Invoke the `review-plan` **agent** (not the skill) in a loop capped at 20 rounds.
 
 ```
-round = 0
-while round < 20:
+# Read persisted counter from disk on entry — guards against Phase-5 re-entry
+# resetting a local variable. Initializes to 0 for pre-existing plan dirs
+# that lack the key (upgrade path).
+meta = read $PLAN_DIR/meta.json
+meta.revision_rounds = meta.revision_rounds ?? 0
+write $PLAN_DIR/meta.json
+
+while meta.revision_rounds < 20:
     result = Agent(subagent_type: "review-plan",
                    prompt: "current.md:  $PLAN_DIR/current.md
                             INDEX:       $PLAN_DIR/INDEX.md
-                            round:       <round>
-                            review_out:  $PLAN_DIR/review/round-<round>.md")
+                            round:       <meta.revision_rounds>
+                            review_out:  $PLAN_DIR/review/round-<meta.revision_rounds>.md")
 
     if result contains "APPROVED":
         break  # proceed to Phase 3 aftermath
@@ -154,14 +160,16 @@ while round < 20:
     # NEEDS_REVISION — pass findings path to planner
     Agent(subagent_type: "planner",
           prompt: "signal:     wave_summary
-                   wave_summary: $PLAN_DIR/review/round-<round>.md
+                   wave_summary: $PLAN_DIR/review/round-<meta.revision_rounds>.md
                    current.md: $PLAN_DIR/current.md
                    learnings.md: $PLAN_DIR/learnings.md")
 
-    update $PLAN_DIR/meta.json: meta.revision_rounds += 1
-    round += 1
+    # Persist counter to disk before next iteration so Phase-5 re-entry sees the
+    # correct cumulative count rather than a reset local variable.
+    meta.revision_rounds += 1
+    write $PLAN_DIR/meta.json
 
-if round == 20 and no APPROVED received:
+if meta.revision_rounds >= 20 and no APPROVED received:
     Tell user: "Plan review hit the 20-round cap without APPROVED. Manual intervention required."
     Stop.
 ```
@@ -337,7 +345,12 @@ planner_result = Agent(subagent_type: "planner",
            final_review:  $PLAN_DIR/final-review.md
            current.md:    $PLAN_DIR/current.md
            learnings.md:  $PLAN_DIR/learnings.md")
-update $PLAN_DIR/meta.json: meta.revision_rounds += 1
+# Read from disk before incrementing — Phase 5 may be re-entered after context compaction
+# (meta variable from Phase 3 would be stale). ?? 0 guard for upgrade path.
+meta = read $PLAN_DIR/meta.json
+meta.revision_rounds = meta.revision_rounds ?? 0
+meta.revision_rounds += 1
+write $PLAN_DIR/meta.json
 
 # Re-materialize READY_ITEMS from updated current.md (same logic as Phase 3 aftermath)
 READY_ITEMS = [items where status=pending and all depends_on are [x]]

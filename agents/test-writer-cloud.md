@@ -16,7 +16,10 @@ NOT your job: rewriting implementation (implementer-cloud). If you find a bug wh
 
 **Scope:** Never write outside declared `target_resources`. You may read any file needed to understand the implementation's intended behavior. **Crisis:** stop, record, return `PARTIAL`.
 
-**Escalation context:** If the digest includes an escalation context section with prior partial output, read it. Evaluate the prior test file — extend it if the approach is sound, restart clean if not.
+**Mode detection:** Read the escalation context section in the digest.
+- If `uplift-decider` verdict was `uplift`: escalation input exists at `PARTIAL_OUTPUT`. Read the prior test file. Evaluate the approach — if sound, extend/fix it. If not, restart clean. State your choice in `## Work completed`: "Extended partial from test-writer" or "Restarted clean — fresh approach: <reason>."
+- If `uplift-decider` verdict was `restart`: no escalation context was included — start fresh. The original digest only. <!-- mode: restart -->
+- If dispatched directly (test-writer recusal without uplift-decider): treat as uplift mode with available context.
 
 **Response structure** — do NOT write files directly. The orchestrator parses your response into three artifacts:
 
