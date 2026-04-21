@@ -2,8 +2,8 @@
 /**
  * c-thru-plan-harness.js — Deterministic wave-lifecycle helpers.
  *
- * Responsibilities (5 subcommands):
- *   batch           Topo-sort READY_ITEMS + resource-conflict batching → wave.json
+ * Responsibilities (7 subcommands):
+ *   batch           Topo-sort READY_ITEMS + resource-conflict batching → wave.md
  *                   Migrated from: agents/plan-orchestrator.md Step 3
  *   batch-abort     Evaluate batch-abort threshold (>50% failed, or ≥2 in batch of ≤3)
  *                   Migrated from: agents/plan-orchestrator.md Batch-abort threshold section
@@ -13,6 +13,9 @@
  *                   Migrated from: agents/plan-orchestrator.md Step 7
  *   inject-contract Prepend shared/_worker-contract.md to each digest file
  *                   Enables: shared/worker-contract.md → B1 drift elimination
+ *   update-marker   Read-modify-write item checkbox state in wave.md (x|~|!|+) with file lock
+ *                   Called by orchestrator only — workers never write wave.md directly
+ *   targets         Emit sorted unique target_resources paths from wave.md; exit 1 on parse error
  *
  * STATUS/CONFIDENCE contract: docs/agent-architecture.md §12.1
  * Source agent: agents/plan-orchestrator.md
@@ -46,7 +49,7 @@ function die(msg) { process.stderr.write(`c-thru-plan-harness: ${msg}\n`); proce
  * @description Parse items from current.md into a Map.
  * Handles markdown list format: `- [ ] id: desc` with indented YAML-like attributes.
  * @param {string} content - full text of current.md
- * @returns {Map<string, {id:string, status:string, depends_on:string[], target_resources:string[], agent:string|null}>}
+ * @returns {Map<string, {id:string, description:string, status:string, depends_on:string[], target_resources:string[], agent:string|null}>}
  */
 function parseCurrentMd(content) {
   const items = new Map();
@@ -55,11 +58,12 @@ function parseCurrentMd(content) {
 
   while (i < lines.length) {
     const line = lines[i];
-    const itemMatch = line.match(/^-\s+\[([x ])\]\s+([\w-]+)\s*:/i);
+    const itemMatch = line.match(/^-\s+\[([x ])\]\s+([\w-]+)\s*:\s*(.*)/i);
     if (itemMatch) {
       const status = itemMatch[1].toLowerCase() === 'x' ? 'done' : 'pending';
       const id = itemMatch[2];
-      const item = { id, status, depends_on: [], target_resources: [], agent: null };
+      const description = itemMatch[3].trim();
+      const item = { id, description, status, depends_on: [], target_resources: [], agent: null };
       i++;
       // Read indented attribute lines
       while (i < lines.length && (lines[i].match(/^\s+\S/) || lines[i].trim() === '')) {
@@ -78,6 +82,243 @@ function parseCurrentMd(content) {
     }
   }
   return items;
+}
+
+// ── wave.md parser ─────────────────────────────────────────────────────────────
+
+// Marker char → status name
+const MARKER_TO_STATUS = { ' ': 'pending', '~': 'in_progress', 'x': 'complete', '!': 'blocked', '+': 'extend' };
+// Status name → marker char
+const STATUS_TO_MARKER = { pending: ' ', in_progress: '~', complete: 'x', blocked: '!', extend: '+' };
+
+/**
+ * @description Parse wave.md into a structured object.
+ * Reads YAML frontmatter + checkbox item blocks. Field: needs (forward edges only;
+ * no reverse edges stored — use findDependents() to derive on demand).
+ * @param {string} content - full text of wave.md
+ * @returns {{wave_id:number, commit_message:string, contract_version:number, batches:string[][], items:Map}}
+ * @throws {Error} on missing frontmatter or missing wave_id
+ */
+function parseWaveMd(content) {
+  // YAML frontmatter block
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) throw new Error('wave.md: missing YAML frontmatter');
+  const fm = fmMatch[1];
+
+  const waveIdM = fm.match(/^wave_id:\s*(\d+)/m);
+  if (!waveIdM) throw new Error('wave.md: missing wave_id in frontmatter');
+  const wave_id = parseInt(waveIdM[1], 10);
+
+  const commitM = fm.match(/^commit_message:\s*"((?:[^"\\]|\\.)*)"/m);
+  const commit_message = commitM
+    ? commitM[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+    : '';
+
+  const contractM = fm.match(/^contract_version:\s*(\d+)/m);
+  const contract_version = contractM ? parseInt(contractM[1], 10) : 3;
+
+  // batches: [["id1","id2"],["id3"]]   # computed — greedy match to last ] on line
+  const batchesM = fm.match(/^batches:\s*(\[.+\])\s*(?:#.*)?$/m);
+  let batches = [];
+  if (batchesM) {
+    try { batches = JSON.parse(batchesM[1]); } catch (_) { batches = []; }
+  }
+
+  // Parse item blocks
+  const items = new Map();
+  const lines = content.split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    // Match: - [marker] item-id: description
+    const itemM = line.match(/^-\s+\[([ x~!+])\]\s+([\w-]+)\s*:\s*(.*)/i);
+    if (itemM) {
+      const status = MARKER_TO_STATUS[itemM[1]] || 'pending';
+      const id = itemM[2];
+      const description = itemM[3].trim();
+      const item = {
+        id, description, status,
+        agent: null, needs: [], batch: null,
+        target_resources: [],
+        escalation_policy: 'local',
+        escalation_policy_source: 'harness-batch',
+        escalation_depth: 0,
+        escalation_log: [],
+        produced: [],
+        wave_num: null,
+      };
+      i++;
+      // Read indented attribute lines (strip inline comments before matching)
+      while (i < lines.length && (lines[i].match(/^\s+\S/) || lines[i].trim() === '')) {
+        const attr = lines[i].trim().replace(/\s*#.*$/, '').trim();
+        const needsM    = attr.match(/^needs:\s*\[([^\]]*)\]/);
+        const resM      = attr.match(/^target_resources:\s*\[([^\]]*)\]/);
+        const agM       = attr.match(/^agent:\s*(\S+)/);
+        const batchM    = attr.match(/^batch:\s*(\d+)/);
+        const ePolM     = attr.match(/^escalation_policy:\s*(\S+)/);
+        const eSrcM     = attr.match(/^escalation_policy_source:\s*(\S+)/);
+        const eDepM     = attr.match(/^escalation_depth:\s*(\d+)/);
+        const eLogM     = attr.match(/^escalation_log:\s*(\[.*\])/);
+        const prodM     = attr.match(/^produced:\s*\[([^\]]*)\]/);
+        const waveNumM  = attr.match(/^wave:\s*(\d+)/);
+        if (needsM)   item.needs = needsM[1].split(',').map(s => s.trim()).filter(Boolean);
+        else if (resM) item.target_resources = resM[1].split(',').map(s => s.trim()).filter(Boolean);
+        else if (agM)  item.agent = agM[1];
+        else if (batchM) item.batch = parseInt(batchM[1], 10);
+        else if (ePolM)  item.escalation_policy = ePolM[1];
+        else if (eSrcM)  item.escalation_policy_source = eSrcM[1];
+        else if (eDepM)  item.escalation_depth = parseInt(eDepM[1], 10);
+        else if (eLogM)  { try { item.escalation_log = JSON.parse(eLogM[1]); } catch (_) {} }
+        else if (prodM)  item.produced = prodM[1].split(',').map(s => s.trim()).filter(Boolean);
+        else if (waveNumM) item.wave_num = parseInt(waveNumM[1], 10);
+        i++;
+      }
+      items.set(id, item);
+    } else {
+      i++;
+    }
+  }
+
+  return { wave_id, commit_message, contract_version, batches, items };
+}
+
+// ── wave.md writer ─────────────────────────────────────────────────────────────
+
+/**
+ * @description Write wave.md atomically (tmp + rename).
+ * Items are serialized in batch order. The `needs:` field carries forward edges
+ * (translated from `depends_on:` in current.md). No reverse `dependents:` field
+ * is written — use findDependents() to derive on demand.
+ * `batch:` and frontmatter `batches:` are computed artifacts; labeled as such.
+ * @param {{wave_id:number, commit_message:string, batches:string[][], items:Map<string,object>}} waveData
+ * @param {string} outPath
+ */
+function writeWaveMd(waveData, outPath) {
+  const { wave_id, commit_message, batches, items } = waveData;
+
+  // Build item → batch number lookup
+  const itemBatchNum = new Map();
+  for (let bi = 0; bi < batches.length; bi++) {
+    for (const id of batches[bi]) {
+      itemBatchNum.set(id, bi + 1);
+    }
+  }
+
+  // Escape commit_message for YAML double-quoted scalar
+  const escapedMsg = commit_message.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const waveNum = String(wave_id).padStart(3, '0');
+  const batchesJson = JSON.stringify(batches);
+
+  let out = '---\n';
+  out += `wave_id:          ${wave_id}\n`;
+  out += `commit_message:   "${escapedMsg}"\n`;
+  out += `contract_version: 3\n`;
+  out += `batches:          ${batchesJson}   # computed by harness — do not edit by hand\n`;
+  out += '---\n\n';
+  out += `# Wave ${waveNum} — ${commit_message}\n\n`;
+  out += '## Tasks\n';
+
+  // Render items in batch order, then any orphans
+  const ordered = [...batches.flat()];
+  const orphans = [...items.keys()].filter(id => !ordered.includes(id));
+
+  for (const id of [...ordered, ...orphans]) {
+    const item = items.get(id);
+    if (!item) continue;
+
+    const marker   = STATUS_TO_MARKER[item.status] || ' ';
+    const needsStr = (item.needs || []).length ? `[${item.needs.join(', ')}]` : '[]';
+    const resStr   = (item.target_resources || []).length ? `[${item.target_resources.join(', ')}]` : '[]';
+    const batchNum = itemBatchNum.get(id) || '?';
+    const desc     = item.description || id;
+    const agent    = item.agent || 'implementer';
+    const ePol     = item.escalation_policy || 'local';
+    const eSrc     = item.escalation_policy_source || 'harness-batch';
+    const eLogStr  = JSON.stringify(item.escalation_log || []);
+
+    out += `\n- [${marker}] ${id}: ${desc}\n`;
+    out += `  agent: ${agent}\n`;
+    out += `  needs: ${needsStr}               # what must be [x] before this dispatches (authoritative)\n`;
+    out += `  batch: ${batchNum}                # computed — do not edit\n`;
+    out += `  target_resources: ${resStr}\n`;
+    out += `  escalation_policy: ${ePol}\n`;
+    out += `  escalation_policy_source: ${eSrc}\n`;
+    out += `  escalation_depth: ${item.escalation_depth || 0}\n`;
+    out += `  escalation_log: ${eLogStr}\n`;
+    // produced: and wave: appended only when set (post-completion fields)
+    if (item.produced && item.produced.length > 0) {
+      out += `  produced: [${item.produced.join(', ')}]\n`;
+    }
+    if (item.wave_num !== null && item.wave_num !== undefined) {
+      out += `  wave: ${item.wave_num}\n`;
+    }
+  }
+
+  const tmp = outPath + '.tmp';
+  fs.writeFileSync(tmp, out, 'utf8');
+  fs.renameSync(tmp, outPath);
+}
+
+// ── Reverse edge helper ────────────────────────────────────────────────────────
+
+/**
+ * @description Find all items that depend on itemId by scanning needs: fields.
+ * O(N) where N = items in the wave — no reverse edges stored in wave.md.
+ * @param {string} itemId
+ * @param {Map<string, {needs:string[]}>} items - from parseWaveMd
+ * @returns {string[]} IDs of items that have itemId in their needs list
+ */
+function findDependents(itemId, items) {
+  const result = [];
+  for (const [id, item] of items) {
+    if ((item.needs || []).includes(itemId)) result.push(id);
+  }
+  return result;
+}
+
+// ── Legacy wave.json fallback (read-only) ──────────────────────────────────────
+
+/**
+ * @description Read legacy wave.json for in-flight v2 plans. Emits deprecation warning.
+ * Translates depends_on → needs for orchestrator compatibility.
+ * @param {string} waveJsonPath - path to wave.json (not wave.md)
+ * @returns {{wave_id:number, commit_message:string, batches:string[][], items:Map}|null}
+ */
+function readWaveJson(waveJsonPath) {
+  if (!fs.existsSync(waveJsonPath)) return null;
+  process.stderr.write(
+    `c-thru-plan-harness: DEPRECATION — reading legacy wave.json at ${waveJsonPath}` +
+    ` (see pre-processor.log)\n`
+  );
+  try {
+    const raw = JSON.parse(fs.readFileSync(waveJsonPath, 'utf8'));
+    const batches = (raw.batches || []).map(b => (b.items || []).map(it => it.item));
+    const items = new Map();
+    for (const b of raw.batches || []) {
+      for (const it of b.items || []) {
+        items.set(it.item, {
+          id: it.item,
+          description: it.item,
+          status: 'pending',
+          agent: it.agent,
+          needs: it.depends_on || [],   // translate depends_on → needs
+          batch: null,
+          target_resources: it.target_resources || [],
+          escalation_policy: it.escalation_policy || 'local',
+          escalation_policy_source: it.escalation_policy_source || 'harness-batch',
+          escalation_depth: it.escalation_depth || 0,
+          escalation_log: it.escalation_log || [],
+          produced: [],
+          wave_num: null,
+        });
+      }
+    }
+    return { wave_id: raw.wave_id, commit_message: raw.commit_message, batches, items };
+  } catch (e) {
+    process.stderr.write(`c-thru-plan-harness: failed to read legacy wave.json: ${e.message}\n`);
+    return null;
+  }
 }
 
 // ── Topo-sort (Kahn's algorithm) ───────────────────────────────────────────────
@@ -187,9 +428,9 @@ function assignBatches(sorted, specs) {
 // ── Subcommand: batch ──────────────────────────────────────────────────────────
 
 /**
- * @description Produce wave.json from current.md + READY_ITEMS list.
- * Writes the file atomically (tmp + rename). Exits non-zero on cycle.
- * Migrated from plan-orchestrator.md Step 3.
+ * @description Produce wave.md from current.md + READY_ITEMS list.
+ * Field rename: depends_on (current.md) → needs (wave.md). No reverse edges stored.
+ * Writes atomically (tmp + rename). Exits non-zero on cycle.
  * @param {string[]} cliArgs - remaining CLI arguments after 'batch'
  */
 function cmdBatch(cliArgs) {
@@ -222,36 +463,42 @@ function cmdBatch(cliArgs) {
     process.exit(2);
   }
 
-  const batches = assignBatches(sorted, specs);
+  const batchesRaw = assignBatches(sorted, specs);
 
-  // Build wave.json structure matching plan-orchestrator Step 3 schema
-  const wave = {
-    wave_id:        waveId,
-    commit_message: commitMsg,
-    batches: batches.map(b => ({
-      parallel: b.parallel,
-      items: b.items.map(id => {
-        const spec = specs.get(id) || {};
-        return {
-          agent:                    spec.agent || 'implementer',
-          item:                     id,
-          target_resources:         spec.target_resources || [],
-          depends_on:               spec.depends_on || [],
-          escalation_policy:        escalPolicy,
-          escalation_policy_source: 'harness-batch',
-          escalation_depth:         0,
-          escalation_log:           [],
-        };
-      }),
-    })),
-  };
+  // Build batch groups (list of lists of IDs) for frontmatter
+  const batchGroups = batchesRaw.map(b => b.items);
 
-  // Atomic write: tmp file + rename
-  const tmp = outputPath + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(wave, null, 2) + '\n', 'utf8');
-  fs.renameSync(tmp, outputPath);
+  // Build item data map (depends_on → needs translation happens here)
+  const itemsMap = new Map();
+  for (const b of batchesRaw) {
+    for (const id of b.items) {
+      const spec = specs.get(id) || {};
+      itemsMap.set(id, {
+        id,
+        description: spec.description || id,
+        status: 'pending',
+        agent: spec.agent || 'implementer',
+        needs: spec.depends_on || [],   // field rename: depends_on → needs
+        target_resources: spec.target_resources || [],
+        escalation_policy: escalPolicy,
+        escalation_policy_source: 'harness-batch',
+        escalation_depth: 0,
+        escalation_log: [],
+        produced: [],
+        wave_num: null,
+      });
+    }
+  }
 
-  process.stdout.write(`batch: wrote ${batches.length} batch(es) for ${sorted.length} item(s) → ${outputPath}\n`);
+  writeWaveMd({ wave_id: waveId, commit_message: commitMsg, batches: batchGroups, items: itemsMap }, outputPath);
+
+  // Schema validation: re-parse to confirm round-trip fidelity
+  const check = parseWaveMd(fs.readFileSync(outputPath, 'utf8'));
+  if (!Number.isFinite(check.wave_id) || !check.commit_message || check.items.size === 0) {
+    die('schema validation failed after write: wave_id, commit_message, or items missing');
+  }
+
+  process.stdout.write(`batch: wrote ${batchGroups.length} batch(es) for ${sorted.length} item(s) → ${outputPath}\n`);
 }
 
 // ── Subcommand: batch-abort ────────────────────────────────────────────────────
@@ -423,6 +670,111 @@ function cmdInjectContract(cliArgs) {
   );
 }
 
+// ── Subcommand: update-marker ──────────────────────────────────────────────────
+
+/**
+ * @description Read-modify-write a single item's marker state in wave.md.
+ * Takes an advisory file lock (atomic open with O_EXCL) to serialize concurrent callers.
+ * Only the orchestrator calls this — workers never write wave.md directly.
+ *
+ * Usage:
+ *   update-marker --wave-md <path> --item <id> --status <x|~|!|+>
+ *                 [--produced <csv>] [--wave <N>]
+ *                 [--escal-policy <policy>] [--escal-policy-source <source>]
+ *                 [--escal-depth <N>]
+ *
+ * Exit codes: 0 success, 1 error (item not found, lock contention, parse failure)
+ * @param {string[]} cliArgs
+ */
+function cmdUpdateMarker(cliArgs) {
+  const waveMdPath  = arg(cliArgs, '--wave-md',             true);
+  const itemId      = arg(cliArgs, '--item',                true);
+  const newStatus   = arg(cliArgs, '--status',              true);
+  const producedCsv = arg(cliArgs, '--produced');
+  const waveNumArg  = arg(cliArgs, '--wave');
+  const escalPol    = arg(cliArgs, '--escal-policy');
+  const escalSrc    = arg(cliArgs, '--escal-policy-source');
+  const escalDepArg = arg(cliArgs, '--escal-depth');
+
+  const VALID_STATUS = new Set(['x', '~', '!', '+']);
+  if (!VALID_STATUS.has(newStatus)) {
+    die(`--status must be one of: x ~ ! +; got: ${newStatus}`);
+  }
+
+  // Advisory file lock: atomic create with O_EXCL (stdlib only, no npm deps)
+  const lockPath = waveMdPath + '.lock';
+  let lockFd;
+  try {
+    lockFd = fs.openSync(lockPath, 'wx');
+  } catch (e) {
+    die(`wave.md is locked by concurrent update-marker: ${lockPath}`);
+  }
+
+  try {
+    if (!fs.existsSync(waveMdPath)) die(`wave.md not found: ${waveMdPath}`);
+
+    const content  = fs.readFileSync(waveMdPath, 'utf8');
+    const waveData = parseWaveMd(content);
+    const item     = waveData.items.get(itemId);
+    if (!item) die(`item '${itemId}' not found in ${waveMdPath}`);
+
+    const STATUS_MAP = { 'x': 'complete', '~': 'in_progress', '!': 'blocked', '+': 'extend' };
+    item.status = STATUS_MAP[newStatus];
+    if (producedCsv)  item.produced  = producedCsv.split(',').map(s => s.trim()).filter(Boolean);
+    if (waveNumArg)   item.wave_num  = parseInt(waveNumArg, 10);
+    if (escalPol)     item.escalation_policy = escalPol;
+    if (escalSrc)     item.escalation_policy_source = escalSrc;
+    if (escalDepArg)  item.escalation_depth = parseInt(escalDepArg, 10);
+
+    writeWaveMd(waveData, waveMdPath);
+    process.stdout.write(`update-marker: ${itemId} → [${newStatus}] (${STATUS_MAP[newStatus]})\n`);
+  } finally {
+    fs.closeSync(lockFd);
+    try { fs.unlinkSync(lockPath); } catch (_) {}
+  }
+}
+
+// ── Subcommand: targets ────────────────────────────────────────────────────────
+
+/**
+ * @description Emit sorted unique target_resources paths from wave.md, one per line.
+ * Pure reader — no state mutation. Orchestrator uses this in Step 12 git commit
+ * (replaces `jq -r '.batches[].items[].target_resources[]'` on wave.json).
+ *
+ * Exit codes: 0 success (even empty), 1 unreadable/malformed wave.md
+ * @param {string[]} cliArgs
+ */
+function cmdTargets(cliArgs) {
+  const waveMdPath = arg(cliArgs, '--wave-md', true);
+
+  if (!fs.existsSync(waveMdPath)) {
+    process.stderr.write(`c-thru-plan-harness: wave.md not found: ${waveMdPath}\n`);
+    process.exit(1);
+  }
+
+  let waveData;
+  try {
+    const content = fs.readFileSync(waveMdPath, 'utf8');
+    waveData = parseWaveMd(content);
+  } catch (e) {
+    process.stderr.write(`c-thru-plan-harness: failed to parse wave.md: ${e.message}\n`);
+    process.exit(1);
+  }
+
+  const allPaths = new Set();
+  for (const [, item] of waveData.items) {
+    for (const r of (item.target_resources || [])) {
+      if (r) allPaths.add(r);
+    }
+  }
+
+  const sorted = [...allPaths].sort();
+  if (sorted.length > 0) {
+    process.stdout.write(sorted.join('\n') + '\n');
+  }
+  process.exit(0);
+}
+
 // ── Main dispatch ──────────────────────────────────────────────────────────────
 
 const [,, subcmd, ...rest] = process.argv;
@@ -432,12 +784,17 @@ c-thru-plan-harness — deterministic wave-lifecycle helpers
 
 Subcommands:
   batch           --current-md <path> --items <id1,id2,...> --wave-id <N>
-                  --commit-msg <msg> --output <wave.json> [--escal-policy <policy>]
+                  --commit-msg <msg> --output <wave.md> [--escal-policy <policy>]
   batch-abort     --failed <N> --total <N> [--wave-dir <path>]
   calibrate       --item <id> --agent <name> --confidence <high|medium|low>
                   --verify-pass <true|false|null> [--has-confidence] --wave-dir <path>
   concat          --wave-dir <path>
   inject-contract --contract <path> --digests-dir <path>
+  update-marker   --wave-md <path> --item <id> --status <x|~|!|+>
+                  [--produced <csv>] [--wave <N>]
+                  [--escal-policy <policy>] [--escal-policy-source <source>]
+                  [--escal-depth <N>]
+  targets         --wave-md <path>
 
 Exit codes: 0 success, 1 abort/error, 2 cycle detected (batch)
 `.trimStart();
@@ -448,6 +805,8 @@ switch (subcmd) {
   case 'calibrate':       cmdCalibrate(rest);      break;
   case 'concat':          cmdConcat(rest);         break;
   case 'inject-contract': cmdInjectContract(rest); break;
+  case 'update-marker':   cmdUpdateMarker(rest);   break;
+  case 'targets':         cmdTargets(rest);        break;
   default:
     process.stdout.write(USAGE);
     process.exit(subcmd ? 1 : 0);
