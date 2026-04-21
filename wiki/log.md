@@ -49983,3 +49983,11 @@ claude-router"
 [2026-04-20 16:26] SESSION_START session:1c57a3e2: opened in c-thru
 [2026-04-20 16:27] SESSION_END session:1c57a3e2: closed in c-thru
 [2026-04-20 16:28] PERIODIC session:1c57a3e2: probabilistic trigger fired (mod=17)
+[2026-04-20 20:26] SESSION_END session:699f43f3: closed in c-thru
+[2026-04-20 20:43] SESSION_START session:5121f779: opened in c-thru
+[2026-04-20 20:43] SESSION_CLEAR session:5121f779: /clear boundary in c-thru
+[2026-04-20 20:43] READ_GATE session:5121f779 path:test/model-map-v12-adapter.test.js slugs:capability-profile-model-layers dur:0ms
+[2026-04-20 20:49] READ_GATE session:5121f779 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-20 20:49] READ_GATE session:5121f779 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-20 20:54] SESSION_END session:5121f779: closed in c-thru
+[2026-04-20 21:16] PERIODIC session:5121f779: probabilistic trigger fired (mod=17)
