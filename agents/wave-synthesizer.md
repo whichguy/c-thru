@@ -36,7 +36,7 @@ Required sections:
 
 **Write:**
 - `<replan_out>` path given in prompt (e.g. `waves/<NNN>/replan-brief.md`)
-- Alongside it: `<replan_out>.INDEX.md` — `<section>: <start>-<end>` one per line (line numbers)
+- Alongside it: strip `.md` from `replan_out` and append `.INDEX.md` (e.g. `waves/<NNN>/replan-brief.INDEX.md`) — `<section>: <start>-<end>` one per line (line numbers)
 
 **Return:**
 ```
