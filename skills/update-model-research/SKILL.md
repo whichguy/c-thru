@@ -82,6 +82,14 @@ Read `docs/local-model-prompt-techniques.md`. Extract:
 Write snapshot to a temp variable `DOC_SNAPSHOT` (do not write to disk).
 Print the open-bug count and disputed-claim count as a brief summary.
 
+6. **Obsolete models** — compare the families extracted from `config/model-map.json`
+   against the model-family headings in the doc (`## Qwen3`, `## Gemma 4`, etc.).
+   Any family heading in the doc with no matching active entry in `model-map.json`
+   is an obsolete model. Print: "Obsolete model sections found: `<list>`". Do not
+   delete or modify these sections automatically — add a note to the Phase 5 Change
+   Summary under `### Obsolete model sections (review manually)` listing the family
+   names and recommending human review before removal.
+
 ---
 
 ## Phase 2 — Parallel Research
@@ -218,6 +226,7 @@ Receive all agent reports. For each finding:
 | NEW FINDING, confirmed | → ADD to appropriate section |
 | NEW FINDING, community-only | → ADD with `⚠️ Community report — not independently verified` tag |
 | AUTHORITATIVE CORRECTION | → UPDATE: replace the claim, cite the authority |
+| NUANCES (from AUTHORITATIVE CORRECTIONS) | → UPDATE: add inline nuance after the existing claim; do not delete the original; cite the authority |
 | CONFIRMS DISPUTED claim | → UPDATE: resolve the disputed tag |
 | DISSENT (credible) | → ADD dissent note inline in the relevant paragraph |
 | NO CHANGE verified | → No edit; log in change summary |
