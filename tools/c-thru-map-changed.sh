@@ -6,13 +6,13 @@ file_path=""
 
 # Parse file_path from stdin JSON safely
 if command -v jq >/dev/null 2>&1; then
-    file_path=$(jq -r '.file_path // empty' 2>/dev/null)
+    file_path=$(jq -r '(.tool_input.file_path // .file_path) // empty' 2>/dev/null)
 elif command -v node >/dev/null 2>&1; then
     file_path=$(node -e "
         let d=''; process.stdin.setEncoding('utf8');
         process.stdin.on('data',c=>d+=c);
         process.stdin.on('end',()=>{
-            try{process.stdout.write(JSON.parse(d).file_path||'')}catch(e){}
+            try{const p=JSON.parse(d);process.stdout.write((p.tool_input&&p.tool_input.file_path)||p.file_path||'')}catch(e){}
         });
     " 2>/dev/null)
 else
@@ -33,12 +33,16 @@ if ! command -v node >/dev/null 2>&1 || [ ! -f "$validator" ]; then
     exit 0  # validator unavailable — skip silently
 fi
 
-# Run validation
-if node "$validator" "$file_path" >/dev/null 2>&1; then
+# Run validation (single invocation — capture output, check exit code)
+if validator_out=$(node "$validator" "$file_path" 2>&1); then
     msg="model-map.json valid — restart proxy to apply: pkill -f claude-proxy"
 else
-    msg=$(node "$validator" "$file_path" 2>&1 | head -5)
+    msg=$(printf '%s' "$validator_out" | head -5)
 fi
 
-printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}' \
-    "$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//')"
+if command -v jq >/dev/null 2>&1; then
+    msg_json=$(printf '%s' "$msg" | jq -Rs .)
+else
+    msg_json=$(node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(d)));" <<< "$msg")
+fi
+printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":%s}}' "$msg_json"

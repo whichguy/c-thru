@@ -9,6 +9,14 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn, spawnSync, execFile } = require('child_process');
 const { Transform } = require('stream');
+const {
+  resolveProfileModel,
+  resolveLlmMode,
+  resolveActiveTier,
+  resolveCapabilityAlias,
+  LLM_MODE_ENUM,
+  LLM_PROFILE_ALIASES,
+} = require('./model-map-resolve.js');
 
 // ── Rolling log ───────────────────────────────────────────────────────
 // Fixed path, 10 MB limit, 3 generations. Intercepts process.stderr so
@@ -376,90 +384,24 @@ function lookupPatternValue(section, model) {
   return null;
 }
 
-// Static set covers the original five aliases + general-default for backward compat.
-// Dynamic profile-key lookup (below) extends this to new capability aliases and
-// synthesized agent-name entries without requiring code changes per alias added.
-const LLM_PROFILE_ALIASES = new Set(['classifier', 'explorer', 'reviewer', 'workhorse', 'coder', 'general-default']);
-
 function profileAliasKey(alias) {
   return alias === 'general-default' ? 'default' : alias;
 }
 
-function detectMemoryProfile() {
-  const override = process.env.CLAUDE_LLM_MEMORY_GB;
-  const totalGb = override && /^\d+$/.test(override) ? Number(override) : Math.ceil(os.totalmem() / (1024 ** 3));
-  const { tierForGb } = require('./hw-profile.js');
-  return tierForGb(totalGb);
-}
-
-function resolveProfileName() {
-  if (process.env.CLAUDE_LLM_PROFILE) return process.env.CLAUDE_LLM_PROFILE;
-  const configured = CONFIG.llm_active_profile || 'auto';
-  return configured === 'auto' ? detectMemoryProfile() : configured;
-}
-
-const LLM_MODE_ENUM = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline']);
-
-function resolveLlmMode() {
-  // Precedence: CLAUDE_LLM_MODE → CLAUDE_CONNECTIVITY_MODE (legacy) → CONFIG.llm_mode → CONFIG.llm_connectivity_mode (legacy) → 'connected'
-  const envMode = process.env.CLAUDE_LLM_MODE;
-  if (envMode) {
-    if (!LLM_MODE_ENUM.has(envMode)) {
-      process.stderr.write(`claude-proxy: unknown CLAUDE_LLM_MODE '${envMode}', ignoring\n`);
-    } else {
-      return envMode;
-    }
-  }
-  const legacyEnv = process.env.CLAUDE_CONNECTIVITY_MODE || process.env.CLAUDE_LLM_CONNECTIVITY_MODE;
-  if (legacyEnv) {
-    return legacyEnv === 'disconnect' ? 'offline' : 'connected';
-  }
-  if (CONFIG.llm_mode && LLM_MODE_ENUM.has(CONFIG.llm_mode)) return CONFIG.llm_mode;
-  if (CONFIG.llm_connectivity_mode) return CONFIG.llm_connectivity_mode === 'disconnect' ? 'offline' : 'connected';
-  return 'connected';
-}
-
-// Kept for internal callers that still use the old name during transition.
 function resolveConnectivityMode() {
-  const m = resolveLlmMode();
+  const m = resolveLlmMode(CONFIG);
   return m === 'offline' ? 'disconnect' : 'connected';
 }
 
-function resolveProfileModel(entry, mode) {
-  // llm_mode: <mode> → model selection from profile entry
-  if (entry.modes && Object.prototype.hasOwnProperty.call(entry.modes, mode)) {
-    return entry.modes[mode];
-  }
-  if (mode === 'offline') return entry.disconnect_model;
-  if (mode === 'connected') return entry.connected_model;
-  // semi-offload and cloud-judge-only default to local unless modes[] overrides
-  if (mode === 'semi-offload' || mode === 'cloud-judge-only') return entry.disconnect_model;
-  return entry.connected_model; // conservative default for unknown modes
-}
-
-// Returns the capability alias for a given model name via 2-hop graph traversal:
-//   agent name  → agent_to_capability → capability alias  (e.g. implementer → deep-coder)
-//   alias name  → identity                                 (e.g. deep-coder → deep-coder)
-//   unknown     → null                                     (passthrough, not a profile alias)
-// Checks: static LLM_PROFILE_ALIASES, agent_to_capability map, or direct profile key.
-function resolveCapabilityAlias(model) {
-  if (LLM_PROFILE_ALIASES.has(model)) return model;
-  const a2c = CONFIG.agent_to_capability;
-  if (a2c && Object.prototype.hasOwnProperty.call(a2c, model)) return a2c[model];
-  const profile = (CONFIG.llm_profiles || {})[resolveProfileName()];
-  if (profile && Object.prototype.hasOwnProperty.call(profile, model)) return model;
-  return null;
-}
-
 function resolveLogicalAlias(model) {
-  const capAlias = resolveCapabilityAlias(model);
+  const tier     = resolveActiveTier(CONFIG);
+  const capAlias = resolveCapabilityAlias(model, CONFIG, tier);
   if (!capAlias) return model;
-  const profiles = CONFIG.llm_profiles || {};
-  const profile = profiles[resolveProfileName()];
+  const profile  = (CONFIG.llm_profiles || {})[tier];
   if (!profile) return model;
-  const entry = profile[profileAliasKey(capAlias)];
+  const entry    = profile[profileAliasKey(capAlias)];
   if (!entry || typeof entry !== 'object') return model;
-  const resolved = resolveProfileModel(entry, resolveLlmMode());
+  const resolved = resolveProfileModel(entry, resolveLlmMode(CONFIG));
   return typeof resolved === 'string' && resolved ? resolved : model;
 }
 
@@ -1322,7 +1264,7 @@ function resolveFallbackModel(model, failureClass, logicalRole = null) {
   // Per-profile hard_fail gate: classifier must error rather than cascade to a non-equivalent model.
   if (logicalRole) {
     const cfg = CONFIG;
-    const hw = resolveProfileName();
+    const hw = resolveActiveTier(CONFIG);
     const profiles = cfg.llm_profiles?.[hw] || {};
     const profileEntry = profiles[profileAliasKey(logicalRole)];
     if (profileEntry?.on_failure === 'hard_fail') return null;
@@ -1485,7 +1427,7 @@ function resolveBackend(model) {
   // 1. Follow route graph first
   const afterRoute = resolveRouteModel(model);
   const terminalModel = resolveLogicalAlias(afterRoute);
-  const logicalRole = resolveCapabilityAlias(afterRoute);
+  const logicalRole = resolveCapabilityAlias(afterRoute, CONFIG, resolveActiveTier(CONFIG));
 
   // 1a. @<backend> sigil: "model@backend_id" binds directly to named backend
   const sigilMatch = terminalModel.match(BACKEND_SIGIL_RE);
