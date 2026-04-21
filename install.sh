@@ -35,6 +35,7 @@ chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh
 chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TOOLS_SRC/c-thru-statusline-overlay.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-apply-recommendations.js" "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/model-map-resolve.js" "$TOOLS_SRC/c-thru-resolve" 2>/dev/null || true
 
 mkdir -p "$TOOLS_DEST"
 
@@ -80,6 +81,8 @@ if command -v node >/dev/null 2>&1; then
     link_tool model-map-validate.js model-map-validate
     link_tool model-map-sync.js model-map-sync
     link_tool model-map-edit.js model-map-edit
+    link_tool model-map-resolve.js model-map-resolve.js
+    link_tool c-thru-resolve c-thru-resolve
 else
     echo -e "  ${YELLOW}⚠️  node not found — skipping JS helper symlinks${NC}"
 fi
