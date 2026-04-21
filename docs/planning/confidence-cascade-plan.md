@@ -85,7 +85,7 @@ high_fail   = high_items WHERE verify_pass = false                     -- set
 n_high      = |high_items|
 n_high_fail = |high_fail|
 
-calibration_rate = (n_high - n_high_fail) / n_high
+calibration_rate = (n_high - n_high_fail) / n_high  (undefined when n_high = 0 — see below)
 compliance       = items_with_CONFIDENCE / total  (target ≥80%)
 ```
 
@@ -93,6 +93,8 @@ compliance       = items_with_CONFIDENCE / total  (target ≥80%)
 `high_items` is a subset of `eligible` — the `verify_pass ≠ null` guard is
 inherited. Any code implementation must apply the `eligible` filter before
 computing `high_items` or the null-exclusion silently breaks.
+If `n_high = 0`: `calibration_rate = null` — insufficient signal. Treat as an
+inconclusive run; do not count toward the 2-consecutive gate.
 
 ### Wave-1 measurement steps (pending — run after merge)
 
@@ -167,6 +169,10 @@ The rubric question is always: *can I produce a verifiably correct output?*
 **Self-recusal rubric (embedded in every worker + orchestrator prompt):**
 
 ```
+The first three signals fire before work begins — return RECUSE without attempting.
+The fourth fires mid-execution: if you have produced output but cannot verify it
+satisfies the criteria, recuse even though work was started. Set ATTEMPTED: yes.
+
 Recuse if ANY of:
   - I cannot identify the specific existing pattern I would follow to satisfy
     the success criteria
@@ -224,7 +230,7 @@ surface to user
 | `scaffolder` | `implementer` | Task type changes: design decision needed |
 | `implementer` | `uplift-decider` → `implementer-cloud` | Reads partial work, patch\|restart |
 | `reviewer-fix` | `implementer-cloud` | Approach broken → restart at cloud implementer. Skips `deep-coder` tier: review recusal means the code requires redesign — a local re-implementation attempt would reproduce the same failure |
-| `test-writer` | `test-writer-cloud` | Same role, higher tier |
+| `test-writer` | `test-writer-cloud` | Same role, higher tier (†Wave-2 — see §3.7) |
 | `planner-local` | `planner` | Cloud judge; already natural `outcome_risk` path |
 | `implementer-cloud` | `judge` | Cloud judge as high-capability implementer |
 | `judge` | surface to user | Last resort only |
@@ -256,12 +262,14 @@ Each escalation passes accumulated context forward: original digest + all prior
 attempts + all recusal reasons. The receiving agent decides: patch partial output
 or restart clean.
 
-Only when `escalation_depth == max_escalations` AND last agent was judge tier →
-surface to user with full escalation log.
+Surface to user only when the judge tier itself recuses. Depth cap (`max_escalations`)
+is a separate budget gate — overflow marks the item `blocked` for user review but does
+not surface the escalation log. These are independent: an item can hit the depth cap
+before reaching judge (→ `blocked`), or exhaust the chain and have judge recuse (→ surface to user).
 
 ### 3.6 Cloud worker CONFIDENCE
 
-`implementer-cloud` carries the same §12.1 CONFIDENCE rubric as `implementer`.
+`implementer-cloud` carries the same CONFIDENCE rubric as `implementer` (see Appendix B).
 Cloud models also self-assess. This catches items where even cloud cannot establish
 correctness — and triggers further escalation rather than silent `STATUS: COMPLETE`.
 
@@ -296,14 +304,15 @@ but included in cloud calibration via `cloud_verify_pass`.
 |---|---|---|
 | `uplift-decider` | `judge` | Reads partial local output; emits accept\|uplift\|restart + CLOUD_CONFIDENCE. Judge-tier intentional: routing errors on bad local output propagate silently — expensive triage is preferable to wrong escalation decision |
 | `implementer-cloud` | `deep-coder-cloud` | Two prompt modes: uplift (patch) vs restart (clean); returns CONFIDENCE |
+| `test-writer-cloud` | `code-analyst-cloud` | Same role as test-writer at cloud tier; escalation target for test-writer recusals |
 | `converger` | `code-analyst` | Aggregates parallel explorer/implementer outputs |
 
 ### 3.8 New config (Wave-2)
 
 `config/model-map.json` additions:
 - `agent_to_capability`: `uplift-decider → judge`, `implementer-cloud → deep-coder-cloud`,
-  `converger → code-analyst`
-- `llm_profiles[hw]`: add `deep-coder-cloud` alias → cloud-backed model per tier
+  `test-writer-cloud → code-analyst-cloud`, `converger → code-analyst`
+- `llm_profiles[hw]`: add `deep-coder-cloud` and `code-analyst-cloud` aliases → cloud-backed models per tier
 
 ### 3.9 Budget and policy
 
@@ -330,6 +339,7 @@ Wave-2 branch: feat/cascade-routing
   agents/scaffolder.md          — same
   agents/uplift-decider.md      — NEW
   agents/implementer-cloud.md   — NEW
+  agents/test-writer-cloud.md   — NEW
   agents/converger.md           — NEW
   config/model-map.json         — deep-coder-cloud alias + new agent_to_capability entries
   docs/agent-architecture.md    — escalation chain + RECUSE contract
@@ -438,7 +448,7 @@ low — ANY of:
   - You couldn't find the calling site of what you built.
 
 UNCERTAINTY_REASONS must name the specific rubric bullet(s) that triggered
-medium or low (comma-separated, single line). Omit when high.
+medium or low (comma-separated, single line). If no bullet triggered, you're high. Omit when high.
 ```
 
 ---

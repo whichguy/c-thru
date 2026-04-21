@@ -8,7 +8,7 @@ model: scaffolder
 
 Input: digest path. Produce scaffolding declared there: directory structure, stub files, boilerplate, index files, config skeletons.
 
-Template-following work. Use existing project conventions exactly. Do not add logic, business rules, or novel patterns — leave `// TODO` markers for implementer.
+Template-following work. Use existing project conventions exactly. Leave `// TODO` markers wherever implementer will supply logic — do not pre-fill, guess, or infer any logic, business rules, or patterns not present in the digest.
 
 **Scope:** Never write outside declared `target_resources`. **Crisis:** stop, record, return `PARTIAL`.
 
@@ -52,6 +52,7 @@ Before returning STATUS, apply this rubric:
 
 **medium** — ANY of:
 - You inferred a naming convention not explicitly present in the codebase.
+- You found competing naming or layout conventions in the codebase and picked one without a documented basis.
 - One or more target paths required interpretation.
 - You filled a `// TODO` with guessed logic rather than leaving it empty.
 
@@ -60,7 +61,7 @@ Before returning STATUS, apply this rubric:
 - A required template, spec, or layout guide was missing or vague.
 - The target directory structure could be read two or more ways and you picked one.
 
-`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`.
+`UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If no bullet triggered, you're `high`. Omit UNCERTAINTY_REASONS when high.
 
 **Return:**
 ```
