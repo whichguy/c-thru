@@ -114,8 +114,10 @@ Quality ordering derived from `wiki/entities/moe-speed-capability-dual.md`, `qwe
 
 Chains seeded for: `judge`, `orchestrator`, `deep-coder`, `local-planner`, `coder`, `workhorse`, `default` at 48gb/64gb/128gb.
 
-`default` chain (48gb): `glm-5.1:cloud` (q=72, s=80) → `gpt-oss:20b` (q=75, s=90) → `gemma4:e4b` (local terminal).
-`default` chain (64gb/128gb): `glm-5.1:cloud` (q=72, s=80) → `gpt-oss:20b` (q=75, s=90) → `gemma4:26b` (local terminal).
+`default` chain (48gb): `gpt-oss:20b` (q=75, s=90) → `glm-5.1:cloud` (q=72, s=80) → `gemma4:e4b` (local terminal).
+`default` chain (64gb/128gb): `gpt-oss:20b` (q=75, s=90) → `glm-5.1:cloud` (q=72, s=80) → `gemma4:26b` (local terminal).
+
+Chains are quality-sorted descending so both active-path (order-preserving) and pre-flight (tiebreaker-aware) give consistent results. When the primary (`glm-5.1:cloud`) fails, `gpt-oss:20b` is tried first — correct, since it has higher quality.
 
 ## Set Mode via Skill
 
@@ -130,4 +132,8 @@ Set per-capability best models:
 /c-thru-config set-local-best-model judge qwen3.6:35b [--tier 64gb] [--reload]
 ```
 
-→ See also: [[capability-profile-model-layers]], [[fallback-event-system]], [[declared-rewrites]], [[moe-speed-capability-dual]]
+- **From Session c6237d83:** Critical post-merge finding: active-path fallback was dead. The dispatch gate (line 2479) only entered `handleRequestWithFallback` when `fallback_strategies[terminalModel]` existed — empty in shipped config, so every capability request took the direct `forwardAnthropic` path, returning 502 on 429/5xx with no recovery. Three-site fix: (1) dispatch gate also routes through when `fallback_chains[hw][capKey]` exists, (2) early-return guard inside `handleRequestWithFallback` skips `doForward` when a chain exists, (3) active error handlers consult `fallback_chains` when `fallback_strategies` yields nothing.
+- **From Session c6237d83:** Validator gap: `fallback_chains[].model` strings were not verified against `model_routes`. Typos like `claude-opux-4-6` would silently route to the Ollama default backend. Fixed by threading `model_routes` into `validateFallbackChains` (direct key + `re:` pattern match). `@backend` sigils exempted — the sigil IS the routing.
+- **From Session c6237d83:** `applyQualityTolerance` with all-null `quality_score`: preserves original chain order (no re-sorting). Partially null: null-score candidates sort after scored ones. Tested in §16 of `test/llm-mode-resolution-matrix.test.js`.
+
+→ See also: [[capability-profile-model-layers]], [[fallback-event-system]], [[declared-rewrites]], [[moe-speed-capability-dual]], [[connectivity-vs-cascade]]
