@@ -22,7 +22,7 @@ AFFECTED_ITEMS: []
 SUMMARY: wave already committed — skipped
 ```
 
-Also check for `$wave_dir/wave.json` — if it exists and any batch is incomplete (see **Within-wave resume** below), resume from the first incomplete batch rather than re-dispatching from scratch.
+Also check for `$wave_dir/wave.md` — if it exists and any batch is incomplete (see **Within-wave resume** below), resume from the first incomplete batch rather than re-dispatching from scratch. Legacy fallback: if `wave.md` is absent but `wave.json` is present (v2 in-flight plan), read via `readWaveJson()` (emits deprecation warning to `pre-processor.log`).
 
 ---
 
@@ -54,12 +54,12 @@ Exit 0 → continue. Decision + ratio written to `$wave_dir/batch-abort.log`.
 
 ## Within-wave resume
 
-Pre-check examines `$wave_dir/wave.json` when it exists:
+Pre-check examines `$wave_dir/wave.md` when it exists:
 
-- **Batch-complete predicate:** a batch is complete iff every item in `batches[].items` has a corresponding `$wave_dir/findings/<agent>-<item>.jsonl` file with a valid STATUS entry.
-- **Partial batch:** some items have findings, others do not — re-run from the first item missing a findings file.
+- **Batch-complete predicate:** a batch is complete iff every item in the `batches:` frontmatter list has a corresponding `$wave_dir/findings/<agent>-<item>.jsonl` file with a valid STATUS entry. (Batch structure is read from frontmatter; per-item `batch:` annotation is denormalized for human scanning only.)
+- **Partial batch:** some items have findings, others do not — re-run from the first item missing a findings file. Item markers (`[~]`, `[x]`, `[!]`) provide a secondary consistency check but `findings/` presence is canonical.
 - **All batches complete:** treat wave as fully dispatched; skip to step 6.
-- **Known limitation:** resume assumes no upstream plan edits (`current.md`) occurred between orchestrator restarts. If such edits occurred, discard `wave.json` and re-dispatch the wave fresh.
+- **Known limitation:** resume assumes no upstream plan edits (`current.md`) occurred between orchestrator restarts. If such edits occurred, discard `wave.md` and re-dispatch the wave fresh.
 
 ---
 
@@ -71,7 +71,7 @@ Pre-check examines `$wave_dir/wave.json` when it exists:
 
 ---
 
-## Step 3 — Write wave.json
+## Step 3 — Write wave.md
 
 Receive `READY_ITEMS[]` and `commit_message` from driver input. Delegate topo-sort
 and batch assembly to the harness (deterministic, zero LLM):
@@ -82,20 +82,24 @@ node tools/c-thru-plan-harness.js batch \
   --items "<READY_ITEMS joined as comma-separated list>" \
   --wave-id <NNN> \
   --commit-msg "<commit_message>" \
-  --output "$wave_dir/wave.json"
+  --output "$wave_dir/wave.md"
 ```
 
 On exit code 2 (cycle detected): return `STATUS: ERROR, SUMMARY: dependency cycle in READY_ITEMS — driver validation gap`.
 
+**Sole-writer invariant:** only the orchestrator writes `wave.md`. Workers never call `update-marker` directly. All marker updates go through: `node tools/c-thru-plan-harness.js update-marker --wave-md "$wave_dir/wave.md" --item <id> --status <x|~|!|+> [...]`.
+
+**Field contract:** `needs:` in `wave.md` carries forward dep edges (renamed from `depends_on:` in `current.md`). No reverse `dependents:` field is stored; use `findDependents()` in the harness when needed. `batch:` per-item and frontmatter `batches:` are computed by the harness — never hand-edited.
+
 **Backward-compatible defaults:** Wave-1 items lacking escalation fields → `escalation_policy: "local"`, `escalation_depth: 0`, `escalation_log: []` on read. Step 4b never emits `never-cloud` — that is user/policy-set only.
 
-Validate schema after write: wave_id, commit_message, batches array all present.
+Validate schema after write (harness does this automatically): wave_id, commit_message, ≥1 item block present.
 
 ---
 
 ## Step 4 — Assemble digests
 
-For each item in `wave.json`, write `$wave_dir/digests/<agent>-<item>.md`:
+For each item in `wave.md` (read frontmatter `batches:` for ordering; `needs:`, `target_resources:`, `agent:` from item blocks), write `$wave_dir/digests/<agent>-<item>.md`:
 
 ```markdown
 ---
@@ -132,7 +136,7 @@ node tools/c-thru-plan-harness.js inject-contract \
   --digests-dir "$wave_dir/digests"
 ```
 
-Pre-check: every digest declared in wave.json must be non-empty before proceeding to step 4b.
+Pre-check: every digest declared in `wave.md` must be non-empty before proceeding to step 4b.
 
 ---
 
@@ -140,7 +144,7 @@ Pre-check: every digest declared in wave.json must be non-empty before proceedin
 
 After all digests are assembled (Step 4), before dispatch (Step 5):
 
-For each item in `wave.json.batches[].items` where `escalation_policy` is absent or `"local"` — skip items already carrying `"never-cloud"` (user/policy-set; orchestrator never overwrites these):
+For each item in `wave.md` (read item blocks) where `escalation_policy` is absent or `"local"` — skip items already carrying `"never-cloud"` (user/policy-set; orchestrator never overwrites these):
 
 Read the item's assembled digest. Classify as `pre-escalate` if ANY of:
 - No existing pattern cited by file/line/function for the core operation
@@ -150,9 +154,13 @@ Read the item's assembled digest. Classify as `pre-escalate` if ANY of:
 - New external interface with no existing equivalent to copy
 - Approach unspecified: "figure out", "implement a solution"
 
-If pre-escalate signal fires: set `escalation_policy: "pre-escalate"`, `escalation_policy_source: "step4b"` on the item in wave.json. Otherwise leave `"local"`.
-
-Write back updated wave.json after all items are classified.
+If pre-escalate signal fires, update the item in `wave.md` via the harness:
+```sh
+node tools/c-thru-plan-harness.js update-marker \
+  --wave-md "$wave_dir/wave.md" --item <id> --status '~' \
+  --escal-policy pre-escalate --escal-policy-source step4b
+```
+Otherwise leave `"local"` unchanged.
 
 **Cloud unavailability:** When a `pre-escalate` item is about to dispatch and the cloud agent is unreachable (no API key, degraded backend) → mark item `blocked`. Do NOT escalate to `judge` tier as a coder substitute. Surface `blocked` items in wave summary for user review. `WAVE_CLOUD_ESCALATION_BUDGET` counter is not charged for error-blocked items.
 
@@ -160,7 +168,7 @@ Write back updated wave.json after all items are classified.
 
 ## Step 5 — Dispatch worker batches
 
-For each batch in `wave.json.batches`:
+Read frontmatter `batches:` from `wave.md` — each element is a list of item IDs that run in parallel. Dispatch each batch as a single `Agent()` message (true parallelism — one tool turn, N sub-agents). For each batch in `batches:`:
 
 **Before dispatching each batch (after the first):** inject prior-batch findings into each item's digest as an appended `## Prior batch findings` section. This is a deterministic string append — the digest file is read, the section appended, the file rewritten. Workers in batch N see batch N-1 findings before starting.
 
@@ -186,8 +194,8 @@ For each response:
 
 If `STATUS: RECUSE`:
 1. Extract: `ATTEMPTED` (yes|no), `RECUSAL_REASON`, `RECOMMEND`, `PARTIAL_OUTPUT` (omitted when `ATTEMPTED=no`).
-2. Increment item's `escalation_depth` in wave.json.
-3. Append to item's `escalation_log`: `{"agent": "<name>", "tier": "<capability-alias>", "attempted": <bool>, "recusal_reason": "<text>", "partial_output": "<path or null>"}`.
+2. Increment item's `escalation_depth` in `wave.md` via `update-marker --escal-depth <N>`.
+3. Append to item's `escalation_log` (read current log, append entry, write via `update-marker`): `{"agent": "<name>", "tier": "<capability-alias>", "attempted": <bool>, "recusal_reason": "<text>", "partial_output": "<path or null>"}`.
 4. Write raw RECUSE response to `$wave_dir/failures/<agent>-<item>.raw` for diagnostic trace.
 5. **Judge-tier RECOMMEND (checked before depth cap):** if `RECOMMEND` resolves to `judge` tier (i.e., `RECOMMEND == "judge"` or the agent named in `RECOMMEND` maps to the `judge` capability alias in `agent_to_capability`) → mark item `blocked` AND surface to user with full `escalation_log`. Do not dispatch. This check fires regardless of `escalation_depth`.
 6. **Depth cap:** if `escalation_depth >= 3` (default `max_escalations`) → mark item `blocked`; log to `$wave_dir/batch-abort.log`.
@@ -202,7 +210,9 @@ If `STATUS: RECUSE`:
 
    Fire `Agent(subagent_type: RECOMMEND, prompt: <digest-path>, timeout: ${WORKER_TIMEOUT_SEC:-600})`. Apply this same Step 5r check to the new response — recursive re-dispatch until STATUS is not RECUSE, depth cap hit, or cloud unavailable.
 
-**RECUSE idempotency on resume:** On orchestrator crash between RECUSE receipt and next dispatch, re-read `escalation_log` in wave.json. Use `findings/<next-agent>-<item>.jsonl` absence as canonical "not yet dispatched" signal — do not re-dispatch already-attempted tiers.
+**State transitions on STATUS:** On `STATUS: COMPLETE` + verify pass → `update-marker --status x`. On recuse depth cap → `update-marker --status !`. On `STATUS: PARTIAL` → `update-marker --status +`. On dispatch → `update-marker --status ~`.
+
+**RECUSE idempotency on resume:** On orchestrator crash between RECUSE receipt and next dispatch, re-read `escalation_log` in `wave.md`. Use `findings/<next-agent>-<item>.jsonl` absence as canonical "not yet dispatched" signal — do not re-dispatch already-attempted tiers.
 
 - If valid STATUS (COMPLETE, PARTIAL, or ERROR): parse the structured response into three artifacts:
   - `## Work completed` section (including any `### Learnings` subsection) → write to `$wave_dir/outputs/<agent>-<item>.md`
@@ -298,7 +308,11 @@ Scan all worker output files (`$wave_dir/outputs/*.md`) and `$wave_dir/findings.
 
 ## Step 11 — Update plan state
 
-**Snapshot:** `cp <current.md path> <plan_dir>/plan/snapshots/p-<NNN>.md`
+**Snapshot:** snapshot both `current.md` and `wave.md` into the plan snapshots directory:
+```sh
+cp <current.md path> <plan_dir>/plan/snapshots/p-<NNN>.md
+cp "$wave_dir/wave.md" "<plan_dir>/plan/snapshots/wave-<NNN>.md"
+```
 (Derive `plan_dir` by stripping `waves/<NNN>` from `wave_dir`: `plan_dir=$(dirname $(dirname $wave_dir))`)
 
 **Append to journal.md:**
@@ -313,15 +327,20 @@ Do NOT update `current.md` item statuses here — the driver's deterministic pre
 If `verify.json` shows no hard failures:
 
 ```sh
-git add $(jq -r '.batches[].items[].target_resources[]' \
-          "$wave_dir/wave.json" \
-          | sort -u | xargs -I{} sh -c 'test -f "{}" && echo "{}"')
-git commit -m "<commit_message from wave.json>
+# Emit sorted unique target paths; exits non-zero on malformed wave.md
+targets=$(node tools/c-thru-plan-harness.js targets --wave-md "$wave_dir/wave.md") \
+  || { echo "targets subcommand failed — aborting commit"; COMMITTED=no; }
+
+if [ -n "$targets" ]; then
+  git add $(echo "$targets" | xargs -I{} sh -c 'test -f "{}" && echo "{}"')
+fi
+
+git commit -m "<commit_message from wave.md frontmatter>
 
 Wave: <NNN>"
 ```
 
-The `test -f` filter silently skips non-existent paths (e.g. items with empty `target_resources: []`).
+The `test -f` filter silently skips non-existent paths (e.g. items with empty `target_resources: []`). The `targets` subcommand replaces the former `jq` invocation on `wave.json` — no `jq` dependency.
 
 The `Wave: <NNN>` trailer enables resume dedup via `git log --grep`.
 On any git error: proceed, set `COMMITTED: no`.
