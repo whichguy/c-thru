@@ -493,7 +493,7 @@
     "doc-writer":           "orchestrator",
     "scaffolder":           "pattern-coder",
     "test-writer":          "code-analyst",
-    "reviewer-fix":         "code-analyst",
+    "wave-reviewer":        "code-analyst",
     "implementer":          "deep-coder",
     "wave-synthesizer":     "code-analyst",
     "learnings-consolidator": "pattern-coder",

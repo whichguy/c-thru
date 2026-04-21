@@ -1,21 +1,45 @@
+agent-contract-testing	agent contract testing
+agent-prompt-construction	agent prompt construction
+agent-structural-testing	agent structural testing
+best-quality-modes	best quality modes
 c-thru-statusline	c thru statusline
 capability-profile-model-layers	capability profile model layers
+cascade-scope-contraction	cascade scope contraction
 claude-code-hook-channels	claude code hook channels
 config-swap-invariant	config swap invariant
 connectivity-vs-cascade	connectivity vs cascade
 declared-rewrites	declared rewrites
 fallback-event-system	fallback event system
+gpt-oss-model	gpt oss model
 hook-model-rewriting-removal	hook model rewriting removal
 hook-safety-posture	hook safety posture
+implementer-lint-directive	implementer lint directive
+implementer-lint-loop	implementer lint loop
 kind-anthropic-invariant	kind anthropic invariant
+llm-mode-resolution	llm mode resolution
 load-bearing-invariant	load bearing invariant
+local-model-prompt-research	local model prompt research
 logical-role-exclusivity	logical role exclusivity
+model-map-edit-key-whitelist	model map edit key whitelist
+model-map-test-pattern	model map test pattern
+model-tag-audit-gap	model tag audit gap
+moe-speed-capability-dual	moe speed capability dual
 narrow-threat-model	narrow threat model
+ollama-endpoint-divergence	ollama endpoint divergence
 ollama-http-api-migration	ollama http api migration
+planner-default-integration	planner default integration
+planner-signals-design	planner signals design
 proxy-health-function-semantics	proxy health function semantics
+qwen-series-selection	qwen series selection
 readme-installer-alignment	readme installer alignment
 release-roadmap	release roadmap
+review-fix-intent-alignment	review fix intent alignment
+review-plan-banner-alignment	review plan banner alignment
 router-lock-handshake	router lock handshake
+runtime-control	runtime control
 schema-v12-dual-gate	schema v12 dual gate
+self-recusal-chain	self recusal chain
 sighup-config-reload	sighup config reload
+skill-config-reload-gaps	skill config reload gaps
 sse-buffer-sizing	sse buffer sizing
+uplift-cascade-pattern	uplift cascade pattern

@@ -19,4 +19,4 @@ When `claude-proxy` hot-reloads config via SIGHUP or `fs.watch`, a bad or malfor
 
 - **From Session 9d601210:** The v1.2 resolver (`resolveCapabilityV12`) must also honor this invariant: it must snapshot `config.tool_capability_to_profile`, `config.profile_to_model`, and `config.models` into local `const` bindings at entry before any async yield or await. The SIGHUP handler can swap the module-level `config` reference at any point mid-request, so a v12 request that reads config after an async boundary could see a half-swapped state. Verification must include a reload-during-request test: send a request, issue SIGHUP mid-flight, and confirm the in-flight request resolves against the config snapshot, not the reloaded config.
 
-→ See also: [[sighup-config-reload]], [[load-bearing-invariant]], [[declared-rewrites]], [[capability-profile-model-layers]]
+→ See also: [[sighup-config-reload]], [[load-bearing-invariant]], [[declared-rewrites]], [[capability-profile-model-layers]], [[model-map-edit-key-whitelist]]

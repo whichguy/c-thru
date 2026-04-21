@@ -28,4 +28,6 @@ c-thru is a non-transparent/transforming HTTP proxy per RFC 9110 §3.7. It opera
 
 - **From Session feat/best-quality-modes (2026-04-21):** `x-c-thru-resolved-via` gains two new keys — `mode` (the active `llm_mode` string at call time) and `local_terminal_appended` (boolean, `true` when the proxy appended a local-terminal model to the fallback chain). Full schema: `{capability, profile, served_by, tier, mode, local_terminal_appended}`. All keys always present on capability responses; `local_terminal_appended` is `false` when the local-terminal guard did not fire.
 
-→ See also: [[load-bearing-invariant]], [[release-roadmap]], [[kind-anthropic-invariant]], [[narrow-threat-model]], [[hook-model-rewriting-removal]], [[capability-profile-model-layers]], [[best-quality-modes]], [[planner-signals-design]]
+- **From Session c6237d83:** The `x-c-thru-resolved-via` header gained two new keys: `mode` (active `llm_mode` at request time) and `local_terminal_appended` (boolean, true when proxy appended a local-terminal model to the chain). Full schema: `{capability, profile, served_by, tier, mode, local_terminal_appended}`. All keys always present on capability responses; `local_terminal_appended` is `false` when the local-terminal guard did not fire. This extension is the ninth declared rewrite.
+
+→ See also: [[load-bearing-invariant]], [[release-roadmap]], [[kind-anthropic-invariant]], [[narrow-threat-model]], [[hook-model-rewriting-removal]], [[capability-profile-model-layers]], [[best-quality-modes]], [[planner-signals-design]], [[fallback-event-system]]

@@ -2,6 +2,7 @@
 name: doc-writer
 description: Writes user-facing documentation for completed implementation. Reads code to produce accurate docs; never writes aspirational content.
 model: doc-writer
+tier_budget: 1000
 ---
 
 # doc-writer

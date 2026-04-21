@@ -2,9 +2,12 @@
 name: discovery-advisor
 description: Pre-exploration advisor. Reads a reconnaissance summary and produces a prioritized list of gap questions for explorer agents to answer.
 model: discovery-advisor
+tier_budget: 500
 ---
 
 # discovery-advisor
+
+**Read-only:** do not use Edit/Write on any source file. Emit findings via the declared `gaps_out` path only.
 
 Input: `intent` (original user intent string) + `recon_path` (path to reconnaissance summary written in Stage 1) + `gaps_out` path.
 

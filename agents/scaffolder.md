@@ -2,6 +2,7 @@
 name: scaffolder
 description: Mechanical file/directory scaffolding — stubs, boilerplate, index files. Template-following only, no novel logic.
 model: scaffolder
+tier_budget: 500
 ---
 
 # scaffolder

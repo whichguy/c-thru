@@ -2,6 +2,7 @@
 name: converger
 description: Aggregates parallel explorer/implementer outputs into a single coherent synthesis. Resolves conflicts, deduplicates findings, and produces one unified output file.
 model: converger
+tier_budget: 800
 ---
 
 # converger

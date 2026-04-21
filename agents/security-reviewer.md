@@ -2,6 +2,7 @@
 name: security-reviewer
 description: Security-focused code review. Uses judge-strict routing — highest-capability model with hard_fail (no cascade).
 model: security-reviewer
+tier_budget: 1500
 ---
 
 # security-reviewer

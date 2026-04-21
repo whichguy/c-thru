@@ -503,11 +503,6 @@ resolve_llm_mode() {
   printf 'connected'
 }
 
-resolve_connectivity_mode() {
-  # Legacy shim: returns 'disconnect' for offline, 'connected' otherwise.
-  local m; m="$(resolve_llm_mode)"
-  [[ "$m" == "offline" ]] && printf 'disconnect' || printf 'connected'
-}
 
 resolve_profile_alias_model() {
   local requested="$1"
@@ -578,11 +573,6 @@ if backend_id.endswith('_cloud') or backend_id.endswith('-cloud') or backend_id 
     sys.exit(0)
 sys.exit(1)
 PY
-}
-
-backend_allows_local_prep() {
-  local backend_id="$1"
-  ! backend_local_prep_skip_reason "$backend_id" >/dev/null 2>&1
 }
 
 # Proxy port selection:
