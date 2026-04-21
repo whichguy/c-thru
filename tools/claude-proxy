@@ -1374,23 +1374,28 @@ function resolveFallbackModel(model, failureClass, logicalRole = null) {
     candidateObjects = legacyCandidates.map(m => ({ model: m }));
   }
 
-  if (!candidateObjects || candidateObjects.length === 0) return null;
+  // Legacy path already returned null above for empty; fallback_chains path may be empty
+  // after filtering the primary — don't bail yet, let the local-terminal guard fire first.
+  if (!candidateObjects) return null;
 
-  // Quality-tolerance tiebreaker applies only in best-quality modes with scored candidates
-  if (isBestQualityMode && candidateObjects.some(c => c.quality_score != null)) {
+  // Quality-tolerance tiebreaker applies only when there are scored candidates
+  if (candidateObjects.length > 0 && isBestQualityMode && candidateObjects.some(c => c.quality_score != null)) {
     candidateObjects = applyQualityTolerance(candidateObjects, tolerancePct);
   }
 
-  // Local-terminal guard: if the last candidate is non-local, append disconnect_model as terminal
-  const lastRaw = candidateObjects[candidateObjects.length - 1];
-  const lastResolved = resolveLogicalAlias(resolveRouteModel(lastRaw.model));
-  if (!modelIsLocal(lastResolved) && capKey) {
+  // Local-terminal guard: applies even when candidateObjects is empty (single-entry chain case).
+  // If last remaining candidate is non-local, append disconnect_model as terminal.
+  const lastRaw = candidateObjects.length > 0 ? candidateObjects[candidateObjects.length - 1] : null;
+  const lastResolved = lastRaw ? resolveLogicalAlias(resolveRouteModel(lastRaw.model)) : null;
+  if ((!lastResolved || !modelIsLocal(lastResolved)) && capKey) {
     const profiles = cfg.llm_profiles?.[hw] || {};
     const profileEntry = profiles[capKey];
     if (profileEntry?.disconnect_model) {
       candidateObjects = [...candidateObjects, { model: profileEntry.disconnect_model, _isAppended: true }];
     }
   }
+
+  if (candidateObjects.length === 0) return null;
 
   // Walk candidates, skipping cooled-down models
   for (const c of candidateObjects) {
