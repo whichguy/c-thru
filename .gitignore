@@ -6,3 +6,4 @@ proxy-health.json
 ollama-prep-state.json
 wiki/.session-*
 wiki/.cache/
+docs/planning/review-manifests/

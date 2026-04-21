@@ -49901,3 +49901,85 @@ claude-router"
 [2026-04-20 05:37] SESSION_START session:f3b24bdd: opened in c-thru
 [2026-04-20 05:37] SESSION_START session:2945f100: opened in c-thru
 [2026-04-20 05:37] PERIODIC session:a2b13b57: probabilistic trigger fired (mod=17)
+[2026-04-20 05:38] READ_GATE session:a2b13b57 path:docs/planning/TODO-readme-installer-alignment.md slugs:capability-profile-model-layers,readme-installer-alignment dur:0ms
+[2026-04-20 05:38] SESSION_START session:fbb7397d: opened in c-thru
+[2026-04-20 05:38] SESSION_START session:516e67e1: opened in c-thru
+[2026-04-20 05:38] SESSION_START session:1ebbd01d: opened in c-thru
+[2026-04-20 05:38] SESSION_START session:866f7884: opened in c-thru
+[2026-04-20 05:38] SESSION_START session:b16a9646: opened in c-thru
+[2026-04-20 05:41] SESSION_START session:aa5180e6: opened in c-thru
+[2026-04-20 05:41] SESSION_START session:eab9f8d2: opened in c-thru
+[2026-04-20 05:41] SESSION_START session:39f537c6: opened in c-thru
+[2026-04-20 05:41] SESSION_START session:7bb6c31a: opened in c-thru
+[2026-04-20 05:41] SESSION_START session:9a28789f: opened in c-thru
+[2026-04-20 05:41] SESSION_START session:1322a8ba: opened in c-thru
+[2026-04-20 05:41] SESSION_START session:bc8bc027: opened in c-thru
+[2026-04-20 05:42] SESSION_START session:544f9898: opened in c-thru
+[2026-04-20 05:42] PERIODIC session:544f9898: probabilistic trigger fired (mod=17)
+[2026-04-20 05:43] SESSION_START session:2d3bf716: opened in c-thru
+[2026-04-20 05:43] SESSION_START session:198fcb08: opened in c-thru
+[2026-04-20 05:45] SESSION_START session:952df8d2: opened in c-thru
+[2026-04-20 05:45] SESSION_START session:a2e40350: opened in c-thru
+[2026-04-20 05:45] PERIODIC session:a2e40350: probabilistic trigger fired (mod=17)
+[2026-04-20 05:48] SESSION_START session:197348b3: opened in c-thru
+[2026-04-20 05:48] SESSION_START session:2f1e282e: opened in c-thru
+[2026-04-20 05:51] AMPLIFIER_MATCH session:1abfc2df: matched=ollama-http-api-migration prompt="deeply think about how the router does the mapping for the incoming model name(f"
+[2026-04-20 05:51] PERIODIC session:1abfc2df: probabilistic trigger fired (mod=17)
+[2026-04-20 05:51] SESSION_START session:bd7158b4: opened in c-thru
+[2026-04-20 05:51] SESSION_START session:1ddbfb0f: opened in c-thru
+[2026-04-20 05:51] SESSION_CLEAR session:1ddbfb0f: /clear boundary in c-thru
+[2026-04-20 05:51] SESSION_START session:1ddbfb0f: opened in c-thru
+[2026-04-20 05:51] SESSION_START session:5fccad32: opened in c-thru
+[2026-04-20 05:51] SESSION_CLEAR session:5fccad32: /clear boundary in c-thru
+[2026-04-20 05:51] AMPLIFIER_MATCH session:5fccad32: matched=ollama-http-api-migration prompt="deeply think about how the router does the mapping for the incoming model name(f"
+[2026-04-20 05:51] PERIODIC session:5fccad32: probabilistic trigger fired (mod=17)
+[2026-04-20 05:51] READ_GATE session:5fccad32 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,hook-model-rewriting-removal dur:0ms
+[2026-04-20 09:17] SESSION_START session:635c4049: opened in c-thru
+[2026-04-20 09:17] SESSION_CLEAR session:635c4049: /clear boundary in c-thru
+[2026-04-20 09:17] SESSION_START session:3c7b7938: opened in c-thru
+[2026-04-20 09:17] SESSION_START session:39ea3de0: opened in c-thru
+[2026-04-20 09:17] SESSION_START session:557cfbf1: opened in c-thru
+[2026-04-20 09:17] SESSION_START session:60056d67: opened in c-thru
+[2026-04-20 09:17] SESSION_START session:fb8afacd: opened in c-thru
+[2026-04-20 09:17] SESSION_START session:2cedd3a5: opened in c-thru
+[2026-04-20 09:17] SESSION_START session:276e0a42: opened in c-thru
+[2026-04-20 09:17] SESSION_START session:517bb451: opened in c-thru
+[2026-04-20 09:17] PERIODIC session:2cedd3a5: probabilistic trigger fired (mod=17)
+[2026-04-20 09:17] PERIODIC session:517bb451: probabilistic trigger fired (mod=17)
+[2026-04-20 09:18] WIKI_LOAD session:: /wiki-load capability-profile-model-layers
+[2026-04-20 09:18] READ_GATE session:635c4049 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,hook-model-rewriting-removal dur:0ms
+[2026-04-20 09:18] READ_GATE session:635c4049 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,hook-model-rewriting-removal dur:0ms
+[2026-04-20 09:18] READ_GATE session:635c4049 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,hook-model-rewriting-removal dur:0ms
+[2026-04-20 09:20] READ_GATE session:635c4049 path:test/model-map-v12-adapter.test.js slugs:capability-profile-model-layers dur:0ms
+[2026-04-20 09:20] READ_GATE session:635c4049 path:test/model-map-v12-adapter.test.js slugs:capability-profile-model-layers dur:0ms
+[2026-04-20 09:21] READ_GATE session:635c4049 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,hook-model-rewriting-removal dur:0ms
+[2026-04-20 09:25] READ_GATE session:635c4049 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,readme-installer-alignment dur:0ms
+[2026-04-20 09:25] READ_GATE session:635c4049 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-20 09:26] READ_GATE session:635c4049 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-20 09:29] SESSION_END session:635c4049: closed in c-thru
+[2026-04-20 12:09] SESSION_START session:41dff592: opened in c-thru
+[2026-04-20 12:09] SESSION_START session:0e35ca63: opened in c-thru
+[2026-04-20 12:09] SESSION_START session:78493284: opened in c-thru
+[2026-04-20 12:09] SESSION_START session:668e37ec: opened in c-thru
+[2026-04-20 12:09] SESSION_START session:b3300cba: opened in c-thru
+[2026-04-20 12:09] SESSION_START session:9fa3a802: opened in c-thru
+[2026-04-20 12:09] SESSION_START session:bfdec5f9: opened in c-thru
+[2026-04-20 12:09] SESSION_START session:795412a2: opened in c-thru
+[2026-04-20 12:09] SESSION_START session:c520f649: opened in c-thru
+[2026-04-20 12:20] SESSION_START session:f00004d7: opened in c-thru
+[2026-04-20 12:20] SESSION_START session:9ebae6c2: opened in c-thru
+[2026-04-20 12:20] SESSION_START session:7065ba90: opened in c-thru
+[2026-04-20 12:20] SESSION_START session:44c90c5c: opened in c-thru
+[2026-04-20 12:20] SESSION_START session:d169d6e0: opened in c-thru
+[2026-04-20 12:20] SESSION_START session:e953236c: opened in c-thru
+[2026-04-20 12:20] SESSION_START session:37ee7dd3: opened in c-thru
+[2026-04-20 12:20] SESSION_START session:ae390820: opened in c-thru
+[2026-04-20 12:23] READ_GATE session:635c4049 path:CLAUDE.md slugs:declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-20 13:03] SESSION_START session:c2238241: opened in c-thru
+[2026-04-20 13:39] SESSION_START session:a9538410: opened in c-thru
+[2026-04-20 13:45] SESSION_START session:7a0d378b: opened in c-thru
+[2026-04-20 13:45] READ_GATE session:635c4049 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,readme-installer-alignment dur:0ms
+[2026-04-20 13:45] READ_GATE session:635c4049 path:install.sh slugs:c-thru-statusline,capability-profile-model-layers,ollama-http-api-migration,readme-installer-alignment dur:0ms
+[2026-04-20 16:26] SESSION_START session:1c57a3e2: opened in c-thru
+[2026-04-20 16:27] SESSION_END session:1c57a3e2: closed in c-thru
+[2026-04-20 16:28] PERIODIC session:1c57a3e2: probabilistic trigger fired (mod=17)
