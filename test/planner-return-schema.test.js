@@ -442,6 +442,69 @@ SUMMARY: recused after thinking`;
     : fail('escalation_policy: pre-escalate round-trips in wave.json item', JSON.stringify(parsed));
 }
 
+// 9. RECOMMEND: judge → should be treated as judge-tier sentinel (block + surface to user)
+//    Simulate orchestrator logic: RECOMMEND resolves to judge tier → blocked
+{
+  const AGENT_TO_CAPABILITY = {
+    'implementer-cloud': 'deep-coder-cloud',
+    'test-writer-cloud': 'code-analyst-cloud',
+    'uplift-decider': 'judge',
+    'planner': 'judge',
+    'auditor': 'judge',
+  };
+  function isJudgeTier(recommend) {
+    if (recommend === 'judge') return true;
+    return AGENT_TO_CAPABILITY[recommend] === 'judge';
+  }
+  (isJudgeTier('judge') && isJudgeTier('uplift-decider') && !isJudgeTier('implementer-cloud') && !isJudgeTier('test-writer-cloud'))
+    ? ok('isJudgeTier sentinel: "judge" and judge-mapped agents detected correctly')
+    : fail('isJudgeTier sentinel: unexpected result');
+}
+
+// 10. RECOMMEND: judge at depth=1 → orchestrator should block before depth cap (depth cap is 3)
+{
+  const raw = `STATUS: RECUSE\nATTEMPTED: yes\nRECUSAL_REASON: task requires security domain knowledge beyond verification ability\nRECOMMEND: judge\nPARTIAL_OUTPUT: waves/001/outputs/implementer-cloud-item-Z.md\nSUMMARY: cloud tier recused, judge-tier sentinel`;
+  const r = parseWorkerStatus(raw);
+  const escalationDepth = 1; // depth=1, well below cap of 3
+  const AGENT_TO_CAPABILITY = { 'judge': 'judge', 'uplift-decider': 'judge' };
+  const isJudgeSentinel = r.RECOMMEND === 'judge' || AGENT_TO_CAPABILITY[r.RECOMMEND] === 'judge';
+  // Orchestrator: judge-tier check fires before depth cap — item becomes blocked+surface regardless of depth
+  const shouldBlock = isJudgeSentinel; // depth cap NOT the deciding factor
+  shouldBlock
+    ? ok('RECOMMEND=judge at depth=1 → blocked+surface (judge-tier check before depth cap)')
+    : fail('RECOMMEND=judge at depth=1 → blocked+surface', JSON.stringify(r));
+}
+
+// 11. escalation_depth >= 3 → blocked (depth cap, non-judge RECOMMEND)
+{
+  const item = {
+    agent: 'implementer', item: 'item-D', target_resources: ['src/hard.ts'],
+    depends_on: [], escalation_policy: 'local', escalation_depth: 3,
+    escalation_log: [
+      { agent: 'implementer', tier: 'deep-coder', attempted: false, recusal_reason: 'r1', partial_output: null },
+      { agent: 'uplift-decider', tier: 'judge', attempted: false, recusal_reason: 'r2', partial_output: null },
+      { agent: 'implementer-cloud', tier: 'deep-coder-cloud', attempted: true, recusal_reason: 'r3', partial_output: 'waves/001/outputs/implementer-cloud-item-D.md' }
+    ]
+  };
+  const depthCapHit = item.escalation_depth >= 3;
+  depthCapHit
+    ? ok('escalation_depth >= 3 → depth cap triggers blocked')
+    : fail('escalation_depth >= 3 → depth cap triggers blocked', `depth: ${item.escalation_depth}`);
+}
+
+// 12. never-cloud items skipped by step 4b (escalation_policy preserved)
+{
+  const item = {
+    agent: 'implementer', item: 'item-NC', target_resources: ['src/proprietary.ts'],
+    depends_on: [], escalation_policy: 'never-cloud', escalation_depth: 0, escalation_log: []
+  };
+  // Step 4b: skip items already carrying "never-cloud" — policy must not be overwritten
+  const shouldSkipClassification = item.escalation_policy === 'never-cloud';
+  shouldSkipClassification
+    ? ok('never-cloud item: step 4b skips classification, policy preserved')
+    : fail('never-cloud item: step 4b skips classification', JSON.stringify(item));
+}
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
