@@ -201,7 +201,13 @@ console.log('\n6. Integration — tools/c-thru-resolve output matches pure-funct
         CLAUDE_LLM_PROFILE: tier,
       };
       const resolveScript = path.join(__dirname, '..', 'tools', 'c-thru-resolve');
-      const stdout = execSync(`node ${resolveScript} ${cap}`, { env, encoding: 'utf8' }).trim();
+      let stdout;
+      try {
+        stdout = execSync(`node ${resolveScript} ${cap}`, { env, encoding: 'utf8' }).trim();
+      } catch (err) {
+        assert(false, `c-thru-resolve ${cap} mode=${mode} tier=${tier} → threw: ${err.message}`);
+        continue;
+      }
       assert(stdout === expected, `c-thru-resolve ${cap} mode=${mode} tier=${tier} → '${stdout}' (want '${expected}')`);
     }
   } finally {

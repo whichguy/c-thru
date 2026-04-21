@@ -40,5 +40,9 @@ else
     msg=$(printf '%s' "$validator_out" | head -5)
 fi
 
-msg_json=$(printf '%s' "$msg" | jq -Rs .)
+if command -v jq >/dev/null 2>&1; then
+    msg_json=$(printf '%s' "$msg" | jq -Rs .)
+else
+    msg_json=$(node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(d)));" <<< "$msg")
+fi
 printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":%s}}' "$msg_json"

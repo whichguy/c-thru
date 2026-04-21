@@ -24,14 +24,6 @@ RECORDER="$WORK/recorder.txt"
 cp "$REPO_DIR/tools/c-thru-map-changed.sh" "$HOOK_COPY"
 chmod +x "$HOOK_COPY"
 
-# Stub validator: writes its first argument to the recorder file, exits 0.
-cat > "$STUB_VALIDATOR" <<'EOF'
-#!/usr/bin/env node
-const fs = require('fs');
-fs.appendFileSync(process.argv[2] || '', (process.argv[1] || '') + '\n');
-process.exit(0);
-EOF
-
 # Stub validator: reads VALIDATOR_RECORDER from env, appends file_path (argv[2]) to it.
 # hook calls: node "$validator" "$file_path" → argv = [node, script, file_path]
 cat > "$STUB_VALIDATOR" <<'STUBEOF'
