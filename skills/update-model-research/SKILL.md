@@ -4,6 +4,10 @@ description: |
   Research and update docs/local-model-prompt-techniques.md with latest
   community findings, Ollama version-specific fixes, and authoritative
   corrections for all local models in config/model-map.json.
+  Scope: client-observable behavior through the Ollama API — prompting patterns,
+  request parameters, response format, tool-calling behavior, dangers, and
+  best practices. Internal server mechanics and deployment configuration are
+  out of scope unless they directly explain a client-visible API behavior.
   Spawns parallel research agents per model family, applies a strict
   citation and confidence standard, and writes a diff-summary of changes.
   Invoked as /update-model-research [--model <family>] [--section <topic>]
@@ -14,6 +18,8 @@ color: yellow
 
 Keeps `docs/local-model-prompt-techniques.md` current as Ollama, model families,
 and community knowledge evolve. Runs five phases: Inventory → Research → Delta Analysis → Update → Change Summary.
+
+**Research scope:** All findings must be actionable from the API client perspective — prompting patterns, request parameters, response format, dangers, and best practices. Internal server mechanics, deployment-only configuration (server env vars, Modelfile PARAMETER blocks, runner flags), and build/install procedures are out of scope unless they directly explain a client-visible API behavior. Apply this filter to every finding: *"Can a developer writing an API client act on this when crafting a prompt or API call?"* Model-native behaviors (chat template format, built-in thinking mode, tool-call schema) are always in scope regardless of runtime.
 
 ## Input
 
@@ -60,9 +66,10 @@ the doc sections they restrict research to:
 | `thinking` | `/think`, `/no_think`, thinking mode, think tags, budget control |
 | `tools` | Tool calling, tool format, tool parsing, FIM |
 | `json` | Structured output, `format=`, grammar sampler |
-| `penalties` | `repeat_penalty`, `presence_penalty`, Go runner sampling |
-| `fa` | Flash Attention, `OLLAMA_FLASH_ATTENTION` |
+| `penalties` | `repeat_penalty`, `presence_penalty`, `frequency_penalty` sampling |
+| `fa` | Flash Attention behavior and throughput impact |
 | `context` | `num_ctx`, context window, KV cache |
+| `params` | Per-model recommended API options: temperature, top_p, top_k, penalties, num_ctx, stop sequences |
 
 Pass the active section filter to each research agent in Phase 2. Agents must
 restrict their search and output to findings relevant to that section only.
@@ -89,6 +96,12 @@ Print the open-bug count and disputed-claim count as a brief summary.
    delete or modify these sections automatically — add a note to the Phase 5 Change
    Summary under `### Obsolete model sections (review manually)` listing the family
    names and recommending human review before removal.
+
+7. **Current model-map parameter defaults** — read `config/model-map.json` and check
+   whether any model entries or capability-alias entries contain a `params` or
+   `options` sub-key with per-model API option defaults. Extract any that exist and
+   record in `DOC_SNAPSHOT` as "model_map_params". These will be compared against
+   the doc's recommended per-request options in Phase 3 to identify gaps or stale defaults.
 
 ---
 
@@ -141,6 +154,21 @@ for findings that are:
 For each major claim in the doc, look for credible community members or official
 sources explicitly disagreeing. A "dissent" must be from a named source with
 a URL — not just "some users report otherwise."
+
+**F. Client-actionability filter**
+Before including any finding, ask: "Can a developer writing an API client act on this when crafting a prompt or API call?" If the finding only applies to server operators (env vars, Modelfile setup, runner launch flags), exclude it. Internal implementation details (runner mechanics, template compilation, attention head arithmetic) are excluded unless they directly explain why a specific API call behaves unexpectedly. When a server-side fact does explain a client behavior, state only the client-visible consequence — not the internal cause.
+
+**G. Per-model recommended API options (always include when `--section params` or full refresh)**
+For each active model, collect or update the recommended per-request `options` block:
+- `temperature`, `top_p`, `top_k`, `min_p` — from official model card, community benchmarks, or agentic-use testing
+- `repeat_penalty`, `presence_penalty`, `frequency_penalty` — note any version constraints (e.g. "requires Ollama v0.17.5+, re-pull")
+- `num_ctx` — minimum useful value for the model's intended role in this stack
+- `num_predict` — any minimum required when thinking is active
+- `mirostat`, `mirostat_tau`, `mirostat_eta` — only when penalties are unreliable for that model
+- `stop` sequences — any model-specific stop tokens required for correct tool-call parsing
+- `reasoning_effort` (gpt-oss only) — recommended level for each agent role
+
+When new confirmed recommendations are found, also note: "Candidate for model-map `params` default" — these feed the model-map parameter defaults evaluation (see Phase 5).
 
 ### Per-family search targets
 
@@ -214,7 +242,7 @@ Agents MUST NOT include:
 
 ## Phase 3 — Delta Analysis
 
-Receive all agent reports. For each finding:
+Receive all agent reports. Apply the client-actionability filter (Directive F) first — discard any finding that fails it regardless of its classification type. For remaining findings:
 
 ### Classification rules
 
@@ -327,6 +355,17 @@ Print a compact summary of every change made:
 
 ### Skipped (insufficient citation)
 - <list of findings rejected due to missing URL or single-source>
+
+### Model-map parameter default candidates
+For each model family, list API options that are now confirmed-enough to consider
+as defaults in `config/model-map.json`. Only include when confidence is high
+(official model card, Ollama maintainer, or reproducible community consensus).
+Format:
+- <model-tag>: `{ "temperature": X, "top_p": X, ... }` — basis: <source/authority>
+  Note any version constraint (e.g. "requires Ollama v0.17.5+ with re-pull").
+  Note the intended agent role this default is optimized for (e.g. "agentic tool-use", "structured output", "thinking/reasoning").
+
+If no new candidates: "No new model-map parameter candidates this run."
 ```
 
 If `--dry-run`, print this summary with `[DRY RUN — no file changes made]` as

@@ -1,6 +1,6 @@
 # Local Model Prompt Techniques & Community Findings
 
-Research compiled from Reddit (r/LocalLLaMA), HuggingFace discussions, GitHub issues (ollama, llama.cpp, lmstudio), and community blogs. Covers models active in `config/model-map.json` as of 2026-04-21. Focuses on non-obvious findings — skip generic "be clear in your prompts" advice.
+Research compiled from Reddit (r/LocalLLaMA), HuggingFace discussions, GitHub issues (ollama, llama.cpp, lmstudio), and community blogs. Covers models active in `config/model-map.json` as of 2026-04-21. **Scope: client-observable behavior through the Ollama API (or generically applicable), prompting patterns, request parameter behavior, response format, known failure modes, and best practices.** Server deployment configuration is excluded; internal mechanics are mentioned only where they explain a client-visible behavior.
 
 ---
 
@@ -36,7 +36,7 @@ Research compiled from Reddit (r/LocalLLaMA), HuggingFace discussions, GitHub is
 
 ### Penalty Sampling: Silently Ignored in Ollama Go Runner
 
-**Penalty sampling was silently discarded on the Go runner — partially fixed in Ollama v0.17.5.** `repeat_penalty`, `presence_penalty`, and `frequency_penalty` were discarded for all Qwen3.5 models (forced onto Go runner via `OllamaEngineRequired()`). Ollama maintainer `jmorganca` fixed repeat-based sampling in PR #14537 (v0.17.5). **You must re-pull qwen3.5 models after upgrading** — without re-pulling, old model state persists. Issue #14493 remains open for tool-calling bugs. Pre-v0.17.5 installs still discard penalties. ([issue #14493](https://github.com/ollama/ollama/issues/14493), [PR #14537](https://github.com/ollama/ollama/pull/14537), [v0.17.5 notes](https://github.com/ollama/ollama/releases/tag/v0.17.5))
+**Penalty sampling was silently discarded for Qwen3.5 in Ollama — fixed in v0.17.5.** `repeat_penalty`, `presence_penalty`, and `frequency_penalty` were silently ignored for all Qwen3.5 models in older Ollama versions. Fixed in v0.17.5 (PR #14537). **You must re-pull qwen3.5 models after upgrading** — without re-pulling, old model state persists and penalties are still ignored. On v0.17.5+ with a fresh pull, penalty params are applied. Issue #14493 remains open for tool-calling bugs. ([issue #14493](https://github.com/ollama/ollama/issues/14493), [PR #14537](https://github.com/ollama/ollama/pull/14537), [v0.17.5 notes](https://github.com/ollama/ollama/releases/tag/v0.17.5))
 
 ---
 
@@ -105,7 +105,7 @@ One community practitioner found 0.1–0.2 necessary to prevent hallucinated var
 
 ### Chat Template Issues
 
-**Double-BOS risk.** Gemma 4 GGUFs include a BOS token in their embedded chat template. If Ollama also prepends a BOS (default behavior), two BOS tokens cause logic degradation and repetitive/garbage output. Known problem for GGUF models generally, well-documented for Gemma 4 specifically.
+**Double-BOS risk.** If a custom GGUF import prepends an extra BOS token on top of the one already in the Gemma 4 chat template, responses degrade into repetitive/garbage output. `ollama pull` handles this correctly; symptom of the problem is immediate incoherence from turn 1.
 
 **New thinking tokens.** Gemma 4 adds native `<|think|>` reasoning tokens in the chat template. This is new; Gemma 3 had no thinking mode. Every system using Gemma 3 templates must be audited.
 
@@ -123,11 +123,9 @@ One community practitioner found 0.1–0.2 necessary to prevent hallucinated var
 
 ### Flash Attention: Disable for Gemma 4
 
-**FA is off by default for all Gemma 4 in Ollama** — and that is the correct state. Ollama maintainer `dhiltgen` enabled FA (PR #15296) then reverted it (PR #15311) after benchmarking a **41.8% throughput degradation** across all Gemma 4 variants with FA on. The revert is the current shipped behavior. Keep `OLLAMA_FLASH_ATTENTION=0` (the default) for all Gemma 4.
+**FA is off by default for all Gemma 4 in Ollama** — and that is the correct state. Ollama maintainer `dhiltgen` enabled FA (PR #15296) then reverted it (PR #15311) after benchmarking a **41.8% throughput degradation** across all Gemma 4 variants with FA on. The revert is the current shipped behavior. Do not enable FA for any Gemma 4.
 
-**The 31b Dense hang is a separate, worse issue.** On top of the throughput degradation, `gemma4:31b` Dense specifically hangs indefinitely above a prompt-length threshold with FA enabled due to mismatched head dimensions (256 vs 512) across the hybrid attention layers. The threshold is hardware-dependent: ~500 tokens on Apple Silicon (issue #15368); ~3–4K+ tokens on CUDA (issue #15350). The 26b MoE does not exhibit the same hang — the MoE expert routing sidesteps the problematic layer interaction.
-
-The Ollama team intends to implement a correct FA path for Gemma 4; no timeline given. ([PR #15311](https://github.com/ollama/ollama/pull/15311), [issue #15350](https://github.com/ollama/ollama/issues/15350), [issue #15368](https://github.com/ollama/ollama/issues/15368))
+**The 31b Dense hang is a separate, worse issue.** `gemma4:31b` specifically hangs indefinitely above a prompt-length threshold with FA enabled — gemma4:26b does not hang, but still degrades 41.8% in throughput. Do not enable FA for any Gemma 4 variant; the Ollama team intends to ship a correct implementation but has given no timeline. ([PR #15311](https://github.com/ollama/ollama/pull/15311), [issue #15368](https://github.com/ollama/ollama/issues/15368))
 
 ---
 
@@ -175,7 +173,7 @@ This is a regression from Gemma 3. **Do not use Ollama `format=` grammar constra
 | Ollama grammar sampler JSON failure (31b: repetition collapse 60–100%; 26b: malformed JSON) | `31b`, `26b` — different failure modes | Critical — Ollama GGML sampler bug; clean on llama.cpp-server | Avoid `format=`; use prompt-level enforcement |
 | `/v1/chat/completions` streaming: output in `reasoning` field, `content` empty | All Gemma 4 | High | Route to native `/api/chat`; pass `think:false` |
 | `<unused24>` token runaway | `26b-a4b` GGUF | High | Update Ollama (llama.cpp b8702 fix) |
-| FA: 41.8% throughput degradation (all variants) + hang for 31b Dense | 31b hang confirmed; throughput degradation all variants | High — FA off by default post-revert PR #15311 | Keep `OLLAMA_FLASH_ATTENTION=0` (default) |
+| FA: 41.8% throughput degradation (all variants) + hang for 31b Dense | 31b hang confirmed; throughput degradation all variants | High — FA off by default post-revert PR #15311 | Do not enable FA (off by default post-revert) |
 | Tool-call parser crash (mode 1: quoted-string arg) | `e4b` still broken (issue #15315); `26b`/`31b` fixed in PR #15254 | High for e4b | Mode 1: use `26b` or `31b`. Modes 2–3 (streaming in reasoning field; `<unused25>` token) remain open for all variants — use llama.cpp-server; no Ollama fix yet |
 | Thinking leaking into response body | `e2b`, `e4b` | Moderate | Use Ollama native endpoint; verify template |
 | Double BOS token | All GGUF variants | Moderate | Verify Ollama handles correctly |
@@ -331,12 +329,12 @@ Correct that stripping is required — **but Ollama has handled it automatically
 Definitively wrong. The QwenLM/Qwen3.6 README documents thinking as a primary feature, including `--reasoning-parser qwen3` in launch instructions and *"Thinking Preservation: A new feature retains thinking context across conversation history."* Thinking is on by default; send `think: false` to disable.
 *Source: [QwenLM/Qwen3.6 README](https://github.com/QwenLM/Qwen3.6/blob/main/README.md)*
 
-**[CONFIRMED] "`PARAMETER think false` in Modelfile works."**
-Does not work. Returns `Error: unknown parameter 'think'` in Ollama 0.17.5 and 0.17.7. Confirmed by community user `kanadrome` in issue #10961; issue #14809 (closed) pointed to a pending PR #14108 (still open as of Ollama v0.21.0) proposing the feature. It does not exist yet.
+**[CONFIRMED FALSE] "There is a way to permanently disable thinking for Qwen models in Ollama."**
+There is not. Returns `Error: unknown parameter 'think'` if attempted via any persistent mechanism. `think: false` must be sent on every individual request. Confirmed by community user `kanadrome` in issue #10961; PR #14108 (open) proposes adding the feature but is not yet merged as of Ollama v0.21.0.
 *Sources: [issue #14809](https://github.com/ollama/ollama/issues/14809), [issue #10961](https://github.com/ollama/ollama/issues/10961), [PR #14108 (open)](https://github.com/ollama/ollama/pull/14108)*
 
 **[NUANCE] "presence_penalty=1.5 is recommended for Qwen3.5 thinking mode."**
-The Qwen team does recommend this (Qwen team member `hzhwcmhf` confirmed it in QwenLM/Qwen3.6 issue #88). The claim was valid as an Ollama implementation gap — it was silently ignored pre-v0.17.5. Post-v0.17.5 the Go runner applies it. No authoritative source has said *not* to use it.
+The Qwen team does recommend this (Qwen team member `hzhwcmhf` confirmed it in QwenLM/Qwen3.6 issue #88). Pass as `"options": {"presence_penalty": 1.5}` — applied on Ollama v0.17.5+ (requires re-pull). No authoritative source has said *not* to use it.
 *Source: [QwenLM/Qwen3.6 #88](https://github.com/QwenLM/Qwen3.6/issues/88)*
 
 ---
@@ -419,15 +417,15 @@ Findings in this section apply specifically to running these models **through Ol
 
 **`/api/chat` vs `/api/generate` — critical difference.** `think: false` as a top-level request body field works on `/api/chat`. It is silently ignored on `/api/generate` for all thinking-capable Qwen models (issue #14793). With `/api/generate` + thinking enabled + small `num_predict`, thinking tokens consume the entire budget and `response` is empty with no error. Always use `/api/chat`. Pass `think` as a **top-level key**, not inside `options`. ([issue #14793](https://github.com/ollama/ollama/issues/14793))
 
-**`num_ctx` default is 2048 — always override.** Ollama's server default is 2048 tokens, not the model's native context window. This silently truncates inputs from the beginning. Minimum useful: 8192. Community standard for agentic use: 32768. Set via `PARAMETER num_ctx 32768` in Modelfile, `"options": {"num_ctx": 32768}` per-request, or `OLLAMA_CONTEXT_LENGTH=32768` env var. For 128K+ contexts, set `PARAMETER num_gpu 99` to prevent GPU-split crashes. ([issue #9890](https://github.com/ollama/ollama/issues/9890))
+**`num_ctx` default is 2048 — always override.** Ollama's server default is 2048 tokens, not the model's native context window. This silently truncates inputs from the beginning. Minimum useful: 8192. Community standard for agentic use: 32768. Set via `"options": {"num_ctx": 32768}` per request. ([issue #9890](https://github.com/ollama/ollama/issues/9890))
 
 **`num_predict` + thinking = silent empty output.** If `num_predict` is too low and thinking is enabled, thinking tokens consume the entire budget with no error. Set `num_predict` to at least 32768 when thinking is active.
 
-**Modelfile `SYSTEM` block is overridden by API system messages — not merged.** Any `SYSTEM` block baked into a Modelfile is silently discarded when a client sends its own `system` message via the API. The `/nothink` system-prompt trick only works when you control the entire system message that reaches the model. ([issue #14601](https://github.com/ollama/ollama/issues/14601))
+**API `system` message fully overrides any model-default system prompt — not merged.** When a client sends a `system` field in the request, the model's built-in default system prompt is silently discarded. The `/nothink` prefix trick only works when you control the entire system message — you cannot append `/nothink` to an existing default, because the default is gone the moment you send your own `system`. ([issue #14601](https://github.com/ollama/ollama/issues/14601))
 
-**Tool calls stripped from conversation history.** When Ollama appends an assistant turn containing a `<tool_call>` block, the tool call content is stripped before template rendering on subsequent turns — leaving only `<|im_start|>assistant<|im_end|>`. This corrupts multi-turn tool-use conversations for Qwen3 models. Workaround: embed tools in the `SYSTEM` block of a Modelfile (bypasses the stripping logic) rather than via the API `tools` field, if tools are static. ([issue #14601](https://github.com/ollama/ollama/issues/14601))
+**Tool calls stripped from conversation history.** When Ollama appends an assistant turn containing a `<tool_call>` block, the tool call content is stripped before template rendering on subsequent turns — leaving only `<|im_start|>assistant<|im_end|>`. This corrupts multi-turn tool-use conversations for Qwen3 models. Workaround: if tools are static, embed the tool schema descriptions directly in the `system` message text (as XML/JSON text) rather than passing via the API `tools` field — this bypasses the stripping behavior. ([issue #14601](https://github.com/ollama/ollama/issues/14601))
 
-**`PARAMETER think false` in Modelfile is rejected.** Ollama returns "unknown parameter" error. Feature request in issue #14809 (closed as duplicate of #10961). No timeline. Workaround: create a separate model variant with `/nothink` baked into a SYSTEM block — but note the SYSTEM override caveat above.
+**No way to set `think: false` as a persistent default — must pass it on every request.** Ollama has no mechanism to permanently disable thinking for a model; `think: false` must be included in every `/api/chat` request body. (Feature request: issue #14809, no timeline.) Alternatively: prepend `/nothink` to the system message text, but note that any `system` you send fully overrides the model's default system message, not merges with it.
 
 **`enable_thinking=False` is the wrong parameter for Ollama.** The HuggingFace model card uses this for transformers. In Ollama, use `think: false`. Using `enable_thinking` as an Ollama API parameter is silently ignored. ([issue #10809](https://github.com/ollama/ollama/issues/10809))
 
@@ -441,44 +439,48 @@ Findings in this section apply specifically to running these models **through Ol
 
 **Structured output + `think: false` interaction.** When both `think: false` and `format=` are set, thinking is disabled but the format constraint may not apply correctly. Use `temperature: 0` inside `options` and instruct the model explicitly in the prompt. For qwen3 local models (non-MoE variants), `format=` schema works well with `temperature: 0`. Cloud variants (qwen3-coder:480b-cloud) bypass grammar-constrained sampling entirely. ([issue #13206](https://github.com/ollama/ollama/issues/13206))
 
-**Reference Modelfile key parameters** (sammcj/llm-templates community reference):
+**Recommended per-request `options`** (sammcj/llm-templates community reference; all passable via `"options": {...}` in `/api/chat`):
+```json
+{
+  "num_ctx": 32768,
+  "temperature": 0.7,
+  "top_k": 20,
+  "top_p": 0.8,
+  "num_keep": 256,
+  "presence_penalty": 1.4
+}
 ```
-PARAMETER num_ctx 32768
-PARAMETER num_gpu 99
-PARAMETER temperature 0.7
-PARAMETER top_k 20
-PARAMETER top_p 0.8
-PARAMETER num_keep 256        # guards system prompt from being trimmed
-PARAMETER presence_penalty 1.4  # applied on v0.17.5+ (re-pull required); silently ignored on older installs and unconfirmed for qwen3.6
-```
-For qwen3-coder: swap `presence_penalty` for `repeat_penalty 1.05` and add `min_p 0.01`.
+`num_keep: 256` guards the system prompt from KV-cache eviction on long contexts. `presence_penalty` is applied on Ollama v0.17.5+ (re-pull required); silently ignored on older installs and unconfirmed for qwen3.6.
+
+For qwen3-coder: swap `presence_penalty` for `repeat_penalty: 1.05` and add `min_p: 0.01`.
 
 ---
 
 ### Gemma 4 — Ollama Layer
 
-**`num_ctx` default is 4096 — always override.** At 4096 the model cannot hold any meaningful context. Minimum for coding agents: 65536 (64K). `OLLAMA_KV_CACHE_TYPE=q8_0` cuts KV cache memory ~50% with minimal quality impact, enabling larger contexts within VRAM limits.
+**`num_ctx` default is 4096 — always override.** At 4096 the model cannot hold any meaningful context. Minimum for coding agents: 65536 (64K). Set via `"options": {"num_ctx": 65536}` per request.
 
 **`think: false` + `format=` conflict (issue #15260).** Setting `think: false` alongside a JSON schema `format=` parameter silently drops the format constraint — the model produces unconstrained plain text. Root cause: Ollama defers grammar masking until it sees the end-of-thinking token; with `think: false`, that token never arrives. **Workaround: omit the `think` parameter entirely when using structured output.** The model defaults to thinking (adding latency) but the format constraint is respected. ([issue #15260](https://github.com/ollama/ollama/issues/15260))
 
 **`/api/generate` behavior reversed for Gemma4.** Thinking is **disabled** by default on `/api/generate` for Gemma4 (opposite of Qwen3). Must explicitly send `think: true` to enable it on that endpoint. Confirmed Ollama bug (issue #15268, open as of Ollama 0.20.0). ([issue #15268](https://github.com/ollama/ollama/issues/15268))
 
-**Flash Attention: keep disabled for all Gemma 4 variants.** Ollama maintainer `dhiltgen` measured a **41.8% throughput degradation** across all Gemma 4 variants with FA enabled (PR #15311 revert), including the 26b MoE. Separately, `gemma4:31b` Dense hangs indefinitely with FA enabled due to mismatched attention head dimensions (256 vs 512) — a distinct, worse issue that the 26b MoE does not share. The 26b MoE does not hang, but it still degrades 41.8%. Keep `OLLAMA_FLASH_ATTENTION=0` (the Ollama default) for all Gemma 4 variants until Ollama ships a correct FA implementation. ([PR #15311](https://github.com/ollama/ollama/pull/15311), [issue #15368](https://github.com/ollama/ollama/issues/15368))
+**Flash Attention: disabled by default in Ollama — do not enable.** Ollama maintainer `dhiltgen` measured a **41.8% throughput degradation** across all Gemma 4 variants with FA enabled (PR #15311 revert), including the 26b MoE. `gemma4:31b` additionally hangs indefinitely with FA enabled; the 26b MoE does not hang but still degrades. FA is off by default post-revert — leave it that way until Ollama ships a correct implementation. ([PR #15311](https://github.com/ollama/ollama/pull/15311), [issue #15368](https://github.com/ollama/ollama/issues/15368))
 
 **Tool calling in Ollama 0.20.x is unreliable for Gemma4.** Three failure modes: (1) quoted-string parser crash (`"gemma4 tool call parsing failed: invalid character"`) — **fixed for 26b/31b in PR #15254**; `gemma4:e4b` still exhibits this (issue #15315 open); (2) streaming tool calls appear in `reasoning` field; (3) `<unused25>` token garbage in tool responses. For failure modes (2) and (3), no Modelfile workaround exists — the fix requires llama.cpp PRs #21326 and #21343. Use llama.cpp-server directly with `--jinja` and these PRs for production tool-calling with Gemma4. ([PR #15254](https://github.com/ollama/ollama/pull/15254), [daniel-farina gist](https://gist.github.com/daniel-farina/87dc1c394b94e45bb700d27e9ea03193))
 
-**Disable thinking via empty SYSTEM block.** An empty `SYSTEM ""` block in a Modelfile removes the `<|think|>` token from the default system message, disabling thinking at the model layer rather than per-request. This is the pattern used by community fast-variants (`bjoernb/gemma4-31b-fast`). Combine with Google's recommended sampling (`temperature 1.0, top_p 0.95, top_k 64`) for fastest inference.
+**Disable thinking by sending an empty system message.** Passing `"system": ""` in the API request removes the `<|think|>` token from the default system message, disabling thinking without requiring `think: false`. Combine with Google's recommended sampling (`temperature 1.0, top_p 0.95, top_k 64`) for fastest inference. This is the pattern behind community fast-variant models.
 
 **Repetition (google-deepmind/gemma #610): deterministic bug at the 14th list item.** A separate training-artifact repetition bug causes the model to loop specifically around the 14th sequential list item ("Wait, I found it. The 14."). Not sampler-fixable — it's a training artifact in both Dense and MoE variants.
 
-**Reference Modelfile for Gemma4 coding** (community pattern):
-```
-FROM gemma4:26b
-PARAMETER temperature 0.4
-PARAMETER top_p 0.9
-PARAMETER num_ctx 65536
-PARAMETER num_predict 4096
-PARAMETER repeat_penalty 1.15
+**Recommended per-request `options` for Gemma4 coding** (community pattern; passable via `"options": {...}` in `/api/chat`):
+```json
+{
+  "temperature": 0.4,
+  "top_p": 0.9,
+  "num_ctx": 65536,
+  "num_predict": 4096,
+  "repeat_penalty": 1.15
+}
 ```
 
 ---
@@ -495,11 +497,7 @@ PARAMETER repeat_penalty 1.15
 
 **Thinking-token bleed into tool call output.** The model outputs reasoning text (e.g., `"Oops, typo? The tool is run_bash_cmd.{...}"`) prefixed before the JSON tool call, making it unparseable. Occurs especially with certain system prompts. Tracked in issue #12203 (open). ([issue #12203](https://github.com/ollama/ollama/issues/12203))
 
-**`num_ctx` minimum 8192 enforced by Ollama** (issue #11711). The default is 4096 but Ollama silently overrides settings below 8192. Community standard: 32768 for general use; 131072 for tool-calling workflows (tool schemas consume significant context). Cannot be set via `/v1/chat/completions` — must be baked into a Modelfile or passed via native Ollama API's `options.num_ctx`.
-
-**"Nothink" proxy workaround.** Neo23x0's `ollama-nothink-proxy.js` (community gist) sits on port 11435, forwards to Ollama on 11434, injects `think: false` and `num_ctx: 32768` into all requests, converts OpenAI-format requests to `/api/chat`, handles tool calls, and implements 120s timeouts. Practical approach for API clients that can't set `think` per-request. ([Neo23x0 gist](https://gist.github.com/Neo23x0/99662c4abe978f5cc53fca178a4d3c69))
-
-**`mashriram/gpt-oss-Regular` community Modelfile** strips the built-in `browser` and `python` tool namespaces from the Harmony template, giving cleaner separation when only using custom `functions`. Useful when built-in tool namespaces interfere with custom dispatch.
+**`num_ctx` minimum 8192 enforced by Ollama** (issue #11711). The default is 4096 but Ollama silently overrides settings below 8192. Community standard: 32768 for general use; 131072 for tool-calling workflows (tool schemas consume significant context). Set via native Ollama API `"options": {"num_ctx": 32768}` — cannot be set via `/v1/chat/completions`; use `/api/chat`.
 
 ---
 
@@ -511,20 +509,22 @@ PARAMETER repeat_penalty 1.15
 
 **FIM via Ollama not supported for devstral.** Ollama's FIM implementation uses `/api/generate` with a `suffix` field. Devstral's chat template contains no FIM tokens (`[PREFIX]`, `[SUFFIX]`, `[MIDDLE]`). The `/v1/fim/completions` endpoint in Mistral's documentation refers to the Mistral-hosted API, not Ollama's local API. FIM does not work through Ollama with devstral — use Codestral for Ollama-based FIM.
 
-**`num_ctx` must cover the system prompt.** Default Ollama `num_ctx` (4096) is smaller than the OpenHands system prompt alone. OpenHands recommends setting `OLLAMA_CONTEXT_LENGTH=22000` as minimum. Community agentic standard: 32768–131072 depending on codebase size. The sammcj community Modelfile uses 131072 as the baseline.
+**`num_ctx` must cover the system prompt.** Default Ollama `num_ctx` (4096) is smaller than the OpenHands system prompt alone. Set `"options": {"num_ctx": 32768}` minimum; community agentic standard is 32768–131072 depending on codebase size.
 
-**Temperature 0.0–0.15 for agentic tool use.** Higher temperatures produce inconsistent tool call formatting. The community Modelfile uses 0.15 as the agentic default; Unsloth recommends 0.0 for deterministic tool dispatch.
+**Temperature 0.0–0.15 for agentic tool use.** Higher temperatures produce inconsistent tool call formatting. Community standard: `temperature: 0.15` as the agentic default; Unsloth recommends `0.0` for deterministic tool dispatch.
 
-**Template markers must be preserved.** Devstral's template wraps the system prompt with `[SYSTEM_PROMPT]...[/SYSTEM_PROMPT]`. Custom TEMPLATE blocks in Modelfiles must preserve these markers — overriding the template without them breaks tool calling.
+**System prompt must include template markers if assembling prompts manually.** Devstral's template wraps the system prompt with `[SYSTEM_PROMPT]...[/SYSTEM_PROMPT]`. When using `/api/chat` normally, Ollama injects these automatically. If you assemble raw prompts outside Ollama's template layer, include these markers — omitting them breaks tool calling.
 
-**Reference Modelfile** (sammcj/llm-templates community reference):
+**Recommended per-request `options`** (sammcj/llm-templates community reference; passable via `"options": {...}` in `/api/chat`):
+```json
+{
+  "num_ctx": 131072,
+  "temperature": 0.15,
+  "min_p": 0.01,
+  "repeat_penalty": 1.0
+}
 ```
-PARAMETER num_ctx 131072
-PARAMETER temperature 0.15
-PARAMETER min_p 0.01
-PARAMETER repeat_penalty 1.0
-```
-Stop tokens: `</thinking>`, `</tool_call>`, `</tool_response>`, `</attempt_completion>`, `</write_to_file>`, `</execute_command>`.
+Recommended stop sequences: `</thinking>`, `</tool_call>`, `</tool_response>`, `</attempt_completion>`, `</write_to_file>`, `</execute_command>` — pass as `"stop": [...]` in the request.
 
 ---
 
@@ -534,7 +534,7 @@ These findings have direct impact on the proxy configuration and agent system pr
 
 ### Immediate
 
-1. **Keep `OLLAMA_FLASH_ATTENTION=0` for all Gemma 4 (the current Ollama default).** Ollama maintainer `dhiltgen` reverted FA enablement (PR #15311) after measuring 41.8% throughput degradation across all variants. Additionally, `gemma4:31b` Dense hangs indefinitely with FA enabled due to mismatched attention head dimensions. The 26b MoE does not hang but still degrades 41.8%. Do not enable FA for any Gemma 4 until Ollama ships a correct implementation.
+1. **Do not enable Flash Attention for any Gemma 4 — the Ollama default (disabled) is correct.** Enabling FA causes a 41.8% throughput degradation across all variants; `gemma4:31b` additionally hangs indefinitely. FA is off by default post-revert (PR #15311). If you see FA-related options or configuration surfaces, leave them disabled for Gemma 4.
 
 2. **Replace `gemma4:26b` with `gemma4:31b` for agentic worker roles.** The long-system-prompt empty-response bug (open, ~500-char threshold estimated, reproducibility disputed) makes `gemma4:26b` MoE unreliable for agentic roles where system prompts exceed a few hundred characters.
 
@@ -542,15 +542,15 @@ These findings have direct impact on the proxy configuration and agent system pr
 
 4. **Do not use Ollama `format=` grammar constraints with Gemma 4.** 60–100% failure rate for 31b (Ollama grammar sampler bug — same GGUF passes on llama.cpp-server). Use prompt-level enforcement: "Return exactly one JSON object. Do not wrap in markdown." Additionally: do not combine `think: false` with `format=` — this silently drops the format constraint (issue #15260).
 
-5. **Upgrade Ollama to v0.17.6+ and re-pull Qwen3.5 models.** v0.17.5 fixed Go runner penalty sampling; v0.17.6 fixed Qwen3.5 tool call format (now correctly uses XML/qwen3-coder pipeline). Without re-pulling, old model state persists.
+5. **Qwen3.5 penalty params and XML tool format require Ollama v0.17.6+ and a fresh model pull.** On v0.17.5+, `presence_penalty`/`repeat_penalty` are applied. On v0.17.6+, tool calls use the correct XML format. Without re-pulling after upgrade, old model state persists and the fixes do not take effect.
 
 6. **Route all model requests to `/api/chat`, not `/v1/chat/completions`.** For Gemma 4 and gpt-oss, the OAI-compat endpoint puts output in `reasoning` field with empty `content` when streaming. For Qwen3/3.5/3.6, `think: false` only works on `/api/chat` as a top-level key.
 
 ### Operational Awareness
 
-7. **Always set `num_ctx` explicitly for every model.** Ollama defaults: 2048 for Qwen models, 4096 for others. Both are inadequate. Minimum recommended: 32768 for most agentic use. Set via Modelfile `PARAMETER num_ctx 32768`, per-request `options.num_ctx`, or `OLLAMA_CONTEXT_LENGTH` env var.
+7. **Always set `num_ctx` explicitly for every model.** Ollama defaults: 2048 for Qwen models, 4096 for others. Both are inadequate. Minimum recommended: 32768 for most agentic use. Set via `"options": {"num_ctx": 32768}` per request on `/api/chat`.
 
-8. **Penalty params fixed in v0.17.5+ for Qwen3.5 — upgrade and re-pull.** The Go runner now applies repeat-based sampling for Qwen3.5 models (PR #14537). You must `ollama pull qwen3.5:<tag>` after upgrading — without re-pulling, old model state persists. For pre-v0.17.5 installs or qwen3.6 (Go runner penalty status unconfirmed), `mirostat 2` (`mirostat_tau 6`, `mirostat_eta 0.1`) remains the only sampler-level repetition backstop.
+8. **Penalty params (`presence_penalty`, `repeat_penalty`) are applied correctly on Ollama v0.17.5+ for Qwen3.5 — requires a fresh model pull after upgrading.** Without re-pulling, old model state persists and penalties are silently ignored regardless of version. For qwen3.6 (penalty application status unconfirmed), `mirostat 2` (`mirostat_tau 6`, `mirostat_eta 0.1`) is the available repetition backstop — passable as `"options": {"mirostat": 2, "mirostat_tau": 6, "mirostat_eta": 0.1}`.
 
 9. **qwen3.6:35b thinking is ON by default** — send `think: false` as a top-level `/api/chat` field to disable. The same thinking+tools empty-output bug (issue #10976) applies.
 
