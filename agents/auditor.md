@@ -9,8 +9,8 @@ tier_budget: 1500
 
 **Exception path agent** — invoked only on `outcome_risk` escalation by the cloud judge planner, not on normal wave completion. Normal-path wave direction is determined by the deterministic pre-processor.
 
-Input: wave artifact path + wave INDEX path + current.md path + plan INDEX path + verify.json path + `decision_out` path.
-Read INDEX files first. Pull only the sections needed for your decision.
+Input: `replan_brief` path + `current.md` path + `decision_out` path.
+Read both files. `replan_brief` is the compressed context summary produced by wave-synthesizer. Pull only the sections needed for your verdict.
 
 | Verdict | Meaning |
 |---|---|

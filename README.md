@@ -65,7 +65,7 @@ Capability aliases and the agents that use them:
 | `orchestrator` | mid-tier local | plan-orchestrator, integrator, doc-writer |
 | `local-planner` | local 27B+, never cloud | planner-local |
 | `deep-coder` | local coding model | implementer |
-| `code-analyst` | local mid-tier | test-writer, reviewer-fix, wave-synthesizer |
+| `code-analyst` | local mid-tier | test-writer, wave-reviewer, wave-synthesizer |
 | `pattern-coder` | local small | scaffolder, discovery-advisor, learnings-consolidator |
 
 ---
@@ -228,7 +228,7 @@ The planner's job is not just to write the initial plan — it maintains the dep
   │  │    implementer   → writes code                        │  │
   │  │    scaffolder    → stubs, boilerplate                 │  │
   │  │    test-writer   → tests                              │  │
-  │  │    reviewer-fix  → review + fix loop                  │  │
+  │  │    wave-reviewer → review + fix loop                  │  │
   │  │    doc-writer    → documentation                      │  │
   │  │                                                       │  │
   │  │  concat findings → findings.jsonl                     │  │

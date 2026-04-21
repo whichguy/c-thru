@@ -9,10 +9,9 @@ tier_budget: 800
 
 **Exception path agent** — called only when the cloud judge planner requests it after an `outcome_risk` review or `revise` scenario. Not invoked on normal wave completion (clean or dep_update transitions).
 
-Input: wave artifact path + wave INDEX path + findings.jsonl path + verify.json path + decision.json path + plan INDEX path + journal.md path + journal line offset + `brief_out` path.
+Input: `wave_summary` path + `current.md` path + `replan_out` path.
 
-Read INDEX files first. Pull sections via `Read(path, offset, limit)`.
-Filter findings.jsonl for `plan-material` and `crisis` lines only. Schema: `{"class":"...","text":"<≤80 char summary>","detail":"<optional longer prose>"}` — prefer `detail` over `text` when present for replan-brief body text.
+Read both files. `wave_summary` is the orchestrator-produced wave summary (already compressed by plan-orchestrator Step 10); filter for `plan-material` and `crisis` signals. Prefer `detail` over `text` when both present.
 
 **Produce replan-brief.md — surfaces facts; does NOT propose item rewrites or dep-graph changes.**
 
@@ -36,8 +35,8 @@ Required sections:
 ```
 
 **Write:**
-- `waves/<NNN>/replan-brief.md`
-- `waves/<NNN>/replan-brief.INDEX.md` — `<section>: <start>-<end>` one per line (line numbers)
+- `<replan_out>` path given in prompt (e.g. `waves/<NNN>/replan-brief.md`)
+- Alongside it: `<replan_out>.INDEX.md` — `<section>: <start>-<end>` one per line (line numbers)
 
 **Return:**
 ```
