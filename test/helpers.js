@@ -192,11 +192,17 @@ function httpJson(port, method, urlPath, body, extraHeaders = {}, timeout = 3000
 async function withProxy(opts, fn) {
   const hooksPort = opts.hooksPort || await getFreePort();
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-home-'));
-  const { child, port, hooksPort: resolvedHooksPort } = await spawnProxy(
-    Object.assign({}, opts, { hooksPort, tmpHome })
-  );
+  let child, port, resolvedHooksPort;
+  try {
+    ({ child, port, hooksPort: resolvedHooksPort } = await spawnProxy(
+      Object.assign({}, opts, { hooksPort, tmpHome })
+    ));
 
-  await waitForPing(port);
+    await waitForPing(port);
+  } catch (e) {
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+    throw e;
+  }
 
   const exitPromise = new Promise(resolve => child.on('exit', resolve));
 
