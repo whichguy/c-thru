@@ -7,7 +7,7 @@ confidence: high
 last_verified: 2026-04-21
 created: 2026-04-21
 last_updated: 2026-04-21
-sources: [1558f542, 69bfbcd1, a82cecbf, b1731578]
+sources: [1558f542, 69bfbcd1, a82cecbf, b1731578, 22924d75, a183dfe6]
 related: [planner-signals-design, uplift-cascade-pattern, capability-profile-model-layers, declared-rewrites, cascade-scope-contraction, self-recusal-chain, implementer-lint-directive]
 ---
 
@@ -29,5 +29,7 @@ Principles governing how c-thru agent prompts are written, sized, and tested. Pr
 
 - **From Session 22924d75:** Full 3-layer audit (agent prompts, skill prompts, dispatch sites) identified 10+ findings organized into 5 fix batches (A/B/C/E/D). Top 3: (1) CONFIDENCE rubric missing on integrator, doc-writer, security-reviewer — silent `medium` degradation, worst on judge-strict security-reviewer. (2) test-writer-cloud doesn't branch uplift vs restart — breaks anchoring-prevention invariant. (3) review-plan SKILL.md at 4,343 lines with `sr_max_iters = 5` conflicting with CLAUDE.md's 20-round expectation. Also: scaffolder 102-line rubric on 1.7B model (tier mismatch), judge-tier agents under-prompted at ~200 tokens vs ~1500 budget, 10 worker prompts share ~200 lines of boilerplate (drift reservoir), c-thru-plan Phase-5 re-entry bug where 20-round cap isn't enforced.
 - **From Session 22924d75:** Dispatch-site layer audit (Batch E): (E1) Planner Signal-2 contract violation — SKILL.md:155 and :232 omit `affected_items` required by planner.md:24. (E2) 3 orphan agents with Input contracts but no `Agent()` call: auditor, wave-synthesizer, learnings-consolidator. (E3) Weak escalation-context enforcement at step 5r. (E4) Signal-1 planner inlines `discovery` into prompt string, violating planner.md:9 "never expect file contents inline". (E5) 20+ `Task()` sites use literal `<plan_path>` placeholders with no structural guarantee. (E6) New contract-check rule verifying dispatch prompts supply every key declared in target agent's `Input:` frontmatter.
+
+- **From Session a183dfe6:** Implemented all 5-batch audit fixes (A/B/C/D/E) across agents and skills (PRs #39, #40, plus follow-on correctness commits). Key outcomes: (A1) CONFIDENCE rubric added to integrator, doc-writer, security-reviewer — ending silent `medium` degradation. (A2) test-writer-cloud now branches `uplift` vs `restart` — anchoring-prevention invariant closed. (A3) Phase-5 revision-round cap persisted to disk (`meta.revision_rounds`) instead of local variable. (B) shared `_worker-contract.md` factored into `shared/` (not under `agents/` glob — would break contract-check roster count). (C/D) scaffolder trimmed for 1.7B tier; learnings-consolidator editorial prose removed; judge-tier agents deferred (no evidence of underperformance). (E1-E6) dispatch-site fixes implemented — see [[dispatch-site-contract-gap]]. Post-implementation finding: auditor and wave-synthesizer needed additional write-block correctness fixes (they had been allowed to use Edit/Write — two commits after PR #40 corrected this).
 
 → See also: [[planner-signals-design]], [[uplift-cascade-pattern]], [[capability-profile-model-layers]], [[declared-rewrites]], [[cascade-scope-contraction]], [[self-recusal-chain]], [[implementer-lint-directive]], [[review-fix-intent-alignment]], [[agent-contract-testing]], [[dispatch-site-contract-gap]]

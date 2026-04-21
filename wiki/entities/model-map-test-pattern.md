@@ -6,8 +6,8 @@ tags: [testing, model-map, maintenance, config-churn, mirror-drift]
 confidence: high
 last_verified: 2026-04-21
 created: 2026-04-20
-last_updated: 2026-04-21
-sources: [64f2589b, c6237d83, a82cecbf]
+last_updated: 2026-04-22
+sources: [64f2589b, c6237d83, a82cecbf, 863318b0]
 related: [capability-profile-model-layers, model-tag-audit-gap, llm-mode-resolution, best-quality-modes, self-recusal-chain]
 ---
 
@@ -23,5 +23,7 @@ Three test files exercise model-map logic, but only one reads the shipped `confi
 - **From Session 69bfbcd1:** `capability-alias-resolve.test.js` exercises production config: every agent in `agent_to_capability` must resolve to a concrete model at every hardware tier. Fail-closed by default — any agent that fails to resolve is a real bug, not a test gap. Initial run found 5 agents missing from the roster (planner, journal-digester, plan-orchestrator, wave-synthesizer, learnings-consolidator).
 
 - **From Session a82cecbf:** `test/planner-return-schema.test.js` gained Section 6: RECUSE STATUS fixtures — 8 Wave-2 escalation cases covering judge-tier sentinel detection, depth cap, never-cloud skip, and think-tag stripping in RECUSE responses. These fixtures test the self-recusal chain's contract at the parser level, complementing the integration-level escalation tests in `agent-status-schema.test.js`.
+- **From Session f20f3ade:** `test/resolve-capability.test.js` (61 assertions) shipped as companion to the `model-map-resolve.js` extraction. Uses a minimal fixture (5 capabilities × 5 tiers × 4 modes = cartesian product) to validate all resolution paths: `resolveProfileModel`, `resolveLlmMode`, `resolveProfileName`, `resolveLogicalAlias`, `resolveCapabilityAlias`, `resolveConnectivityMode`. Also includes one integration test that loads the real shipped config and resolves every known alias through every tier/mode combination. Runs independently of `llm-mode-resolution-matrix.test.js` — the extraction created two separate test files that validate different surfaces (resolver internals vs. end-to-end mode matrix).
+- **From Session 863318b0:** Stdlib-only test convention: all `test/*.test.js` files use a hand-rolled `ok()/fail()` pattern with `process.exit(exitCode)` — no mocha, chai, or other test framework. The project has no `package.json` (no npm install step), so adding a test-runner dependency would create a new class of CI breakage for no practical benefit. CI only needs an exit code; TAP reporters and assertion libraries are unnecessary. This convention applies to all 9+ test files including `agent-contract-static.test.js` and `agent-contract-live.test.js` (PR #39). When writing new tests, follow the `ok(condition, 'message'); fail('message')` pattern from existing files — do not introduce external deps.
 
-→ See also: [[capability-profile-model-layers]], [[model-tag-audit-gap]], [[llm-mode-resolution]], [[best-quality-modes]], [[self-recusal-chain]], [[agent-structural-testing]]
+→ See also: [[capability-profile-model-layers]], [[model-tag-audit-gap]], [[llm-mode-resolution]], [[best-quality-modes]], [[self-recusal-chain]], [[agent-structural-testing]], [[model-map-resolve-module]]

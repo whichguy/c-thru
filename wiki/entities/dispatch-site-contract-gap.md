@@ -1,0 +1,24 @@
+---
+name: Dispatch-Site Contract Gap
+type: entity
+description: "Gaps between agent Input contract declarations and actual Agent()/Task() call sites — missing parameters, orphan agents, inline content violations, and placeholder fragility"
+tags: [architecture, agents, contracts, dispatch, drift, c-thru-plan]
+confidence: high
+last_verified: 2026-04-22
+created: 2026-04-22
+last_updated: 2026-04-22
+sources: [22924d75]
+related: [agent-prompt-construction, planner-signals-design, uplift-cascade-pattern, declared-rewrites, agent-contract-testing]
+---
+
+# Dispatch-Site Contract Gap
+
+A class of bugs where agent `.md` files declare `Input:` frontmatter (the contract), but the dispatch sites (`Agent()` / `Task()` calls in SKILL.md files) fail to supply every declared key. This creates a gap between contract and execution — agents may receive incomplete digests, silently degrade, or fault at runtime. The pattern extends to three other dispatch-site issues: orphan agents with declared contracts but no callers, inline content that violates path-based input rules, and fragile `<plan_path>` placeholders.
+
+- **From Session 22924d75:** Six dispatch-site findings (Batch E of the prompt audit): (E1) Planner Signal-2 contract violation — `skills/c-thru-plan/SKILL.md:155` (review loop) and `:232` (outcome_risk) both call planner with `signal=wave_summary` but omit `affected_items`, which `agents/planner.md:24` declares as a required Input field. Without it, planner either faults or silently enlarges scope. (E2) 3 orphan agents with declared Input contracts but no `Agent()` call anywhere: `auditor`, `wave-synthesizer`, `learnings-consolidator`. Architecture references them in prose but dispatch is not wired. (E3) Weak escalation-context enforcement at step 5r — uplift-decider and direct-dispatched cloud workers can receive a digest missing `## Escalation context` with no pre-check. (E4) Signal-1 planner inlines `discovery` into the prompt string, violating `agents/planner.md:9`'s "never expect file contents inline" rule. (E5) 20+ `Task()` sites in review-plan SKILL.md use literal `<plan_path>` placeholders relying on the caller to substitute before spawn — no structural guarantee. (E6) New contract-check rule proposed: `tools/c-thru-contract-check.sh` should verify that every dispatch prompt supplies all keys declared in the target agent's `Input:` frontmatter.
+- **From Session 22924d75:** The dispatch-site layer is architecturally distinct from agent prompts (what the agent says about itself) and skill prompts (what the skill says about its phases). Dispatch sites are where the rubber meets the road — a contract declared in `Input:` is a promise; a dispatch site that omits a required key breaks that promise silently. The fix pattern: (1) add E6 contract-check to CI, (2) fix E1 by deriving `affected_items` from wave_summary, (3) decide on E2 orphans (wire, deprecate, or remove), (4) add pre-check for E3, (5) move E4 discovery to path-based input, (6) replace E5 `<plan_path>` with structural substitution.
+
+- **From Session a183dfe6:** E1-E4 resolution (Batch E of PR #40): E1 fixed — both dispatch sites now supply `affected_items` (`[]` for review-loop full-scope sentinel, `transition.affected_items` as comma-separated list for outcome_risk). E2 fixed — `learnings-consolidator`, `auditor`, and `wave-synthesizer` wired with concrete `Agent()` dispatch in planner (E2 included auditor/wave-synthesizer input alignment). E3 fixed — step 5r now requires well-formed `## Escalation context` section with explicit `mode: restart|direct` marker before cloud dispatch. E4 fixed — Signal-1 planner now writes `discovery` context to `$PLAN_DIR/discovery/combined.md` and passes path (never inline). D4: `agents/reviewer-fix.md` → `agents/wave-reviewer.md` rename (quiescence confirmed before rename; all references updated in plan-orchestrator, implementer-cloud, arch doc, model-map, CLAUDE.md, README.md).
+- **From Session a183dfe6:** Wave-synthesizer/auditor Input mismatch (post-E2 code review finding): wave-synthesizer's Input declaration listed raw wave artifacts, but planner dispatch supplies `wave_summary + current.md + replan_out` — the declared contract and the dispatch site were mismatched. Fixed by aligning Input to dispatch (Option A: match declaration to what the caller actually supplies). Auditor had the same issue: Input listed raw artifacts but receives `replan_brief + current.md + decision_out` via planner. Both Write blocks also updated to use the prompt-key references (not hardcoded paths).
+
+→ See also: [[agent-prompt-construction]], [[planner-signals-design]], [[uplift-cascade-pattern]], [[declared-rewrites]], [[agent-contract-testing]]

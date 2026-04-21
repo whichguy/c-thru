@@ -50495,3 +50495,75 @@ claude-router"
 [2026-04-21 13:53] READ_GATE session:a183dfe6 path:agents/plan-orchestrator.md slugs:cascade-scope-contraction dur:0ms
 [2026-04-21 13:53] READ_GATE session:a183dfe6 path:docs/agent-architecture.md slugs:agent-contract-testing,cascade-scope-contraction,implementer-lint-loop dur:0ms
 [2026-04-21 13:54] READ_GATE session:a183dfe6 path:config/model-map.json slugs:capability-profile-model-layers,declared-rewrites,fallback-event-system,gpt-oss-model,hook-model-rewriting-removal...+4 dur:0ms
+[2026-04-21 19:30] EXTRACT session:a82cecbf: self-recusal-chain (created), implementer-lint-directive (created), uplift-cascade-pattern (updated Wave-2 shipped), cascade-scope-contraction (updated Wave-2 shipped vindication), agent-prompt-construction (updated self-directed directives principle), model-map-edit-key-whitelist (updated PROFILE_KEYS parallel whitelist), model-map-test-pattern (updated RECUSE fixtures)
+[2026-04-22 00:30] EXTRACT session:22924d75: agent-prompt-construction (updated: +3 bullets — 3-layer audit findings, dispatch-site Batch E, fix batches A/B/C/E/D), uplift-cascade-pattern (updated: +1 bullet — test-writer-cloud uplift/restart branch gap), dispatch-site-contract-gap (created)
+[2026-04-21 14:26] SESSION_START session:393c7e95: opened in c-thru
+[2026-04-21 14:26] SESSION_START session:62c5c325: opened in c-thru
+[2026-04-21 14:26] SESSION_START session:a7de7728: opened in c-thru
+[2026-04-21 14:26] AMPLIFIER_MATCH session:393c7e95: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 14:26] AMPLIFIER_MATCH session:a7de7728: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 14:26] AMPLIFIER_MATCH session:62c5c325: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 14:31] READ_GATE session:a183dfe6 path:CLAUDE.md slugs:cascade-scope-contraction,declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-21 14:31] READ_GATE session:a183dfe6 path:CLAUDE.md slugs:cascade-scope-contraction,declared-rewrites,hook-model-rewriting-removal dur:0ms
+[2026-04-21 14:31] READ_GATE session:a183dfe6 path:README.md slugs:readme-installer-alignment dur:0ms
+[2026-04-21 14:32] READ_GATE session:a183dfe6 path:README.md slugs:readme-installer-alignment dur:0ms
+[2026-04-21 14:34] SESSION_START session:7c5a7a36: opened in c-thru
+[2026-04-21 14:34] SESSION_START session:c57feab6: opened in c-thru
+[2026-04-21 14:34] SESSION_START session:0861dc28: opened in c-thru
+[2026-04-21 14:34] AMPLIFIER_MATCH session:c57feab6: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 14:34] AMPLIFIER_MATCH session:0861dc28: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 14:34] AMPLIFIER_MATCH session:7c5a7a36: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 14:37] SESSION_START session:b9e75c8d: opened in c-thru
+[2026-04-21 14:37] SESSION_START session:8fb35f6a: opened in c-thru
+[2026-04-21 14:37] AMPLIFIER_MATCH session:b9e75c8d: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 14:37] AMPLIFIER_MATCH session:8fb35f6a: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:09] SESSION_START session:344519c9: opened in c-thru
+[2026-04-21 15:09] EXTRACT session:a183dfe6: compaction — 2 queue entries written
+[2026-04-21 15:10] AMPLIFIER_MATCH session:344519c9: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:12] SESSION_START session:a183dfe6: opened in c-thru
+[2026-04-21 15:12] SESSION_START session:026bc7b2: opened in c-thru
+[2026-04-21 15:12] SESSION_START session:ec631696: opened in c-thru
+[2026-04-21 15:12] AMPLIFIER_MATCH session:ec631696: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:12] AMPLIFIER_MATCH session:026bc7b2: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:12] EXTRACT session:a183dfe6: dispatch-site-contract-gap (E1-E4 resolution, wave-synthesizer/auditor write-block fix), agent-prompt-construction (5-batch audit materialized), uplift-cascade-pattern (test-writer-cloud branching fix), agent-structural-testing (D7 tier_budget check), agent-contract-testing (wave-reviewer rename, MAX_TOKENS, 401/403), agent-tier-budget-frontmatter (new)
+[2026-04-21 15:17] SESSION_END session:026bc7b2: closed in c-thru
+[2026-04-21 15:17] SESSION_START session:d0e31c86: opened in c-thru
+[2026-04-21 15:18] AMPLIFIER_MATCH session:d0e31c86: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:30] EXTRACT session:a183dfe6: agent-prompt-construction (updated), uplift-cascade-pattern (updated), dispatch-site-contract-gap (pre-populated), agent-contract-testing (pre-populated); index: agent-contract-testing + model-map-resolve-module added
+[2026-04-21 15:18] SESSION_START session:b631d3f2: opened in c-thru
+[2026-04-21 15:18] SESSION_START session:e488f831: opened in c-thru
+[2026-04-21 15:18] SESSION_END session:ec631696: closed in c-thru
+[2026-04-21 15:18] AMPLIFIER_MATCH session:b631d3f2: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:18] AMPLIFIER_MATCH session:e488f831: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+
+[2026-04-21 15:17] EXTRACT session:026bc7b2: no new entities — agent-contract-testing already captured wave-reviewer rename + MAX_TOKENS + 401/403-skip from co-running session a183dfe6
+[2026-04-21 15:20] SESSION_END session:d0e31c86: closed in c-thru
+[2026-04-21 15:20] SESSION_START session:a9d85366: opened in c-thru
+[2026-04-21 15:20] SESSION_START session:863318b0: opened in c-thru
+[2026-04-21 15:20] AMPLIFIER_MATCH session:863318b0: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:20] AMPLIFIER_MATCH session:a9d85366: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:21] PERIODIC session:b1731578: probabilistic trigger fired (mod=17)
+[2026-04-21 15:21] SESSION_START session:9664a6cc: opened in c-thru
+[2026-04-21 15:21] AMPLIFIER_MATCH session:9664a6cc: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 22:18] EXTRACT session:b1731578: updated entities/agent-structural-testing.md
+[2026-04-21 15:22] SESSION_START session:38a4aec4: opened in c-thru
+[2026-04-21 15:22] AMPLIFIER_MATCH session:38a4aec4: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:22] SESSION_END session:a9d85366: closed in c-thru
+[2026-04-21 15:22] SESSION_START session:16ce0e40: opened in c-thru
+[2026-04-21 15:23] AMPLIFIER_MATCH session:16ce0e40: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 15:18] EXTRACT session:d0e31c86: no new entities — concurrent curator runs (a183dfe6 at 15:12 + 15:30, b1731578 at 22:18) already captured all content: dispatch-site-contract-gap (E1-E4 + write-block), agent-prompt-construction (batches A-E), agent-contract-testing (wave-reviewer rename, MAX_TOKENS, 401/403), agent-tier-budget-frontmatter (new), model-map-resolve-module (new), uplift-cascade-pattern (test-writer-cloud branching), agent-structural-testing (D7, live test limitations)
+[2026-04-21 15:24] SESSION_END session:863318b0: closed in c-thru
+[2026-04-21 22:20] EXTRACT session:a9d85366: no new entities — session was a concurrent wiki curator with empty transcript; all co-session content already captured by a183dfe6, f20f3ade, b1731578
+[2026-04-21 15:24] SESSION_END session:16ce0e40: closed in c-thru
+[2026-04-21 22:35] EXTRACT session:b1731578: no new entities — all content already captured across 4 entities (agent-contract-testing: 5 bullets, agent-structural-testing: 2 bullets, agent-prompt-construction: 1 bullet, self-recusal-chain: 1 bullet); a183dfe6 extraction pre-populated agent-contract-testing with b1731578 content; prior b1731578 extraction at 22:18 added agent-structural-testing bullets
+[2026-04-21 15:24] SESSION_START session:84747a76: opened in c-thru
+[2026-04-21 15:24] SESSION_END session:9664a6cc: closed in c-thru
+[2026-04-21 15:24] AMPLIFIER_MATCH session:84747a76: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 22:45] EXTRACT session:b1731578: updated agent-contract-testing with behavioral gap analysis (3-dimension testing framework: prompt correctness vs routing vs behavioral quality; 6 uncovered paths identified; fixture-digest recommendation)
+[2026-04-21 15:25] SESSION_END session:38a4aec4: closed in c-thru
+[2026-04-21 15:18] EXTRACT session:ec631696: no new entities — session was itself a wiki curator (ran 15:12–15:18, extracted a183dfe6); all content already captured: dispatch-site-contract-gap, agent-prompt-construction, uplift-cascade-pattern, agent-structural-testing, agent-contract-testing, agent-tier-budget-frontmatter, model-map-resolve-module
+[2026-04-21 15:23] EXTRACT session:9664a6cc: no new entities — session was a concurrent wiki curator (ran 15:21–15:24, co-running with b1731578); all content from b1731578 already captured across agent-contract-testing (behavioral gap analysis) and agent-structural-testing (live test verbosity, install.sh sync requirement); a183dfe6 captures wave-reviewer rename + MAX_TOKENS + 401/403 corrections
+[2026-04-21 23:00] EXTRACT session:38a4aec4: no new entities — session content is claude-craft review-fix work (linter-table pre-flight, UX reconception tasks); not relevant to c-thru wiki
+[2026-04-21 23:10] EXTRACT session:b1731578: updated entities/agent-contract-testing.md — added shared/_worker-contract.md fixture dependency constraint (required for planned agent-contract-behavioral.test.js; missing from prior extractions)
+[2026-04-22 00:00] EXTRACT session:863318b0: updated entities/model-map-test-pattern.md (stdlib-only test convention — no mocha/chai, hand-rolled ok()/fail() pattern)
+[2026-04-21 15:32] SESSION_END session:84747a76: closed in c-thru
