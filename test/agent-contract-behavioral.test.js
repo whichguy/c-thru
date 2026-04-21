@@ -12,6 +12,13 @@ const fs   = require('fs');
 const http = require('http');
 const os   = require('os');
 const path = require('path');
+const {
+  parseStatusBlock,
+  stripBehavioralContract,
+  tierTimeout,
+  registerTmpDir,
+  installExitHandlers,
+} = require('./helpers');
 
 if (!process.env.C_THRU_BEHAVIORAL_TESTS) {
   console.log('agent-contract-behavioral: skip (set C_THRU_BEHAVIORAL_TESTS=1 to enable)');
@@ -26,17 +33,23 @@ const WORKER_CONTRACT = fs.readFileSync(CONTRACT_FILE, 'utf8');
 // Behavioral-test variant: strips the post-work linting section.
 // Raw API calls have no tool use — models can't run node --check, so the
 // full contract causes recusal on "cannot establish output is correct".
-const BEHAVIORAL_WORKER_CONTRACT = WORKER_CONTRACT
-  .replace(/---\n\n## Post-work linting[\s\S]*$/, '').trim();
+const BEHAVIORAL_WORKER_CONTRACT = stripBehavioralContract(WORKER_CONTRACT);
 
 const FILTER = process.env.BEHAVIORAL_ONLY
   ? new Set(process.env.BEHAVIORAL_ONLY.split(',').map(s => s.trim()))
   : null;
 
-let passed   = 0;
-let failed   = 0;
-let skipped  = 0;
+let passed           = 0;
+let failed           = 0;
+let skippedExpected  = 0;
+let skippedUnexpected = 0;
 const advisory = [];
+
+// Cloud/judge tiers where 401/403 is expected when ANTHROPIC_API_KEY is absent.
+const CLOUD_TIERS = new Set(['judge', 'judge-strict', 'deep-coder-cloud', 'code-analyst-cloud']);
+
+// Tiers served by Qwen3 models that need /no_think in the system prompt.
+const QWEN3_TIERS = new Set(['pattern-coder', 'orchestrator', 'local-planner']);
 
 function ok(label) {
   console.log(`  ok    ${label}`);
@@ -49,29 +62,19 @@ function fail(label, reason) {
   failed++;
 }
 
-function skip(label, reason) {
-  console.log(`  skip  ${label}${reason ? ' — ' + reason : ''}`);
-  skipped++;
+function skipExpected(label, reason) {
+  console.log(`  skip  ${label}${reason ? ' — ' + reason : ''} (expected)`);
+  skippedExpected++;
+}
+
+function skipUnexpected(label, reason) {
+  console.log(`  SKIP! ${label}${reason ? ' — ' + reason : ''} (UNEXPECTED)`);
+  skippedUnexpected++;
 }
 
 function adv(label) {
   advisory.push(label);
   console.log(`  adv   ${label}`);
-}
-
-// ── STATUS block parser ───────────────────────────────────────────────────────
-function parseStatusBlock(text) {
-  // Strip think blocks, then normalize pipe-separated STATUS lines that some
-  // local models emit (e.g. "STATUS: COMPLETE|WROTE: ...|ANSWERED: yes").
-  const stripped = text
-    .replace(/<think>[\s\S]*?<\/think>/g, '')
-    .replace(/\|([A-Z_]+:)/g, '\n$1');
-  const r = {};
-  for (const line of stripped.split('\n')) {
-    const m = line.match(/^([A-Z_]+):\s*(.*)$/);
-    if (m) r[m[1]] = m[2].trim();
-  }
-  return r;
 }
 
 // ── Proxy helpers ─────────────────────────────────────────────────────────────
@@ -119,7 +122,7 @@ function postMessages(host, port, body, timeoutMs = 120_000) {
           const bodyText = Buffer.concat(chunks).toString('utf8');
           let json = null;
           try { json = JSON.parse(bodyText); } catch {}
-          resolve({ status: res.statusCode, json, bodyText });
+          resolve({ status: res.statusCode, headers: res.headers, json, bodyText });
         });
       }
     );
@@ -152,9 +155,9 @@ function buildWorkerDigest(tmpDir, agentName, itemId, targetResources, taskBody)
     '---',
   ].join('\n');
   const content = frontmatter + '\n\n' + taskBody.trim() + '\n\n---\n\n' + BEHAVIORAL_WORKER_CONTRACT;
-  const digestPath = path.join(tmpDir, `${agentName}-${itemId}.md`);
-  fs.writeFileSync(digestPath, content, 'utf8');
-  return digestPath;
+  // Write to disk for debugging; return contents (not path) so the model can read them.
+  fs.writeFileSync(path.join(tmpDir, `${agentName}-${itemId}.md`), content, 'utf8');
+  return content;
 }
 
 // ── Validate helpers ──────────────────────────────────────────────────────────
@@ -195,17 +198,17 @@ function assertWorkSection(agentName, text, advisory = false) {
 
 // ── Runner ────────────────────────────────────────────────────────────────────
 async function runTest(host, port, entry) {
-  const { name, maxTokens, buildMessage, validate } = entry;
+  const { name, maxTokens, expectedCapability, buildMessage, validate } = entry;
 
   if (FILTER && !FILTER.has(name)) return;
 
   const systemPrompt = readSystemPrompt(name);
   if (!systemPrompt) {
-    skip(`${name}`, 'agent file not found');
+    skipUnexpected(`${name}`, 'agent file not found');
     return;
   }
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `c-thru-beh-${name}-`));
+  const tmpDir = registerTmpDir(fs.mkdtempSync(path.join(os.tmpdir(), `c-thru-beh-${name}-`)));
   let userMessage;
   try {
     userMessage = buildMessage(tmpDir);
@@ -215,27 +218,25 @@ async function runTest(host, port, entry) {
     return;
   }
 
+  // Prepend /no_think to system prompt for Qwen3-served tiers to suppress
+  // extended-thinking token drain without corrupting KV-format user messages.
+  const sysPrompt = QWEN3_TIERS.has(expectedCapability)
+    ? `/no_think\n\n${systemPrompt}`
+    : systemPrompt;
+
   process.stdout.write(`  [${name}] … `);
   let res;
   try {
-    // Append /no_think to suppress extended-thinking mode on Qwen3 models.
-    // Without this, thinking tokens exhaust the budget before any text output.
-    // Harmless for non-Qwen3 models — they ignore the suffix.
-    // Set noThink: false on entries that use inline key-value input formats
-    // where appending /no_think disrupts parsing.
-    const userContent = entry.noThink === false
-      ? userMessage
-      : userMessage + '\n\n/no_think';
     res = await postMessages(host, port, {
       model:      name,
       max_tokens: maxTokens || 3000,
       stream:     false,
-      system:     systemPrompt,
-      messages:   [{ role: 'user', content: userContent }],
-    }, entry.timeoutMs || 180_000);
+      system:     sysPrompt,
+      messages:   [{ role: 'user', content: userMessage }],
+    }, entry.timeoutMs || tierTimeout(expectedCapability));
   } catch (e) {
     console.log('');
-    skip(`${name}: request failed — ${e.message}`);
+    skipUnexpected(`${name}`, `request failed — ${e.message}`);
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     return;
   }
@@ -243,12 +244,42 @@ async function runTest(host, port, entry) {
 
   try {
     if (res.status === 401 || res.status === 403) {
-      skip(`${name}: HTTP ${res.status} — cloud backend auth not configured`);
+      if (CLOUD_TIERS.has(expectedCapability)) {
+        skipExpected(`${name}`, `HTTP ${res.status} — cloud backend auth not configured`);
+      } else {
+        skipUnexpected(`${name}`, `HTTP ${res.status} — unexpected auth error on local tier`);
+      }
       return;
     }
     if (res.status !== 200) {
       fail(`${name}: HTTP ${res.status}`, res.bodyText.slice(0, 300));
       return;
+    }
+
+    // Verify the response came through c-thru with agent-name resolution.
+    const resolvedVia = res.headers && res.headers['x-c-thru-resolved-via'];
+    if (!resolvedVia) {
+      fail(`${name}: x-c-thru-resolved-via header absent — response did not come through c-thru proxy`);
+    } else {
+      try {
+        const via = JSON.parse(resolvedVia);
+        ok(`${name}: routed through c-thru → served_by=${via.served_by} capability=${via.capability} tier=${via.tier}`);
+        if (via.served_by === name) {
+          fail(`${name}: served_by equals agent name — agent_to_capability resolution did not fire`);
+        } else {
+          ok(`${name}: agent name resolved (served_by "${via.served_by}" ≠ agent name "${name}")`);
+        }
+        if (!via.served_by) {
+          fail(`${name}: served_by is null/empty — no model was resolved`);
+        }
+        if (expectedCapability && via.capability !== expectedCapability) {
+          fail(`${name}: capability "${via.capability}" expected "${expectedCapability}"`);
+        } else if (expectedCapability) {
+          ok(`${name}: capability matches expected (${expectedCapability})`);
+        }
+      } catch (e) {
+        fail(`${name}: x-c-thru-resolved-via is not valid JSON — ${e.message}`);
+      }
     }
 
     const text = res.json && Array.isArray(res.json.content)
@@ -258,7 +289,7 @@ async function runTest(host, port, entry) {
     const block = parseStatusBlock(text);
 
     if (!block.STATUS) {
-      skip(`${name}: no STATUS block in response (text length: ${text.length} chars — increase maxTokens or check routing)`);
+      skipUnexpected(`${name}`, `no STATUS block in response (text length: ${text.length} chars — increase maxTokens or check routing)`);
       return;
     }
 
@@ -284,9 +315,8 @@ const ROSTER = [
   // Recon content is inlined so the model doesn't need filesystem tool use.
   {
     name: 'discovery-advisor',
+    expectedCapability: 'pattern-coder',
     maxTokens: 4000,
-    timeoutMs: 300_000,
-    noThink: false,
     buildMessage(tmpDir) {
       const reconContent = '# Reconnaissance summary\n\nno-gaps\n\nGreenfield project with no existing code to survey.\n';
       const reconPath = path.join(tmpDir, 'recon.md');
@@ -322,6 +352,7 @@ const ROSTER = [
   // File contents are inlined so the model doesn't need filesystem tool use.
   {
     name: 'explorer',
+    expectedCapability: 'pattern-coder',
     maxTokens: 2000,
     buildMessage(tmpDir) {
       const configPath = path.join(tmpDir, 'config.js');
@@ -360,20 +391,20 @@ const ROSTER = [
   // 3. uplift-decider: partial output matches all criteria → VERDICT accept
   {
     name: 'uplift-decider',
+    expectedCapability: 'judge',
     maxTokens: 4000,
-    timeoutMs: 300_000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'outputs'), { recursive: true });
       const partialOutput = path.join(tmpDir, 'outputs', 'implementer-item-001.md');
-      fs.writeFileSync(partialOutput,
-        `## Work completed
+      const partialText = `## Work completed
 Appended \`// behavioral-test-marker\` as the final line of src/hello.js.
 
 The file now ends with the comment \`// behavioral-test-marker\` and passes \`node --check\`.
 
 ### Learnings
 Target file was syntactically valid before modification.
-`);
+`;
+      fs.writeFileSync(partialOutput, partialText);
       const digestContent = `---
 agent: uplift-decider
 item_id: item-behavioral-001
@@ -398,10 +429,14 @@ Recusal reason: local implementer could not confirm output passes lint check.
 
 Prior escalation log:
 - agent: implementer, tier: deep-coder, attempted: yes
+
+Contents of PARTIAL_OUTPUT:
+\`\`\`
+${partialText.trim()}
+\`\`\`
 `;
-      const digestPath = path.join(tmpDir, 'uplift-decider-item-001.md');
-      fs.writeFileSync(digestPath, digestContent);
-      return digestPath;
+      fs.writeFileSync(path.join(tmpDir, 'uplift-decider-item-001.md'), digestContent);
+      return digestContent;
     },
     validate(name, block) {
       if (block.STATUS !== 'COMPLETE') {
@@ -442,8 +477,8 @@ Prior escalation log:
   // 4. implementer: append comment to clean JS → COMPLETE, LINT_ITERATIONS numeric
   {
     name: 'implementer',
+    expectedCapability: 'deep-coder',
     maxTokens: 4000,
-    timeoutMs: 300_000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const helloJs = path.join(tmpDir, 'src', 'hello.js');
@@ -499,6 +534,7 @@ Only modify \`${helloJs}\`. No other files.`;
   // 5. security-reviewer: pure math utility → STATUS must NOT be RECUSE
   {
     name: 'security-reviewer',
+    expectedCapability: 'judge-strict',
     maxTokens: 3000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
@@ -532,8 +568,8 @@ Review only \`${mathUtils}\`. No other files.`;
   // 6. scaffolder: explicit stub spec → COMPLETE, work section present
   {
     name: 'scaffolder',
+    expectedCapability: 'pattern-coder',
     maxTokens: 6000,
-    timeoutMs: 300_000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const stubJs = path.join(tmpDir, 'src', 'greeter.js');
@@ -570,8 +606,8 @@ Only create \`${stubJs}\`. No other files.`;
   // 7. wave-reviewer: clean JS file → STATUS valid, ITERATIONS numeric
   {
     name: 'wave-reviewer',
+    expectedCapability: 'code-analyst',
     maxTokens: 6000,
-    timeoutMs: 300_000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const adderJs = path.join(tmpDir, 'src', 'adder.js');
@@ -608,8 +644,8 @@ Only write to \`${adderJs}\`. No other files.`;
   // 8. test-writer: simple add function → COMPLETE, work section present
   {
     name: 'test-writer',
+    expectedCapability: 'code-analyst',
     maxTokens: 4000,
-    timeoutMs: 300_000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'),  { recursive: true });
       fs.mkdirSync(path.join(tmpDir, 'test'), { recursive: true });
@@ -650,8 +686,8 @@ Write only to \`${testJs}\`. Read \`${addJs}\` to understand the implementation.
   // 9. converger: two identical parallel outputs → COMPLETE
   {
     name: 'converger',
+    expectedCapability: 'code-analyst',
     maxTokens: 6000,
-    timeoutMs: 300_000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'outputs'), { recursive: true });
       const sharedContent = `## Work completed
@@ -696,8 +732,8 @@ Write only to \`${mergedOut}\`.`;
   // 10. integrator: wire module into index → COMPLETE
   {
     name: 'integrator',
+    expectedCapability: 'orchestrator',
     maxTokens: 6000,
-    timeoutMs: 300_000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const greetJs = path.join(tmpDir, 'src', 'greet.js');
@@ -738,8 +774,8 @@ Only modify \`${indexJs}\`. Read \`${greetJs}\` to understand its interface.`;
   // 11. doc-writer: document add function → COMPLETE
   {
     name: 'doc-writer',
+    expectedCapability: 'orchestrator',
     maxTokens: 6000,
-    timeoutMs: 300_000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'),  { recursive: true });
       fs.mkdirSync(path.join(tmpDir, 'docs'), { recursive: true });
@@ -781,14 +817,13 @@ Write only to \`${docMd}\`. Read \`${addJs}\` to understand actual behavior.`;
   // 12. planner-local: pending item with no deps → VERDICT ready
   {
     name: 'planner-local',
+    expectedCapability: 'local-planner',
     maxTokens: 4000,
-    timeoutMs: 300_000,
-    noThink: false,
     buildMessage(tmpDir) {
-      const currentMd  = path.join(tmpDir, 'current.md');
+      const currentMd   = path.join(tmpDir, 'current.md');
       const waveSummary = path.join(tmpDir, 'wave-summary.json');
       const learningsMd = path.join(tmpDir, 'learnings.md');
-      fs.writeFileSync(currentMd, [
+      const currentContent = [
         '## Outcome',
         'Build a simple Node.js CLI that prints "hello world".',
         '',
@@ -800,8 +835,10 @@ Write only to \`${docMd}\`. Read \`${addJs}\` to understand actual behavior.`;
         'target_resources: [src/index.js]',
         'depends_on: []',
         'notes: implement main entry point',
-      ].join('\n'));
-      fs.writeFileSync(waveSummary, JSON.stringify({ dep_discoveries: [] }, null, 2));
+      ].join('\n');
+      const waveSummaryText = JSON.stringify({ dep_discoveries: [] }, null, 2);
+      fs.writeFileSync(currentMd, currentContent);
+      fs.writeFileSync(waveSummary, waveSummaryText);
       fs.writeFileSync(learningsMd, '');
       return [
         `current.md: ${currentMd}`,
@@ -809,6 +846,12 @@ Write only to \`${docMd}\`. Read \`${addJs}\` to understand actual behavior.`;
         `wave_summary: ${waveSummary}`,
         'affected_items: [item-behavioral-001]',
         `learnings.md: ${learningsMd}`,
+        '',
+        'Contents of current.md:',
+        '```markdown', currentContent.trim(), '```',
+        '',
+        'Contents of wave_summary (JSON):',
+        '```json', waveSummaryText.trim(), '```',
       ].join('\n');
     },
     validate(name, block) {
@@ -837,8 +880,8 @@ Write only to \`${docMd}\`. Read \`${addJs}\` to understand actual behavior.`;
   // 13. implementer-cloud: cloud tier — same task as implementer, skip on 401
   {
     name: 'implementer-cloud',
+    expectedCapability: 'deep-coder-cloud',
     maxTokens: 4000,
-    timeoutMs: 300_000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const helloJs = path.join(tmpDir, 'src', 'hello.js');
@@ -877,8 +920,8 @@ Only modify \`${helloJs}\`.`;
   // 14. test-writer-cloud: cloud tier — same task as test-writer, skip on 401
   {
     name: 'test-writer-cloud',
+    expectedCapability: 'code-analyst-cloud',
     maxTokens: 4000,
-    timeoutMs: 300_000,
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'),  { recursive: true });
       fs.mkdirSync(path.join(tmpDir, 'test'), { recursive: true });
@@ -913,6 +956,8 @@ Write only to \`${testJs}\`.`;
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
+  installExitHandlers();
+
   const { host, port } = resolveProxy();
 
   process.stdout.write(`Checking proxy at ${host}:${port}… `);
@@ -928,7 +973,7 @@ async function main() {
   const active = FILTER ? ROSTER.filter(e => FILTER.has(e.name)) : ROSTER;
   console.log(`\nAgent behavioral tests (${active.length} agent${active.length !== 1 ? 's' : ''} — may take several minutes)\n`);
 
-  for (const entry of ROSTER) {
+  for (const entry of active) {
     await runTest(host, port, entry);
   }
 
@@ -937,16 +982,16 @@ async function main() {
     for (const a of advisory) console.log(`  adv   ${a}`);
   }
 
-  const total = passed + failed;
-  console.log(`\n${total} tests: ${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`);
-  process.exit(failed ? 1 : 0);
+  const total = passed + failed + skippedExpected + skippedUnexpected;
+  const skippedParts = [];
+  if (skippedExpected)   skippedParts.push(`${skippedExpected} skipped (expected)`);
+  if (skippedUnexpected) skippedParts.push(`${skippedUnexpected} skipped (UNEXPECTED)`);
+  const skippedSummary = skippedParts.length ? `, ${skippedParts.join(', ')}` : '';
+  console.log(`\n${total} tests: ${passed} passed, ${failed} failed${skippedSummary}`);
+  process.exit(failed || skippedUnexpected ? 1 : 0);
 }
 
-process.on('unhandledRejection', err => {
-  console.error('unhandledRejection:', err);
-  process.exit(1);
-});
-
+// unhandledRejection handler is installed by helpers.js on require.
 main().catch(err => {
   console.error(err);
   process.exit(1);
