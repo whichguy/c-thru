@@ -6,7 +6,8 @@ const path = require('path');
 
 const PROFILE_KEYS = ['default', 'classifier', 'explorer', 'reviewer', 'workhorse', 'coder',
   'judge', 'judge-strict', 'orchestrator', 'code-analyst', 'pattern-coder', 'deep-coder',
-  'local-planner', 'commit-message-generator'];
+  'local-planner', 'commit-message-generator',
+  'deep-coder-cloud', 'code-analyst-cloud'];
 const CAPABILITY_KEYS = new Set([
   'default',
   'classify_intent',
