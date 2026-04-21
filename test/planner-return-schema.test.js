@@ -648,7 +648,7 @@ console.log('\n7. LINT_ITERATIONS fixtures');
     : fail('CONFIDENCE=high with LINT_ITERATIONS present: valid', JSON.stringify(r));
 }
 
-// 5. LINT_ITERATIONS: 5 + plan-material finding + CONFIDENCE: high → invalid
+// 5. LINT_ITERATIONS: 5 + plan-material finding "lint errors remained after cap" + CONFIDENCE: high → invalid
 //    (unfixed errors at cap force CONFIDENCE ≤ medium per agent directive)
 {
   const raw = `STATUS: COMPLETE\nCONFIDENCE: high\nWROTE: waves/001/outputs/implementer-item-E.md\nINDEX: waves/001/outputs/implementer-item-E.INDEX.md\nFINDINGS: waves/001/findings/implementer-item-E.jsonl\nFINDING_CATS: {crisis:0,plan-material:1,contextual:0,trivial:0,augmentation:0,improvement:1}\nLINT_ITERATIONS: 5\nSUMMARY: cap hit, lint errors remain`;
