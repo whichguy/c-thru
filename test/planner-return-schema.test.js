@@ -321,6 +321,128 @@ console.log('\n4. Migration shim');
 }
 
 // ---------------------------------------------------------------------------
+// Section 5 — RECUSE STATUS fixtures (Wave-2 escalation)
+// ---------------------------------------------------------------------------
+
+console.log('\n5. RECUSE STATUS fixtures');
+
+// Orchestrator response handler — strips think tags, parses STATUS block
+function stripThinkTags(text) {
+  return text.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think><\/think>/g, '');
+}
+
+function parseWorkerStatus(raw) {
+  const text = stripThinkTags(raw);
+  const result = {};
+  for (const line of text.trim().split('\n')) {
+    const m = line.match(/^([A-Z_]+):\s*(.*)$/);
+    if (!m) continue;
+    result[m[1]] = m[2].trim();
+  }
+  return result;
+}
+
+// 1. STATUS: RECUSE with ATTEMPTED=yes parses without crash
+{
+  const raw = `
+## Work completed
+partial work here
+
+STATUS: RECUSE
+ATTEMPTED: yes
+RECUSAL_REASON: cannot confirm output satisfies criteria without running integration tests
+RECOMMEND: uplift-decider
+PARTIAL_OUTPUT: waves/001/outputs/implementer-item-A.md
+SUMMARY: recused mid-execution, partial output written
+  `.trim();
+  const r = parseWorkerStatus(raw);
+  (r.STATUS === 'RECUSE' && r.ATTEMPTED === 'yes' && r.RECOMMEND === 'uplift-decider' && r.PARTIAL_OUTPUT)
+    ? ok('RECUSE ATTEMPTED=yes — all fields present')
+    : fail('RECUSE ATTEMPTED=yes — all fields present', JSON.stringify(r));
+}
+
+// 2. STATUS: RECUSE with ATTEMPTED=no parses without crash
+{
+  const raw = `STATUS: RECUSE
+ATTEMPTED: no
+RECUSAL_REASON: two valid interpretations exist — cannot determine which satisfies criteria
+RECOMMEND: uplift-decider
+SUMMARY: pre-execution recusal, no partial output`;
+  const r = parseWorkerStatus(raw);
+  (r.STATUS === 'RECUSE' && r.ATTEMPTED === 'no' && !r.PARTIAL_OUTPUT)
+    ? ok('RECUSE ATTEMPTED=no — PARTIAL_OUTPUT absent')
+    : fail('RECUSE ATTEMPTED=no — PARTIAL_OUTPUT absent', JSON.stringify(r));
+}
+
+// 3. RECOMMEND field present and non-empty
+{
+  const raw = `STATUS: RECUSE\nATTEMPTED: no\nRECUSAL_REASON: missing pattern\nRECOMMEND: implementer-cloud\nSUMMARY: recused`;
+  const r = parseWorkerStatus(raw);
+  (r.RECOMMEND && r.RECOMMEND.length > 0)
+    ? ok('RECOMMEND field non-empty')
+    : fail('RECOMMEND field non-empty', JSON.stringify(r));
+}
+
+// 4. Absent RECOMMEND gracefully treated as empty string (not null-deref)
+{
+  const raw = `STATUS: RECUSE\nATTEMPTED: no\nRECUSAL_REASON: missing pattern\nSUMMARY: recused`;
+  const r = parseWorkerStatus(raw);
+  (r.RECOMMEND === undefined || r.RECOMMEND === '')
+    ? ok('absent RECOMMEND → undefined (no crash)')
+    : fail('absent RECOMMEND → undefined (no crash)', JSON.stringify(r));
+}
+
+// 5. PARTIAL_OUTPUT omitted when ATTEMPTED=no
+{
+  const raw = `STATUS: RECUSE\nATTEMPTED: no\nRECUSAL_REASON: unverifiable\nRECOMMEND: uplift-decider\nSUMMARY: x`;
+  const r = parseWorkerStatus(raw);
+  (!r.PARTIAL_OUTPUT)
+    ? ok('PARTIAL_OUTPUT absent when ATTEMPTED=no')
+    : fail('PARTIAL_OUTPUT absent when ATTEMPTED=no', `got: ${r.PARTIAL_OUTPUT}`);
+}
+
+// 6. Malformed RECUSE (missing RECUSAL_REASON) — orchestrator marks failed, not crashed
+{
+  const raw = `STATUS: RECUSE\nATTEMPTED: yes\nRECOMMEND: uplift-decider\nSUMMARY: broken`;
+  const r = parseWorkerStatus(raw);
+  const malformed = r.STATUS === 'RECUSE' && !r.RECUSAL_REASON;
+  malformed
+    ? ok('malformed RECUSE (missing RECUSAL_REASON) detected — orchestrator marks failed')
+    : fail('malformed RECUSE (missing RECUSAL_REASON) detected', JSON.stringify(r));
+}
+
+// 7. Think-tag stripping before STATUS parse
+{
+  const raw = `<think>
+some extended thinking here
+about what to do
+</think>
+STATUS: RECUSE
+ATTEMPTED: no
+RECUSAL_REASON: cannot verify output satisfies criteria
+RECOMMEND: test-writer-cloud
+SUMMARY: recused after thinking`;
+  const r = parseWorkerStatus(raw);
+  (r.STATUS === 'RECUSE' && r.RECOMMEND === 'test-writer-cloud')
+    ? ok('think-tag stripped before STATUS parse')
+    : fail('think-tag stripped before STATUS parse', JSON.stringify(r));
+}
+
+// 8. wave.json item with escalation_policy: pre-escalate — field round-trips correctly
+{
+  const item = {
+    agent: 'implementer', item: 'item-X', target_resources: ['src/foo.ts'],
+    depends_on: [], escalation_policy: 'pre-escalate', escalation_policy_source: 'step4b',
+    escalation_depth: 0, escalation_log: []
+  };
+  const serialized = JSON.stringify(item);
+  const parsed = JSON.parse(serialized);
+  (parsed.escalation_policy === 'pre-escalate' && parsed.escalation_depth === 0 && Array.isArray(parsed.escalation_log))
+    ? ok('escalation_policy: pre-escalate round-trips in wave.json item')
+    : fail('escalation_policy: pre-escalate round-trips in wave.json item', JSON.stringify(parsed));
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 
