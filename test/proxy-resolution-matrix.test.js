@@ -413,6 +413,68 @@ async function main() {
     } finally {
       if (localTerminalStub) await localTerminalStub.close().catch(() => {});
     }
+    // ── 9. Active-path tiebreaker: speed-sort within quality band ────────
+    // Chain (raw config order): [A(q=90,s=20), B(q=87,s=95), C(q=60,s=99)]
+    // terminatedModel = A (fails with 429).
+    // Without tiebreaker: filtered=[B,C], walk order B→C.
+    // With tiebreaker (5% tolerance): threshold=87*0.95=82.65; in-band: B(87). Out: C(60).
+    // Wait — B is first in filtered so topScore=87, threshold=82.65. In-band: B(87). Out: C(60).
+    // Only one in-band so sort is no-op → result [B, C]. Same as raw.
+    // Need a case where in-band has ≥2 entries with different speeds.
+    // Chain: [A(q=90,s=20), B(q=87,s=30), C(q=86,s=99), D(q=60,s=50)]
+    // filtered=[B(87,30), C(86,99), D(60,50)]. topScore=87. threshold=87*0.95=82.65.
+    // In-band: B(87), C(86). Out: D(60). Speed-sort in-band: C(99)>B(30) → [C,B].
+    // Result: [C, B, D]. Raw order would be [B, C, D].
+    // So tiebreaker promotes C (lower quality but MUCH faster) above B.
+    // Test: A fails → first call is C (not B). If tiebreaker missing: first call is B.
+    console.log('\n9. Active-path tiebreaker: speed-sort within quality band promotes faster candidate');
+    let tiebreakerStub;
+    try {
+      tiebreakerStub = await multiModelSelectiveStub(['tb-primary'], 429);
+      const tbConfig = {
+        backends: { tb: { kind: 'anthropic', url: `http://127.0.0.1:${tiebreakerStub.port}` } },
+        model_routes: {
+          'tb-primary': 'tb', 'tb-B': 'tb', 'tb-C': 'tb', 'tb-D': 'tb',
+        },
+        llm_profiles: {
+          '64gb': {
+            workhorse: { connected_model: 'tb-primary', disconnect_model: 'tb-D' },
+          },
+        },
+        quality_tolerance_pct: 5,
+        fallback_chains: {
+          '64gb': {
+            workhorse: [
+              { model: 'tb-primary', quality_score: 90, speed_score: 20 },
+              { model: 'tb-B',       quality_score: 87, speed_score: 30 },
+              { model: 'tb-C',       quality_score: 86, speed_score: 99 },
+              { model: 'tb-D',       quality_score: 60, speed_score: 50 },
+            ],
+          },
+        },
+      };
+      const tbConfigPath = writeConfig(tmpDir, tbConfig);
+      await withProxy(
+        { configPath: tbConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'cloud-best-quality' } },
+        async ({ port }) => {
+          const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
+          const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 5000);
+          assert(resp.status === 200,
+            `tiebreaker test: request succeeds after primary fails (got status=${resp.status})`);
+          // With tiebreaker: B(q=87,s=30) and C(q=86,s=99) are in-band (threshold=87*0.95=82.65).
+          // Speed sort promotes C before B → first fallback is C.
+          // Without tiebreaker: raw order B then C → first fallback is B.
+          const reqs = tiebreakerStub.requests;
+          assert(reqs.length >= 2, `≥2 calls: primary + fallback (got ${reqs.length})`);
+          assert(reqs[0] && reqs[0].model_used === 'tb-primary',
+            `first call was tb-primary (got ${reqs[0] && reqs[0].model_used})`);
+          assert(reqs[1] && reqs[1].model_used === 'tb-C',
+            `second call was tb-C (speed-promoted over tb-B by tiebreaker; got ${reqs[1] && reqs[1].model_used})`);
+        }
+      );
+    } finally {
+      if (tiebreakerStub) await tiebreakerStub.close().catch(() => {});
+    }
   } finally {
     if (stub) await stub.close().catch(() => {});
     if (errorStub) await errorStub.close().catch(() => {});

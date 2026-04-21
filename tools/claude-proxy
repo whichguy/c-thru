@@ -2290,7 +2290,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
     let appendedTerminalIdx = -1;
     if (candidates.length === 0 && _capKey) {
       const chain = CONFIG.fallback_chains?.[_hwTier]?.[_capKey] || [];
-      ({ candidates, appendedTerminalIdx } = buildFallbackCandidatesFromChain(chain, terminalModel, _capKey, _hwTier));
+      ({ candidates, appendedTerminalIdx } = buildFallbackCandidatesFromChain(chain, terminalModel, _capKey, _hwTier, _isBqMode, _tolerancePct));
     }
     proxyLog('fallback.chain_start', {
       terminal_model: terminalModel,
