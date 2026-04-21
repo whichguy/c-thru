@@ -352,5 +352,45 @@ console.log('\n17. general-default fallback chains seeded at 48gb/64gb/128gb');
   }
 }
 
+// ── 18. Mirror-drift guard: test stub resolveProfileModel === real resolver ─
+// If the real resolveProfileModel changes and the test stub above is not updated,
+// this section catches the divergence before it silently invalidates §1-§17.
+console.log('\n18. Mirror-drift guard: test stub matches real resolveProfileModel');
+{
+  const { resolveProfileModel: realResolve } = require(path.join(__dirname, '..', 'tools', 'model-map-resolve.js'));
+
+  const driftCases = [
+    // null guard
+    { entry: null,      mode: 'connected',         expected: null },
+    // basic modes
+    { entry: { connected_model: 'c', disconnect_model: 'd' }, mode: 'connected',         expected: 'c' },
+    { entry: { connected_model: 'c', disconnect_model: 'd' }, mode: 'offline',           expected: 'd' },
+    { entry: { connected_model: 'c', disconnect_model: 'd' }, mode: 'semi-offload',      expected: 'd' },
+    { entry: { connected_model: 'c', disconnect_model: 'd' }, mode: 'cloud-judge-only',  expected: 'd' },
+    // new modes: fallthrough
+    { entry: { connected_model: 'c', disconnect_model: 'd' }, mode: 'cloud-best-quality', expected: 'c' },
+    { entry: { connected_model: 'c', disconnect_model: 'd' }, mode: 'local-best-quality', expected: 'd' },
+    // new modes: convenience fields win
+    { entry: { connected_model: 'c', disconnect_model: 'd', cloud_best_model: 'cb' }, mode: 'cloud-best-quality', expected: 'cb' },
+    { entry: { connected_model: 'c', disconnect_model: 'd', local_best_model: 'lb'  }, mode: 'local-best-quality', expected: 'lb' },
+    // modes[] override wins over everything
+    { entry: { connected_model: 'c', disconnect_model: 'd', cloud_best_model: 'cb', modes: { 'cloud-best-quality': 'ov' } }, mode: 'cloud-best-quality', expected: 'ov' },
+    { entry: { connected_model: 'c', disconnect_model: 'd', modes: { 'offline': 'ov' } }, mode: 'offline', expected: 'ov' },
+  ];
+
+  for (const { entry, mode, expected } of driftCases) {
+    const stubResult = resolveProfileModel(entry, mode);
+    const realResult = realResolve(entry, mode);
+    assert(
+      stubResult === realResult,
+      `stub/real agree for mode='${mode}' entry=${JSON.stringify(entry)}: stub=${stubResult} real=${realResult}`
+    );
+    assert(
+      realResult === expected,
+      `real resolver: mode='${mode}' → '${expected}' (got ${realResult})`
+    );
+  }
+}
+
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
