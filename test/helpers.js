@@ -2,6 +2,9 @@
 'use strict';
 // Shared test harness for proxy integration tests.
 // Stdlib-only — no external deps.
+//
+// TODO: Evaluate porting test/*.test.sh to Node — if consolidating bash tests here
+// is simpler than maintaining a mixed Node+bash suite, port them to use this harness.
 
 const { spawn } = require('child_process');
 const fs   = require('fs');
@@ -244,6 +247,60 @@ function collectStderr(child) {
   return { get: () => buf };
 }
 
+// ── Stub backend ───────────────────────────────────────────────────────────
+
+// Starts a lightweight HTTP server that captures forwarded proxy requests.
+// Each entry in .requests records: { method, path, headers, body, model_used, serving_url }
+// where model_used is the concrete model name the proxy forwarded (sans @sigil),
+// and serving_url is the full URL the proxy targeted.
+//
+// Returns a minimal valid Anthropic non-streaming response for every request.
+// Use kind:"anthropic" in the proxy config backend — no Ollama probe is triggered.
+function stubBackend() {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      let body = null;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+      requests.push({
+        method:      req.method,
+        path:        req.url,
+        headers:     req.headers,
+        body,
+        model_used:  body ? body.model : null,
+        serving_url: `http://127.0.0.1:${server.address().port}${req.url}`,
+      });
+      const response = {
+        id: 'msg_stub',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'stub' }],
+        model: body ? body.model : 'stub',
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(response));
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      resolve({
+        server,
+        port,
+        requests,
+        lastRequest: () => requests[requests.length - 1] || null,
+        close: () => new Promise(r => server.close(r)),
+      });
+    });
+    server.on('error', reject);
+  });
+}
+
 // ── Global rejection guard ─────────────────────────────────────────────────
 
 process.on('unhandledRejection', err => {
@@ -263,4 +320,5 @@ module.exports = {
   withProxy,
   assertLogContains,
   collectStderr,
+  stubBackend,
 };
