@@ -677,6 +677,9 @@ function recordStats(endpoint, backend, clientModel, effectiveModel, statusCode)
 // ── Fallback strategies ───────────────────────────────────────────────
 
 const VALID_FAILURE_CLASSES = new Set(['network_failure', 'rate_limit', 'account_quota', 'context_limit']);
+// Events that do not accept hookSpecificOutput per Claude Code's hook schema.
+// For these events only a top-level systemMessage (or empty {}) is valid.
+const SIDE_EFFECT_EVENTS = new Set(['PostCompact', 'PreCompact', 'SessionEnd', 'Stop', 'Notification', 'WorktreeRemove', 'InstructionsLoaded', 'StopFailure', 'CwdChanged', 'FileChanged']);
 const cooldowns = new Map(); // model -> { untilMs, failureClass }
 
 // In-memory ring buffer of recent fallback events. Consumed by the
@@ -2834,14 +2837,14 @@ const hooksServer = require('http').createServer((req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             // Side-effect-only events (PostCompact, PreCompact, SessionEnd, Stop, etc.)
             // do not accept hookSpecificOutput — only top-level systemMessage is valid.
-            const SIDE_EFFECT_EVENTS = new Set(['PostCompact', 'PreCompact', 'SessionEnd', 'Stop', 'Notification', 'WorktreeRemove', 'InstructionsLoaded', 'StopFailure', 'CwdChanged', 'FileChanged']);
             if (eventName && SIDE_EFFECT_EVENTS.has(eventName)) {
               res.end(JSON.stringify({ systemMessage: issues.join('\n') }));
+            } else if (eventName) {
+              // hookEventName is required in hookSpecificOutput — only emit when known.
+              res.end(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext: issues.join('\n') } }));
             } else {
-              const hookOut = eventName
-                ? { hookEventName: eventName, additionalContext: issues.join('\n') }
-                : { additionalContext: issues.join('\n') };
-              res.end(JSON.stringify({ hookSpecificOutput: hookOut }));
+              // No event name — cannot construct a valid hookSpecificOutput; emit no-op.
+              res.end('{}');
             }
           } else {
             res.writeHead(200, { 'Content-Type': 'application/json' });
