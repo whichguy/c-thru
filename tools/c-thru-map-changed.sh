@@ -40,5 +40,5 @@ else
     msg=$(printf '%s' "$validator_out" | head -5)
 fi
 
-printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}' \
-    "$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//')"
+msg_json=$(printf '%s' "$msg" | jq -Rs .)
+printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":%s}}' "$msg_json"
