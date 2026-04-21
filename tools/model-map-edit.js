@@ -37,6 +37,36 @@ function applyFallbackUpdates(config, fallbackStrategies) {
   }
 }
 
+function applyLlmProfilesUpdates(config, llmProfiles) {
+  if (llmProfiles == null) return;
+  if (!isObject(llmProfiles)) fail("'llm_profiles' update payload must be an object");
+  config.llm_profiles = isObject(config.llm_profiles) ? JSON.parse(JSON.stringify(config.llm_profiles)) : {};
+  for (const [tier, capMap] of Object.entries(llmProfiles)) {
+    if (typeof tier !== 'string' || !tier.trim()) fail('llm_profiles tier keys must be non-empty strings');
+    if (capMap === null) fail(`llm_profiles['${tier}'] = null is not supported — removing an entire tier is out of scope`);
+    if (!isObject(capMap)) fail(`llm_profiles['${tier}'] must be an object`);
+    config.llm_profiles[tier] = isObject(config.llm_profiles[tier]) ? { ...config.llm_profiles[tier] } : {};
+    for (const [cap, entry] of Object.entries(capMap)) {
+      if (typeof cap !== 'string' || !cap.trim()) fail(`llm_profiles['${tier}'] capability keys must be non-empty strings`);
+      if (entry === null) {
+        delete config.llm_profiles[tier][cap];
+        continue;
+      }
+      if (!isObject(entry)) fail(`llm_profiles['${tier}']['${cap}'] must be an object or null`);
+      for (const [k, v] of Object.entries(entry)) {
+        if (v === null) fail(`llm_profiles['${tier}']['${cap}']['${k}'] = null is not supported — use full-object replace only`);
+      }
+      if (typeof entry.connected_model !== 'string' || !entry.connected_model.trim()) {
+        fail(`llm_profiles['${tier}']['${cap}'].connected_model must be a non-empty string`);
+      }
+      if (typeof entry.disconnect_model !== 'string' || !entry.disconnect_model.trim()) {
+        fail(`llm_profiles['${tier}']['${cap}'].disconnect_model must be a non-empty string`);
+      }
+      config.llm_profiles[tier][cap] = entry;
+    }
+  }
+}
+
 function applyUpdates(config, spec) {
   if (!isObject(config)) fail('top-level effective model-map config must be an object');
   if (!isObject(spec)) fail('edit spec must be a JSON object');
@@ -44,6 +74,7 @@ function applyUpdates(config, spec) {
   const next = JSON.parse(JSON.stringify(config));
   applyRouteUpdates(next, spec.routes);
   applyFallbackUpdates(next, spec.fallback_strategies);
+  applyLlmProfilesUpdates(next, spec.llm_profiles);
 
   if (spec.default_model != null) {
     if (typeof spec.default_model !== 'string' || !spec.default_model.trim()) fail("'default_model' must be a non-empty string");
