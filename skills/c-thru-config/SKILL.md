@@ -29,6 +29,7 @@ Usage:
   /c-thru-config validate                                                    schema check
   /c-thru-config reload                                                      SIGHUP the running proxy
   /c-thru-config restart [--force]                                           full proxy restart
+  /c-thru-config planning [...]                                              toggle EnterPlanMode planner hint
 
 Modes: connected | semi-offload | cloud-judge-only | offline | cloud-best-quality | local-best-quality
 ```
@@ -604,4 +605,144 @@ rl.on('close', () => {
 });
   " 2>/dev/null
 fi
+```
+
+---
+
+## Subcommand: `planning`
+
+**Usage:** `/c-thru-config planning [<anything>]`
+
+Manages the `EnterPlanMode` PreToolUse advisory hook that hints about `/c-thru-plan`
+on every Shift+Tab. The hook fires in **all Claude Code sessions** on this machine.
+
+### Intent inference
+
+Parse `$ARGUMENTS` (after stripping the leading `planning` word) as free text.
+Infer the user's intent from the meaning of the words — do not require exact keywords.
+
+| Intent signals | Action |
+|---|---|
+| "off", "disable", "turn off", "remove", "stop", "quiet", "no hint", "opt out", "silence" | → **disable** |
+| "on", "enable", "turn on", "add", "register", "activate", "restore" | → **enable** |
+| "status", "check", "what", "show", "is it", "current", "state" | → **status** |
+| empty arguments | → **status** |
+
+If the intent is unclear or contradictory (e.g. "on but maybe off?"), ask the user
+one short clarifying question before acting. Do not guess.
+
+---
+
+### Action: status
+
+Report current state — whether the hook is registered and whether the opt-out override is set.
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+SETTINGS="$CLAUDE_DIR/settings.json"
+OVERRIDES="$CLAUDE_DIR/model-map.overrides.json"
+HOOK_CMD="$CLAUDE_DIR/tools/c-thru-enter-plan-hook"
+
+hook_registered=no
+if [ -f "$SETTINGS" ] && command -v jq >/dev/null 2>&1; then
+  count=$(jq -r --arg cmd "$HOOK_CMD" \
+    '(.hooks.PreToolUse // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
+    "$SETTINGS" 2>/dev/null || echo 0)
+  [ "${count:-0}" -gt 0 ] && hook_registered=yes
+fi
+
+hint_pref=unset
+if [ -f "$OVERRIDES" ] && command -v jq >/dev/null 2>&1; then
+  hint_pref=$(jq -r '.planner_hint // "unset"' "$OVERRIDES" 2>/dev/null || echo unset)
+fi
+
+echo "planning hint hook:  $hook_registered"
+echo "planner_hint pref:   $hint_pref"
+if [ "$hook_registered" = "yes" ] && [ "$hint_pref" != "false" ]; then
+  echo "effective:           on"
+elif [ "$hint_pref" = "false" ]; then
+  echo "effective:           off  (opt-out in overrides)"
+else
+  echo "effective:           off  (hook not registered)"
+fi
+```
+
+---
+
+### Action: disable
+
+Remove the `EnterPlanMode` hook and write `planner_hint: false` to overrides.
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+SETTINGS="$CLAUDE_DIR/settings.json"
+OVERRIDES="$CLAUDE_DIR/model-map.overrides.json"
+HOOK_CMD="$CLAUDE_DIR/tools/c-thru-enter-plan-hook"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "planning: jq not found — cannot modify settings.json" >&2
+  exit 1
+fi
+
+[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+[ -f "$OVERRIDES" ] || echo '{}' > "$OVERRIDES"
+
+tmp="${SETTINGS}.tmp.$$"
+jq --arg cmd "$HOOK_CMD" '
+  if .hooks.PreToolUse then
+    .hooks.PreToolUse |= map(.hooks |= map(select((.command // "") != $cmd)))
+    | .hooks.PreToolUse |= map(select(.hooks | length > 0))
+  else . end
+' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+
+tmp="${OVERRIDES}.tmp.$$"
+jq '.planner_hint = false' "$OVERRIDES" > "$tmp" && mv "$tmp" "$OVERRIDES"
+
+echo "planning hint: off"
+echo "  hook removed from settings.json, planner_hint: false written to overrides"
+echo "  re-enable: /c-thru-config planning on"
+```
+
+---
+
+### Action: enable
+
+Register the `EnterPlanMode` hook (idempotent) and clear the opt-out override.
+
+```bash
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+SETTINGS="$CLAUDE_DIR/settings.json"
+OVERRIDES="$CLAUDE_DIR/model-map.overrides.json"
+HOOK_CMD="$CLAUDE_DIR/tools/c-thru-enter-plan-hook"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "planning: jq not found — cannot modify settings.json" >&2
+  exit 1
+fi
+
+[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+[ -f "$OVERRIDES" ] || echo '{}' > "$OVERRIDES"
+
+count=$(jq -r --arg cmd "$HOOK_CMD" \
+  '(.hooks.PreToolUse // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
+  "$SETTINGS" 2>/dev/null || echo 0)
+
+if [ "${count:-0}" -eq 0 ]; then
+  tmp="${SETTINGS}.tmp.$$"
+  jq --arg cmd "$HOOK_CMD" '
+    if .hooks == null then .hooks = {} else . end |
+    if .hooks.PreToolUse == null then .hooks.PreToolUse = [] else . end |
+    .hooks.PreToolUse += [{"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": $cmd, "timeout": 3}]}]
+  ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+  echo "planning hint: hook registered"
+else
+  echo "planning hint: hook already registered"
+fi
+
+tmp="${OVERRIDES}.tmp.$$"
+jq 'del(.planner_hint)' "$OVERRIDES" > "$tmp" && mv "$tmp" "$OVERRIDES"
+
+echo "planning hint: on"
+echo "  Note: fires in all Claude Code sessions on this machine"
+echo "  Disable: /c-thru-config planning off"
 ```

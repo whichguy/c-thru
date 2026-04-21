@@ -36,6 +36,7 @@ chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TO
 chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-apply-recommendations.js" "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-resolve.js" "$TOOLS_SRC/c-thru-resolve" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-enter-plan-hook.sh" 2>/dev/null || true
 
 mkdir -p "$TOOLS_DEST"
 
@@ -99,6 +100,7 @@ link_tool c-thru-contract-check.sh c-thru-contract-check
 link_tool c-thru-self-update.sh c-thru-self-update
 link_tool verify-lmstudio-ollama-compat.sh verify-lmstudio-ollama-compat
 link_tool c-thru-ollama-probe.sh c-thru-ollama-probe
+link_tool c-thru-enter-plan-hook.sh c-thru-enter-plan-hook
 
 # --- Migrate legacy providers schema ---
 # Guard: jq -e '.providers' is a no-op if key is absent — idempotent by design.
@@ -275,6 +277,80 @@ If `c-thru reload` exits non-zero (proxy not running), print:
 ```
 SKILL_EOF
     echo -e "  ${GREEN}✅ installed skill: /c-thru-status${NC}"
+}
+
+# --- /cplan command shortcut ---
+install_cplan_command() {
+    local commands_dir="$CLAUDE_DIR/commands"
+    local cmd_file="$commands_dir/cplan.md"
+    local canonical_line='Skill(skill="c-thru-plan", args="$ARGUMENTS")'
+
+    mkdir -p "$commands_dir"
+
+    if [ -f "$cmd_file" ] && grep -qF "$canonical_line" "$cmd_file" 2>/dev/null; then
+        echo -e "  ${GRAY}✓  /cplan${NC}"
+        return 0
+    fi
+
+    cat > "$cmd_file" << 'CPLAN_EOF'
+---
+description: "Shortcut for /c-thru-plan — wave-based agentic planner"
+allowed-tools: "Skill"
+---
+
+Invoke the c-thru-plan skill with the user's arguments:
+
+Skill(skill="c-thru-plan", args="$ARGUMENTS")
+CPLAN_EOF
+    echo -e "  ${GREEN}✅ installed command: /cplan${NC}"
+}
+
+# --- EnterPlanMode advisory hook ---
+# Registers a PreToolUse hook on EnterPlanMode that emits a hint about /c-thru-plan.
+# Idempotent: skips if already registered. Respects planner_hint:false opt-out.
+install_planner_hint_hook() {
+    if [ "$JQ_AVAILABLE" -eq 0 ]; then
+        echo -e "  ${YELLOW}⚠️  jq not found — skipping planner hint hook${NC}"
+        return 0
+    fi
+
+    local settings="$CLAUDE_DIR/settings.json"
+    local hook_cmd="$TOOLS_DEST/c-thru-enter-plan-hook"
+
+    if [ ! -f "$settings" ]; then
+        echo '{}' > "$settings"
+    fi
+
+    local already
+    already=$(jq -r --arg cmd "$hook_cmd" \
+        '(.hooks.PreToolUse // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
+        "$settings" 2>/dev/null || echo 0)
+    if [ "${already:-0}" -gt 0 ]; then
+        echo -e "  ${GRAY}✓  PreToolUse EnterPlanMode hook${NC}"
+        return 0
+    fi
+
+    # Respect existing opt-out.
+    local ovr="$CLAUDE_DIR/model-map.overrides.json"
+    if [ -f "$ovr" ]; then
+        local hint_val
+        hint_val=$(jq -r '.planner_hint // "unset"' "$ovr" 2>/dev/null || echo "unset")
+        if [ "$hint_val" = "false" ]; then
+            echo -e "  ${GRAY}✓  planner hint opted out — skipping hook${NC}"
+            return 0
+        fi
+    fi
+
+    local tmp="${settings}.tmp.$$"
+    jq --arg cmd "$hook_cmd" '
+        if .hooks == null then .hooks = {} else . end |
+        if .hooks.PreToolUse == null then .hooks.PreToolUse = [] else . end |
+        .hooks.PreToolUse += [{"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": $cmd, "timeout": 3}]}]
+    ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+
+    echo -e "  ${GREEN}✅ registered hook: PreToolUse EnterPlanMode (planner hint)${NC}"
+    echo -e "  ${YELLOW}   Note: this hook fires in all Claude Code sessions on this machine.${NC}"
+    echo -e "  ${YELLOW}   Disable: /c-thru-config planning off${NC}"
 }
 
 # --- Hooks: SessionStart, PostCompact, UserPromptSubmit, PostToolUse ---
@@ -732,6 +808,7 @@ add_permission
 echo ""
 echo "Skills:"
 install_skill
+install_cplan_command
 
 echo ""
 echo "Agents (agentic plan/wave):"
@@ -748,6 +825,7 @@ extend_model_map
 echo ""
 echo "Hooks:"
 register_hooks
+install_planner_hint_hook
 
 # --- Non-clobbering detection for statusline + Stop hook ---
 # Probes settings.json via stdlib-only node (no jq dep) and prints
