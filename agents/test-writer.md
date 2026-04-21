@@ -56,7 +56,8 @@ Before returning STATUS, apply this rubric (test-writer-specific — "code chang
 - You improvised a pattern not seen elsewhere in the codebase.
 - One or more success_criteria required interpretation.
 - You couldn't fully read the implementation before writing tests (missing file, truncated read).
-- You added error handling or edge-case logic you weren't sure was needed.
+- You inferred implementation behavior from the file name or task description rather than reading the code path.
+- You wrote tests for error paths or edge cases you couldn't confirm the implementation handles.
 
 **low** — ANY of:
 - You hit an unfamiliar domain (cryptography, concurrency, accounting, parsing) and inferred behavior rather than verified it.

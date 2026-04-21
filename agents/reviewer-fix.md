@@ -59,13 +59,15 @@ Before returning STATUS, apply this rubric:
 - You improvised a pattern not seen elsewhere in the codebase.
 - One or more success_criteria required interpretation.
 - You inferred author intent in ambiguous code rather than finding a definitive reference (test, spec, or caller).
+- You applied a fix that calls a function or uses an API whose signature you didn't read (no Read, no tests).
 - You added error handling or edge-case logic you weren't sure was needed.
 
 **low** — ANY of:
 - You hit an unfamiliar domain (cryptography, concurrency, accounting, parsing) and inferred behavior rather than verified it.
 - A required resource (spec, API doc, upstream dep) was missing or vague.
 - The item's description could be read two or more ways and you picked one.
-- You couldn't find tests or callers to validate that your fix preserved existing behavior.
+- You couldn't find existing tests that exercise the code path you changed.
+- You couldn't enumerate the callers of the function you modified or verify they handle the new behavior.
 
 `UNCERTAINTY_REASONS` must name the specific rubric bullet(s) that triggered `medium` or `low` (comma-separated, single line). If you can't name one, you're `high`. Omit when `high`.
 
