@@ -306,6 +306,29 @@ Iterate until no plan-material/crisis findings, or cap hit.
 
 ---
 
+## Step 5.5 — CI-safety final wave (complex plans only)
+
+**Pre-check:** `COMPLEXITY: complex` AND `TEST_FRAMEWORKS` present (from recon or forwarded in plan.json). Skip entirely for `trivial` and `moderate`.
+
+For `COMPLEXITY: complex`, append a final "CI-safety" wave to the plan before dispatching the last implementation wave. This wave runs the project's declared test/lint/build commands.
+
+**Parse TEST_FRAMEWORKS tokens:**
+```
+parsedFrameworks = TEST_FRAMEWORKS.split(',').map(t => t.trim()).filter(t => t !== 'none')
+```
+Each token format: `{framework}@{test-dir}[+ci:{system}]`
+- `framework` (before `@`) → maps to a test command (e.g. `jest` → `npx jest`, `pytest` → `pytest`, `node` → `node --check`)
+- `ci` tag (after `+ci:`) → CI entry point file (e.g. `.github/workflows/ci.yml`)
+
+**CI-safety wave structure:**
+- Items are dispatched to `test-writer` and `wave-reviewer` tiers (same as today)
+- If `parsedFrameworks` is empty (TEST_FRAMEWORKS was `none` or absent): wave still runs; items target `node --check` on all `.js` files in the plan's `target_resources`. Emit `STATUS: COMPLETE` with "no CI commands detected — ran syntax check only".
+- Wave commit message: `"ci: verify CI-safety gate — <plan-slug>"`
+
+This is a template the orchestrator merges into the plan — no new agent role.
+
+---
+
 ## Step 6 — Verify (no LLM)
 
 Bash checks only:
