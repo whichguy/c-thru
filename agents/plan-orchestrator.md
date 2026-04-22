@@ -88,11 +88,11 @@ Before wave planning, evaluate plan complexity from four recon signals read from
 - `moderate`: all other cases
 
 **Downstream behavior:**
-- `trivial` → single wave, skip deployability guard, skip CI-safety wave
+- `trivial` → skip deployability guard, skip CI-safety wave (typically resolves in one wave — not enforced)
 - `moderate` → deployability guard runs per wave
 - `complex` → deployability guard + migration evaluation + final CI-safety wave appended
 
-**Logging:** Write derivation inputs and result to `$wave_dir/plan.json` (create or merge):
+**Logging:** Write derivation inputs and result to `$plan_dir/plan.json` (create or merge on first wave; skip re-evaluation if `complexity` key already present — recon inputs don't change between waves):
 ```json
 {
   "complexity": "trivial|moderate|complex",
@@ -146,7 +146,7 @@ Detection: for each item's `target_resources`, scan for import/require statement
 
 **Field contract:** `needs:` in `wave.md` carries forward dep edges (renamed from `depends_on:` in `current.md`). No reverse `dependents:` field is stored; use `findDependents()` in the harness when needed. `batch:` per-item and frontmatter `batches:` are computed by the harness — never hand-edited.
 
-**State migration evaluation** (gated on `COMPLEXITY ≠ trivial` AND `PERSISTED_STATE_STORES ≠ absent/none`): For each wave, determine whether any item touches a persisted-state store (DB schema, queue config, key-value store) identified in recon. Formally: check whether any item's `target_resources` includes a file that matches a path in `PERSISTED_STATE_STORES`.
+**State migration evaluation** (gated on `COMPLEXITY = complex` AND `PERSISTED_STATE_STORES ≠ absent/none`): For each wave, determine whether any item touches a persisted-state store (DB schema, queue config, key-value store) identified in recon. Formally: check whether any item's `target_resources` includes a file that matches a path in `PERSISTED_STATE_STORES`.
 
 If a schema-touching item is found:
 - Set `MIGRATION_REQUIRED: yes` for that wave
@@ -167,7 +167,7 @@ Validate schema after write (harness does this automatically): wave_id, commit_m
 
 For each item in `wave.md` (read frontmatter `batches:` for ordering; `needs:`, `target_resources:`, `agent:` from item blocks), write `$wave_dir/digests/<agent>-<item>.md`:
 
-**TEST_FRAMEWORKS forwarding:** Before assembling digests, read the recon output at `$plan_dir/discovery/` for a `TEST_FRAMEWORKS:` line from `discovery-advisor` or any explorer answer. If found and non-empty (not `none`), forward it into each worker digest's `## Mission context` section as: `Test infrastructure: <TEST_FRAMEWORKS value>`. Absent or `none` → omit the line. Implementer, test-writer, and wave-reviewer agents use this to align their work with the project's actual test contract.
+**TEST_FRAMEWORKS forwarding:** Before assembling digests, read the recon output at `$plan_dir/discovery/` for a `TEST_FRAMEWORKS:` line. Precedence: `discovery-advisor` output is the primary source (always emits the field); explorer answers augment only when the gap question was CI-focused. If the field is found and non-empty (not `none`), forward it into each worker digest's `## Mission context` section as: `Test infrastructure: <TEST_FRAMEWORKS value>`. When multiple sources are present, prefer the `discovery-advisor` value. Absent or `none` → omit the line.
 
 ```markdown
 ---
@@ -308,9 +308,9 @@ Iterate until no plan-material/crisis findings, or cap hit.
 
 ## Step 5.5 — CI-safety final wave (complex plans only)
 
-**Pre-check:** `COMPLEXITY: complex` AND `TEST_FRAMEWORKS` present (from recon or forwarded in plan.json). Skip entirely for `trivial` and `moderate`.
+**Pre-check:** `COMPLEXITY: complex`. Skip entirely for `trivial` and `moderate`. (Runs even when `TEST_FRAMEWORKS` is absent or `none` — the fallback to `node --check` handles that case.)
 
-For `COMPLEXITY: complex`, append a final "CI-safety" wave to the plan before dispatching the last implementation wave. This wave runs the project's declared test/lint/build commands.
+For `COMPLEXITY: complex`, append a final "CI-safety" wave as the last wave of the plan — after all implementation waves complete. This wave runs the project's declared test/lint/build commands.
 
 **Parse TEST_FRAMEWORKS tokens:**
 ```
