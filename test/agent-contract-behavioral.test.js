@@ -66,7 +66,9 @@ const advisory = [];
 const CLOUD_TIERS = new Set(['judge', 'judge-strict', 'deep-coder-cloud', 'code-analyst-cloud']);
 
 // Tiers served by Qwen3 models that need /no_think in the system prompt.
-const QWEN3_TIERS = new Set(['pattern-coder', 'orchestrator', 'local-planner']);
+// judge/judge-strict cascade to qwen3.6:35b without ANTHROPIC_API_KEY;
+// /no_think is harmless for cloud models (ignored as text) but essential for local Qwen3.
+const QWEN3_TIERS = new Set(['pattern-coder', 'orchestrator', 'local-planner', 'judge', 'judge-strict']);
 
 function ok(label) {
   console.log(`  ok    ${label}`);

@@ -326,15 +326,15 @@ function parseStatusBlock(text) {
 // ── Tier timeouts ──────────────────────────────────────────────────────────
 
 const TIER_TIMEOUTS_MS = {
-  'judge':              90_000,
-  'judge-strict':       90_000,
-  'deep-coder-cloud':   90_000,
-  'code-analyst-cloud': 90_000,
-  'code-analyst':      180_000,
-  'deep-coder':        180_000,
-  'pattern-coder':     300_000,
-  'orchestrator':      300_000,
-  'local-planner':     300_000,
+  'judge':              600_000,
+  'judge-strict':       600_000,
+  'deep-coder-cloud':   300_000,
+  'code-analyst-cloud': 300_000,
+  'code-analyst':      300_000,
+  'deep-coder':        300_000,
+  'pattern-coder':     600_000,
+  'orchestrator':      600_000,
+  'local-planner':     600_000,
 };
 
 function tierTimeout(tier, fallback = 180_000) {

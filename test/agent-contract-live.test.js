@@ -20,16 +20,21 @@ if (!process.env.C_THRU_LIVE_AGENT_TESTS) {
 
 const REPO_ROOT  = path.resolve(__dirname, '..');
 const AGENTS_DIR = path.join(REPO_ROOT, 'agents');
-const MAX_TOKENS = 1200;
-const PER_AGENT_TIMEOUT_MS = 60_000;
+const MAX_TOKENS = 2000;
+const PER_AGENT_TIMEOUT_MS = 120_000;
+
+// Cloud/judge tiers where 401/403 is expected when ANTHROPIC_API_KEY is absent.
+const CLOUD_TIERS = new Set(['judge', 'judge-strict', 'deep-coder-cloud', 'code-analyst-cloud']);
+
+// Tiers served by Qwen3 models that need /no_think in the system prompt.
+// judge/judge-strict cascade to qwen3.6:35b without ANTHROPIC_API_KEY;
+// /no_think is harmless for cloud models (ignored as text) but essential for local Qwen3.
+const QWEN3_TIERS = new Set(['pattern-coder', 'orchestrator', 'local-planner', 'judge', 'judge-strict']);
 
 let passed           = 0;
 let failed           = 0;
 let skippedExpected  = 0;
 let skippedUnexpected = 0;
-
-// Cloud/judge tiers where 401/403 is expected when ANTHROPIC_API_KEY is absent.
-const CLOUD_TIERS = new Set(['judge', 'judge-strict', 'deep-coder-cloud', 'code-analyst-cloud']);
 
 function ok(label) {
   console.log(`  ok    ${label}`);
@@ -335,6 +340,9 @@ async function main() {
     }
 
     const timeout = tierTimeout(expectedCapability, PER_AGENT_TIMEOUT_MS);
+    const sysPrompt = QWEN3_TIERS.has(expectedCapability)
+      ? `/no_think\n\n${systemPrompt}`
+      : systemPrompt;
     process.stdout.write(`  [${name}] … `);
     let res;
     try {
@@ -342,7 +350,7 @@ async function main() {
         model:      name,
         max_tokens: MAX_TOKENS,
         stream:     false,
-        system:     systemPrompt,
+        system:     sysPrompt,
         messages:   [{ role: 'user', content: userMessage }],
       }, timeout);
     } catch (e) {

@@ -71,9 +71,12 @@ function resolveActiveTier(config) {
 // unknown     → null                                     (passthrough, not a profile alias)
 // tier must be pre-computed by the caller (use resolveActiveTier).
 function resolveCapabilityAlias(model, config, tier) {
-  if (LLM_PROFILE_ALIASES.has(model)) return model;
+  // agent_to_capability takes priority over LLM_PROFILE_ALIASES so that
+  // agent names that shadow profile keys (e.g. explorer → pattern-coder)
+  // resolve through the 2-hop graph, not to the identity alias.
   const a2c = config && config.agent_to_capability;
   if (a2c && Object.prototype.hasOwnProperty.call(a2c, model)) return a2c[model];
+  if (LLM_PROFILE_ALIASES.has(model)) return model;
   const profile = ((config && config.llm_profiles) || {})[tier];
   if (profile && Object.prototype.hasOwnProperty.call(profile, model)) return model;
   return null;
