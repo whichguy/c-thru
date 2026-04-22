@@ -31,7 +31,7 @@ fi
 chmod +x "$TOOLS_SRC/c-thru" "$TOOLS_SRC/claude-proxy" "$TOOLS_SRC/llm-capabilities-mcp.js" "$TOOLS_SRC/model-map-sync.js" "$TOOLS_SRC/model-map-validate.js" "$TOOLS_SRC/model-map-edit.js" "$TOOLS_SRC/model-map-layered.js" 2>/dev/null || true
 # llm-capabilities-shared.js is a library, not executable
 chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
-chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" "$TOOLS_SRC/c-thru-ollama-probe.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" "$TOOLS_SRC/c-thru-ollama-probe.sh" "$TOOLS_SRC/c-thru-postcompact-context.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TOOLS_SRC/c-thru-statusline-overlay.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-apply-recommendations.js" "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
@@ -101,6 +101,7 @@ link_tool c-thru-self-update.sh c-thru-self-update
 link_tool verify-lmstudio-ollama-compat.sh verify-lmstudio-ollama-compat
 link_tool c-thru-ollama-probe.sh c-thru-ollama-probe
 link_tool c-thru-enter-plan-hook.sh c-thru-enter-plan-hook
+link_tool c-thru-postcompact-context.sh c-thru-postcompact-context
 
 # --- Migrate legacy providers schema ---
 # Guard: jq -e '.providers' is a no-op if key is absent — idempotent by design.
@@ -367,6 +368,7 @@ register_hooks() {
     local health_cmd="$TOOLS_DEST/c-thru-proxy-health"
     local classify_cmd="$TOOLS_DEST/c-thru-classify"
     local map_changed_cmd="$TOOLS_DEST/c-thru-map-changed"
+    local postcompact_cmd="$TOOLS_DEST/c-thru-postcompact-context"
 
     if [ ! -f "$settings" ]; then
         echo '{}' > "$settings"
@@ -413,39 +415,39 @@ register_hooks() {
     fi
     [ "$ss_changed" -eq 1 ] && echo -e "  ${GREEN}✅ registered hook: SessionStart (HTTP + command)${NC}"
 
-    # --- PostCompact (HTTP hook + command fallback) ---
-    local pc_http_exists pc_cmd_exists
-    pc_http_exists=$(jq -r --arg url "$hooks_url" \
-        '(.hooks.PostCompact // []) | [.[].hooks[]?.url // ""] | map(select(. == $url)) | length' \
+    # --- PostCompact (command hook — silent on ECONNREFUSED) ---
+    # Migrate: remove any legacy type:http PostCompact entry (caused ECONNREFUSED when proxy is down).
+    local pc_http_count
+    pc_http_count=$(jq -r --arg url "$hooks_url" \
+        '(.hooks.PostCompact // []) | [.[].hooks[]? | select(.type == "http" and (.url // "") == $url)] | length' \
         "$settings" 2>/dev/null || echo 0)
-    pc_cmd_exists=$(jq -r --arg cmd "$session_cmd" \
-        '(.hooks.PostCompact // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
-        "$settings" 2>/dev/null || echo 0)
-
-    local pc_changed=0
-    if [ "${pc_http_exists:-0}" -gt 0 ]; then
-        echo -e "  ${GRAY}✓  PostCompact HTTP hook${NC}"
-    else
+    if [ "${pc_http_count:-0}" -gt 0 ]; then
         tmp="${settings}.tmp.$$"
         jq --arg url "$hooks_url" '
-            if .hooks == null then .hooks = {} else . end |
-            if .hooks.PostCompact == null then .hooks.PostCompact = [] else . end |
-            .hooks.PostCompact += [{"hooks": [{"type": "http", "url": $url, "timeout": 3}]}]
+            (.hooks.PostCompact // []) |= map(
+                .hooks |= map(select((.type == "http" and (.url // "") == $url) | not))
+            ) | (.hooks.PostCompact // []) |= map(select(.hooks | length > 0))
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
-        pc_changed=1
+        echo -e "  ${YELLOW}🔄 migrated: removed PostCompact type:http hook${NC}"
     fi
+
+    local pc_changed=0
+    local pc_cmd_exists
+    pc_cmd_exists=$(jq -r --arg cmd "$postcompact_cmd" \
+        '(.hooks.PostCompact // []) | [.[].hooks[]?.command // ""] | map(select(. == $cmd)) | length' \
+        "$settings" 2>/dev/null || echo 0)
     if [ "${pc_cmd_exists:-0}" -gt 0 ]; then
         echo -e "  ${GRAY}✓  PostCompact command hook${NC}"
     else
         tmp="${settings}.tmp.$$"
-        jq --arg cmd "$session_cmd" '
+        jq --arg cmd "$postcompact_cmd" '
             if .hooks == null then .hooks = {} else . end |
             if .hooks.PostCompact == null then .hooks.PostCompact = [] else . end |
             .hooks.PostCompact += [{"hooks": [{"type": "command", "command": $cmd, "timeout": 5}]}]
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
         pc_changed=1
     fi
-    [ "$pc_changed" -eq 1 ] && echo -e "  ${GREEN}✅ registered hook: PostCompact (HTTP + command)${NC}"
+    [ "$pc_changed" -eq 1 ] && echo -e "  ${GREEN}✅ registered hook: PostCompact (command)${NC}"
 
     # --- UserPromptSubmit (asyncRewake upgrade) ---
     # Detect old format (entry present, .async absent) → patch in-place
