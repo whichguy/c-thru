@@ -8,7 +8,8 @@
 #   1b. No hardcoded .c-thru/plans/ paths in agents/*.md
 #   2.  Dangling subagent_type references (no corresponding agents/X.md file)
 #   3.  Agent prompt key mismatches vs. declared Input: lines
-#   4.  Agent-count consistency (agents/*.md vs agent_to_capability keys)
+#   4.  Agent-count consistency (agents/*.md vs agent_to_capability keys,
+#       excluding routing-only entries that have no agent file)
 #   5.  Phase 0 mkdir coverage for $PLAN_DIR subdirectories
 #
 # Exit 0: no issues. Exit 1: one or more issues found.
@@ -325,7 +326,9 @@ done < "$tmpblocks"
 # Check 4 — Agent-count consistency
 #
 # Canonical source: config/model-map.json#agent_to_capability.
-# agents/*.md count must match; docs must not hardcode a different number.
+# agents/*.md count must match (minus routing-only keys); docs must not hardcode a different number.
+# Routing-only keys: entries in agent_to_capability with no corresponding agent file
+# (e.g. judge-evaluator — resolves via capability alias only, no agents/*.md).
 # ---------------------------------------------------------------------------
 echo "4/9  Agent-count consistency check..."
 
@@ -335,11 +338,19 @@ if [ ! -f "$MODEL_MAP" ]; then
 else
     agent_file_count=$(ls "$AGENTS_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
     cap_key_count=$(jq '.agent_to_capability | keys | length' "$MODEL_MAP" 2>/dev/null || echo "0")
+    # Count routing-only keys: agent_to_capability entries with no corresponding agent file
+    routing_only_count=0
+    for key in $(jq -r '.agent_to_capability | keys[]' "$MODEL_MAP" 2>/dev/null); do
+        if [ ! -f "$AGENTS_DIR/${key}.md" ]; then
+            routing_only_count=$((routing_only_count + 1))
+        fi
+    done
+    effective_key_count=$((cap_key_count - routing_only_count))
 
-    if [ "$agent_file_count" != "$cap_key_count" ]; then
-        fail "agents/*.md count ($agent_file_count) != agent_to_capability keys ($cap_key_count) in config/model-map.json"
+    if [ "$agent_file_count" != "$effective_key_count" ]; then
+        fail "agents/*.md count ($agent_file_count) != agent_to_capability keys ($cap_key_count, minus $routing_only_count routing-only = $effective_key_count) in config/model-map.json"
     else
-        ok "agent count consistent: $agent_file_count agents/*.md = $cap_key_count agent_to_capability keys"
+        ok "agent count consistent: $agent_file_count agents/*.md = $effective_key_count agent_to_capability keys ($routing_only_count routing-only)"
     fi
 
     for doc in README.md CLAUDE.md docs/agent-architecture.md; do

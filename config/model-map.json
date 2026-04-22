@@ -502,6 +502,7 @@
     "uplift-decider":       "judge",
     "implementer-cloud":    "deep-coder-cloud",
     "test-writer-cloud":    "code-analyst-cloud",
-    "converger":            "code-analyst"
+    "converger":            "code-analyst",
+    "judge-evaluator":      "judge"
   }
 }

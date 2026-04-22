@@ -6,6 +6,7 @@
 // Guard:   C_THRU_BEHAVIORAL_TESTS=1
 // Proxy:   CLAUDE_PROXY_URL or CLAUDE_PROXY_PORT
 // Filter:  BEHAVIORAL_ONLY=discovery-advisor,explorer  (comma-separated subset)
+// Judge:   C_THRU_JUDGE=1  (requires ANTHROPIC_API_KEY — adds cloud semantic validation)
 // Run:     C_THRU_BEHAVIORAL_TESTS=1 node test/agent-contract-behavioral.test.js
 
 const fs   = require('fs');
@@ -38,6 +39,22 @@ const BEHAVIORAL_WORKER_CONTRACT = stripBehavioralContract(WORKER_CONTRACT);
 const FILTER = process.env.BEHAVIORAL_ONLY
   ? new Set(process.env.BEHAVIORAL_ONLY.split(',').map(s => s.trim()))
   : null;
+
+// When C_THRU_JUDGE=1, a second proxy call (model: judge-evaluator) evaluates
+// each response semantically. VERDICT=FAIL is a hard failure.
+const JUDGE_GUARD = !!process.env.C_THRU_JUDGE;
+
+const JUDGE_SYSTEM = `You are a contract validator for AI agent test cases.
+Given: (1) what the agent's response MUST contain, (2) the actual response text.
+Evaluate strictly. PASS only if all listed requirements are met.
+
+Respond with exactly:
+VERDICT: PASS
+RATIONALE: <one sentence>
+
+Or:
+VERDICT: FAIL
+RATIONALE: <one sentence identifying which requirement failed>`;
 
 let passed           = 0;
 let failed           = 0;
@@ -131,6 +148,26 @@ function postMessages(host, port, body, timeoutMs = 120_000) {
     req.write(bodyStr);
     req.end();
   });
+}
+
+// ── Judge helper ──────────────────────────────────────────────────────────────
+// Calls model: judge-evaluator (resolves to judge/cloud tier) with a structured
+// evaluation prompt. Returns { pass, rationale } or null on unavailability.
+async function judgeResponse(host, port, judgeQuery, agentText, timeoutMs = 90_000) {
+  const res = await postMessages(host, port, {
+    model:      'judge-evaluator',
+    max_tokens: 300,
+    stream:     false,
+    system:     JUDGE_SYSTEM,
+    messages:   [{ role: 'user', content: `Requirements:\n${judgeQuery}\n\nAgent response:\n${agentText}` }],
+  }, timeoutMs).catch(() => null);
+  if (!res || res.status === 401 || res.status === 403 || res.status !== 200) return null;
+  const text = res.json && Array.isArray(res.json.content)
+    ? res.json.content.map(c => c.text || '').join('')
+    : res.bodyText;
+  const v = text.match(/VERDICT:\s*(PASS|FAIL)/i);
+  const r = text.match(/RATIONALE:\s*(.+)/i);
+  return v ? { pass: v[1].toUpperCase() === 'PASS', rationale: r ? r[1].trim() : '' } : null;
 }
 
 // ── Agent file helpers ────────────────────────────────────────────────────────
@@ -294,6 +331,17 @@ async function runTest(host, port, entry) {
     }
 
     validate(name, block, text);
+
+    if (JUDGE_GUARD && entry.judgeQuery) {
+      const judgment = await judgeResponse(host, port, entry.judgeQuery, text);
+      if (judgment === null) {
+        skipExpected(`${name}: judge`, 'judge-evaluator unavailable (no API key or timeout)');
+      } else if (judgment.pass) {
+        ok(`${name}: judge PASS — ${judgment.rationale}`);
+      } else {
+        fail(`${name}: judge FAIL — ${judgment.rationale}`);
+      }
+    }
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
@@ -303,6 +351,7 @@ async function runTest(host, port, entry) {
 // Phase 1: high-confidence deterministic assertions
 // Phase 2: worker agents — STATUS + work-section assertions
 // Phase 3: cloud agents (skip on 401) + planner-local
+// Phase 4: judge-tier orchestration agents (skip on 401)
 
 const ROSTER = [
 
@@ -317,6 +366,7 @@ const ROSTER = [
     name: 'discovery-advisor',
     expectedCapability: 'pattern-coder',
     maxTokens: 4000,
+    judgeQuery: '(a) STATUS=COMPLETE; (b) GAPS=0 (greenfield shortcut); (c) WROTE field present; (d) TEST_FRAMEWORKS field present',
     buildMessage(tmpDir) {
       const reconContent = '# Reconnaissance summary\n\nno-gaps\n\nGreenfield project with no existing code to survey.\n';
       const reconPath = path.join(tmpDir, 'recon.md');
@@ -354,6 +404,7 @@ const ROSTER = [
     name: 'explorer',
     expectedCapability: 'pattern-coder',
     maxTokens: 2000,
+    judgeQuery: "(a) ANSWERED=yes or partial; (b) WROTE field present; (c) response body mentions '3000' (the PORT value)",
     buildMessage(tmpDir) {
       const configPath = path.join(tmpDir, 'config.js');
       const configContent = "'use strict';\nconst PORT = 3000;\nmodule.exports = { PORT };\n";
@@ -393,6 +444,7 @@ const ROSTER = [
     name: 'uplift-decider',
     expectedCapability: 'judge',
     maxTokens: 4000,
+    judgeQuery: "(a) VERDICT in {accept, uplift, restart}; (b) CLOUD_CONFIDENCE in {high, medium, low}; (c) RATIONALE field present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'outputs'), { recursive: true });
       const partialOutput = path.join(tmpDir, 'outputs', 'implementer-item-001.md');
@@ -479,6 +531,7 @@ ${partialText.trim()}
     name: 'implementer',
     expectedCapability: 'deep-coder',
     maxTokens: 4000,
+    judgeQuery: "(a) STATUS in {COMPLETE, PARTIAL}; (b) response body contains 'behavioral-test-marker'; (c) SUMMARY present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const helloJs = path.join(tmpDir, 'src', 'hello.js');
@@ -536,6 +589,7 @@ Only modify \`${helloJs}\`. No other files.`;
     name: 'security-reviewer',
     expectedCapability: 'judge-strict',
     maxTokens: 3000,
+    judgeQuery: "(a) STATUS ≠ RECUSE; (b) response body contains 'eval' (the flagged construct); (c) SUMMARY present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const mathUtils = path.join(tmpDir, 'src', 'math-utils.js');
@@ -570,6 +624,7 @@ Review only \`${mathUtils}\`. No other files.`;
     name: 'scaffolder',
     expectedCapability: 'pattern-coder',
     maxTokens: 6000,
+    judgeQuery: "(a) STATUS=COMPLETE; (b) response body contains 'greet' function name; (c) SUMMARY present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const stubJs = path.join(tmpDir, 'src', 'greeter.js');
@@ -608,6 +663,7 @@ Only create \`${stubJs}\`. No other files.`;
     name: 'wave-reviewer',
     expectedCapability: 'code-analyst',
     maxTokens: 6000,
+    judgeQuery: "(a) STATUS in valid set; (b) ITERATIONS field present and numeric; (c) SUMMARY present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const adderJs = path.join(tmpDir, 'src', 'adder.js');
@@ -646,6 +702,7 @@ Only write to \`${adderJs}\`. No other files.`;
     name: 'test-writer',
     expectedCapability: 'code-analyst',
     maxTokens: 4000,
+    judgeQuery: "(a) STATUS=COMPLETE; (b) response body contains 'add(1' test invocation; (c) SUMMARY present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'),  { recursive: true });
       fs.mkdirSync(path.join(tmpDir, 'test'), { recursive: true });
@@ -688,6 +745,7 @@ Write only to \`${testJs}\`. Read \`${addJs}\` to understand the implementation.
     name: 'converger',
     expectedCapability: 'code-analyst',
     maxTokens: 6000,
+    judgeQuery: "(a) STATUS=COMPLETE; (b) response body contains 'greet' (the unified function); (c) SUMMARY present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'outputs'), { recursive: true });
       const sharedContent = `## Work completed
@@ -734,6 +792,7 @@ Write only to \`${mergedOut}\`.`;
     name: 'integrator',
     expectedCapability: 'orchestrator',
     maxTokens: 6000,
+    judgeQuery: "(a) STATUS=COMPLETE; (b) response body contains 'require' or 'greet'; (c) SUMMARY present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const greetJs = path.join(tmpDir, 'src', 'greet.js');
@@ -776,6 +835,7 @@ Only modify \`${indexJs}\`. Read \`${greetJs}\` to understand its interface.`;
     name: 'doc-writer',
     expectedCapability: 'orchestrator',
     maxTokens: 6000,
+    judgeQuery: "(a) STATUS=COMPLETE; (b) response body mentions 'add' function; (c) SUMMARY present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'),  { recursive: true });
       fs.mkdirSync(path.join(tmpDir, 'docs'), { recursive: true });
@@ -819,6 +879,7 @@ Write only to \`${docMd}\`. Read \`${addJs}\` to understand actual behavior.`;
     name: 'planner-local',
     expectedCapability: 'local-planner',
     maxTokens: 4000,
+    judgeQuery: "(a) STATUS in {COMPLETE, CYCLE, ERROR}; (b) VERDICT in {ready, done}; (c) if ready: READY_ITEMS present",
     buildMessage(tmpDir) {
       const currentMd   = path.join(tmpDir, 'current.md');
       const waveSummary = path.join(tmpDir, 'wave-summary.json');
@@ -882,6 +943,7 @@ Write only to \`${docMd}\`. Read \`${addJs}\` to understand actual behavior.`;
     name: 'implementer-cloud',
     expectedCapability: 'deep-coder-cloud',
     maxTokens: 4000,
+    judgeQuery: "(a) STATUS in {COMPLETE, PARTIAL}; (b) response mentions 'behavioral-test-marker'; (c) SUMMARY present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
       const helloJs = path.join(tmpDir, 'src', 'hello.js');
@@ -922,6 +984,7 @@ Only modify \`${helloJs}\`.`;
     name: 'test-writer-cloud',
     expectedCapability: 'code-analyst-cloud',
     maxTokens: 4000,
+    judgeQuery: "(a) STATUS=COMPLETE; (b) response mentions 'add(1' test; (c) SUMMARY present",
     buildMessage(tmpDir) {
       fs.mkdirSync(path.join(tmpDir, 'src'),  { recursive: true });
       fs.mkdirSync(path.join(tmpDir, 'test'), { recursive: true });
@@ -952,6 +1015,434 @@ Write only to \`${testJs}\`.`;
       }
     },
   },
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Phase 4: judge-tier orchestration agents (skip on 401)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // 15. auditor: partial wave outcome → VERDICT ∈ {continue, extend, revise}
+  {
+    name: 'auditor',
+    expectedCapability: 'judge',
+    maxTokens: 4000,
+    judgeQuery: "The response MUST contain: (a) VERDICT field with value 'continue', 'extend', or 'revise'; (b) a SUMMARY field; (c) a rationale for the chosen direction. FAIL if VERDICT is absent or not one of those three values.",
+    buildMessage(tmpDir) {
+      const replanBrief = path.join(tmpDir, 'replan-brief.md');
+      const decisionOut = path.join(tmpDir, 'decision.json');
+      const briefContent = [
+        '# Wave 001 Replan Brief',
+        '',
+        'outcome: partial',
+        'intent: add authentication middleware to Express app',
+        '',
+        '## Completed items (1/3)',
+        '- item-001: implemented JWT validation middleware (COMPLETE)',
+        '',
+        '## Failed/timed-out items (2/3)',
+        '- item-002: route protection — timed out after 120s',
+        '- item-003: test coverage — timed out after 120s',
+        '',
+        '## Risk assessment',
+        'Core middleware is in place. Route protection and tests are missing.',
+        'Extending the wave with focused items is feasible.',
+      ].join('\n');
+      fs.writeFileSync(replanBrief, briefContent);
+      return [
+        `replan_brief: ${replanBrief}`,
+        `decision_out: ${decisionOut}`,
+        '',
+        'Contents of replan-brief.md:',
+        briefContent,
+      ].join('\n');
+    },
+    validate(name, block) {
+      if (!['COMPLETE', 'ERROR'].includes(block.STATUS)) {
+        fail(`${name}: STATUS "${block.STATUS}" not in {COMPLETE, ERROR}`);
+        return;
+      }
+      ok(`${name}: STATUS=${block.STATUS}`);
+      if (!block.SUMMARY) fail(`${name}: SUMMARY absent`); else ok(`${name}: SUMMARY present`);
+      if (block.STATUS === 'COMPLETE') {
+        if (!['continue', 'extend', 'revise'].includes(block.VERDICT)) {
+          fail(`${name}: VERDICT "${block.VERDICT}" not in {continue, extend, revise}`);
+        } else {
+          ok(`${name}: VERDICT=${block.VERDICT}`);
+        }
+      }
+    },
+  },
+
+  // 16. final-reviewer: all-complete plan → VERDICT ∈ {APPROVED, NEEDS_REVISION}
+  {
+    name: 'final-reviewer',
+    expectedCapability: 'judge',
+    maxTokens: 4000,
+    judgeQuery: "The response MUST contain: (a) VERDICT field with value 'APPROVED' or 'NEEDS_REVISION'; (b) WROTE field referencing an output path; (c) SUMMARY field. FAIL if VERDICT is absent or not one of those two values.",
+    buildMessage(tmpDir) {
+      const currentMd = path.join(tmpDir, 'current.md');
+      const reviewOut = path.join(tmpDir, 'final-review.md');
+      const planContent = [
+        '## Outcome',
+        'Add JWT authentication middleware to the Express API.',
+        '',
+        '## Items',
+        '',
+        '### item-001',
+        'status: complete',
+        'agent: implementer',
+        'target_resources: [src/middleware/auth.js]',
+        'notes: Implemented JWT validation middleware',
+        '',
+        '### item-002',
+        'status: complete',
+        'agent: integrator',
+        'target_resources: [src/routes/api.js]',
+        'notes: Wired auth middleware into protected routes',
+        '',
+        '### item-003',
+        'status: complete',
+        'agent: test-writer',
+        'target_resources: [test/auth.test.js]',
+        'notes: Added test coverage for middleware',
+      ].join('\n');
+      fs.writeFileSync(currentMd, planContent);
+      return [
+        `current.md: ${currentMd}`,
+        `review_out: ${reviewOut}`,
+        'outcome: All items complete. JWT middleware implemented, routes protected, tests added.',
+        '',
+        'Contents of current.md:',
+        planContent,
+      ].join('\n');
+    },
+    validate(name, block) {
+      if (!['COMPLETE', 'ERROR'].includes(block.STATUS)) {
+        fail(`${name}: STATUS "${block.STATUS}" not in {COMPLETE, ERROR}`);
+        return;
+      }
+      ok(`${name}: STATUS=${block.STATUS}`);
+      if (!block.SUMMARY) fail(`${name}: SUMMARY absent`); else ok(`${name}: SUMMARY present`);
+      if (block.STATUS === 'COMPLETE') {
+        if (!['APPROVED', 'NEEDS_REVISION'].includes(block.VERDICT)) {
+          fail(`${name}: VERDICT "${block.VERDICT}" not in {APPROVED, NEEDS_REVISION}`);
+        } else {
+          ok(`${name}: VERDICT=${block.VERDICT}`);
+        }
+        if (!block.WROTE) fail(`${name}: WROTE absent`); else ok(`${name}: WROTE present`);
+      }
+    },
+  },
+
+  // 17. journal-digester: wave finding with improvement opportunity
+  {
+    name: 'journal-digester',
+    expectedCapability: 'judge',
+    maxTokens: 4000,
+    judgeQuery: "The response MUST contain: (a) STATUS field; (b) WROTE field; (c) SUMMARY field; (d) body text that proposes at least one concrete improvement to a prompt or agent. FAIL if WROTE is absent or no improvement is proposed.",
+    buildMessage(tmpDir) {
+      const journalPath = path.join(tmpDir, 'journal.md');
+      const outputPath  = path.join(tmpDir, 'digest.md');
+      const journalContent = [
+        '# Wave Journal',
+        '',
+        '## Wave 001 — findings',
+        '',
+        '### discovery-advisor',
+        'The agent produced 7 gap questions but 4 were redundant (covered by recon summary).',
+        'Opportunity: the discovery-advisor system prompt should instruct the agent to',
+        'deduplicate gap questions against existing recon findings before emitting GAPS.',
+        '',
+        '### implementer',
+        'Completed successfully. No issues.',
+      ].join('\n');
+      fs.writeFileSync(journalPath, journalContent);
+      return [
+        `journal_path: ${journalPath}`,
+        `output_path: ${outputPath}`,
+        '',
+        'Contents of journal.md:',
+        journalContent,
+      ].join('\n');
+    },
+    validate(name, block) {
+      if (!['COMPLETE', 'ERROR'].includes(block.STATUS)) {
+        fail(`${name}: STATUS "${block.STATUS}" not in {COMPLETE, ERROR}`);
+        return;
+      }
+      ok(`${name}: STATUS=${block.STATUS}`);
+      if (!block.SUMMARY) fail(`${name}: SUMMARY absent`); else ok(`${name}: SUMMARY present`);
+      if (block.STATUS === 'COMPLETE') {
+        if (!block.WROTE) fail(`${name}: WROTE absent`); else ok(`${name}: WROTE present`);
+      }
+    },
+  },
+
+  // 18. learnings-consolidator: two wave learnings entries
+  {
+    name: 'learnings-consolidator',
+    expectedCapability: 'pattern-coder',
+    maxTokens: 4000,
+    judgeQuery: "The response MUST contain: (a) STATUS field; (b) WROTE field; (c) SUMMARY field; (d) body text referencing the input learnings topics (prompt verbosity OR test coverage). FAIL if WROTE is absent.",
+    buildMessage(tmpDir) {
+      const findingsA = path.join(tmpDir, 'findings-wave-001.md');
+      const findingsB = path.join(tmpDir, 'findings-wave-002.md');
+      const outputPath = path.join(tmpDir, 'learnings.md');
+      fs.writeFileSync(findingsA, [
+        '# Wave 001 Learnings',
+        '',
+        '## Pattern: system prompts too verbose',
+        'The implementer system prompt is 4000 tokens. Models recuse on "cannot read",',
+        'suggesting working memory exhaustion. Recommendation: trim non-essential context.',
+      ].join('\n'));
+      fs.writeFileSync(findingsB, [
+        '# Wave 002 Learnings',
+        '',
+        '## Pattern: test coverage missing for edge cases',
+        'test-writer produced tests for happy path only. Negative/edge cases absent.',
+        'Recommendation: add explicit "cover edge cases" instruction to test-writer prompt.',
+      ].join('\n'));
+      return [
+        `findings_paths: [${findingsA}, ${findingsB}]`,
+        `output_path: ${outputPath}`,
+        '',
+        'Contents of findings-wave-001.md:',
+        fs.readFileSync(findingsA, 'utf8'),
+        '',
+        'Contents of findings-wave-002.md:',
+        fs.readFileSync(findingsB, 'utf8'),
+      ].join('\n');
+    },
+    validate(name, block) {
+      if (!['COMPLETE', 'ERROR'].includes(block.STATUS)) {
+        fail(`${name}: STATUS "${block.STATUS}" not in {COMPLETE, ERROR}`);
+        return;
+      }
+      ok(`${name}: STATUS=${block.STATUS}`);
+      if (!block.SUMMARY) fail(`${name}: SUMMARY absent`); else ok(`${name}: SUMMARY present`);
+      if (block.STATUS === 'COMPLETE') {
+        if (!block.WROTE) fail(`${name}: WROTE absent`); else ok(`${name}: WROTE present`);
+      }
+    },
+  },
+
+  // 19. plan-orchestrator: minimal current.md + READY_ITEMS → STATUS block emitted
+  // RECUSE is acceptable (no tool access in raw API call).
+  {
+    name: 'plan-orchestrator',
+    expectedCapability: 'orchestrator',
+    maxTokens: 4000,
+    judgeQuery: "The response MUST contain: (a) STATUS field; (b) SUMMARY field; (c) any mention of 'complexity', 'wave', or 'item' indicating the agent understood its input. FAIL if STATUS is absent.",
+    buildMessage(tmpDir) {
+      const currentMd = path.join(tmpDir, 'current.md');
+      const waveDir   = path.join(tmpDir, 'wave-001');
+      fs.mkdirSync(waveDir, { recursive: true });
+      const planContent = [
+        '## Outcome',
+        'Add a greet function to the project.',
+        '',
+        '## Items',
+        '',
+        '### item-001',
+        'status: pending',
+        'agent: implementer',
+        'target_resources: [src/greet.js]',
+        'depends_on: []',
+        'notes: implement greet function',
+      ].join('\n');
+      fs.writeFileSync(currentMd, planContent);
+      return [
+        `current.md: ${currentMd}`,
+        `READY_ITEMS: [item-001]`,
+        `commit_message: feat: add greeting module`,
+        `wave_dir: ${waveDir}`,
+        '',
+        'Contents of current.md:',
+        planContent,
+      ].join('\n');
+    },
+    validate(name, block) {
+      if (!['COMPLETE', 'PARTIAL', 'ERROR', 'RECUSE'].includes(block.STATUS)) {
+        fail(`${name}: STATUS "${block.STATUS}" not in valid set`);
+        return;
+      }
+      ok(`${name}: STATUS=${block.STATUS}`);
+      if (!block.SUMMARY) fail(`${name}: SUMMARY absent`); else ok(`${name}: SUMMARY present`);
+    },
+  },
+
+  // 20. planner: intent signal + pending item → VERDICT ready or done
+  // RECUSE is acceptable (tool access unavailable in raw API context).
+  {
+    name: 'planner',
+    expectedCapability: 'judge',
+    maxTokens: 4000,
+    judgeQuery: "The response MUST contain: (a) STATUS field; (b) VERDICT field with value 'ready' or 'done'; (c) if VERDICT=ready, a READY_ITEMS field listing at least one item ID; (d) SUMMARY field. FAIL if any of these are absent.",
+    buildMessage(tmpDir) {
+      const currentMd = path.join(tmpDir, 'current.md');
+      const planContent = [
+        '## Outcome',
+        'Build a hello-world CLI that prints "hello world" to stdout.',
+        '',
+        '## Items',
+        '',
+        '### item-001',
+        'status: pending',
+        'agent: implementer',
+        'target_resources: [src/index.js]',
+        'depends_on: []',
+        'notes: implement main entry point',
+      ].join('\n');
+      fs.writeFileSync(currentMd, planContent);
+      return [
+        `current.md: ${currentMd}`,
+        'signal: intent',
+        'outcome: build a hello-world CLI',
+        '',
+        'Contents of current.md:',
+        planContent,
+      ].join('\n');
+    },
+    validate(name, block) {
+      if (!['COMPLETE', 'CYCLE', 'ERROR', 'RECUSE'].includes(block.STATUS)) {
+        fail(`${name}: STATUS "${block.STATUS}" not in {COMPLETE, CYCLE, ERROR, RECUSE}`);
+        return;
+      }
+      ok(`${name}: STATUS=${block.STATUS}`);
+      if (!block.SUMMARY) fail(`${name}: SUMMARY absent`); else ok(`${name}: SUMMARY present`);
+      if (block.STATUS === 'COMPLETE') {
+        if (!['ready', 'done'].includes(block.VERDICT)) {
+          fail(`${name}: VERDICT "${block.VERDICT}" not in {ready, done}`);
+        } else {
+          ok(`${name}: VERDICT=${block.VERDICT}`);
+        }
+        if (block.VERDICT === 'ready' && !block.READY_ITEMS) {
+          fail(`${name}: READY_ITEMS absent when VERDICT=ready`);
+        } else if (block.VERDICT === 'ready') {
+          ok(`${name}: READY_ITEMS=${block.READY_ITEMS}`);
+        }
+      }
+    },
+  },
+
+  // 21. review-plan: clean plan → VERDICT APPROVED
+  {
+    name: 'review-plan',
+    expectedCapability: 'judge',
+    maxTokens: 4000,
+    judgeQuery: "The response MUST contain: (a) VERDICT field with value 'APPROVED' or 'NEEDS_REVISION'; (b) WROTE field; (c) SUMMARY field. The input plan has no circular dependencies, clear outcome, and well-formed items — FAIL only if VERDICT is absent or not one of the two values.",
+    buildMessage(tmpDir) {
+      const currentMd = path.join(tmpDir, 'current.md');
+      const reviewOut = path.join(tmpDir, 'review-001.md');
+      const planContent = [
+        '## Outcome',
+        'Add a greet function that returns "hello" and export it from the module.',
+        '',
+        '## Items',
+        '',
+        '### item-001',
+        'status: pending',
+        'agent: scaffolder',
+        'target_resources: [src/greet.js]',
+        'depends_on: []',
+        'notes: scaffold greet function stub',
+        '',
+        '### item-002',
+        'status: pending',
+        'agent: implementer',
+        'target_resources: [src/greet.js]',
+        'depends_on: [item-001]',
+        'notes: implement greet to return "hello"',
+        '',
+        '### item-003',
+        'status: pending',
+        'agent: test-writer',
+        'target_resources: [test/greet.test.js]',
+        'depends_on: [item-002]',
+        'notes: write tests for greet function',
+      ].join('\n');
+      fs.writeFileSync(currentMd, planContent);
+      return [
+        `current.md: ${currentMd}`,
+        `review_out: ${reviewOut}`,
+        '',
+        'Contents of current.md:',
+        planContent,
+      ].join('\n');
+    },
+    validate(name, block) {
+      if (!['COMPLETE', 'ERROR'].includes(block.STATUS)) {
+        fail(`${name}: STATUS "${block.STATUS}" not in {COMPLETE, ERROR}`);
+        return;
+      }
+      ok(`${name}: STATUS=${block.STATUS}`);
+      if (!block.SUMMARY) fail(`${name}: SUMMARY absent`); else ok(`${name}: SUMMARY present`);
+      if (block.STATUS === 'COMPLETE') {
+        if (!['APPROVED', 'NEEDS_REVISION'].includes(block.VERDICT)) {
+          fail(`${name}: VERDICT "${block.VERDICT}" not in {APPROVED, NEEDS_REVISION}`);
+        } else {
+          ok(`${name}: VERDICT=${block.VERDICT}`);
+        }
+        if (!block.WROTE) fail(`${name}: WROTE absent`); else ok(`${name}: WROTE present`);
+      }
+    },
+  },
+
+  // 22. wave-synthesizer: partial-success wave → replan-brief written
+  {
+    name: 'wave-synthesizer',
+    expectedCapability: 'code-analyst',
+    maxTokens: 4000,
+    judgeQuery: "The response MUST contain: (a) STATUS field; (b) WROTE field referencing a replan-brief path; (c) a VERDICT of 'extend' or 'revise'; (d) SUMMARY field. FAIL if WROTE is absent or VERDICT is absent.",
+    buildMessage(tmpDir) {
+      const waveDir      = path.join(tmpDir, 'wave-001');
+      const replanBrief  = path.join(tmpDir, 'replan-brief.md');
+      fs.mkdirSync(waveDir, { recursive: true });
+      // Write mock wave artifacts
+      fs.writeFileSync(path.join(waveDir, 'item-001-complete.md'), [
+        '## Work completed',
+        'Implemented greet function in src/greet.js.',
+        'STATUS: COMPLETE',
+        'SUMMARY: greet function implemented and exported',
+      ].join('\n'));
+      fs.writeFileSync(path.join(waveDir, 'item-002-timeout.md'), [
+        'STATUS: ERROR',
+        'SUMMARY: test-writer timed out after 120s',
+        'RECUSAL_REASON: exceeded time budget',
+      ].join('\n'));
+      return [
+        `wave_dir: ${waveDir}`,
+        `replan_brief_out: ${replanBrief}`,
+        'outcome: partial',
+        'reason: item-002 timed out',
+        'completed: [item-001]',
+        'failed: [item-002]',
+        '',
+        'Wave artifact contents:',
+        '',
+        'item-001 (COMPLETE):',
+        fs.readFileSync(path.join(waveDir, 'item-001-complete.md'), 'utf8'),
+        '',
+        'item-002 (TIMEOUT):',
+        fs.readFileSync(path.join(waveDir, 'item-002-timeout.md'), 'utf8'),
+      ].join('\n');
+    },
+    validate(name, block) {
+      if (!['COMPLETE', 'ERROR'].includes(block.STATUS)) {
+        fail(`${name}: STATUS "${block.STATUS}" not in {COMPLETE, ERROR}`);
+        return;
+      }
+      ok(`${name}: STATUS=${block.STATUS}`);
+      if (!block.SUMMARY) fail(`${name}: SUMMARY absent`); else ok(`${name}: SUMMARY present`);
+      if (block.STATUS === 'COMPLETE') {
+        if (!block.WROTE) fail(`${name}: WROTE absent`); else ok(`${name}: WROTE present`);
+        if (!['extend', 'revise'].includes(block.VERDICT)) {
+          adv(`${name}: VERDICT="${block.VERDICT}" — expected 'extend' or 'revise' for partial-success wave`);
+        } else {
+          ok(`${name}: VERDICT=${block.VERDICT}`);
+        }
+      }
+    },
+  },
 ];
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -969,6 +1460,10 @@ async function main() {
     process.exit(0);
   }
   console.log('ok');
+
+  if (JUDGE_GUARD) {
+    console.log('  judge mode: ON (C_THRU_JUDGE=1 — cloud semantic validation enabled)');
+  }
 
   const active = FILTER ? ROSTER.filter(e => FILTER.has(e.name)) : ROSTER;
   console.log(`\nAgent behavioral tests (${active.length} agent${active.length !== 1 ? 's' : ''} — may take several minutes)\n`);
