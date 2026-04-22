@@ -181,23 +181,33 @@ The `plan-orchestrator` evaluates plan complexity before wave planning (Step 2.5
 
 ### Complexity evaluation
 
-Four recon signals determine complexity (first match wins):
+Three structural signals determine complexity (first match wins):
 
 | Signal | Source |
 |---|---|
 | `files_affected` | Count of distinct `target_resources` across all READY_ITEMS |
 | `shared_interfaces` | Schemas/types consumed by ≥2 files outside the plan's file set |
-| `persisted_state` | `PERSISTED_STATE_STORES` from recon: present or absent |
 | `external_consumers` | Callers not in the plan's file set that reference plan-touched files |
 
 **Rubric:**
-- `trivial`: files_affected ≤ 2, shared_interfaces = 0, persisted_state = absent, external_consumers = 0
-- `complex`: files_affected ≥ 5 OR persisted_state = present OR external_consumers > 0
+- `trivial`: files_affected ≤ 2, shared_interfaces = 0, external_consumers = 0
+- `complex`: files_affected ≥ 5 OR external_consumers > 0
 - `moderate`: all other cases
 
-`COMPLEXITY` is emitted in the orchestrator's Step 13 STATUS return block and logged to `$wave_dir/plan.json` with derivation inputs. A calibration tuple `{intent_summary, file_count, classification, downstream_wave_count}` is written to `$wave_dir/cascade/complexity.jsonl`.
+Complexity gates the **deployability guard** only. Migration and CI/CD are handled by per-wave self-questions (see below) — not by complexity tier.
 
-Absent `COMPLEXITY` in orchestrator output → treated as `moderate` (safe default — does not skip guards).
+`COMPLEXITY` is emitted in the orchestrator's Step 13 STATUS return block and logged to `$plan_dir/plan.json`. A calibration tuple `{intent_summary, file_count, classification, downstream_wave_count}` is written to `$wave_dir/cascade/complexity.jsonl`.
+
+Absent `COMPLEXITY` → treated as `moderate` (safe default — does not skip guards).
+
+### Per-wave self-questions
+
+Before emitting each wave, the orchestrator explicitly reasons through two questions:
+
+1. **Migration:** *Does this wave touch any state, data, or files that need to be migrated?* (schema changes, renamed runtime fields, data format changes) → sets `MIGRATION_REQUIRED: yes|no`
+2. **CI/CD:** *Could merging this wave break a CI pipeline?* (renamed entry points, changed exports, removed files) → sets `ci_risk: yes` in wave.md frontmatter when yes
+
+These are reasoning steps answered from item descriptions and recon context — not file-pattern scanning or user prompts. Any plan can trigger migration or CI-safety waves regardless of complexity tier.
 
 ### Test/CI reconnaissance (TEST_FRAMEWORKS)
 
@@ -215,11 +225,11 @@ The guard is skipped entirely for `trivial` plans.
 
 ### State migration evaluation (MIGRATION_REQUIRED)
 
-For `complex` plans with a `PERSISTED_STATE_STORES` recon signal, each wave is checked for schema-touching items. When found, `MIGRATION_REQUIRED: yes` is set in wave.md frontmatter and a dedicated migration wave is inserted before the schema change wave. Migration items carry `migration_target` and `migration_plan` fields and are dispatched to `deep-coder` tier. Absent `MIGRATION_REQUIRED` → `no` (graceful degradation). Trivial and moderate plans are unaffected.
+Triggered by the per-wave migration self-question — not by complexity tier. When `MIGRATION_REQUIRED: yes`, a dedicated migration wave is inserted immediately before the schema change wave. Migration items carry `migration_target` and `migration_plan` fields and are dispatched to `deep-coder` tier. Absent `MIGRATION_REQUIRED` → `no` (graceful degradation).
 
 ### CI-safety final wave
 
-For `complex` plans, the orchestrator appends a CI-safety wave as the **last wave of the plan** — after all implementation waves complete. The wave parses `TEST_FRAMEWORKS` tokens to derive test commands, then dispatches items to `test-writer` and `wave-reviewer`. Empty or `none` frameworks → falls back to `node --check` on plan target files. Trivial and moderate plans are unaffected.
+Appended as the **last wave of the plan** whenever any wave carries `ci_risk: yes` — regardless of complexity tier. The wave parses `TEST_FRAMEWORKS` tokens to derive test commands, then dispatches items to `test-writer` and `wave-reviewer`. Empty or `none` frameworks → falls back to `node --check` on plan target files.
 
 ---
 

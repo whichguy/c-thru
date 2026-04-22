@@ -386,20 +386,24 @@ Increment on each review-plan or final-reviewer→planner cycle. At 20: pause an
 
 ## Complexity & deployability contract
 
-**Complexity evaluation** runs in plan-orchestrator Step 2.5, before wave emission. The orchestrator derives a `COMPLEXITY: trivial|moderate|complex` signal from four recon inputs (files affected, shared interfaces, persisted state, external consumers) and gates downstream behavior on it:
+**Complexity evaluation** runs in plan-orchestrator Step 2.5, before wave emission. The orchestrator derives a `COMPLEXITY: trivial|moderate|complex` signal from structural scope only (files affected, shared interfaces, external consumers):
 
-| Complexity | Deployability guard | Migration eval | CI-safety wave |
-|---|---|---|---|
-| `trivial` | skipped | skipped | no |
-| `moderate` | runs per wave | skipped | no |
-| `complex` | runs per wave | runs per wave | yes (appended last) |
+| Complexity | Deployability guard |
+|---|---|
+| `trivial` | skipped |
+| `moderate` | runs per wave |
+| `complex` | runs per wave |
 
 **Absent `COMPLEXITY`** (old orchestrator output) → treated as `moderate` (safe default).
 
-**Test/CI reconnaissance** (`TEST_FRAMEWORKS`): `discovery-advisor` emits a `TEST_FRAMEWORKS:` line in its STATUS block: comma-separated `{framework}@{test-dir}[+ci:{system}]` tokens, or `none`. This is forwarded into every worker digest's `## Mission context` section so implementer and test-writer agents know the project's actual test contract. Absent field → `none` (no behavioral change).
+**Per-wave self-questions** (asked before emitting each wave — any complexity):
+- *Does this wave need migration?* → `MIGRATION_REQUIRED: yes` + dedicated migration wave inserted before this one
+- *Could this wave break CI?* → `ci_risk: yes` annotated in wave frontmatter
 
-**Deployability guard**: for each wave (moderate/complex only), the orchestrator checks that no item imports a module produced by a later wave. On violation: collapse the pair into the same wave (default). A human-readable reason is printed and logged to `$wave_dir/cascade/deployability.jsonl`.
+**CI-safety final wave**: appended as the last wave of the plan whenever any wave carries `ci_risk: yes` — not gated on complexity. Runs the project's test/lint/build commands from `TEST_FRAMEWORKS`; falls back to `node --check`. Items dispatched to `test-writer` + `wave-reviewer` tiers.
 
-**State migration** (`MIGRATION_REQUIRED`): for non-trivial plans touching persisted state, each wave emits `MIGRATION_REQUIRED: yes|no`. When `yes`, a dedicated migration wave is inserted before the schema change wave. Absent field → `no`.
+**State migration** (`MIGRATION_REQUIRED`): triggered by the per-wave self-question, not by complexity tier. Any plan can get a migration wave — even a trivial one if it touches stored data. Absent field → `no`.
 
-**CI-safety final wave** (complex only): the last wave before archival runs the project's test/lint/build commands as detected in `TEST_FRAMEWORKS`. Falls back to `node --check` on plan target files when no framework is detected. Items dispatched to `test-writer` + `wave-reviewer` tiers.
+**Test/CI reconnaissance** (`TEST_FRAMEWORKS`): `discovery-advisor` emits a `TEST_FRAMEWORKS:` line in its STATUS block: comma-separated `{framework}@{test-dir}[+ci:{system}]` tokens, or `none`. Forwarded into every worker digest's `## Mission context` section. Absent → `none` (no behavioral change).
+
+**Deployability guard**: for each wave (moderate/complex only), the orchestrator checks that no item imports a module produced by a later wave. On violation: collapse the pair into the same wave. Logged to `$wave_dir/cascade/deployability.jsonl`.
