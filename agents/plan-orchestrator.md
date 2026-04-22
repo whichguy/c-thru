@@ -129,6 +129,19 @@ node tools/c-thru-plan-harness.js batch \
 
 On exit code 2 (cycle detected): return `STATUS: ERROR, SUMMARY: dependency cycle in READY_ITEMS — driver validation gap`.
 
+**Deployability guard** (skip when `COMPLEXITY: trivial`): Before finalizing each wave, assert that merging only the items in that wave leaves the codebase deployable. Formally: no item in wave N may introduce an import or call-site to a module that first appears in wave N+1 or later.
+
+Detection: for each item's `target_resources`, scan for import/require statements targeting files that are `produced:` by a *later* wave's items (read all subsequent waves from `current.md`). A forward reference exists when a later-wave `produced:` path matches an import target.
+
+**On violation — default action = collapse:** merge the forward-referencing pair into the same wave. Split-with-stub only when: the referenced module exports >1 symbol AND only one is needed in the earlier wave AND a stub can satisfy that interface.
+
+**Logging on guard activation:**
+- Emit human-readable reason to orchestrator stdout: `[deployability-guard] wave N: <item-id> imports <path> from wave M — collapsing into wave N`
+- Append to `$wave_dir/cascade/deployability.jsonl`:
+  ```
+  {"wave_id":N,"violation_type":"forward-ref","item_id":"<id>","imported_path":"<path>","resolution":"collapse|split-stub"}
+  ```
+
 **Sole-writer invariant:** only the orchestrator writes `wave.md`. Workers never call `update-marker` directly. All marker updates go through: `node tools/c-thru-plan-harness.js update-marker --wave-md "$wave_dir/wave.md" --item <id> --status <x|~|!|+> [...]`.
 
 **Field contract:** `needs:` in `wave.md` carries forward dep edges (renamed from `depends_on:` in `current.md`). No reverse `dependents:` field is stored; use `findDependents()` in the harness when needed. `batch:` per-item and frontmatter `batches:` are computed by the harness — never hand-edited.
