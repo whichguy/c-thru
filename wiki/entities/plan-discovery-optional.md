@@ -8,7 +8,7 @@ last_verified: 2026-04-21
 created: 2026-04-21
 last_updated: 2026-04-21
 sources: [84747a76]
-related: [planner-signals-design, planner-default-integration]
+related: [planner-signals-design, planner-default-integration, planner-design-backlog, orchestrator-self-questions]
 ---
 
 # Plan Discovery Optional
@@ -20,4 +20,7 @@ related: [planner-signals-design, planner-default-integration]
 - **From Session 84747a76:** When discovery is worth the cost: existing codebases with non-obvious patterns (brownfield work), tasks that touch cross-cutting dependencies, tasks where the user hasn't described the codebase. Skipping discovery on brownfield work leads to wrong `depends_on` chains and misidentified `target_resources` that only surface mid-wave.
 - **From Session 84747a76:** `current.md` naming rationale: the slug is already in the directory path (`$PLAN_ROOT/$SLUG/current.md`), making the filename redundant if it included the slug. "current" signals the file is live mutable state as opposed to `plan/snapshots/p-001.md` (frozen historical copies). The name makes the single-source-of-truth role explicit without embedding the slug twice.
 
-→ See also: [[planner-signals-design]], [[planner-default-integration]]
+- **From Session a553415d:** Design refinement after implementing COMPLEXITY/MIGRATION_REQUIRED/CI-safety waves: instead of auto-detecting `PERSISTED_STATE_STORES` from file patterns (fragile heuristic), the orchestrator asks the human two explicit questions at plan start (after recon, before gap fill): "does any state/data/files need to be migrated?" and "is there any CI/CD to consider?" Answers feed directly into the discovery context for plan-orchestrator to consume. Rule derived: *human knowledge beats file-pattern inference for ambiguous contextual signals* — auto-detection is only appropriate when the signal can be read unambiguously from code (e.g., test framework via `package.json`), not when it depends on deployment context or operational knowledge.
+- **From Session a553415d (correction — same session, later turn):** The user-prompt Stage 0 described above was **not shipped**. The user clarified "not user prompts, LLM self-questions during wave planning." The shipped design has the orchestrator reason through both questions itself before emitting each `wave.md`, from item descriptions and recon context already in scope — no `user-constraints.md` file, no user interaction. The rule evolved: *self-reasoning > user prompts > file-pattern heuristics*. See [[orchestrator-self-questions]] for the full pattern.
+
+→ See also: [[planner-signals-design]], [[planner-default-integration]], [[planner-design-backlog]], [[orchestrator-self-questions]]

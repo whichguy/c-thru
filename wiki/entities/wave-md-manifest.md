@@ -8,7 +8,7 @@ last_verified: 2026-04-22
 created: 2026-04-22
 last_updated: 2026-04-22
 sources: []
-related: [planner-design-backlog, planner-signals-design, plan-discovery-optional, cascade-scope-contraction]
+related: [planner-design-backlog, planner-signals-design, plan-discovery-optional, cascade-scope-contraction, orchestrator-self-questions]
 ---
 
 # Wave MD Manifest
@@ -20,4 +20,6 @@ related: [planner-design-backlog, planner-signals-design, plan-discovery-optiona
 - **From Session a553415d:** 7 harness subcommands: `batch` (topo-sort READY_ITEMS → wave.md, with schema round-trip validation), `update-marker` (RMW item checkbox state with O_EXCL lock; flags: `--status`, `--escal-depth`, `--escal-log-append`), `targets` (sorted unique target_resources paths, exit 1 on parse error), `inject-contract` (prepend shared/_worker-contract.md to each digest), plus internal `parseWaveMd`, `writeWaveMd`, `findDependents`. Field rename contract: `depends_on` lives in current.md; `needs` lives in wave.md — translation happens in `cmdBatch`, never mixed within a file.
 - **From Session a553415d:** v2→v3 migration path: three options surfaced in SKILL.md Phase 0 — (1) drain: call `readWaveJson()` (legacy fallback, emits deprecation warning to pre-processor.log) to finish the in-flight v2 wave, then immediately call `writeWaveMd()` to promote to wave.md before any update-marker calls; (2) discard: archive plan dir, start fresh on v3; (3) abort. `--escal-log-append <json>` flag on update-marker was added to support Step 5r RECUSE handling where the orchestrator must append recusal log entries without breaking the sole-writer invariant.
 
-→ See also: [[planner-design-backlog]], [[planner-signals-design]], [[plan-discovery-optional]], [[cascade-scope-contraction]]
+- **From Session a553415d (post-PR #42 refinement):** `ci_risk: yes` annotation added to wave.md frontmatter for non-complex plans when the orchestrator's Step 2.5 self-question (CI/CD reasoning) concludes a wave could break a pipeline — specifically: renamed entry points, changed exports, removed files, or altered CLI interfaces. Complex plans route CI concern into the CI-safety final wave (Step 5.5) instead of the frontmatter annotation. The `ci_risk` field is orchestrator-written; never hand-edited.
+
+→ See also: [[planner-design-backlog]], [[planner-signals-design]], [[plan-discovery-optional]], [[cascade-scope-contraction]], [[orchestrator-self-questions]]
