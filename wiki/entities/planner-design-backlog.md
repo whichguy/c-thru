@@ -50,6 +50,25 @@ Rules:
 
 ---
 
+## TODO 3 — Iteration self-learnings: prompt/agent/flow improvement capture
+
+**At the end of each plan/replan iteration and each plan-orchestrator wave execution**, the system should ask:
+
+> *Based on what we learned this iteration, what are the specific, citable, and detailed improvements we would make to the c-thru prompts, agents, flow, or organization?*
+
+These observations should be appended to a `self-learnings.md` file (or similarly named, e.g. `$PLAN_DIR/self-learnings.md`) after each wave completes. After all waves are done, a TODO task is added to this backlog to queue up a follow-up task: evaluate all accumulated self-learnings and determine which are applicable, then promote the actionable ones into concrete plan items.
+
+**Scope:**
+- Each wave's orchestrator step (Step 11 or a new Step 10.5) appends self-learnings to `$plan_dir/self-learnings.md`
+- The planner (on each replan cycle) also appends learnings about the planning process itself
+- Format: timestamped, citable bullets (file/line/agent name where applicable)
+- After final wave: orchestrator or final-reviewer writes a TODO to this backlog entity (or to `$PLAN_DIR/pending-evaluations.md`) summarizing the learnings for deferred evaluation
+- Deferred evaluation task: a future `/cplan` invocation or manual review evaluates which learnings are applicable and promotes them to prompt/agent edits
+
+**Not yet implemented.** Status: OPEN.
+
+---
+
 ## Cross-cutting: complexity evaluation applies to all of the above
 
 Both TODOs above are gated by a **complexity signal** that the planner evaluates at plan time:
