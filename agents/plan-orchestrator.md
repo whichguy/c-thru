@@ -71,6 +71,48 @@ Pre-check examines `$wave_dir/wave.md` when it exists:
 
 ---
 
+## Step 2.5 — Complexity evaluation
+
+Before wave planning, evaluate plan complexity from four recon signals read from `$plan_dir/discovery/` and the item list in `current.md`:
+
+| Signal | Source |
+|---|---|
+| `files_affected` | Count of distinct `target_resources` across all items in `READY_ITEMS` |
+| `shared_interfaces` | Count of schemas/types consumed by ≥2 files outside the plan's file set (from recon) |
+| `persisted_state` | `PERSISTED_STATE_STORES` recon field: `present` if non-empty/non-`none`, else `absent` |
+| `external_consumers` | Count of callers not in the plan's file set that reference plan-touched files (from recon) |
+
+**Rubric (evaluate in order — first match wins):**
+- `trivial`: `files_affected ≤ 2` AND `shared_interfaces = 0` AND `persisted_state = absent` AND `external_consumers = 0`
+- `complex`: `files_affected ≥ 5` OR `persisted_state = present` OR `external_consumers > 0`
+- `moderate`: all other cases
+
+**Downstream behavior:**
+- `trivial` → single wave, skip deployability guard, skip CI-safety wave
+- `moderate` → deployability guard runs per wave
+- `complex` → deployability guard + migration evaluation + final CI-safety wave appended
+
+**Logging:** Write derivation inputs and result to `$wave_dir/plan.json` (create or merge):
+```json
+{
+  "complexity": "trivial|moderate|complex",
+  "complexity_inputs": {
+    "files_affected": N,
+    "shared_interfaces": N,
+    "persisted_state": "present|absent",
+    "external_consumers": N
+  }
+}
+```
+Also emit one calibration tuple to `$wave_dir/cascade/complexity.jsonl`:
+```
+{"intent_summary":"<≤10 words>","file_count":N,"classification":"trivial|moderate|complex","downstream_wave_count":N}
+```
+
+Emit `COMPLEXITY: trivial|moderate|complex` in the return STATUS block (Step 13).
+
+---
+
 ## Step 3 — Write wave.md
 
 Receive `READY_ITEMS[]` and `commit_message` from driver input. Delegate topo-sort
@@ -87,9 +129,33 @@ node tools/c-thru-plan-harness.js batch \
 
 On exit code 2 (cycle detected): return `STATUS: ERROR, SUMMARY: dependency cycle in READY_ITEMS — driver validation gap`.
 
+**Deployability guard** (skip when `COMPLEXITY: trivial`): Before finalizing each wave, assert that merging only the items in that wave leaves the codebase deployable. Formally: no item in wave N may introduce an import or call-site to a module that first appears in wave N+1 or later.
+
+Detection: for each item's `target_resources`, scan for import/require statements targeting files that are `produced:` by a *later* wave's items (read all subsequent waves from `current.md`). A forward reference exists when a later-wave `produced:` path matches an import target.
+
+**On violation — default action = collapse:** merge the forward-referencing pair into the same wave. Split-with-stub only when: the referenced module exports >1 symbol AND only one is needed in the earlier wave AND a stub can satisfy that interface.
+
+**Logging on guard activation:**
+- Emit human-readable reason to orchestrator stdout: `[deployability-guard] wave N: <item-id> imports <path> from wave M — collapsing into wave N`
+- Append to `$wave_dir/cascade/deployability.jsonl`:
+  ```
+  {"wave_id":N,"violation_type":"forward-ref","item_id":"<id>","imported_path":"<path>","resolution":"collapse|split-stub"}
+  ```
+
 **Sole-writer invariant:** only the orchestrator writes `wave.md`. Workers never call `update-marker` directly. All marker updates go through: `node tools/c-thru-plan-harness.js update-marker --wave-md "$wave_dir/wave.md" --item <id> --status <x|~|!|+> [...]`.
 
 **Field contract:** `needs:` in `wave.md` carries forward dep edges (renamed from `depends_on:` in `current.md`). No reverse `dependents:` field is stored; use `findDependents()` in the harness when needed. `batch:` per-item and frontmatter `batches:` are computed by the harness — never hand-edited.
+
+**State migration evaluation** (gated on `COMPLEXITY ≠ trivial` AND `PERSISTED_STATE_STORES ≠ absent/none`): For each wave, determine whether any item touches a persisted-state store (DB schema, queue config, key-value store) identified in recon. Formally: check whether any item's `target_resources` includes a file that matches a path in `PERSISTED_STATE_STORES`.
+
+If a schema-touching item is found:
+- Set `MIGRATION_REQUIRED: yes` for that wave
+- Insert a dedicated migration wave immediately before the schema change wave; migration wave items carry `migration_target: <store-path>` and a `migration_plan: <≤20-word summary>` field
+- Migration wave items are dispatched to the `deep-coder` tier (same as normal implementer items; no routing change needed)
+
+If no schema-touching item: set `MIGRATION_REQUIRED: no` for that wave (no migration wave inserted).
+
+Emit `MIGRATION_REQUIRED: yes|no` in the wave's wave.md frontmatter. Absent field defaults to `no` (graceful degradation).
 
 **Backward-compatible defaults:** Wave-1 items lacking escalation fields → `escalation_policy: "local"`, `escalation_depth: 0`, `escalation_log: []` on read. Step 4b never emits `never-cloud` — that is user/policy-set only.
 
@@ -101,6 +167,8 @@ Validate schema after write (harness does this automatically): wave_id, commit_m
 
 For each item in `wave.md` (read frontmatter `batches:` for ordering; `needs:`, `target_resources:`, `agent:` from item blocks), write `$wave_dir/digests/<agent>-<item>.md`:
 
+**TEST_FRAMEWORKS forwarding:** Before assembling digests, read the recon output at `$plan_dir/discovery/` for a `TEST_FRAMEWORKS:` line from `discovery-advisor` or any explorer answer. If found and non-empty (not `none`), forward it into each worker digest's `## Mission context` section as: `Test infrastructure: <TEST_FRAMEWORKS value>`. Absent or `none` → omit the line. Implementer, test-writer, and wave-reviewer agents use this to align their work with the project's actual test contract.
+
 ```markdown
 ---
 agent: <role>
@@ -110,6 +178,7 @@ target_resources: [<repo-relative file paths>]
 ---
 ## Mission context
 <2 sentences: overall task goal and where this item fits>
+<If TEST_FRAMEWORKS was detected: "Test infrastructure: {value}">
 
 ## Prior wave context
 <Completed work summaries relevant to this item's deps — from produced: paths in current.md>
@@ -237,6 +306,29 @@ Iterate until no plan-material/crisis findings, or cap hit.
 
 ---
 
+## Step 5.5 — CI-safety final wave (complex plans only)
+
+**Pre-check:** `COMPLEXITY: complex` AND `TEST_FRAMEWORKS` present (from recon or forwarded in plan.json). Skip entirely for `trivial` and `moderate`.
+
+For `COMPLEXITY: complex`, append a final "CI-safety" wave to the plan before dispatching the last implementation wave. This wave runs the project's declared test/lint/build commands.
+
+**Parse TEST_FRAMEWORKS tokens:**
+```
+parsedFrameworks = TEST_FRAMEWORKS.split(',').map(t => t.trim()).filter(t => t !== 'none')
+```
+Each token format: `{framework}@{test-dir}[+ci:{system}]`
+- `framework` (before `@`) → maps to a test command (e.g. `jest` → `npx jest`, `pytest` → `pytest`, `node` → `node --check`)
+- `ci` tag (after `+ci:`) → CI entry point file (e.g. `.github/workflows/ci.yml`)
+
+**CI-safety wave structure:**
+- Items are dispatched to `test-writer` and `wave-reviewer` tiers (same as today)
+- If `parsedFrameworks` is empty (TEST_FRAMEWORKS was `none` or absent): wave still runs; items target `node --check` on all `.js` files in the plan's `target_resources`. Emit `STATUS: COMPLETE` with "no CI commands detected — ran syntax check only".
+- Wave commit message: `"ci: verify CI-safety gate — <plan-slug>"`
+
+This is a template the orchestrator merges into the plan — no new agent role.
+
+---
+
 ## Step 6 — Verify (no LLM)
 
 Bash checks only:
@@ -353,6 +445,7 @@ On any git error: proceed, set `COMMITTED: no`.
 STATUS: COMPLETE|PARTIAL|ERROR
 WAVE: <NNN>
 COMMITTED: yes|no
+COMPLEXITY: trivial|moderate|complex
 AFFECTED_ITEMS: [<item-id>, ...]
 FINDINGS_PATH: waves/NNN/wave_summary.md
 SUMMARY: ≤20 words

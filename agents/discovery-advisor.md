@@ -35,10 +35,13 @@ Each question must be:
 ...
 ```
 
+**Test/CI reconnaissance:** While reading the recon summary, detect and record the project's test infrastructure. Look for test runners (jest, mocha, vitest, pytest, go test, etc.), test directories, and CI config files (`.github/workflows/`, `.gitlab-ci.yml`, `Makefile`, `package.json scripts`). Report as a comma-separated list of `{framework}@{test-dir}[+ci:{system}]` tokens, or `none` if not detected.
+
 **Return:**
 ```
 STATUS: COMPLETE|ERROR
 WROTE: <gaps.md path>
 GAPS: N
+TEST_FRAMEWORKS: {framework}@{test-dir}[+ci:{system}] | none
 SUMMARY: <≤20 words>
 ```
