@@ -146,6 +146,17 @@ Detection: for each item's `target_resources`, scan for import/require statement
 
 **Field contract:** `needs:` in `wave.md` carries forward dep edges (renamed from `depends_on:` in `current.md`). No reverse `dependents:` field is stored; use `findDependents()` in the harness when needed. `batch:` per-item and frontmatter `batches:` are computed by the harness — never hand-edited.
 
+**State migration evaluation** (gated on `COMPLEXITY ≠ trivial` AND `PERSISTED_STATE_STORES ≠ absent/none`): For each wave, determine whether any item touches a persisted-state store (DB schema, queue config, key-value store) identified in recon. Formally: check whether any item's `target_resources` includes a file that matches a path in `PERSISTED_STATE_STORES`.
+
+If a schema-touching item is found:
+- Set `MIGRATION_REQUIRED: yes` for that wave
+- Insert a dedicated migration wave immediately before the schema change wave; migration wave items carry `migration_target: <store-path>` and a `migration_plan: <≤20-word summary>` field
+- Migration wave items are dispatched to the `deep-coder` tier (same as normal implementer items; no routing change needed)
+
+If no schema-touching item: set `MIGRATION_REQUIRED: no` for that wave (no migration wave inserted).
+
+Emit `MIGRATION_REQUIRED: yes|no` in the wave's wave.md frontmatter. Absent field defaults to `no` (graceful degradation).
+
 **Backward-compatible defaults:** Wave-1 items lacking escalation fields → `escalation_policy: "local"`, `escalation_depth: 0`, `escalation_log: []` on read. Step 4b never emits `never-cloud` — that is user/policy-set only.
 
 Validate schema after write (harness does this automatically): wave_id, commit_message, ≥1 item block present.
