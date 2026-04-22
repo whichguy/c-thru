@@ -50636,3 +50636,9 @@ claude-router"
 [2026-04-21 17:11] READ_GATE session:a553415d path:agents/plan-orchestrator.md slugs:cascade-scope-contraction,ux-progress-visibility dur:0ms
 [2026-04-21 17:11] READ_GATE session:a553415d path:test/agent-contract-static.test.js slugs:agent-contract-testing,agent-prompt-construction,agent-structural-testing,implementer-lint-directive,self-recusal-chain dur:0ms
 [2026-04-21 17:11] READ_GATE session:a553415d path:test/helpers.js slugs:agent-contract-testing,test-suite-hardening dur:0ms
+[2026-04-22 00:05] EXTRACT session:75859eff: entities/planner-design-backlog.md updated (COMPLEXITY rubric, deployability guard mechanics, TEST_FRAMEWORKS format, 6-phase plan reviewed READY)
+[2026-04-21 17:14] READ_GATE session:a52bd9fd path:agents/plan-orchestrator.md slugs:cascade-scope-contraction,ux-progress-visibility dur:0ms
+[2026-04-21 17:16] READ_GATE session:a553415d path:agents/plan-orchestrator.md slugs:cascade-scope-contraction,ux-progress-visibility dur:0ms
+[2026-04-22 00:11] EXTRACT session:a553415d: entities/wave-md-manifest.md created (contract v3, 5-state markers, sole-writer, lock bugs, v2 migration), entities/planner-design-backlog.md updated (Phase 1 TEST_FRAMEWORKS shipped, Phases 2-5 pending)
+[2026-04-21 17:18] READ_GATE session:a553415d path:docs/agent-architecture.md slugs:agent-contract-testing,cascade-scope-contraction,implementer-lint-loop dur:0ms
+[2026-04-21 17:18] READ_GATE session:a553415d path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction dur:0ms

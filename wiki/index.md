@@ -54,8 +54,9 @@
 | [model-map-resolve-module](entities/model-map-resolve-module.md) | tools/model-map-resolve.js extracted shared module for resolveProfileModel/resolveLlmMode — single source for proxy, SKILL.md inline scripts, and c-thru-resolve CLI | 2026-04-21 |
 | [agent-tier-budget-frontmatter](entities/agent-tier-budget-frontmatter.md) | tier_budget: N frontmatter field on all 22 agents declaring token ceiling per capability tier — CI-enforced by contract-check.sh Check 9/9 (D7, PR #40) | 2026-04-21 |
 | [test-suite-hardening](entities/test-suite-hardening.md) | 7 concrete fragilities found running behavioral tests against real LLM calls — worker file-path RECUSE, x-c-thru-resolved-via routing proof gap, parser divergence, /no_think placement, tmpDir leak, ambiguous skip semantics; all P0 items resolved (session 75859eff) | 2026-04-22 |
-| [planner-design-backlog](entities/planner-design-backlog.md) | Open TODOs for plan-orchestrator: test/CI framework awareness pre-execution, deployable-wave semantics (each wave shippable to prod), state migration evaluation per wave, complexity-gated decisions across all of these | 2026-04-21 |
+| [planner-design-backlog](entities/planner-design-backlog.md) | Open TODOs for plan-orchestrator: test/CI awareness + deployable-wave semantics; Phase 1 (TEST_FRAMEWORKS recon signal) shipped; Phases 2–5 (COMPLEXITY, deployability guard, migration, CI-safety wave) still pending | 2026-04-22 |
 | [ux-progress-visibility](entities/ux-progress-visibility.md) | TODO: research + design for expressive progress notifications during c-thru agentic operations — wave/agent/routing events via statusline, Stop-hook systemMessage, OS toasts; 7 open research questions; candidate state-file schema | 2026-04-21 |
+| [wave-md-manifest](entities/wave-md-manifest.md) | wave.md markdown format (contract v3) replacing wave.json — YAML frontmatter, 5-state checkbox items (pending/in_progress/complete/blocked/extend), sole-writer invariant, O_EXCL file lock, 7 harness subcommands, v2→v3 migration path | 2026-04-22 |
 
 ## About
 
