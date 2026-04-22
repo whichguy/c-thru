@@ -84,7 +84,7 @@ const ROSTER = {
   'journal-digester':   { warnOnly: true },
 
   // ── Orchestrator / utility tiers: warn-only ───────────────────────────────────
-  'plan-orchestrator':      { warnOnly: true, extraFields: ['TEST_FRAMEWORKS'] },
+  'plan-orchestrator':      { warnOnly: true, extraFields: ['TEST_FRAMEWORKS', 'COMPLEXITY'] },
   'wave-synthesizer':       { warnOnly: true },
   'learnings-consolidator': { warnOnly: true },
 };

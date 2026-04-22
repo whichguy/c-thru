@@ -71,6 +71,48 @@ Pre-check examines `$wave_dir/wave.md` when it exists:
 
 ---
 
+## Step 2.5 — Complexity evaluation
+
+Before wave planning, evaluate plan complexity from four recon signals read from `$plan_dir/discovery/` and the item list in `current.md`:
+
+| Signal | Source |
+|---|---|
+| `files_affected` | Count of distinct `target_resources` across all items in `READY_ITEMS` |
+| `shared_interfaces` | Count of schemas/types consumed by ≥2 files outside the plan's file set (from recon) |
+| `persisted_state` | `PERSISTED_STATE_STORES` recon field: `present` if non-empty/non-`none`, else `absent` |
+| `external_consumers` | Count of callers not in the plan's file set that reference plan-touched files (from recon) |
+
+**Rubric (evaluate in order — first match wins):**
+- `trivial`: `files_affected ≤ 2` AND `shared_interfaces = 0` AND `persisted_state = absent` AND `external_consumers = 0`
+- `complex`: `files_affected ≥ 5` OR `persisted_state = present` OR `external_consumers > 0`
+- `moderate`: all other cases
+
+**Downstream behavior:**
+- `trivial` → single wave, skip deployability guard, skip CI-safety wave
+- `moderate` → deployability guard runs per wave
+- `complex` → deployability guard + migration evaluation + final CI-safety wave appended
+
+**Logging:** Write derivation inputs and result to `$wave_dir/plan.json` (create or merge):
+```json
+{
+  "complexity": "trivial|moderate|complex",
+  "complexity_inputs": {
+    "files_affected": N,
+    "shared_interfaces": N,
+    "persisted_state": "present|absent",
+    "external_consumers": N
+  }
+}
+```
+Also emit one calibration tuple to `$wave_dir/cascade/complexity.jsonl`:
+```
+{"intent_summary":"<≤10 words>","file_count":N,"classification":"trivial|moderate|complex","downstream_wave_count":N}
+```
+
+Emit `COMPLEXITY: trivial|moderate|complex` in the return STATUS block (Step 13).
+
+---
+
 ## Step 3 — Write wave.md
 
 Receive `READY_ITEMS[]` and `commit_message` from driver input. Delegate topo-sort
@@ -356,6 +398,7 @@ On any git error: proceed, set `COMMITTED: no`.
 STATUS: COMPLETE|PARTIAL|ERROR
 WAVE: <NNN>
 COMMITTED: yes|no
+COMPLEXITY: trivial|moderate|complex
 AFFECTED_ITEMS: [<item-id>, ...]
 FINDINGS_PATH: waves/NNN/wave_summary.md
 SUMMARY: ≤20 words
