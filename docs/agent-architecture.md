@@ -215,11 +215,11 @@ The guard is skipped entirely for `trivial` plans.
 
 ### State migration evaluation (MIGRATION_REQUIRED)
 
-For non-trivial plans with a `PERSISTED_STATE_STORES` recon signal, each wave is checked for schema-touching items. When found, `MIGRATION_REQUIRED: yes` is set in wave.md frontmatter and a dedicated migration wave is inserted before the schema change wave. Migration items carry `migration_target` and `migration_plan` fields and are dispatched to `deep-coder` tier. Absent `MIGRATION_REQUIRED` → `no` (graceful degradation).
+For `complex` plans with a `PERSISTED_STATE_STORES` recon signal, each wave is checked for schema-touching items. When found, `MIGRATION_REQUIRED: yes` is set in wave.md frontmatter and a dedicated migration wave is inserted before the schema change wave. Migration items carry `migration_target` and `migration_plan` fields and are dispatched to `deep-coder` tier. Absent `MIGRATION_REQUIRED` → `no` (graceful degradation). Trivial and moderate plans are unaffected.
 
 ### CI-safety final wave
 
-For `complex` plans, the orchestrator appends a CI-safety wave before the last implementation wave. The wave parses `TEST_FRAMEWORKS` tokens to derive test commands, then dispatches items to `test-writer` and `wave-reviewer`. Empty or `none` frameworks → falls back to `node --check` on plan target files. Trivial and moderate plans are unaffected.
+For `complex` plans, the orchestrator appends a CI-safety wave as the **last wave of the plan** — after all implementation waves complete. The wave parses `TEST_FRAMEWORKS` tokens to derive test commands, then dispatches items to `test-writer` and `wave-reviewer`. Empty or `none` frameworks → falls back to `node --check` on plan target files. Trivial and moderate plans are unaffected.
 
 ---
 

@@ -67,8 +67,9 @@ const ROSTER = {
   'planner-local':    { needsStatus: true, needsRecuse: 'warn' },
 
   // ── Recon agents ─────────────────────────────────────────────────────────────
+  // TEST_FRAMEWORKS is conditional for explorer (CI questions only) — extraFields check verifies it's documented, not always emitted
   'explorer':          { needsStatus: true, needsRecuse: 'exempt', extraFields: ['TEST_FRAMEWORKS'] },
-  // discovery-advisor: minimal STATUS grammar (COMPLETE|ERROR only); RECUSE spec gap
+  // discovery-advisor: minimal STATUS grammar (COMPLETE|ERROR only); RECUSE spec gap; TEST_FRAMEWORKS always emitted
   'discovery-advisor': { needsStatus: true, needsRecuse: 'warn', extraFields: ['TEST_FRAMEWORKS'] },
 
   // ── Special contracts ─────────────────────────────────────────────────────────
