@@ -1,2 +1,2 @@
-📂 c-thru wiki · 48 pages · 48 topics
+📂 c-thru wiki · 52 pages · 52 topics
    /wiki-load <topic> — entity lookup  ·  /wiki-query <question> — cross-page synthesis

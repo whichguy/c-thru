@@ -8,7 +8,7 @@ last_verified: 2026-04-21
 created: 2026-04-21
 last_updated: 2026-04-21
 sources: [1558f542]
-related: [uplift-cascade-pattern, capability-profile-model-layers, declared-rewrites, runtime-control, cascade-scope-contraction]
+related: [uplift-cascade-pattern, capability-profile-model-layers, declared-rewrites, runtime-control, cascade-scope-contraction, plan-discovery-optional]
 ---
 
 # Planner-Signals Design
@@ -21,4 +21,6 @@ c-thru's planning groups by **trigger** (intent / wave_summary / final_review), 
 - **From Session 1558f542:** Honest c-thru weaknesses: lower discoverability (19 agents + signals + 2-hop routing harder to read than persona diagram), `current.md` is engineer-only (not stakeholder-facing), single judge tier for all planning judgment (compensated by review loop but still a concentration point), governance in general-purpose CLAUDE.md not planner-specific (fixable with one-line edit), brownfield-optimized (weaker for true greenfield).
 - **From Session 1558f542:** When to reject c-thru for a task: (1) fuzzy greenfield requirements → BMAD's upfront ceremony earns its cost, (2) stakeholder sign-off needed → write SDD-style spec separately, feed as intent, (3) architecture-dominated work → run `/architect` first, feed as discovery, (4) single-use throwaway → skill overhead > value, use plain Claude Code.
 
-→ See also: [[uplift-cascade-pattern]], [[agent-prompt-construction]], [[capability-profile-model-layers]], [[declared-rewrites]], [[runtime-control]], [[sighup-config-reload]], [[cascade-scope-contraction]]
+- **From Session 84747a76:** The 5 phases of `/cplan`: (1) **Discovery** — driver spawns `discovery-advisor` + parallel `explorer` agents, all outputs land in `discovery/`; (2) **Plan construction** — `planner` writes `current.md` with `## Outcome` (immutable once set), `## Items` (dep graph), returns `READY_ITEMS[]` and `COMMIT_MESSAGE`; (3) **Plan review loop** — `review-plan` agent checks the plan, `NEEDS_REVISION` triggers planner rerun (cap 20 rounds); (4) **Wave loop** — `plan-orchestrator` runs topo-sort → batch dispatch → `wave-reviewer` inner loop → verification → commit; deterministic pre-processor classifies wave result (`clean`/`dep_update`/`outcome_risk`/`revision`) and signals planner for next iteration; (5) **Outcome** — loop exits when all items complete or cap hit. State lives in `$TMPDIR/c-thru/<repo>/<slug>/`.
+
+→ See also: [[uplift-cascade-pattern]], [[agent-prompt-construction]], [[capability-profile-model-layers]], [[declared-rewrites]], [[runtime-control]], [[sighup-config-reload]], [[cascade-scope-contraction]], [[plan-discovery-optional]]
