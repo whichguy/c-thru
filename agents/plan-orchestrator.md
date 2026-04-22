@@ -22,7 +22,7 @@ AFFECTED_ITEMS: []
 SUMMARY: wave already committed — skipped
 ```
 
-Also check for `$wave_dir/wave.md` — if it exists and any batch is incomplete (see **Within-wave resume** below), resume from the first incomplete batch rather than re-dispatching from scratch. Legacy fallback: if `wave.md` is absent but `wave.json` is present (v2 in-flight plan), read via `readWaveJson()` (emits deprecation warning to `pre-processor.log`).
+Also check for `$wave_dir/wave.md` — if it exists and any batch is incomplete (see **Within-wave resume** below), resume from the first incomplete batch rather than re-dispatching from scratch. Legacy fallback: if `wave.md` is absent but `wave.json` is present (v2 in-flight plan), read via `readWaveJson()` (emits deprecation warning to `pre-processor.log`). After reading wave.json, immediately write it out as `wave.md` via `writeWaveMd()` before any `update-marker` calls — this promotes the in-flight plan to v3 format in one step.
 
 ---
 

@@ -102,7 +102,7 @@ function parseWaveMd(content) {
     const line = lines[i];
     const itemM = line.match(/^-\s+\[([ x~!+])\]\s+([\w-]+)\s*:\s*(.*)/i);
     if (itemM) {
-      const status = MARKER_TO_STATUS[itemM[1]] || 'pending';
+      const status = MARKER_TO_STATUS[itemM[1].toLowerCase()] || 'pending';
       const id = itemM[2];
       const description = itemM[3].trim();
       const item = {
@@ -336,6 +336,13 @@ for (const [marker, expectedStatus, char] of markerFixtures) {
   const fixture = `---\nwave_id: 1\ncommit_message: "t"\ncontract_version: 3\nbatches: [["x"]]\n---\n\n- ${marker} x: desc\n  agent: implementer\n  needs: []\n  batch: 1\n  target_resources: []\n  escalation_policy: local\n  escalation_policy_source: harness-batch\n  escalation_depth: 0\n  escalation_log: []\n`;
   const d = parseWaveMd(fixture);
   assert(d.items.get('x').status === expectedStatus, `marker ${marker} → status=${expectedStatus}`);
+}
+
+// Uppercase [X] must parse as 'complete' (not silently degrade to 'pending')
+{
+  const fixture = `---\nwave_id: 1\ncommit_message: "t"\ncontract_version: 3\nbatches: [["x"]]\n---\n\n- [X] x: desc\n  agent: implementer\n  needs: []\n  batch: 1\n  target_resources: []\n  escalation_policy: local\n  escalation_policy_source: harness-batch\n  escalation_depth: 0\n  escalation_log: []\n`;
+  const d = parseWaveMd(fixture);
+  assert(d.items.get('x').status === 'complete', 'uppercase [X] normalizes to complete (not pending)');
 }
 
 // wave.md must NOT contain depends_on:
@@ -630,6 +637,27 @@ console.log('\n8. update-marker — concurrent write rejection (lock)');
     fs.closeSync(lockFd);
     try { fs.unlinkSync(lockPath); } catch (_) {}
   }
+}
+
+// Lock cleanup on error: item not found — lock must be released so next call succeeds
+{
+  const tmp = tmpDir();
+  const cMd = path.join(tmp, 'current.md');
+  const wMd = path.join(tmp, 'wave.md');
+  fs.writeFileSync(cMd, sampleCurrentMd);
+  runHarness(['batch', '--current-md', cMd, '--items', 'item-1', '--wave-id', '1', '--commit-msg', 't', '--output', wMd]);
+
+  // Request a non-existent item — should error but must release the lock
+  const r1 = runHarness(['update-marker', '--wave-md', wMd, '--item', 'no-such-item', '--status', 'x']);
+  assert(r1.code === 1, 'update-marker exits 1 on missing item');
+
+  // Lock must be gone — next call must not see stale lock
+  const lockPath = wMd + '.lock';
+  assert(!fs.existsSync(lockPath), 'lock file removed after error');
+
+  // Verify the next update-marker succeeds (would hang/fail if lock not released)
+  const r2 = runHarness(['update-marker', '--wave-md', wMd, '--item', 'item-1', '--status', 'x']);
+  assert(r2.code === 0, 'subsequent update-marker succeeds after error cleanup');
 }
 
 // ── 9. targets subcommand ─────────────────────────────────────────────────────

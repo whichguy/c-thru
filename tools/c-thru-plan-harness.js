@@ -134,7 +134,7 @@ function parseWaveMd(content) {
     // Match: - [marker] item-id: description
     const itemM = line.match(/^-\s+\[([ x~!+])\]\s+([\w-]+)\s*:\s*(.*)/i);
     if (itemM) {
-      const status = MARKER_TO_STATUS[itemM[1]] || 'pending';
+      const status = MARKER_TO_STATUS[itemM[1].toLowerCase()] || 'pending';
       const id = itemM[2];
       const description = itemM[3].trim();
       const item = {
@@ -716,13 +716,17 @@ function cmdUpdateMarker(cliArgs) {
     die(`wave.md is locked by concurrent update-marker: ${lockPath}`);
   }
 
+  // Use throw inside the lock scope instead of die() — process.exit() skips finally,
+  // which would leave the lock file orphaned. Catch at the outer level, then release
+  // the lock before exiting.
+  let lockError = null;
   try {
-    if (!fs.existsSync(waveMdPath)) die(`wave.md not found: ${waveMdPath}`);
+    if (!fs.existsSync(waveMdPath)) throw new Error(`wave.md not found: ${waveMdPath}`);
 
     const content  = fs.readFileSync(waveMdPath, 'utf8');
     const waveData = parseWaveMd(content);
     const item     = waveData.items.get(itemId);
-    if (!item) die(`item '${itemId}' not found in ${waveMdPath}`);
+    if (!item) throw new Error(`item '${itemId}' not found in ${waveMdPath}`);
 
     const STATUS_MAP = { 'x': 'complete', '~': 'in_progress', '!': 'blocked', '+': 'extend' };
     item.status = STATUS_MAP[newStatus];
@@ -734,17 +738,21 @@ function cmdUpdateMarker(cliArgs) {
     if (escalLogAppend) {
       let entry;
       try { entry = JSON.parse(escalLogAppend); } catch (e) {
-        die(`--escal-log-append is not valid JSON: ${e.message}`);
+        throw new Error(`--escal-log-append is not valid JSON: ${e.message}`);
       }
       item.escalation_log = [...(item.escalation_log || []), entry];
     }
 
     writeWaveMd(waveData, waveMdPath);
     process.stdout.write(`update-marker: ${itemId} → [${newStatus}] (${STATUS_MAP[newStatus]})\n`);
+  } catch (e) {
+    lockError = e;
   } finally {
     fs.closeSync(lockFd);
     try { fs.unlinkSync(lockPath); } catch (_) {}
   }
+
+  if (lockError) die(lockError.message);
 }
 
 // ── Subcommand: targets ────────────────────────────────────────────────────────
