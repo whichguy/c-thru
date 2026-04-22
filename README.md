@@ -222,7 +222,7 @@ The planner's job is not just to write the initial plan — it maintains the dep
   │  ┌───────────────────────────────────────────────────────┐  │
   │  │  plan-orchestrator executes one wave                  │  │
   │  │                                                       │  │
-  │  │  topo-sort + resource-conflict batch → wave.json      │  │
+  │  │  topo-sort + resource-conflict batch → wave.md        │  │
   │  │                                                       │  │
   │  │  dispatch workers in parallel:                        │  │
   │  │    implementer   → writes code                        │  │
@@ -367,7 +367,7 @@ Git commit                  zero       bash                     per wave
   plan/snapshots/         ← p-NNN.md after each wave commit
   discovery/              ← recon.md, gaps.md, per-gap explorer outputs
   waves/NNN/
-    wave.json             ← orchestrator batch plan
+    wave.md               ← orchestrator markdown manifest (wave_id, batches:, needs:, state markers)
     findings.jsonl        ← per-item structured findings
     wave-summary.md       ← key findings + signals
     verify.json           ← deterministic post-wave checks
