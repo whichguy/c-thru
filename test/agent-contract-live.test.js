@@ -205,6 +205,56 @@ const LIVE_ROSTER = [
     expectedCapability: 'judge-strict',
     userMessage: 'Review: eval(userInput)',
   },
+  {
+    name: 'auditor',
+    expectedCapability: 'judge',
+    userMessage: 'replan_brief: /tmp/test-brief.md\ndecision_out: /tmp/test-decision.json\n\nWave 001 outcome: partial. 1 of 3 items completed (item-001). Items 2 and 3 timed out. Intent: add authentication middleware.',
+  },
+  {
+    name: 'final-reviewer',
+    expectedCapability: 'judge',
+    userMessage: 'All items complete. Plan: add user auth. Outcome: implemented JWT middleware, protected routes, added tests. All items status:complete. Review and confirm plan is met.',
+  },
+  {
+    name: 'journal-digester',
+    expectedCapability: 'judge',
+    userMessage: 'journal_path: /tmp/test-journal.md\noutput_path: /tmp/test-digest.md\n\nJournal: Wave 001 complete. Discovery found no test framework. Implementer added Jest config.',
+  },
+  {
+    name: 'learnings-consolidator',
+    expectedCapability: 'pattern-coder',
+    userMessage: 'findings_paths: []\noutput_path: /tmp/test-learnings.md\n\nLearning 1: system prompts too verbose. Learning 2: test coverage missing for edge cases.',
+  },
+  {
+    name: 'plan-orchestrator',
+    expectedCapability: 'orchestrator',
+    userMessage: 'current.md: /tmp/current.md\nREADY_ITEMS: [item-001]\ncommit_message: feat: add greeting module\nwave_dir: /tmp/wave-001',
+  },
+  {
+    name: 'planner',
+    expectedCapability: 'judge',
+    userMessage: 'current.md: /tmp/current.md\nsignal: intent\noutcome: build a hello-world CLI\n\nItems:\n- id: item-001, status: pending, agent: implementer, depends_on: []',
+  },
+  {
+    name: 'review-plan',
+    expectedCapability: 'judge',
+    userMessage: 'current.md: /tmp/current.md\nreview_out: /tmp/review-001.md\n\nPlan: 1 item, no deps, outcome: add greet function. Item: id:item-001 status:pending target:src/greet.js',
+  },
+  {
+    name: 'wave-synthesizer',
+    expectedCapability: 'code-analyst',
+    userMessage: 'wave_dir: /tmp/wave-001\nreplan_brief_out: /tmp/replan-brief.md\noutcome: partial\nreason: item-002 timed out\ncompleted: [item-001]\nfailed: [item-002]',
+  },
+  {
+    name: 'planner-local',
+    expectedCapability: 'local-planner',
+    userMessage: 'current.md: /tmp/current.md\nsignal: dep_update\nwave_summary: /tmp/wave-summary.json\naffected_items: [item-001]',
+  },
+  {
+    name: 'uplift-decider',
+    expectedCapability: 'judge',
+    userMessage: 'PARTIAL_OUTPUT: /tmp/impl-output.md\nmode: uplift\nRecusal reason: cannot confirm lint pass.\nPrior agent: implementer, tier: deep-coder, attempted: yes',
+  },
 ];
 
 // ── Validation helpers ────────────────────────────────────────────────────────

@@ -88,6 +88,10 @@ const ROSTER = {
   'plan-orchestrator':      { warnOnly: true, extraFields: ['TEST_FRAMEWORKS', 'COMPLEXITY', 'MIGRATION_REQUIRED'] },
   'wave-synthesizer':       { warnOnly: true },
   'learnings-consolidator': { warnOnly: true },
+
+  // ── Routing-only entries: no agent file; resolve via agent_to_capability only ──
+  // routingOnly: true — skip all file checks; only coverage in agent_to_capability is verified.
+  'judge-evaluator': { routingOnly: true },
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -118,6 +122,12 @@ for (const agentName of Object.keys(AGENT_TO_CAPABILITY)) {
 console.log('\n2. Per-agent structural checks');
 
 for (const [agentName, spec] of Object.entries(ROSTER)) {
+  // Routing-only entries have no agent file — skip all file checks.
+  if (spec.routingOnly) {
+    ok(`${agentName}: routing-only (no agent file required)`);
+    continue;
+  }
+
   const filePath = path.join(AGENTS_DIR, `${agentName}.md`);
 
   if (!fs.existsSync(filePath)) {
