@@ -79,18 +79,21 @@ Before wave planning, evaluate plan complexity from recon signals and item list 
 |---|---|
 | `files_affected` | Count of distinct `target_resources` across all items in `READY_ITEMS` |
 | `shared_interfaces` | Count of schemas/types consumed by ≥2 files outside the plan's file set (from recon) |
-| `persisted_state` | `PERSISTED_STATE_STORES` recon field: `present` if non-empty/non-`none`, else `absent` |
 | `external_consumers` | Count of callers not in the plan's file set that reference plan-touched files (from recon) |
 
 **Rubric (evaluate in order — first match wins):**
-- `trivial`: `files_affected ≤ 2` AND `shared_interfaces = 0` AND `persisted_state = absent` AND `external_consumers = 0`
-- `complex`: `files_affected ≥ 5` OR `persisted_state = present` OR `external_consumers > 0`
+- `trivial`: `files_affected ≤ 2` AND `shared_interfaces = 0` AND `external_consumers = 0`
+- `complex`: `files_affected ≥ 5` OR `external_consumers > 0`
 - `moderate`: all other cases
 
+Migration and CI/CD are now handled by the per-wave self-questions below — not upfront rubric signals. The rubric covers structural scope only.
+
 **Downstream behavior:**
-- `trivial` → skip deployability guard, skip CI-safety wave (typically resolves in one wave — not enforced)
+- `trivial` → skip deployability guard (typically resolves in one wave — not enforced)
 - `moderate` → deployability guard runs per wave
-- `complex` → deployability guard + migration evaluation + final CI-safety wave appended
+- `complex` → deployability guard runs per wave
+
+CI-safety wave and migration waves are triggered by the per-wave self-questions (Step 2.5), not by complexity tier — any plan can get them.
 
 **Before emitting each wave, ask yourself these two questions explicitly:**
 
@@ -106,7 +109,6 @@ These are reasoning steps, not user prompts — answer them from the items and r
   "complexity_inputs": {
     "files_affected": N,
     "shared_interfaces": N,
-    "persisted_state": "present|absent",
     "external_consumers": N
   }
 }
@@ -153,7 +155,7 @@ Detection: for each item's `target_resources`, scan for import/require statement
 
 **Field contract:** `needs:` in `wave.md` carries forward dep edges (renamed from `depends_on:` in `current.md`). No reverse `dependents:` field is stored; use `findDependents()` in the harness when needed. `batch:` per-item and frontmatter `batches:` are computed by the harness — never hand-edited.
 
-**State migration evaluation** (gated on `COMPLEXITY = complex` AND `persisted_state = present`): For each wave, ask yourself: *does this wave touch any state, data, or files that need to be migrated?* Consider schema changes, data format changes, renamed identifiers used in stored data. This is a reasoning step — use the item descriptions and recon context, not file-pattern matching.
+**State migration evaluation:** For each wave, the migration self-question (Step 2.5) produces the answer. If you answered yes → set `MIGRATION_REQUIRED: yes` and insert a migration wave. No separate detection needed.
 
 If a schema-touching item is found:
 - Set `MIGRATION_REQUIRED: yes` for that wave
@@ -313,11 +315,11 @@ Iterate until no plan-material/crisis findings, or cap hit.
 
 ---
 
-## Step 5.5 — CI-safety final wave (complex plans only)
+## Step 5.5 — CI-safety final wave
 
-**Pre-check:** `COMPLEXITY: complex`. Skip entirely for `trivial` and `moderate`. (Runs even when `TEST_FRAMEWORKS` is absent or `none` — the fallback to `node --check` handles that case.)
+**Pre-check:** Skip if no wave in this plan has `ci_risk: yes` in its frontmatter (set by the CI/CD self-question in Step 2.5). When any wave carries `ci_risk: yes`, append a single CI-safety wave as the last wave of the plan — regardless of COMPLEXITY.
 
-For `COMPLEXITY: complex`, append a final "CI-safety" wave as the last wave of the plan — after all implementation waves complete. This wave asks: *is there CI/CD that needs to pass after these changes?* Answer from recon context and item descriptions before building the wave items.
+Append a final "CI-safety" wave after all implementation waves complete.
 
 **Command resolution (in priority order):**
 1. `TEST_FRAMEWORKS` from `$plan_dir/discovery/` — parse tokens: `{framework}@{test-dir}[+ci:{system}]`; map framework → command (`jest` → `npx jest`, `pytest` → `pytest`, etc.)
