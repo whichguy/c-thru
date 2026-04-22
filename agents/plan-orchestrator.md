@@ -101,6 +101,8 @@ Validate schema after write (harness does this automatically): wave_id, commit_m
 
 For each item in `wave.md` (read frontmatter `batches:` for ordering; `needs:`, `target_resources:`, `agent:` from item blocks), write `$wave_dir/digests/<agent>-<item>.md`:
 
+**TEST_FRAMEWORKS forwarding:** Before assembling digests, read the recon output at `$plan_dir/discovery/` for a `TEST_FRAMEWORKS:` line from `discovery-advisor` or any explorer answer. If found and non-empty (not `none`), forward it into each worker digest's `## Mission context` section as: `Test infrastructure: <TEST_FRAMEWORKS value>`. Absent or `none` → omit the line. Implementer, test-writer, and wave-reviewer agents use this to align their work with the project's actual test contract.
+
 ```markdown
 ---
 agent: <role>
@@ -110,6 +112,7 @@ target_resources: [<repo-relative file paths>]
 ---
 ## Mission context
 <2 sentences: overall task goal and where this item fits>
+<If TEST_FRAMEWORKS was detected: "Test infrastructure: {value}">
 
 ## Prior wave context
 <Completed work summaries relevant to this item's deps — from produced: paths in current.md>
