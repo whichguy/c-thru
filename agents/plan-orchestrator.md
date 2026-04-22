@@ -73,7 +73,7 @@ Pre-check examines `$wave_dir/wave.md` when it exists:
 
 ## Step 2.5 — Complexity evaluation
 
-Before wave planning, evaluate plan complexity from four recon signals read from `$plan_dir/discovery/` and the item list in `current.md`:
+Before wave planning, evaluate plan complexity from recon signals and item list in `current.md`.
 
 | Signal | Source |
 |---|---|
@@ -92,7 +92,14 @@ Before wave planning, evaluate plan complexity from four recon signals read from
 - `moderate` → deployability guard runs per wave
 - `complex` → deployability guard + migration evaluation + final CI-safety wave appended
 
-**Logging:** Write derivation inputs and result to `$plan_dir/plan.json` (create or merge on first wave; skip re-evaluation if `complexity` key already present — recon inputs don't change between waves):
+**Before emitting each wave, ask yourself these two questions explicitly:**
+
+> 1. **Migration:** Does this wave touch any state, data, or files that need to be migrated? Consider: schema changes, renamed fields used at runtime, data format changes, config file renames. If yes → insert a migration wave before this one.
+> 2. **CI/CD:** Could merging this wave break a CI pipeline? Consider: renamed entry points, changed exports, removed files, altered CLI interfaces. If yes → note it in the wave summary and ensure the CI-safety wave (Step 5.5, complex plans) covers it; for non-complex plans, add a `ci_risk: yes` annotation to the wave.md frontmatter.
+
+These are reasoning steps, not user prompts — answer them from the items and recon context before writing `wave.md`.
+
+**Logging:** Write derivation inputs and result to `$plan_dir/plan.json` (create or merge on first wave; skip re-evaluation if `complexity` key already present — inputs don't change between waves):
 ```json
 {
   "complexity": "trivial|moderate|complex",
@@ -146,7 +153,7 @@ Detection: for each item's `target_resources`, scan for import/require statement
 
 **Field contract:** `needs:` in `wave.md` carries forward dep edges (renamed from `depends_on:` in `current.md`). No reverse `dependents:` field is stored; use `findDependents()` in the harness when needed. `batch:` per-item and frontmatter `batches:` are computed by the harness — never hand-edited.
 
-**State migration evaluation** (gated on `COMPLEXITY = complex` AND `PERSISTED_STATE_STORES ≠ absent/none`): For each wave, determine whether any item touches a persisted-state store (DB schema, queue config, key-value store) identified in recon. Formally: check whether any item's `target_resources` includes a file that matches a path in `PERSISTED_STATE_STORES`.
+**State migration evaluation** (gated on `COMPLEXITY = complex` AND `persisted_state = present`): For each wave, ask yourself: *does this wave touch any state, data, or files that need to be migrated?* Consider schema changes, data format changes, renamed identifiers used in stored data. This is a reasoning step — use the item descriptions and recon context, not file-pattern matching.
 
 If a schema-touching item is found:
 - Set `MIGRATION_REQUIRED: yes` for that wave
@@ -310,19 +317,15 @@ Iterate until no plan-material/crisis findings, or cap hit.
 
 **Pre-check:** `COMPLEXITY: complex`. Skip entirely for `trivial` and `moderate`. (Runs even when `TEST_FRAMEWORKS` is absent or `none` — the fallback to `node --check` handles that case.)
 
-For `COMPLEXITY: complex`, append a final "CI-safety" wave as the last wave of the plan — after all implementation waves complete. This wave runs the project's declared test/lint/build commands.
+For `COMPLEXITY: complex`, append a final "CI-safety" wave as the last wave of the plan — after all implementation waves complete. This wave asks: *is there CI/CD that needs to pass after these changes?* Answer from recon context and item descriptions before building the wave items.
 
-**Parse TEST_FRAMEWORKS tokens:**
-```
-parsedFrameworks = TEST_FRAMEWORKS.split(',').map(t => t.trim()).filter(t => t !== 'none')
-```
-Each token format: `{framework}@{test-dir}[+ci:{system}]`
-- `framework` (before `@`) → maps to a test command (e.g. `jest` → `npx jest`, `pytest` → `pytest`, `node` → `node --check`)
-- `ci` tag (after `+ci:`) → CI entry point file (e.g. `.github/workflows/ci.yml`)
+**Command resolution (in priority order):**
+1. `TEST_FRAMEWORKS` from `$plan_dir/discovery/` — parse tokens: `{framework}@{test-dir}[+ci:{system}]`; map framework → command (`jest` → `npx jest`, `pytest` → `pytest`, etc.)
+2. Fallback: `node --check` on all `.js` files in the plan's `target_resources`
 
 **CI-safety wave structure:**
 - Items are dispatched to `test-writer` and `wave-reviewer` tiers (same as today)
-- If `parsedFrameworks` is empty (TEST_FRAMEWORKS was `none` or absent): wave still runs; items target `node --check` on all `.js` files in the plan's `target_resources`. Emit `STATUS: COMPLETE` with "no CI commands detected — ran syntax check only".
+- Emit `STATUS: COMPLETE` with "no CI commands detected — ran syntax check only" when fallback applies
 - Wave commit message: `"ci: verify CI-safety gate — <plan-slug>"`
 
 This is a template the orchestrator merges into the plan — no new agent role.
