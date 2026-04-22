@@ -306,6 +306,81 @@ function stubBackend() {
   });
 }
 
+// ── STATUS block parser ────────────────────────────────────────────────────
+// Unified parser shared by live and behavioral test suites.
+// Strips <think> blocks and normalizes Qwen3 pipe-separated STATUS lines.
+
+function parseStatusBlock(text) {
+  if (typeof text !== 'string') return {};
+  const stripped = text
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/\|([A-Z_]+:)/g, '\n$1');
+  const out = {};
+  for (const line of stripped.split('\n')) {
+    const m = line.match(/^([A-Z_]+):\s*(.*)$/);
+    if (m) out[m[1]] = m[2].trim();
+  }
+  return out;
+}
+
+// ── Tier timeouts ──────────────────────────────────────────────────────────
+
+const TIER_TIMEOUTS_MS = {
+  'judge':              90_000,
+  'judge-strict':       90_000,
+  'deep-coder-cloud':   90_000,
+  'code-analyst-cloud': 90_000,
+  'code-analyst':      180_000,
+  'deep-coder':        180_000,
+  'pattern-coder':     300_000,
+  'orchestrator':      300_000,
+  'local-planner':     300_000,
+};
+
+function tierTimeout(tier, fallback = 180_000) {
+  return TIER_TIMEOUTS_MS[tier] || fallback;
+}
+
+// ── tmpDir registry (SIGINT safety) ───────────────────────────────────────
+
+const _tmpDirRegistry = new Set();
+
+function registerTmpDir(dir) {
+  _tmpDirRegistry.add(dir);
+  return dir;
+}
+
+function cleanupTmpDirs() {
+  for (const d of _tmpDirRegistry) {
+    try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
+  }
+  _tmpDirRegistry.clear();
+}
+
+let _exitHandlersInstalled = false;
+
+function installExitHandlers() {
+  if (_exitHandlersInstalled) return;
+  _exitHandlersInstalled = true;
+  process.on('SIGINT',  () => { cleanupTmpDirs(); process.exit(130); });
+  process.on('SIGTERM', () => { cleanupTmpDirs(); process.exit(143); });
+  process.on('exit',    ()  => cleanupTmpDirs());
+}
+
+// ── Contract strip ─────────────────────────────────────────────────────────
+
+function stripBehavioralContract(contractText) {
+  const stripped = contractText
+    .replace(/---\n\n## Post-work linting[\s\S]*$/, '').trim();
+  if (stripped === contractText.trim()) {
+    throw new Error(
+      'stripBehavioralContract: no-op — shared/_worker-contract.md layout may have changed. ' +
+      'Expected a "---" HR followed by "## Post-work linting" section at the end of the file.'
+    );
+  }
+  return stripped;
+}
+
 // ── Global rejection guard ─────────────────────────────────────────────────
 
 process.on('unhandledRejection', err => {
@@ -326,4 +401,10 @@ module.exports = {
   assertLogContains,
   collectStderr,
   stubBackend,
+  parseStatusBlock,
+  tierTimeout,
+  registerTmpDir,
+  cleanupTmpDirs,
+  installExitHandlers,
+  stripBehavioralContract,
 };

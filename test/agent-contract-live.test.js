@@ -11,6 +11,7 @@
 const fs   = require('fs');
 const http = require('http');
 const path = require('path');
+const { parseStatusBlock, tierTimeout } = require('./helpers');
 
 if (!process.env.C_THRU_LIVE_AGENT_TESTS) {
   console.log('agent-contract-live: skip (set C_THRU_LIVE_AGENT_TESTS=1 to enable)');
@@ -22,9 +23,13 @@ const AGENTS_DIR = path.join(REPO_ROOT, 'agents');
 const MAX_TOKENS = 1200;
 const PER_AGENT_TIMEOUT_MS = 60_000;
 
-let passed  = 0;
-let failed  = 0;
-let skipped = 0;
+let passed           = 0;
+let failed           = 0;
+let skippedExpected  = 0;
+let skippedUnexpected = 0;
+
+// Cloud/judge tiers where 401/403 is expected when ANTHROPIC_API_KEY is absent.
+const CLOUD_TIERS = new Set(['judge', 'judge-strict', 'deep-coder-cloud', 'code-analyst-cloud']);
 
 function ok(label) {
   console.log(`  ok    ${label}`);
@@ -37,21 +42,14 @@ function fail(label, reason) {
   failed++;
 }
 
-function skip(label, reason) {
-  console.log(`  skip  ${label}${reason ? ' — ' + reason : ''}`);
-  skipped++;
+function skipExpected(label, reason) {
+  console.log(`  skip  ${label}${reason ? ' — ' + reason : ''} (expected)`);
+  skippedExpected++;
 }
 
-// ── STATUS block parser ───────────────────────────────────────────────────────
-// Strip <think>…</think> blocks before parsing — some models emit CoT headers.
-function parseStatusBlock(text) {
-  const stripped = text.replace(/<think>[\s\S]*?<\/think>/g, '');
-  const r = {};
-  for (const line of stripped.split('\n')) {
-    const m = line.match(/^([A-Z_]+):\s*(.*)$/);
-    if (m) r[m[1]] = m[2].trim();
-  }
-  return r;
+function skipUnexpected(label, reason) {
+  console.log(`  SKIP! ${label}${reason ? ' — ' + reason : ''} (UNEXPECTED)`);
+  skippedUnexpected++;
 }
 
 // ── Proxy helpers ─────────────────────────────────────────────────────────────
@@ -100,7 +98,7 @@ function postMessages(host, port, body, timeoutMs = PER_AGENT_TIMEOUT_MS) {
           const bodyText = Buffer.concat(chunks).toString('utf8');
           let json = null;
           try { json = JSON.parse(bodyText); } catch {}
-          resolve({ status: res.statusCode, json, bodyText });
+          resolve({ status: res.statusCode, headers: res.headers, json, bodyText });
         });
       }
     );
@@ -133,6 +131,7 @@ function readSystemPrompt(agentName) {
 const LIVE_ROSTER = [
   {
     name: 'implementer',
+    expectedCapability: 'deep-coder',
     userMessage: "Digest: TASK: Append a comment '// hello' to an empty file. TARGET: /tmp/test.js. SCOPE: 1 line add.",
     extraChecks(r) {
       if (r.LINT_ITERATIONS !== undefined && !/^\d+$/.test(r.LINT_ITERATIONS))
@@ -142,6 +141,7 @@ const LIVE_ROSTER = [
   },
   {
     name: 'implementer-cloud',
+    expectedCapability: 'deep-coder-cloud',
     userMessage: "Digest: TASK: Append a comment '// hello' to an empty file. TARGET: /tmp/test.js. SCOPE: 1 line add.",
     extraChecks(r) {
       if (r.LINT_ITERATIONS !== undefined && !/^\d+$/.test(r.LINT_ITERATIONS))
@@ -151,6 +151,7 @@ const LIVE_ROSTER = [
   },
   {
     name: 'wave-reviewer',
+    expectedCapability: 'code-analyst',
     userMessage: "Review this code: console.log('hello'). Return STATUS block.",
     extraChecks(r) {
       if (r.STATUS !== 'RECUSE' && r.ITERATIONS === undefined) return 'ITERATIONS absent on non-RECUSE response';
@@ -161,38 +162,47 @@ const LIVE_ROSTER = [
   },
   {
     name: 'test-writer',
+    expectedCapability: 'code-analyst',
     userMessage: 'Write one test for: function add(a,b){return a+b}',
   },
   {
     name: 'test-writer-cloud',
+    expectedCapability: 'code-analyst-cloud',
     userMessage: 'Write one test for: function add(a,b){return a+b}',
   },
   {
     name: 'scaffolder',
+    expectedCapability: 'pattern-coder',
     userMessage: 'Scaffold a minimal Node.js CLI entrypoint file.',
   },
   {
     name: 'converger',
+    expectedCapability: 'code-analyst',
     userMessage: 'Two parallel outputs both implement the same function identically. Output A: function f(){return 1} Output B: function f(){return 1}. Merge them.',
   },
   {
     name: 'integrator',
+    expectedCapability: 'orchestrator',
     userMessage: "Wire this function into a no-op Express router: function greet(){return 'hi'}",
   },
   {
     name: 'doc-writer',
+    expectedCapability: 'orchestrator',
     userMessage: 'Write a one-sentence docstring for: function add(a,b){return a+b}',
   },
   {
     name: 'explorer',
+    expectedCapability: 'pattern-coder',
     userMessage: 'List JavaScript files in /tmp',
   },
   {
     name: 'discovery-advisor',
+    expectedCapability: 'pattern-coder',
     userMessage: 'What should I investigate first in a codebase that has no tests?',
   },
   {
     name: 'security-reviewer',
+    expectedCapability: 'judge-strict',
     userMessage: 'Review: eval(userInput)',
   },
 ];
@@ -266,14 +276,15 @@ async function main() {
   console.log('ok\n');
 
   for (const entry of LIVE_ROSTER) {
-    const { name, userMessage, extraChecks } = entry;
+    const { name, expectedCapability, userMessage, extraChecks } = entry;
 
     const systemPrompt = readSystemPrompt(name);
     if (!systemPrompt) {
-      skip(`${name}`, 'agent file not found');
+      skipUnexpected(`${name}`, 'agent file not found');
       continue;
     }
 
+    const timeout = tierTimeout(expectedCapability, PER_AGENT_TIMEOUT_MS);
     process.stdout.write(`  [${name}] … `);
     let res;
     try {
@@ -283,21 +294,51 @@ async function main() {
         stream:     false,
         system:     systemPrompt,
         messages:   [{ role: 'user', content: userMessage }],
-      });
+      }, timeout);
     } catch (e) {
       console.log('');
-      skip(`${name}: request failed — ${e.message}`);
+      skipUnexpected(`${name}`, `request failed — ${e.message}`);
       continue;
     }
     console.log(`HTTP ${res.status}`);
 
     if (res.status === 401 || res.status === 403) {
-      skip(`${name}: HTTP ${res.status} — cloud backend auth not configured in this environment`);
+      if (CLOUD_TIERS.has(expectedCapability)) {
+        skipExpected(`${name}`, `HTTP ${res.status} — cloud backend auth not configured`);
+      } else {
+        skipUnexpected(`${name}`, `HTTP ${res.status} — unexpected auth error on local tier`);
+      }
       continue;
     }
     if (res.status !== 200) {
       fail(`${name}: proxy returned HTTP ${res.status}`, res.bodyText.slice(0, 300));
       continue;
+    }
+
+    // Verify the response came through c-thru with agent-name resolution.
+    const resolvedVia = res.headers && res.headers['x-c-thru-resolved-via'];
+    if (!resolvedVia) {
+      fail(`${name}: x-c-thru-resolved-via header absent — response did not come through c-thru proxy`);
+    } else {
+      try {
+        const via = JSON.parse(resolvedVia);
+        ok(`${name}: routed through c-thru → served_by=${via.served_by} capability=${via.capability} tier=${via.tier}`);
+        if (via.served_by === name) {
+          fail(`${name}: served_by equals agent name — agent_to_capability resolution did not fire`);
+        } else {
+          ok(`${name}: agent name resolved (served_by "${via.served_by}" ≠ agent name "${name}")`);
+        }
+        if (!via.served_by) {
+          fail(`${name}: served_by is null/empty — no model was resolved`);
+        }
+        if (expectedCapability && via.capability !== expectedCapability) {
+          fail(`${name}: capability "${via.capability}" expected "${expectedCapability}"`);
+        } else if (expectedCapability) {
+          ok(`${name}: capability matches expected (${expectedCapability})`);
+        }
+      } catch (e) {
+        fail(`${name}: x-c-thru-resolved-via is not valid JSON — ${e.message}`);
+      }
     }
 
     const text = res.json && Array.isArray(res.json.content)
@@ -307,7 +348,7 @@ async function main() {
     const block = parseStatusBlock(text);
 
     if (!block.STATUS) {
-      skip(`${name}: no STATUS block in response (truncation — try increasing MAX_TOKENS)`);
+      skipUnexpected(`${name}`, 'no STATUS block in response (truncation — try increasing MAX_TOKENS)');
       continue;
     }
 
@@ -323,16 +364,16 @@ async function main() {
     }
   }
 
-  const total = passed + failed;
-  console.log(`\n${total} tests: ${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`);
-  process.exit(failed ? 1 : 0);
+  const total = passed + failed + skippedExpected + skippedUnexpected;
+  const skippedParts = [];
+  if (skippedExpected)   skippedParts.push(`${skippedExpected} skipped (expected)`);
+  if (skippedUnexpected) skippedParts.push(`${skippedUnexpected} skipped (UNEXPECTED)`);
+  const skippedSummary = skippedParts.length ? `, ${skippedParts.join(', ')}` : '';
+  console.log(`\n${total} tests: ${passed} passed, ${failed} failed${skippedSummary}`);
+  process.exit(failed || skippedUnexpected ? 1 : 0);
 }
 
-process.on('unhandledRejection', err => {
-  console.error('unhandledRejection:', err);
-  process.exit(1);
-});
-
+// unhandledRejection handler is installed by helpers.js on require.
 main().catch(err => {
   console.error(err);
   process.exit(1);

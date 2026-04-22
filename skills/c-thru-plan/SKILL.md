@@ -30,14 +30,23 @@ PLAN_DIR="$PLAN_ROOT/$SLUG"
 
 If `$PLAN_DIR/current.md` exists:
 
-  **Contract version check:** If `.c-thru-contract-version` does NOT exist in `$PLAN_DIR`:
+  **Contract version check:**
+
+  If `.c-thru-contract-version` does NOT exist in `$PLAN_DIR`:
     - Print: "Pre-refactor plan state detected (no contract version marker). This plan was created with the old orchestrator contract (Mode 1/2/3). Options: **drain** (finish remaining waves via legacy path), **discard** (archive + start fresh), or **abort**."
     - Prompt user and wait.
     - discard: move `$PLAN_DIR` to `$PLAN_DIR.archived.<timestamp>`, proceed as fresh.
     - abort: exit.
     - drain: proceed to Phase 4, treating first wave as a recovery wave (accept VERDICT=done from legacy orchestrator).
 
-  If `.c-thru-contract-version` exists (resume case):
+  If `.c-thru-contract-version` contains `2` (v2 plan — wave.json format):
+    - Print: "Legacy v2 plan detected (wave.json format). Contract version 3 uses wave.md. Options: **drain** (finish remaining waves using legacy wave.json code path — harness reads wave.json with readWaveJson() fallback), **discard** (archive + start fresh on v3), or **abort**."
+    - Prompt user and wait.
+    - drain: proceed to Phase 4; harness automatically reads wave.json as fallback when wave.md is absent (emits deprecation warning to pre-processor.log).
+    - discard: move `$PLAN_DIR` to `$PLAN_DIR.archived.<timestamp>`, proceed as fresh.
+    - abort: exit.
+
+  If `.c-thru-contract-version` contains `3` (current — wave.md format, resume case):
     - Prompt user: **resume** (continue from current plan), **restart** (archive + fresh), or **abort**.
     - resume: skip to Phase 4, picking up next incomplete wave.
       - Check for any wave dir that has `findings.jsonl` but no matching `Wave: <NNN>` git commit via `git log --grep="Wave: <NNN>"` — if found, offer to re-run that wave.
@@ -49,13 +58,13 @@ If fresh: `mkdir -p $PLAN_DIR/waves $PLAN_DIR/discovery $PLAN_DIR/plan/snapshots
 ## State model
 
 - `current.md` — single source of truth. Two immutable-rule sections: `## Outcome` (written once, never changed) and `## Items` (updated by planner per-wave). `[x]` items are immutable.
-- `waves/<NNN>/` — ephemeral per-wave artifacts (wave.json, digests, outputs, findings, verify.json, wave-summary.md). Write-once per wave. `decision.json` and `replan-brief.md` are exception-path only (outcome_risk escalation).
-- `plan/snapshots/p-<NNN>.md` — historical snapshot post-commit.
+- `waves/<NNN>/` — ephemeral per-wave artifacts (wave.md, digests, outputs, findings, verify.json, wave-summary.md). Write-once per wave. `decision.json` and `replan-brief.md` are exception-path only (outcome_risk escalation).
+- `plan/snapshots/p-<NNN>.md` + `plan/snapshots/wave-<NNN>.md` — historical snapshot post-commit (current.md + wave.md).
 - `journal.md` — append-only event log.
 - `learnings.md` — cross-wave improvements; refreshed by planner (step 2 of planner algorithm).
 - `meta.json` — counters (`revision_rounds`, `status`).
 - `pre-processor.log` — structured log of each wave transition classification.
-- `.c-thru-contract-version` — marker file; value `2` indicates refactored contract.
+- `.c-thru-contract-version` — marker file; value `3` = wave.md contract (current); value `2` = legacy wave.json contract; absent = pre-refactor.
 
 **Invariants:**
 - Agents take paths, never inlined content. Returns are ≤20-line STATUS blocks.
@@ -136,7 +145,7 @@ On `STATUS=CYCLE`: print "Dependency cycle in initial plan: ITEMS=<items>". Stop
 
 Write contract version marker:
 ```sh
-echo "2" > $PLAN_DIR/.c-thru-contract-version
+echo "3" > $PLAN_DIR/.c-thru-contract-version
 ```
 
 ## Phase 3 — Plan review loop

@@ -428,18 +428,19 @@ SUMMARY: recused after thinking`;
     : fail('think-tag stripped before STATUS parse', JSON.stringify(r));
 }
 
-// 8. wave.json item with escalation_policy: pre-escalate — field round-trips correctly
+// 8. wave.md item with escalation_policy: pre-escalate — field round-trips correctly
+// (wave.md uses needs: instead of depends_on:; escalation fields unchanged)
 {
   const item = {
     agent: 'implementer', item: 'item-X', target_resources: ['src/foo.ts'],
-    depends_on: [], escalation_policy: 'pre-escalate', escalation_policy_source: 'step4b',
+    needs: [], escalation_policy: 'pre-escalate', escalation_policy_source: 'step4b',
     escalation_depth: 0, escalation_log: []
   };
   const serialized = JSON.stringify(item);
   const parsed = JSON.parse(serialized);
-  (parsed.escalation_policy === 'pre-escalate' && parsed.escalation_depth === 0 && Array.isArray(parsed.escalation_log))
-    ? ok('escalation_policy: pre-escalate round-trips in wave.json item')
-    : fail('escalation_policy: pre-escalate round-trips in wave.json item', JSON.stringify(parsed));
+  (parsed.escalation_policy === 'pre-escalate' && parsed.escalation_depth === 0 && Array.isArray(parsed.escalation_log) && Array.isArray(parsed.needs))
+    ? ok('escalation_policy: pre-escalate round-trips in wave.md item (needs: field)')
+    : fail('escalation_policy: pre-escalate round-trips in wave.md item', JSON.stringify(parsed));
 }
 
 // 9. RECOMMEND: judge → should be treated as judge-tier sentinel (block + surface to user)

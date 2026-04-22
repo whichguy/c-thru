@@ -59,7 +59,7 @@ See `docs/hardware-profile-matrix.md` for the full 6-profile × 5-alias table.
 3. **Plan review loop** — `review-plan` up to 20 rounds
 4. **Wave loop** — three-branch driver loop repeats until no ready items:
    - `plan-orchestrator` (pure executor per wave):
-     - Topological sort + resource-conflict batching → `wave.json` (from READY_ITEMS input)
+     - Topological sort + resource-conflict batching → `wave.md` (from READY_ITEMS input)
      - Assemble digest files (reads learnings.md internally)
      - Dispatch worker batches in parallel with progressive batch injection
      - Concat findings → `findings.jsonl`; concat outputs → `artifact.md`
@@ -112,13 +112,20 @@ ${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/
   meta.json           — slug, revision_rounds, wave_count, created, status
   journal.md          — wave-by-wave log (append-only)
   learnings.md        — cross-wave wiki; refreshed by planner step 2
-  plan/snapshots/     — p-NNN.md per wave
+  plan/snapshots/     — p-NNN.md (current.md snapshot) + wave-NNN.md (wave.md snapshot) per wave
   discovery/          — explorer summaries from Phase 1
   pre-processor.log   — structured log of each wave transition classification
-  .c-thru-contract-version  — value 2 = refactored contract (v1 plans absent this marker)
+  .c-thru-contract-version  — value 3 = wave.md contract (v2 plans have value 2; v1 plans absent marker)
   waves/
     NNN/
-      wave.json       — orchestrator-internal batch plan (wave_id, commit_message, batches[])
+      wave.md         — markdown manifest: YAML frontmatter (wave_id, commit_message,
+                        contract_version:3, batches:[[id,...],...] # computed) +
+                        checkbox items (needs:, batch:# computed, target_resources:,
+                        escalation_*, produced:, wave:). Only the orchestrator writes this
+                        file via the update-marker subcommand. Workers never write wave.md.
+                        Field contract: needs: in wave.md (forward edges, authoritative);
+                        depends_on: in current.md (unchanged). Reverse edges derived on demand
+                        via findDependents() — never stored.
       wave-summary.md — key findings, improvement signals, open questions
       wave_summary_compressed.md — prose-stripped findings for planner context
       digests/        — <agent>-<item>.md per execution item
@@ -130,6 +137,18 @@ ${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/
       decision.json   — auditor verdict (exception path only)
       replan-brief.md — wave-synthesizer output (exception path only)
 ```
+
+### wave.md marker alphabet
+
+| Marker | State       | Meaning |
+|--------|-------------|---------|
+| `[ ]`  | pending     | Not yet dispatched |
+| `[~]`  | in_progress | Dispatched, STATUS not yet received |
+| `[x]`  | complete    | Worker returned STATUS: COMPLETE and verify passed |
+| `[!]`  | blocked     | Escalation depth cap hit, cloud unavailable, or judge-tier sentinel |
+| `[+]`  | extend      | Worker returned STATUS: PARTIAL; follow-up item needed |
+
+State transitions are written by `node tools/c-thru-plan-harness.js update-marker` with an advisory O_EXCL file lock.
 
 ## Worker STATUS contract
 
