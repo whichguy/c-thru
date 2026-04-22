@@ -175,6 +175,54 @@ SUMMARY: <≤20 words>
 
 ---
 
+## Complexity & deployability signals
+
+The `plan-orchestrator` evaluates plan complexity before wave planning (Step 2.5) and gates several behaviors on the result.
+
+### Complexity evaluation
+
+Four recon signals determine complexity (first match wins):
+
+| Signal | Source |
+|---|---|
+| `files_affected` | Count of distinct `target_resources` across all READY_ITEMS |
+| `shared_interfaces` | Schemas/types consumed by ≥2 files outside the plan's file set |
+| `persisted_state` | `PERSISTED_STATE_STORES` from recon: present or absent |
+| `external_consumers` | Callers not in the plan's file set that reference plan-touched files |
+
+**Rubric:**
+- `trivial`: files_affected ≤ 2, shared_interfaces = 0, persisted_state = absent, external_consumers = 0
+- `complex`: files_affected ≥ 5 OR persisted_state = present OR external_consumers > 0
+- `moderate`: all other cases
+
+`COMPLEXITY` is emitted in the orchestrator's Step 13 STATUS return block and logged to `$wave_dir/plan.json` with derivation inputs. A calibration tuple `{intent_summary, file_count, classification, downstream_wave_count}` is written to `$wave_dir/cascade/complexity.jsonl`.
+
+Absent `COMPLEXITY` in orchestrator output → treated as `moderate` (safe default — does not skip guards).
+
+### Test/CI reconnaissance (TEST_FRAMEWORKS)
+
+`discovery-advisor` and `explorer` emit a `TEST_FRAMEWORKS` STATUS field: comma-separated `{framework}@{test-dir}[+ci:{system}]` tokens, or `none`. The orchestrator reads this from `$plan_dir/discovery/` and forwards it into each worker digest's `## Mission context` section as `Test infrastructure: <value>`. Absent → `none` (graceful degradation, no behavioral change).
+
+### Deployability guard
+
+For `moderate` and `complex` plans, each wave is validated before emission: no item in wave N may introduce an import/call-site to a module first produced in wave N+1 or later. On violation, the default resolution is **collapse** (merge the pair into the same wave). Split-with-stub is used only when the referenced module exports >1 symbol and only one is needed in the earlier wave.
+
+Guard activations are logged to `$wave_dir/cascade/deployability.jsonl`:
+```
+{"wave_id":N,"violation_type":"forward-ref","item_id":"<id>","imported_path":"<path>","resolution":"collapse|split-stub"}
+```
+The guard is skipped entirely for `trivial` plans.
+
+### State migration evaluation (MIGRATION_REQUIRED)
+
+For non-trivial plans with a `PERSISTED_STATE_STORES` recon signal, each wave is checked for schema-touching items. When found, `MIGRATION_REQUIRED: yes` is set in wave.md frontmatter and a dedicated migration wave is inserted before the schema change wave. Migration items carry `migration_target` and `migration_plan` fields and are dispatched to `deep-coder` tier. Absent `MIGRATION_REQUIRED` → `no` (graceful degradation).
+
+### CI-safety final wave
+
+For `complex` plans, the orchestrator appends a CI-safety wave before the last implementation wave. The wave parses `TEST_FRAMEWORKS` tokens to derive test commands, then dispatches items to `test-writer` and `wave-reviewer`. Empty or `none` frameworks → falls back to `node --check` on plan target files. Trivial and moderate plans are unaffected.
+
+---
+
 ## Escalation chain (Wave-2)
 
 Self-recusal triggers a cascading re-dispatch through capability tiers. The chain never terminates early — it exhausts all tiers before surfacing to the user. Exception: `wave-reviewer` skips `deep-coder` (recusal = redesign, not re-implementation).
@@ -260,8 +308,8 @@ Agents that don't use the standard worker STATUS block:
 | `auditor` | `VERDICT: continue\|extend\|revise` + `WROTE` + `SUMMARY` | No CONFIDENCE, no FINDINGS |
 | `final-reviewer` | `RECOMMENDATION: complete\|needs_items` + `WROTE` + `GAP_COUNT` + `SUMMARY` | No CONFIDENCE |
 | `review-plan` | `VERDICT: APPROVED\|NEEDS_REVISION` + `WROTE` + `FINDINGS_COUNT` + `SUMMARY` | No CONFIDENCE |
-| `explorer` | `STATUS: COMPLETE\|PARTIAL\|ERROR` + `WROTE` + `SUMMARY` | No CONFIDENCE, no FINDING_CATS |
-| `discovery-advisor` | `STATUS: COMPLETE\|ERROR` + `WROTE` + `GAPS: N` + `SUMMARY` | No CONFIDENCE |
+| `explorer` | `STATUS: COMPLETE\|PARTIAL\|ERROR` + `WROTE` + `ANSWERED` + `SUMMARY` + `TEST_FRAMEWORKS` (CI questions only) | No CONFIDENCE, no FINDING_CATS |
+| `discovery-advisor` | `STATUS: COMPLETE\|ERROR` + `WROTE` + `GAPS: N` + `TEST_FRAMEWORKS` + `SUMMARY` | No CONFIDENCE |
 | `planner` | `STATUS: COMPLETE\|CYCLE\|ERROR` + `VERDICT: ready\|done` + `READY_ITEMS` + `COMMIT_MESSAGE` + `DELTA_*` + `SUMMARY` + `PARALLEL_WAVES` | No CONFIDENCE, no FINDING_CATS |
 | `planner-local` | Same shape as `planner` | Same notes |
 | `journal-digester` | `STATUS: COMPLETE\|ERROR` + `THEMES: N` + `PROPOSALS: N` + `WROTE` + `SUMMARY` | No CONFIDENCE |

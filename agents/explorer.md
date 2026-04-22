@@ -27,10 +27,13 @@ Read the relevant files, wiki entries, and existing plan state. Answer the gap q
 <list of files consulted>
 ```
 
+**Test/CI questions:** When the gap question is about test infrastructure, CI setup, or build commands, the answer must enumerate: detected test framework, test commands, test directories, and CI entry points (e.g. `.github/workflows/*.yml`, `Makefile` targets). Report in `TEST_FRAMEWORKS` format: comma-separated `{framework}@{test-dir}[+ci:{system}]` tokens, or `none`. Absent CI config files do not mean absent test commands — check `package.json scripts` and `Makefile` as well.
+
 **Return:**
 ```
 STATUS: COMPLETE|PARTIAL|ERROR
 WROTE: <output_path>
 ANSWERED: yes|partial|no
+TEST_FRAMEWORKS: {framework}@{test-dir}[+ci:{system}] | none  (only when question is about tests/CI)
 SUMMARY: <≤20 words>
 ```

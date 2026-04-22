@@ -30,7 +30,9 @@ moe-speed-capability-dual	moe speed capability dual
 narrow-threat-model	narrow threat model
 ollama-endpoint-divergence	ollama endpoint divergence
 ollama-http-api-migration	ollama http api migration
+plan-discovery-optional	plan discovery optional
 planner-default-integration	planner default integration
+planner-design-backlog	planner design backlog
 planner-signals-design	planner signals design
 proxy-health-function-semantics	proxy health function semantics
 qwen-series-selection	qwen series selection
@@ -45,4 +47,6 @@ self-recusal-chain	self recusal chain
 sighup-config-reload	sighup config reload
 skill-config-reload-gaps	skill config reload gaps
 sse-buffer-sizing	sse buffer sizing
+test-suite-hardening	test suite hardening
 uplift-cascade-pattern	uplift cascade pattern
+ux-progress-visibility	ux progress visibility

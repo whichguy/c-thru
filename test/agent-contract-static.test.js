@@ -67,9 +67,9 @@ const ROSTER = {
   'planner-local':    { needsStatus: true, needsRecuse: 'warn' },
 
   // ── Recon agents ─────────────────────────────────────────────────────────────
-  'explorer':          { needsStatus: true, needsRecuse: 'exempt' },
+  'explorer':          { needsStatus: true, needsRecuse: 'exempt', extraFields: ['TEST_FRAMEWORKS'] },
   // discovery-advisor: minimal STATUS grammar (COMPLETE|ERROR only); RECUSE spec gap
-  'discovery-advisor': { needsStatus: true, needsRecuse: 'warn' },
+  'discovery-advisor': { needsStatus: true, needsRecuse: 'warn', extraFields: ['TEST_FRAMEWORKS'] },
 
   // ── Special contracts ─────────────────────────────────────────────────────────
   'uplift-decider':    { needsStatus: false, special: 'uplift-decider' },
@@ -84,7 +84,7 @@ const ROSTER = {
   'journal-digester':   { warnOnly: true },
 
   // ── Orchestrator / utility tiers: warn-only ───────────────────────────────────
-  'plan-orchestrator':      { warnOnly: true },
+  'plan-orchestrator':      { warnOnly: true, extraFields: ['TEST_FRAMEWORKS', 'COMPLEXITY', 'MIGRATION_REQUIRED'] },
   'wave-synthesizer':       { warnOnly: true },
   'learnings-consolidator': { warnOnly: true },
 };
@@ -134,7 +134,18 @@ for (const [agentName, spec] of Object.entries(ROSTER)) {
     ok(`${agentName}: model: field matches filename`);
   }
 
-  // Warn-only tiers: only model: check above; no STATUS/RECUSE contract
+  // Extra field declarations checked for all agents (including warnOnly tiers)
+  if (spec.extraFields) {
+    for (const field of spec.extraFields) {
+      if (!content.includes(field)) {
+        fail(`${agentName}: required field "${field}" not declared in prompt body`);
+      } else {
+        ok(`${agentName}: "${field}" declared`);
+      }
+    }
+  }
+
+  // Warn-only tiers: only model: and extraFields checks above; no STATUS/RECUSE contract
   if (spec.warnOnly) continue;
 
   // uplift-decider: VERDICT contract instead of STATUS/RECUSE
@@ -215,16 +226,6 @@ for (const [agentName, spec] of Object.entries(ROSTER)) {
     }
   }
 
-  // Extra field declarations (LINT_ITERATIONS, ITERATIONS)
-  if (spec.extraFields) {
-    for (const field of spec.extraFields) {
-      if (!content.includes(field)) {
-        fail(`${agentName}: required field "${field}" not declared in prompt body`);
-      } else {
-        ok(`${agentName}: "${field}" declared`);
-      }
-    }
-  }
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────
