@@ -67,6 +67,13 @@ These observations should be appended to a `self-learnings.md` file (or similarl
 
 **Not yet implemented.** Status: OPEN.
 
+**Implementation sketch** (for when this is planned):
+- `agents/plan-orchestrator.md`: add Step 10.5 between wave-summary (Step 10) and plan-state update (Step 11). Prompt: "Based on this wave's findings and worker outputs, list specific improvements to c-thru prompts/agents/flow. Be citable (file:line or agent name). Append to `$plan_dir/self-learnings.md`."
+- `agents/planner.md`: on each replan cycle (dep_update or outcome_risk), append a planning-process self-learning entry.
+- File format: append-only markdown with `## Wave NNN — <iso-date>` headers and bullet items.
+- `skills/c-thru-plan/SKILL.md` Phase 5: after final-reviewer completes, if `$plan_dir/self-learnings.md` is non-empty, print "Self-learnings captured at `$plan_dir/self-learnings.md` — run `/cplan evaluate self-learnings` to promote actionable items."
+- No new agent needed — orchestrator writes the file directly using findings already in scope.
+
 ---
 
 ## Cross-cutting: complexity evaluation applies to all of the above
