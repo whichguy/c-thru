@@ -50642,3 +50642,40 @@ claude-router"
 [2026-04-22 00:11] EXTRACT session:a553415d: entities/wave-md-manifest.md created (contract v3, 5-state markers, sole-writer, lock bugs, v2 migration), entities/planner-design-backlog.md updated (Phase 1 TEST_FRAMEWORKS shipped, Phases 2-5 pending)
 [2026-04-21 17:18] READ_GATE session:a553415d path:docs/agent-architecture.md slugs:agent-contract-testing,cascade-scope-contraction,implementer-lint-loop dur:0ms
 [2026-04-21 17:18] READ_GATE session:a553415d path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction dur:0ms
+[2026-04-21 17:21] SESSION_END session:a553415d: closed in c-thru
+[2026-04-21 17:21] SESSION_START session:839fa166: opened in c-thru
+[2026-04-21 17:21] SESSION_START session:ab0674a8: opened in c-thru
+[2026-04-21 17:21] AMPLIFIER_MATCH session:839fa166: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 17:21] AMPLIFIER_MATCH session:ab0674a8: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 17:24] READ_GATE session:a553415d path:agents/plan-orchestrator.md slugs:cascade-scope-contraction,ux-progress-visibility dur:0ms
+[2026-04-22 00:22] EXTRACT session:a553415d: entities/agent-contract-testing.md updated
+[2026-04-21 17:24] READ_GATE session:a553415d path:docs/agent-architecture.md slugs:agent-contract-testing,cascade-scope-contraction,implementer-lint-loop,planner-design-backlog dur:0ms
+[2026-04-21 17:25] READ_GATE session:a553415d path:test/agent-contract-static.test.js slugs:agent-contract-testing,agent-prompt-construction,agent-structural-testing,implementer-lint-directive,planner-design-backlog...+1 dur:0ms
+[2026-04-21 17:25] READ_GATE session:a553415d path:agents/plan-orchestrator.md slugs:cascade-scope-contraction,ux-progress-visibility dur:0ms
+[2026-04-21 17:26] SESSION_START session:52391bd4: opened in c-thru
+[2026-04-21 17:26] SESSION_START session:1fb5b657: opened in c-thru
+[2026-04-21 17:26] AMPLIFIER_MATCH session:52391bd4: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 17:26] AMPLIFIER_MATCH session:1fb5b657: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 17:26] READ_GATE session:a553415d path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction,planner-design-backlog dur:0ms
+[2026-04-21 17:27] READ_GATE session:a553415d path:agents/plan-orchestrator.md slugs:cascade-scope-contraction,planner-design-backlog,ux-progress-visibility dur:0ms
+[2026-04-21 17:29] SESSION_START session:31b3333e: opened in c-thru
+[2026-04-22 00:27] EXTRACT session:a553415d: entities/plan-discovery-optional.md (updated — ask-human-vs-auto-detect design principle for migration/CI signals)
+[2026-04-21 17:29] AMPLIFIER_MATCH session:31b3333e: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 17:29] READ_GATE session:a553415d path:agents/plan-orchestrator.md slugs:cascade-scope-contraction,planner-design-backlog,ux-progress-visibility dur:0ms
+[2026-04-21 17:30] READ_GATE session:a553415d path:agents/plan-orchestrator.md slugs:cascade-scope-contraction,planner-design-backlog,ux-progress-visibility dur:0ms
+[2026-04-21 17:30] READ_GATE session:a553415d path:skills/c-thru-plan/SKILL.md slugs:cascade-scope-contraction,planner-design-backlog dur:0ms
+[2026-04-21 17:30] READ_GATE session:a553415d path:docs/agent-architecture.md slugs:agent-contract-testing,cascade-scope-contraction,implementer-lint-loop,planner-design-backlog dur:0ms
+[2026-04-21 17:32] SESSION_START session:a553415d: opened in c-thru
+[2026-04-21 17:32] SESSION_START session:48b96f1e: opened in c-thru
+[2026-04-21 17:32] AMPLIFIER_MATCH session:a553415d: matched=review-fix-intent-alignment prompt="/review-fix"
+[2026-04-21 17:32] PERIODIC session:a553415d: probabilistic trigger fired (mod=17)
+[2026-04-22 00:29] EXTRACT session:a553415d: entities/orchestrator-self-questions.md (created), entities/plan-discovery-optional.md (correction: Stage 0 user-prompt approach reversed, self-questions pattern), entities/wave-md-manifest.md (ci_risk frontmatter field)
+[2026-04-21 17:32] AMPLIFIER_MATCH session:48b96f1e: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-22 00:35] EXTRACT session:a553415d: no new entities — all 5 entities (orchestrator-self-questions, planner-design-backlog, wave-md-manifest, agent-contract-testing, plan-discovery-optional) already recorded from prior extraction runs; idempotency check passed
+[2026-04-21 17:37] AMPLIFIER_MATCH session:a553415d: matched=review-fix-intent-alignment prompt="/review-fix"
+[2026-04-21 17:37] SESSION_START session:49162ba9: opened in c-thru
+[2026-04-21 17:37] SESSION_START session:10af2ef8: opened in c-thru
+[2026-04-21 17:37] AMPLIFIER_MATCH session:49162ba9: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-21 17:37] AMPLIFIER_MATCH session:10af2ef8: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-22 00:40] EXTRACT session:a553415d: entities/orchestrator-self-questions.md (added post-ship simplifications bullet — persisted_state rubric removal, ci_risk trigger generalization; missed by prior extractions)
+[2026-04-21 17:42] EXTRACT session:a553415d: idempotency check — all 5 entities already recorded by prior extraction runs; no new pages created or updated
