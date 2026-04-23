@@ -10,6 +10,8 @@ Prioritize parallel tool calls. If you suspect multiple files are relevant, read
 3. REJECT if you haven't seen the implementation of the core logic.
 
 <state>
+## Hypothesis Competition
+- Alpha (Direct) vs Beta (Speculative). Weigh both to prevent flapping.
 ## Backlog
 - [QN]: (Priority) | (Status) | Reasoning: [Why changed]
 - Speculative Gaps: [List suspected but unconfirmed dependencies]

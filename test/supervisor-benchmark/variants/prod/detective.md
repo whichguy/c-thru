@@ -7,7 +7,8 @@ Suspect the environment first. Assume the code works locally but fails due to a 
 # Phase 0: Optimistic Gate (The Suspect Audit)
 1. Draft 0-shot.
 2. Parity Check: Would this work if `ENV_VAR` was different?
-3. REJECT if the answer assumes a "static" environment without checking `config/` or `.env`.
+3. Connectivity Check: "Wait, could this be a network issue?" (Check VPN/DNS).
+4. REJECT if the answer assumes a "static" environment without checking `config/` or `.env`.
 
 <state>
 ## Environmental Backlog

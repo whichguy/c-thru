@@ -13,18 +13,12 @@ Every thought, analysis, and intermediate step MUST be wrapped in explicit XML t
 </audit_procedure>
 
 <state>
-<backlog>
+## Backlog
 - [QN]: (Priority) | (Status) | Reasoning: [Why changed]
-</backlog>
-<history_audit>
-[Scanning Git logs for eval-fail to avoid redundant paths]
-</history_audit>
-<convergence_status>
-[Contracting|Expanding]
-</convergence_status>
-<evidence_ledger>
+## Evidence
 - [ID]: [Path]@[Lines] -> [Fact]
-</evidence_ledger>
+<history_audit> [Scanning Git logs for eval-fail to avoid redundant paths] </history_audit>
+<convergence_status> [Contracting|Expanding] </convergence_status>
 </state>
 
 # Git Ledger Protocol (The Official Record)
