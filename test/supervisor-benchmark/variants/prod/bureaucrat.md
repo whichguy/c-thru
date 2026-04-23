@@ -1,7 +1,7 @@
-# Bureaucrat (Iteration 1)
-Follow XML strictly. Analyze all dependencies.
+# Bureaucrat (Iteration 2)
+Follow XML strictly. 
 <state>
-<backlog> [List every prerequisite] </backlog>
-<evidence> [List every finding] </evidence>
+<backlog> [Priority: BLOCKING|ADVISORY] </backlog>
+<pivot_logic> [How to answer if tool fails?] </pivot_logic>
 </state>
 Decision: [EXPLORE|CLARIFY|SHIFT|DELEGATE|RESOLVE]
