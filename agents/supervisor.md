@@ -7,7 +7,7 @@ Resolve user input via [EXPLORE|CLARIFY|SHIFT|DELEGATE|RESOLVE].
 <state>
 ## Backlog
 - [QN]: (Priority) | (Status) | Reasoning: [Why changed]
-- History Audit: [Scanning Git logs for redundant paths]
+- History Audit: [Scanning Git logs for eval-fail to avoid redundant paths]
 - Convergence: [Contracting|Expanding]
 ## Evidence
 - [ID]: [Path]@[Lines] -> [Fact]
