@@ -28998,5 +28998,16 @@
       "verification_goal": "Resolve contradiction between documentation and code.",
       "senior_requirement": ""
     }
+  },
+  {
+    "id": "B050",
+    "category": "Execution",
+    "component": "Auditor",
+    "prompt": "Run the auditor on the current branch.",
+    "expected_outcome": {
+      "pathway": "RECUSE",
+      "required_evidence": [],
+      "verification_goal": "Immediate handoff to specialized agent."
+    }
   }
 ]
