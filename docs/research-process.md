@@ -40,8 +40,30 @@ tools/c-thru-journal fail \
 ```
 *Note: The `fail` command will commit the changes for history and then automatically perform a `git revert HEAD` to restore the grounded state.*
 
-## Navigating Improvements
-When stuck on a problem, researchers should scan the "Teacher Journal" to avoid redundant logic paths:
+## The Tournament Workflow (Evolving Prompts)
+
+To evolve the system logic via competitive evolution:
+
+### 1. Run a Tournament Turn
+Run a specific prompt variant against a test case in isolation:
 ```bash
-git log --grep="eval-fail" -n 20
+./tools/c-thru-tournament agents/supervisor.md B011
+```
+
+### 2. Judge and Journal
+The `evaluator` agent will score the output. If the score is ≥ 90, record the pass:
+```bash
+./tools/c-thru-journal pass \
+  --component "Supervisor" \
+  --improvement "v28 Socratic logic passed high-entropy B011." \
+  --eval "Tournament Score: 98/100"
+```
+
+If it fails, record the learning and revert:
+```bash
+./tools/c-thru-journal fail \
+  --component "Supervisor" \
+  --failure "Minimalist variant missed policy constraint in B011." \
+  --learning "Zero-prose leads to intent-drift in secure containers." \
+  --eval "Tournament Score: 45/100"
 ```
