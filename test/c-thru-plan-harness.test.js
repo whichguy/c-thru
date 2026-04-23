@@ -790,19 +790,19 @@ console.log('\n13. inject-contract — prepend and idempotency');
 
   const contractFile = path.join(tmp, 'worker-contract.md');
   fs.writeFileSync(contractFile, '## Shared contract\nRubric goes here.\n');
-  fs.writeFileSync(path.join(digestsD, 'implementer-item1.md'), '# Digest\nTask details.\n');
+  fs.writeFileSync(path.join(digestsD, 'implementer-item1.md'), '---\nagent: implementer\n---\n# Digest\nTask details.\n');
 
   runHarness(['inject-contract', '--contract', contractFile, '--digests-dir', digestsD]);
 
   const injected = fs.readFileSync(path.join(digestsD, 'implementer-item1.md'), 'utf8');
-  assert(injected.includes('## Worker contract'), 'contract section injected');
+  assert(injected.includes('### REQUIRED RESPONSE TEMPLATE'), 'contract section injected');
   assert(injected.includes('Rubric goes here'), 'contract content present');
-  assert(injected.startsWith('# Digest'), 'original digest content preserved at top');
+  assert(injected.startsWith('---'), 'original digest content preserved at top');
 
   // Idempotency
   runHarness(['inject-contract', '--contract', contractFile, '--digests-dir', digestsD]);
   const afterSecond = fs.readFileSync(path.join(digestsD, 'implementer-item1.md'), 'utf8');
-  const count = (afterSecond.match(/## Worker contract/g) || []).length;
+  const count = (afterSecond.match(/### REQUIRED RESPONSE TEMPLATE/g) || []).length;
   assert(count === 1, 'inject-contract is idempotent (section appears exactly once)');
 }
 

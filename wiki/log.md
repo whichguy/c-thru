@@ -50679,3 +50679,18 @@ claude-router"
 [2026-04-21 17:37] AMPLIFIER_MATCH session:10af2ef8: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
 [2026-04-22 00:40] EXTRACT session:a553415d: entities/orchestrator-self-questions.md (added post-ship simplifications bullet — persisted_state rubric removal, ci_risk trigger generalization; missed by prior extractions)
 [2026-04-21 17:42] EXTRACT session:a553415d: idempotency check — all 5 entities already recorded by prior extraction runs; no new pages created or updated
+[2026-04-21 17:39] SESSION_START session:7fba8f1f: opened in c-thru
+[2026-04-21 17:39] AMPLIFIER_MATCH session:7fba8f1f: matched=model-map-edit-key-whitelist prompt="You are a wiki curator for a software project. Your job is to read a conversatio"
+[2026-04-22 00:42] EXTRACT session:a553415d: idempotency check — all 5 entities (orchestrator-self-questions, planner-design-backlog, wave-md-manifest, agent-contract-testing, plan-discovery-optional) confirmed recorded by 4 prior extraction passes; no new pages created or updated
+[2026-04-22 00:45] EXTRACT session:a553415d: idempotency check (pass 5) — confirmed no new entities; all session content captured by prior passes; no pages created or updated
+[2026-04-22 00:50] EXTRACT session:a553415d: idempotency check (pass 6) — confirmed no new entities; all session content captured by prior passes; no pages created or updated
+[2026-04-21 20:13] READ_GATE session:c1336181 path:tools/model-map-resolve.js slugs:best-quality-modes,llm-mode-resolution,model-map-resolve-module,model-map-test-pattern dur:0ms
+[2026-04-21 20:15] READ_GATE session:c1336181 path:test/helpers.js slugs:agent-contract-testing,test-suite-hardening dur:0ms
+[2026-04-21 20:15] READ_GATE session:c1336181 path:test/agent-contract-behavioral.test.js slugs:agent-contract-testing,test-suite-hardening dur:0ms
+[2026-04-21 20:41] READ_GATE session:c1336181 path:test/helpers.js slugs:agent-contract-testing,test-suite-hardening dur:0ms
+[2026-04-21 20:43] READ_GATE session:c1336181 path:test/agent-contract-behavioral.test.js slugs:agent-contract-testing,test-suite-hardening dur:0ms
+[2026-04-21 20:43] READ_GATE session:c1336181 path:test/agent-contract-behavioral.test.js slugs:agent-contract-testing,test-suite-hardening dur:0ms
+[2026-04-21 20:43] READ_GATE session:c1336181 path:test/agent-contract-behavioral.test.js slugs:agent-contract-testing,test-suite-hardening dur:0ms
+[2026-04-21 20:43] READ_GATE session:c1336181 path:test/agent-contract-behavioral.test.js slugs:agent-contract-testing,test-suite-hardening dur:0ms
+[2026-04-21 20:43] READ_GATE session:c1336181 path:test/agent-contract-behavioral.test.js slugs:agent-contract-testing,test-suite-hardening dur:0ms
+[2026-04-21 20:43] READ_GATE session:c1336181 path:test/agent-contract-behavioral.test.js slugs:agent-contract-testing,test-suite-hardening dur:0ms

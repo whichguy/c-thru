@@ -1445,6 +1445,63 @@ Write only to \`${testJs}\`.`;
       }
     },
   },
+
+  // 23. implementer: ambiguous task -> RECUSE
+  {
+    name: 'implementer',
+    expectedCapability: 'deep-coder',
+    maxTokens: 4000,
+    judgeQuery: "(a) STATUS=RECUSE; (b) RECUSAL_REASON present; (c) SUMMARY present",
+    buildMessage(tmpDir) {
+      const taskBody = `## Mission context
+Behavioral test. Ambiguous task that should trigger recusal.
+
+## Your task
+Refactor the entire project to follow "better patterns" but do not specify which patterns or which files.
+
+Success criteria:
+- [ ] Project is better
+`;
+      return buildWorkerDigest(tmpDir, 'implementer', 'item-recuse-001', [], taskBody);
+    },
+    validate(name, block) {
+      validateBase(name, block);
+      if (block.STATUS !== 'RECUSE') {
+        adv(`${name}: expected RECUSE for highly ambiguous task, got ${block.STATUS}`);
+      } else {
+        ok(`${name}: STATUS=RECUSE (correctly recused on ambiguity)`);
+        if (!block.RECUSAL_REASON) fail(`${name}: RECUSAL_REASON absent`);
+      }
+    },
+  },
+
+  // 24. test-writer: missing implementation -> RECUSE
+  {
+    name: 'test-writer',
+    expectedCapability: 'code-analyst',
+    maxTokens: 4000,
+    judgeQuery: "(a) STATUS=RECUSE; (b) RECUSAL_REASON mentions missing file; (c) SUMMARY present",
+    buildMessage(tmpDir) {
+      const taskBody = `## Mission context
+Behavioral test. Missing implementation file.
+
+## Your task
+Write tests for \`src/non-existent.js\`.
+
+Success criteria:
+- [ ] Tests written for non-existent file
+`;
+      return buildWorkerDigest(tmpDir, 'test-writer', 'item-recuse-002', [], taskBody);
+    },
+    validate(name, block) {
+      validateBase(name, block);
+      if (block.STATUS !== 'RECUSE') {
+        adv(`${name}: expected RECUSE for missing file, got ${block.STATUS}`);
+      } else {
+        ok(`${name}: STATUS=RECUSE (correctly recused on missing file)`);
+      }
+    },
+  },
 ];
 
 // ── Main ──────────────────────────────────────────────────────────────────────

@@ -55,3 +55,4 @@ verify the install worked without running a separate command.
 The Node version warning is intentional on first install but noisy on idempotent re-runs where
 the user already knows about the version. No action needed unless it becomes a pain point —
 noting for awareness.
+- [ ] Refactor `tools/c-thru` and related scripts to use more professional, standardized messaging (consistent prefixes, clearer status updates).

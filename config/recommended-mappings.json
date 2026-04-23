@@ -2,15 +2,39 @@
   "schema_version": 1,
   "updated_at": "2026-04-20",
   "recommendations": {
-    "judge":          { "48gb": "claude-opus-4-6",     "64gb": "claude-opus-4-6",    "128gb": "claude-opus-4-6"    },
-    "orchestrator":   { "48gb": "qwen3.5:9b",          "64gb": "qwen3.6:35b",        "128gb": "qwen3.6:35b"        },
-    "local-planner":  { "48gb": "qwen3.5:27b",         "64gb": "qwen3.5:27b",        "128gb": "qwen3.5:27b"        },
-    "deep-coder":     { "48gb": "devstral-small:2",    "64gb": "devstral-small:2",   "128gb": "devstral-small:2"   },
-    "code-analyst":   { "48gb": "qwen3.5:9b",          "64gb": "devstral-small:2",   "128gb": "devstral-small:2"   },
-    "pattern-coder":  { "48gb": "qwen3.5:9b",          "64gb": "qwen3.6:35b",        "128gb": "qwen3-coder:30b"    }
+    "judge": {
+      "48gb": "claude-opus-4-6",
+      "64gb": "claude-opus-4-6",
+      "128gb": "claude-opus-4-6"
+    },
+    "orchestrator": {
+      "48gb": "qwen3.6:35b-a3b-coding-nvfp4",
+      "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+      "128gb": "qwen3.6:35b"
+    },
+    "local-planner": {
+      "48gb": "qwen3.6:35b-a3b-coding-nvfp4",
+      "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+      "128gb": "qwen3.6:35b"
+    },
+    "deep-coder": {
+      "48gb": "devstral-small:2",
+      "64gb": "devstral-small:2",
+      "128gb": "devstral-small:2"
+    },
+    "code-analyst": {
+      "48gb": "qwen3.6:27b-coding-nvfp4",
+      "64gb": "devstral-small:2",
+      "128gb": "devstral-small:2"
+    },
+    "pattern-coder": {
+      "48gb": "qwen3.6:27b-coding-nvfp4",
+      "64gb": "qwen3.6:27b-coding-nvfp4",
+      "128gb": "qwen3-coder:30b"
+    }
   },
   "agent_to_capability_defaults": {
-    "planner":     "judge",
+    "planner": "judge",
     "review-plan": "judge",
     "implementer": "deep-coder"
   }

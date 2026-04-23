@@ -646,7 +646,7 @@ function cmdInjectContract(cliArgs) {
   if (!fs.existsSync(digestsDir))   { die(`digests directory not found: ${digestsDir}`); }
 
   const contractContent = fs.readFileSync(contractPath, 'utf8');
-  const separator = '\n\n---\n\n## Worker contract\n\n';
+  const separator = '\n\n---\n\n';
 
   const digests = fs.readdirSync(digestsDir)
     .filter(f => f.endsWith('.md'))
@@ -656,9 +656,55 @@ function cmdInjectContract(cliArgs) {
   for (const file of digests) {
     const digestPath    = path.join(digestsDir, file);
     const digestContent = fs.readFileSync(digestPath, 'utf8');
-    // Idempotent: skip if already injected (guard against double-run on resume)
-    if (digestContent.includes('## Worker contract')) continue;
-    fs.writeFileSync(digestPath, digestContent + separator + contractContent, 'utf8');
+    
+    // Idempotent: skip if already injected
+    if (digestContent.includes('### REQUIRED RESPONSE TEMPLATE')) continue;
+
+    // Extract agent type from YAML frontmatter
+    const agentMatch = digestContent.match(/^agent:\s*(\S+)/m);
+    const agent = agentMatch ? agentMatch[1] : 'implementer';
+
+    let template = '\n\n### REQUIRED RESPONSE TEMPLATE\n\n' +
+                   '## Work completed\n' +
+                   '[Briefly describe what you did here. If you discovered new patterns or invariants, add a `### Learnings` subsection below.]\n\n' +
+                   '## Findings (jsonl)\n' +
+                   '```jsonl\n' +
+                   '{"class":"improvement","text":"[Required: what would make the next iteration easier?]","detail":"[optional prose]"}\n' +
+                   '[Add other trivial|contextual|plan-material|crisis findings here]\n' +
+                   '```\n\n' +
+                   '## Output INDEX\n' +
+                   '[List changed sections, e.g., src/main.js: 10-50]\n\n' +
+                   'STATUS: [COMPLETE|PARTIAL|ERROR|RECUSE]\n';
+
+    if (agent === 'discovery-advisor' || agent === 'explorer') {
+      template += 'ANSWERED: [yes|no]\n' +
+                  'GAPS: [number of remaining unknown areas]\n';
+    } else if (agent === 'uplift-decider') {
+      template = '\n\n### REQUIRED RESPONSE TEMPLATE\n\n' +
+                 'STATUS: COMPLETE\n' +
+                 'VERDICT: [accept|uplift|restart]\n' +
+                 'CLOUD_CONFIDENCE: [high|medium|low]\n' +
+                 'RATIONALE: [One sentence explaining why the local output is accepted or why escalation is needed]\n' +
+                 'SUMMARY: [≤20 words summary]\n';
+    } else {
+      // Standard worker (implementer, test-writer, scaffolder, etc)
+      template += 'CONFIDENCE: [high|medium|low]\n' +
+                  'UNCERTAINTY_REASONS: [List rubric bullets if medium/low; omit if high]\n' +
+                  'WROTE: [comma-separated paths from target_resources]\n' +
+                  'INDEX: [output.INDEX.md path or none]\n' +
+                  'FINDINGS: [findings.jsonl path or none]\n' +
+                  'FINDING_CATS: {crisis:0,plan-material:0,contextual:0,trivial:0,augmentation:0,improvement:1}\n' +
+                  'LINT_ITERATIONS: [number]\n';
+    }
+
+    if (agent !== 'uplift-decider') {
+      template += 'SUMMARY: [≤20 words summary]\n\n' +
+                  '**Note for RECUSE:** If you recuse, use `STATUS: RECUSE` and provide `RECUSAL_REASON: [reason]` and `ATTEMPTED: [yes|no]`. Omit WROTE, INDEX, and FINDINGS.\n';
+    }
+
+    const reminder = '\n\nIMPORTANT: You MUST complete the template above. Replace all `[...]` placeholders with actual content. Do not leave the brackets in your final response.';
+    
+    fs.writeFileSync(digestPath, digestContent + separator + contractContent + template + reminder, 'utf8');
     injectedCount++;
   }
 
@@ -832,3 +878,4 @@ switch (subcmd) {
     process.stdout.write(USAGE);
     process.exit(subcmd ? 1 : 0);
 }
+

@@ -26,10 +26,11 @@ function assert(cond, msg) {
 
 const HELPERS = path.join(__dirname, '..', 'tools', 'c-thru-config-helpers.js');
 
-function run(args, env = {}) {
+function run(args, env = {}, opts = {}) {
   const result = spawnSync(process.execPath, [HELPERS, ...args], {
     encoding: 'utf8',
     env: { ...process.env, ...env },
+    cwd: opts.cwd,
   });
   return { code: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
 }
@@ -84,7 +85,8 @@ function resolveProfileModel(entry, mode) {
   if (mode === 'connected') return entry.connected_model || null;
   return entry.disconnect_model || entry.connected_model || null;
 }
-module.exports = { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, LLM_MODE_ENUM };
+function resolveTerminalTarget(_config, _label) { return null; }
+module.exports = { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, LLM_MODE_ENUM };
 `;
   fs.writeFileSync(path.join(toolsDir, 'model-map-resolve.js'), resolveStub, 'utf8');
 
@@ -150,6 +152,34 @@ console.log('\n1. resolve — capability/agent resolution');
   const dir = tmpClaudeDir();
   const r = run(['resolve', 'nonexistent-cap'], { CLAUDE_PROFILE_DIR: dir });
   assert(r.code === 2, 'resolve unknown capability exits 2');
+}
+
+{
+  // Project-local selected graph wins over profile graph for resolve
+  const dir = tmpClaudeDir();
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfg-project-'));
+  const projectClaude = path.join(projectDir, '.claude');
+  fs.mkdirSync(projectClaude, { recursive: true });
+  const projectCfg = {
+    llm_mode: 'connected',
+    llm_active_profile: '16gb',
+    llm_profiles: {
+      '16gb': {
+        'deep-coder': {
+          connected_model: 'project-picked-model',
+          disconnect_model: 'project-picked-model',
+        },
+      },
+    },
+    agent_to_capability: {},
+    backends: {},
+    model_routes: {},
+  };
+  fs.writeFileSync(path.join(projectClaude, 'model-map.json'), JSON.stringify(projectCfg), 'utf8');
+  const r = run(['resolve', 'deep-coder'], { CLAUDE_PROFILE_DIR: dir }, { cwd: projectDir });
+  assert(r.code === 0, 'resolve with project-local model-map exits 0');
+  assert(r.stdout.trim() === 'project-picked-model', 'project-local selected graph wins for resolve');
+  try { fs.rmSync(projectDir, { recursive: true, force: true }); } catch {}
 }
 
 // ── 2. mode-read ──────────────────────────────────────────────────────────────

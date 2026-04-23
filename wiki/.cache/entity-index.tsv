@@ -30,6 +30,7 @@ moe-speed-capability-dual	moe speed capability dual
 narrow-threat-model	narrow threat model
 ollama-endpoint-divergence	ollama endpoint divergence
 ollama-http-api-migration	ollama http api migration
+orchestrator-self-questions	orchestrator self questions
 plan-discovery-optional	plan discovery optional
 planner-default-integration	planner default integration
 planner-design-backlog	planner design backlog
@@ -50,3 +51,4 @@ sse-buffer-sizing	sse buffer sizing
 test-suite-hardening	test suite hardening
 uplift-cascade-pattern	uplift cascade pattern
 ux-progress-visibility	ux progress visibility
+wave-md-manifest	wave md manifest

@@ -73,7 +73,7 @@ test/
 
 ```
 c-thru (bash)
-  ├─ reads 3-tier model-map (project/.claude/ → ~/.claude/ → config/model-map.json)
+  ├─ selects active model-map (override path → project/.claude/ → ~/.claude/model-map.json)
   ├─ resolves route → backend → env vars
   ├─ for Ollama backends: spawns/reuses claude-proxy (HTTP server on a free port)
   │    claude-proxy translates Anthropic Messages API → Ollama/OpenRouter/LiteLLM
@@ -88,11 +88,13 @@ Top-level keys: `backends`, `routes`, `models` (models is sparse — most resolu
 - `model_overrides` (optional): flat `{"concrete-model": "replacement"}` map applied before route/alias resolution. Example: `{"gemma4:26b": "gemma4:31b"}` redirects all uses of the 26b model. Unconditional — covers primary requests and fallback candidates.
 - Model resolution order: `--route` flag → `routes.default` → `--model` flag → Ollama passthrough.
 
-### 3-tier model-map lookup (model-map-layered.js)
+### model-map selection and layering
 
-1. `$PWD/.claude/model-map.json` — per-project overrides
-2. `~/.claude/model-map.json` — user profile (seeded by `install.sh`)
-3. `config/model-map.json` — shipped defaults
+1. `CLAUDE_MODEL_MAP_PATH` — explicit override path
+2. `$PWD/.claude/model-map.json` — selected project graph
+3. `~/.claude/model-map.json` — selected profile graph
+
+Only the profile graph is layered: `model-map.system.json` + `model-map.overrides.json` are synced into `~/.claude/model-map.json`. Project-local `model-map.json` is selected by precedence and traversed as its own DAG; it is not merged on top of the profile graph.
 
 ### llm-capabilities-mcp.js
 

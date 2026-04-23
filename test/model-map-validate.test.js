@@ -21,9 +21,9 @@ function assert(condition, message) {
   }
 }
 
-function validate(config) {
+function validate(config, options) {
   const errors = [];
-  validateConfig(config, errors);
+  validateConfig(config, errors, options);
   return errors;
 }
 
@@ -217,6 +217,93 @@ console.log('\n15. validateRecommendedMappings unknown capability');
   const errs = [];
   validateRecommendedMappings(rec, errs);
   assert(errs.length > 0, 'unknown capability → error');
+}
+
+// ── 16. Invalid on_failure value ────────────────────────────────────────────
+console.log('\n16. Invalid on_failure value');
+{
+  const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+  cfg.llm_profiles['16gb'].judge.on_failure = 'hard-fial';
+  const errs = validate(cfg);
+  assert(errs.length > 0, 'bad on_failure → error');
+  assert(errs.some(e => e.includes('on_failure')), `error mentions on_failure (got: ${errs[0]})`);
+}
+
+// ── 17. model_routes unknown backend id ─────────────────────────────────────
+console.log('\n17. model_routes unknown backend id');
+{
+  const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+  cfg.model_routes['test-model'] = 'ghost';
+  const errs = validate(cfg);
+  assert(errs.length > 0, 'unknown model_routes backend → error');
+  assert(errs.some(e => e.includes('ghost')), `error mentions missing backend id (got: ${errs[0]})`);
+}
+
+// ── 18. targets.default required ────────────────────────────────────────────
+console.log('\n18. targets.default required');
+{
+  const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+  cfg.targets = {
+    'named-target': { backend: 'local', model: 'test-model' },
+  };
+  const errs = validate(cfg);
+  assert(errs.length > 0, 'missing targets.default → error');
+  assert(errs.some(e => e.includes('targets.default')), `error mentions targets.default (got: ${errs[0]})`);
+}
+
+// ── 19. route and target key overlap ────────────────────────────────────────
+console.log('\n19. route and target key overlap');
+{
+  const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+  cfg.routes = { 'shared-id': 'test-model' };
+  cfg.targets = {
+    default: { backend: 'local' },
+    'shared-id': { backend: 'local', model: 'test-model' },
+  };
+  const errs = validate(cfg);
+  assert(errs.length > 0, 'route/target overlap → error');
+  assert(errs.some(e => e.includes('conflicts')), `error mentions conflict (got: ${errs[0]})`);
+}
+
+// ── 20. target JS wrapper rejected when disabled ────────────────────────────
+console.log('\n20. target JS wrapper rejected when disabled');
+{
+  const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+  cfg.targets = {
+    default: { backend: 'local' },
+    'named-target': {
+      backend: 'local',
+      model: 'test-model',
+      request_defaults: {
+        options: {
+          num_predict: { '$js': '(ctx) => 42' },
+        },
+      },
+    },
+  };
+  const errs = validate(cfg, { jsEnabled: false, trustedJs: true });
+  assert(errs.length > 0, 'disabled JS wrapper → error');
+  assert(errs.some(e => e.includes('$js')), `error mentions $js (got: ${errs[0]})`);
+}
+
+// ── 21. target JS wrapper allowed when enabled + trusted ───────────────────
+console.log('\n21. target JS wrapper allowed when enabled + trusted');
+{
+  const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+  cfg.targets = {
+    default: { backend: 'local' },
+    'named-target': {
+      backend: 'local',
+      model: 'test-model',
+      request_defaults: {
+        options: {
+          num_predict: { '$js': '(ctx) => 42' },
+        },
+      },
+    },
+  };
+  const errs = validate(cfg, { jsEnabled: true, trustedJs: true });
+  assert(errs.length === 0, 'enabled trusted JS wrapper → no error');
 }
 
 // ── Summary ────────────────────────────────────────────────────────────────

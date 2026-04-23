@@ -1,10 +1,12 @@
 # model-map.json
 
-The router reads a layered stack of `model-map.json` files and merges them:
+The router/proxy selects one active `model-map.json` graph by precedence:
 
-1. `$PWD/model-map.json` — per-project override (optional).
-2. `$HOME/.claude/model-map.json` — user profile (seeded by `install.sh`).
-3. `<repo>/config/model-map.json` — shipped defaults.
+1. `CLAUDE_MODEL_MAP_PATH` — explicit override path.
+2. `$PWD/.claude/model-map.json` — project-local selected graph.
+3. `$HOME/.claude/model-map.json` — profile selected graph.
+
+Only the profile graph is layered. `install.sh` seeds `model-map.system.json`, user changes live in `model-map.overrides.json`, and those are synced into the effective profile `model-map.json`. A project-local `model-map.json` is selected as-is and traversed as its own DAG; it is not merged with the profile graph.
 
 ## Shape
 
@@ -17,6 +19,7 @@ The router reads a layered stack of `model-map.json` files and merges them:
   "llm_profiles":        { "<hw-tier>": { "<capability>": { "connected_model": "...", "disconnect_model": "...", "on_failure": "cascade|hard_fail", "modes": { "<llm_mode>": "<model>" } } } },
   "agent_to_capability": { "<agent-name>": "<capability-alias>" },
   "model_overrides":     { "<concrete-model>": "<replacement>" },
+  "targets":             { "<terminal-label>": { "backend": "<backend-id>", "model": "<provider-model>", "request_defaults": { "...": "..." } } },
   "models":              [ { "name": "<model-name>", "equivalents": ["<fallback-model>"] } ]
 }
 ```
@@ -28,6 +31,7 @@ The router reads a layered stack of `model-map.json` files and merges them:
 - **llm_profiles** — per-hw-tier (`16gb`…`128gb`), per-capability-alias model slots. Each entry selects a concrete model based on `llm_mode`. Optional `modes` sub-map overrides per mode. See `docs/hardware-profile-matrix.md`.
 - **agent_to_capability** — 2-hop resolution: agent-name → capability-alias → `llm_profiles[hw][alias]`. Agents declare `model: <agent-name>`; the proxy resolves the concrete model at request time.
 - **model_overrides** — unconditional tag rename applied before route graph traversal. Covers both primary requests and fallback candidates.
+- **targets** — final proxy-only terminal mapping. If a resolved terminal label matches a target id, the proxy uses that target’s backend/model/request defaults; otherwise the proxy uses `targets.default` as the pass-through backend for the terminal label.
 - **models** — sparse array; each entry has `name` and optional `equivalents[]` for per-request fallback cascade on failure.
 
-Validate with `model-map-validate <path>`. See `tools/model-map-validate.js` for the full schema and `tools/model-map-layered.js` for the merge order.
+Validate with `model-map-validate <path>`. See `tools/model-map-validate.js` for the full schema and `tools/model-map-layered.js` for the profile-layer sync behavior.

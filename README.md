@@ -419,21 +419,25 @@ c-thru --list                      # show resolved profile + all routes
 
 ## Configuration
 
-### model-map.json — three-tier lookup
+### model-map.json — config selection precedence
 
 ```
-$PWD/.claude/model-map.json     ← per-project overrides
-~/.claude/model-map.json        ← user profile (seeded by install.sh, never clobbered)
-config/model-map.json           ← shipped defaults
+$CLAUDE_MODEL_MAP_PATH         ← explicit override path
+$PWD/.claude/model-map.json    ← selected project graph
+~/.claude/model-map.json       ← selected profile graph (seeded by install.sh, never clobbered)
+config/model-map.json          ← shipped defaults, synced into the profile graph via model-map.system.json + model-map.overrides.json
 ```
 
-Top-level keys: `backends`, `routes`, `llm_profiles`, `agent_to_capability`, `model_overrides`.
+The router/proxy traverses the selected `model-map.json` as the full DAG for that launch. Project-local configs are selected by precedence; they are not merged on top of the profile graph.
+
+Top-level keys: `backends`, `routes`, `llm_profiles`, `agent_to_capability`, `model_overrides`, `targets`.
 
 - **`backends`** — connection metadata (url, auth, kind). `kind: "ollama"` or `kind: "anthropic"`.
-- **`routes`** — named presets mapping to `{model, backend}`. `routes.default` used when no flag passed.
+- **`routes`** — named string→string graph edges. `routes.default` used when no flag passed.
 - **`llm_profiles`** — per-hardware-tier, per-capability-alias model slots (`connected_model` / `disconnect_model`).
 - **`agent_to_capability`** — maps agent names to capability aliases. One line to rebind an agent.
 - **`model_overrides`** — unconditional tag rename before route resolution. Example: `{"gemma4:26b": "gemma4:31b"}`.
+- **`targets`** — optional final mapping layer from terminal label → backend/model/request defaults. Unmatched terminal labels continue through `targets.default` in the proxy only.
 
 See [`docs/model-map.md`](docs/model-map.md) for full schema.
 

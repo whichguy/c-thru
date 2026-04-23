@@ -1,0 +1,74 @@
+#!/bin/bash
+# c-thru-journal: A tool for the Teacher-Researcher Journal workflow.
+# It codifies the engineering experiment lifecycle using Git as an immutable ledger.
+
+COMMAND=$1
+shift
+
+function show_help() {
+  echo "Usage: c-thru-journal [pass|fail] [options]"
+  echo ""
+  echo "Commands:"
+  echo "  pass    Record a successful experiment and commit changes."
+  echo "  fail    Record a failed experiment, commit for the record, then revert."
+  echo ""
+  echo "Options for 'pass':"
+  echo "  --component <name>    The system component modified."
+  echo "  --improvement <text>  What specifically got better."
+  echo "  --logic <text>        Senior-engineer reasoning for merging."
+  echo "  --eval <text>         The command or metric used for verification."
+  echo ""
+  echo "Options for 'fail':"
+  echo "  --component <name>    The system component modified."
+  echo "  --failure <text>      What went wrong or why it was declined."
+  echo "  --learning <text>     The negative fact discovered/what to avoid."
+  echo "  --eval <text>         The command or metric that triggered the failure."
+  echo ""
+}
+
+if [[ -z "$COMMAND" ]]; then
+  show_help
+  exit 1
+fi
+
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+  case $1 in
+    --component) COMPONENT="$2"; shift ;;
+    --improvement) IMPROVEMENT="$2"; shift ;;
+    --logic) LOGIC="$2"; shift ;;
+    --eval) EVAL="$2"; shift ;;
+    --failure) FAILURE="$2"; shift ;;
+    --learning) LEARNING="$2"; shift ;;
+    *) echo "Unknown parameter: $1"; exit 1 ;;
+  esac
+  shift
+done
+
+if [[ "$COMMAND" == "pass" ]]; then
+  COMMIT_MSG="eval-pass: ${COMPONENT} refinement
+
+IMPROVEMENT: ${IMPROVEMENT}
+LOGIC: ${LOGIC}
+EVAL: ${EVAL}"
+
+  git add .
+  git commit -m "$COMMIT_MSG"
+  echo "Experiment recorded: eval-pass committed."
+
+elif [[ "$COMMAND" == "fail" ]]; then
+  COMMIT_MSG="eval-fail: ${COMPONENT} attempt
+
+FAILURE: ${FAILURE}
+LEARNING: ${LEARNING}
+EVAL: ${EVAL}"
+
+  git add .
+  git commit -m "$COMMIT_MSG"
+  git revert HEAD --no-edit
+  echo "Experiment recorded: eval-fail committed and state reverted."
+
+else
+  show_help
+  exit 1
+fi

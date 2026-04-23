@@ -7,47 +7,27 @@ Single source of truth for drift-prone boilerplate. See: docs/agent-architecture
 
 ## Response structure
 
-**Do NOT write files directly.** The orchestrator parses your response into three artifacts:
+**Do NOT write files directly.** You must follow the exact structure provided in the `### REQUIRED RESPONSE TEMPLATE` at the very end of this document.
 
-1. `## Work completed` section (with `### Learnings` subsection) → wave outputs directory
-   ```markdown
-   ## Work completed
-   <what was done — file/change/integration point>
+1.  **Copy the template** from the end of this file.
+2.  **Fill in the placeholders** `[...]` with your actual work, data, and findings.
+3.  **Return ONLY the completed template** (and your preceding logic/reasoning) as your response. Do NOT echo the instructions, the rubric, or the rest of this prompt.
 
-   ### Learnings
-   <patterns, invariants, or constraints discovered>
-   ```
-
-2. `## Findings (jsonl)` fenced code block → parsed line-by-line into wave findings directory
-   ```markdown
-   ## Findings (jsonl)
-   ```jsonl
-   {"class":"trivial|contextual|plan-material|crisis|augmentation|improvement","text":"<≤80 char summary>","detail":"<optional longer prose>"}
-   ```
-   ```
-   `detail` is optional — omit when `text` is self-contained.
-
-   **Improvement required:** emit at least one `improvement` entry per task. What would make next wave's version of this work easier or higher-quality? If nothing, write `{"class":"improvement","text":"none — task was clean"}`.
-
-3. `## Output INDEX` section → wave outputs directory
-   ```markdown
-   ## Output INDEX
-   <section>: <start>-<end>
-   ```
+Every task MUST include at least one `improvement` finding. What would make the next iteration of this work easier or higher quality?
 
 ---
 
 ## Self-recusal criteria
 
-Apply BEFORE starting work. The fourth signal fires mid-execution.
+Apply BEFORE starting work.
 
 **Recuse if ANY of:**
-- Cannot identify the specific existing pattern to satisfy success criteria
-- Success criteria cannot be verified by available means
-- Two or more valid interpretations exist — choosing wrong one fails verification
-- Attempted this; produced output but cannot establish it is correct (set ATTEMPTED: yes)
+- Cannot identify the specific existing pattern to satisfy success criteria.
+- Success criteria cannot be verified by available means.
+- Two or more valid interpretations exist — choosing wrong one fails verification.
+- You have attempted the work but cannot establish it is correct (set `ATTEMPTED: yes`).
 
-When recusing: do NOT include WROTE, INDEX, FINDINGS, or FINDING_CATS in the STATUS block.
+When recusing, use the `STATUS: RECUSE` format from the template and omit `WROTE`, `INDEX`, `FINDINGS`, and `FINDING_CATS`.
 
 ---
 
@@ -57,4 +37,5 @@ After completing all code edits, run available linters against each modified fil
 
 - `.sh` / `.bash`: `bash -n <file>`; also `shellcheck <file>` if available
 - `.js` / `.mjs` / `.cjs`: `node --check <file>`
-- `.ts` / `.tsx`: `node --check <file>` (per-file tsc is unreliable without tsconfig — use node --check as fallback)
+- `.ts` / `.tsx`: `node --check <file>` (per-file tsc is unreliable without tsconfig)
+- `.json`: `python3 -m json.tool <file> > /dev/null` if available (skip `.jsonc`)

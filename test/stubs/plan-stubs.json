@@ -1,0 +1,72 @@
+[
+  {
+    "match_agent": "discovery-advisor",
+    "response": {
+      "id": "stub-disc-001",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-3-5-sonnet-latest",
+      "content": [
+        {
+          "type": "text",
+          "text": "STATUS: COMPLETE\nGAPS: 0\nWROTE: []\nTEST_FRAMEWORKS: [mocha]\nSUMMARY: Initial discovery complete. Project is a simple Node.js app."
+        }
+      ],
+      "stop_reason": "end_turn",
+      "usage": { "input_tokens": 100, "output_tokens": 50 }
+    }
+  },
+  {
+    "match_agent": "planner",
+    "match_prompt": "Phase 2: Review and Strategy",
+    "response": {
+      "id": "stub-plan-001",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-3-5-sonnet-latest",
+      "content": [
+        {
+          "type": "text",
+          "text": "STATUS: COMPLETE\nCONFIDENCE: 1.0\nSUMMARY: Plan formulated.\n\n## Items\n- [ ] item-1: create main.js\n  agent: scaffolder\n  target_resources: [src/main.js]\n"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "usage": { "input_tokens": 200, "output_tokens": 100 }
+    }
+  },
+  {
+    "match_agent": "scaffolder",
+    "response": {
+      "id": "stub-scaf-001",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-3-5-sonnet-latest",
+      "content": [
+        {
+          "type": "text",
+          "text": "STATUS: COMPLETE\nWROTE: [src/main.js]\nSUMMARY: Scaffolded main.js."
+        }
+      ],
+      "stop_reason": "end_turn",
+      "usage": { "input_tokens": 150, "output_tokens": 75 }
+    }
+  },
+  {
+    "match_agent": "plan-orchestrator",
+    "match_prompt": "Phase 5: Final Review",
+    "response": {
+      "id": "stub-orch-001",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-3-5-sonnet-latest",
+      "content": [
+        {
+          "type": "text",
+          "text": "STATUS: COMPLETE\nCONFIDENCE: 1.0\nSUMMARY: All items executed successfully."
+        }
+      ],
+      "stop_reason": "end_turn",
+      "usage": { "input_tokens": 300, "output_tokens": 50 }
+    }
+  }
+]

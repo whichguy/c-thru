@@ -677,6 +677,26 @@ lookup_model_pattern_value() {
   return 0
 }
 
+resolve_target_backend_for_model() {
+  local model="$1"
+  [[ -f "$CONFIG" ]] || return 1
+  [[ -n "$model" ]] || return 1
+
+  local resolved
+  resolved="$(jq -r --arg m "$model" '
+    (.targets // empty) as $targets |
+    if ($targets | type) != "object" then
+      empty
+    elif ($targets[$m] // empty) != empty then
+      [$targets[$m].backend // "", $targets[$m].model // ""] | @tsv
+    else
+      empty
+    end
+  ' "$CONFIG" 2>/dev/null || true)"
+  [[ -n "$resolved" && "$resolved" != "null" ]] || return 1
+  printf '%s\n' "$resolved"
+}
+
 pick_anthropic_backend_id() {
   [[ ! -f "$CONFIG" ]] && return 0
   jq -r '
@@ -838,7 +858,11 @@ cleanup_router_children() {
     CLAUDE_CHILD_PID=""
   fi
   if [[ -n "${ROUTER_STARTED_PROXY_PID:-}" ]]; then
-    if router_pid_looks_like_proxy "$ROUTER_STARTED_PROXY_PID"; then
+    if [[ "${C_THRU_KEEP_PROXY:-0}" == "1" ]]; then
+      if [[ -n "${CLAUDE_ROUTER_DEBUG:-}" && "$CLAUDE_ROUTER_DEBUG" != "0" ]]; then
+        echo "c-thru: leaving claude-proxy (pid $ROUTER_STARTED_PROXY_PID) running due to C_THRU_KEEP_PROXY=1" >&2
+      fi
+    elif router_pid_looks_like_proxy "$ROUTER_STARTED_PROXY_PID"; then
       kill "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
       wait "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
     fi
@@ -1101,7 +1125,7 @@ ensure_proxy_running() {
     fi
     # Distinguish EEXIST (lock held) from other mkdir failures (EROFS/EACCES
     # etc.), where we'd otherwise silently run with no lock at all.
-    local mkdir_err_file="${TMPDIR:-/tmp}/claude-router-mkdir-err.$$.$RANDOM"
+    local mkdir_err_file="${TMPDIR:-/tmp}/c-thru-mkdir-err.$$.$RANDOM"
     if ! mkdir "$lock_dir" 2>"$mkdir_err_file"; then
       local mkdir_err
       mkdir_err="$(cat "$mkdir_err_file" 2>/dev/null || true)"
@@ -1231,7 +1255,7 @@ ollama_secret_from_backend_json() {
 claude_router_debug_event() {
   local _dl="${CLAUDE_ROUTER_DEBUG:-0}"
   [[ "$_dl" == "0" || "$_dl" == "false" ]] && return 0
-  echo "claude-router debug: $*" >&2
+  echo "c-thru debug: $*" >&2
 }
 
 ollama_prep_state_parent_dir() {
@@ -1380,7 +1404,7 @@ ensure_ollama_cli_available() {
   ollama_prep_state_update "requirements" "ollama_cli" "install_attempt" "installing"
   echo "c-thru: 'ollama' CLI not found — attempting 'brew install ollama' in background..." >&2
   local install_log=""
-  install_log="$(mktemp "${TMPDIR:-/tmp}/claude-router-ollama-install.XXXXXX.log" 2>/dev/null || true)"
+  install_log="$(mktemp "${TMPDIR:-/tmp}/c-thru-ollama-install.XXXXXX.log" 2>/dev/null || true)"
   [[ -n "$install_log" ]] || install_log="/dev/null"
   (
     if brew install ollama >"$install_log" 2>&1; then
@@ -1423,7 +1447,12 @@ resolve_ollama_backend_for_model() {
   [[ -n "$model" ]] || return 1
 
   local backend_id=""
-  backend_id="$(jq -r --arg m "$model" '.model_routes[$m] // empty' "$CONFIG" 2>/dev/null || true)"
+  local target_data=""
+  target_data="$(resolve_target_backend_for_model "$model" || true)"
+  if [[ -n "$target_data" ]]; then
+    backend_id="${target_data%%$'\t'*}"
+  fi
+  [[ -n "$backend_id" ]] || backend_id="$(jq -r --arg m "$model" '.model_routes[$m] // empty' "$CONFIG" 2>/dev/null || true)"
   [[ -n "$backend_id" ]] || backend_id="$(lookup_model_pattern_value "model_routes" "$model")"
   [[ -n "$backend_id" ]] || return 1
 
@@ -1584,6 +1613,20 @@ run_background_ollama_prep_sweep() {
   disown 2>/dev/null || true
 }
 
+ensure_active_tier_ollama_requirements() {
+  [[ "${C_THRU_SKIP_PREPULL:-0}" == "1" ]] && return 0
+  [[ -f "$CONFIG" ]] || return 0
+  command -v ollama >/dev/null 2>&1 && return 0
+  llm_profiles_defined || return 0
+
+  local lines
+  lines="$(collect_active_profile_local_ollama_models)"
+  [[ -n "$lines" ]] || return 0
+
+  # Local models are required but ollama is missing. Warn or install.
+  ensure_ollama_cli_available "startup" || true
+}
+
 ensure_active_tier_prepulled() {
   # Pre-pull all active-tier local Ollama models in the background so the first
   # request after a config change or fresh install does not block on a multi-GB pull.
@@ -1688,7 +1731,7 @@ ollama_cloud_auth_probe() {
   local output=""
   local status=0
   local stderr_file=""
-  stderr_file="$(mktemp -t claude-router-ollama-stderr.XXXXXX 2>/dev/null || echo "/tmp/claude-router-ollama-stderr.$$.$RANDOM")"
+  stderr_file="$(mktemp -t c-thru-ollama-stderr.XXXXXX 2>/dev/null || echo "/tmp/c-thru-ollama-stderr.$$.$RANDOM")"
   : > "$stderr_file"
   chmod 0600 "$stderr_file" 2>/dev/null || true
   # Belt-and-braces: cleanup on any subshell exit (SIGKILL to parent still
@@ -2012,14 +2055,11 @@ ensure_ollama_running() {
     return 0
   fi
 
-  if [[ "$model_loaded" == "1" ]]; then
-    claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host loaded=true"
-    return 0
-  fi
-
   # --- Cached + not loaded + reachable → fire background warm-up ---
   if [[ "$mode" == "sweep" && -n "$capabilities" ]]; then
     echo "c-thru: warming '$model' on $cli_host (background; capabilities: $capabilities)..." >&2
+  elif [[ "$mode" == "active" ]]; then
+    echo "c-thru: warming '$model' on $cli_host..." >&2
   else
     echo "c-thru: warming '$model' on $cli_host (background)..." >&2
   fi
@@ -2029,6 +2069,23 @@ ensure_ollama_running() {
   "${ollama_cli_env[@]}" nohup ollama run "$model" "--options" "num_ctx=65536" </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
   claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host warmed=true"
+
+  # --- If active, loop and inform user until resident ---
+  if [[ "$mode" == "active" && "$model_loaded" == "0" ]]; then
+    local max_wait_iters=40 # 2 minutes total
+    local i=0
+    while (( i < max_wait_iters )); do
+      sleep 3
+      i=$((i + 1))
+      ps_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama ps 2>/dev/null || echo "")
+      if echo "$ps_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
+        echo "c-thru: [$model] ready" >&2
+        return 0
+      fi
+      echo "c-thru: [$model] still warming (waiting for memory residency)..." >&2
+    done
+    echo "c-thru: [$model] warming timeout — proceeding anyway" >&2
+  fi
 }
 
 # Note: config file permissions should be set by installer, not runtime
@@ -2039,7 +2096,7 @@ claude_router_debug_dump() {
   local _dl="${CLAUDE_ROUTER_DEBUG:-0}"
   [[ "$_dl" == "0" || "$_dl" == "false" ]] && return 0
   local mode="$1"
-  echo "claude-router debug ($mode, CLAUDE_ROUTER_DEBUG=$_dl):" >&2
+  echo "c-thru debug ($mode, CLAUDE_ROUTER_DEBUG=$_dl):" >&2
   if [[ "$mode" == "transparent" ]]; then
     echo "  MODEL=<unset; remapping is per-request in claude-proxy>" >&2
   else
@@ -2462,6 +2519,9 @@ if [[ "${1:-}" == "restart" ]]; then
   cmd_restart "$@"; exit $?
 fi
 
+# Check Ollama requirements for the active tier's agent tags before pre-pulling
+ensure_active_tier_ollama_requirements
+
 # Pre-pull active-tier Ollama models in background (stamp-guarded, once per config version).
 ensure_active_tier_prepulled
 
@@ -2534,7 +2594,7 @@ fi
 
 # No explicit/default model: transparent proxy fallback (legacy behavior) + real claude binary.
 if [[ -z "$MODEL" ]]; then
-  REAL_CLAUDE="$(find_real_claude)"
+  REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
   if [[ "${CLAUDE_PROXY_BYPASS:-}" == "1" ]]; then
     claude_router_debug_dump transparent
     run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
@@ -2564,7 +2624,7 @@ EFFECTIVE_MODEL="$(resolve_profile_alias_model "$EFFECTIVE_MODEL")" || exit 1
 log_llm_profile_selection "$EFFECTIVE_MODEL"
 validate_ollama_cloud_auth_for_launch "$EFFECTIVE_MODEL" || exit 1
 
-REAL_CLAUDE="$(find_real_claude)"
+REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
 
 # --- Helper: expand placeholders and export resolved provider env vars ---
 apply_provider_block() {
@@ -2626,8 +2686,39 @@ apply_resolved_backend() {
 # Priority: 1) .model_routes+.backends (exact) → 2) .model_routes+.backends (pattern)
 #           → 3) claude-* auto-anthropic → 4) Ollama tag auto-detect → 5) assume Ollama
 OLLAMA_HTTP_BASE="${OLLAMA_URL%/api}"
+TARGET_BACKEND_DATA=""
+TARGET_BACKEND_ID=""
+TARGET_PROVIDER_MODEL=""
+TARGET_FORCE_PROXY=0
 
-if [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE_MODEL" '.model_routes[$m] // empty' "$CONFIG" 2>/dev/null) && [[ -n "$BACKEND_ID" ]]; then
+if [[ -n "$MODEL" && -f "$CONFIG" ]]; then
+  TARGET_BACKEND_DATA="$(resolve_target_backend_for_model "$EFFECTIVE_MODEL" || true)"
+  if [[ -n "$TARGET_BACKEND_DATA" ]]; then
+    TARGET_BACKEND_ID="${TARGET_BACKEND_DATA%%$'\t'*}"
+    TARGET_PROVIDER_MODEL="${TARGET_BACKEND_DATA#*$'\t'}"
+    TARGET_PROVIDER_MODEL="${TARGET_PROVIDER_MODEL%%$'\t'*}"
+    TARGET_FORCE_PROXY=1
+  fi
+fi
+
+if [[ -n "$TARGET_BACKEND_ID" ]]; then
+  BACKEND_ID="$TARGET_BACKEND_ID"
+  BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
+  if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
+    echo "c-thru: backend '$BACKEND_ID' not defined for target '$EFFECTIVE_MODEL' in $CONFIG" >&2
+    exit 1
+  fi
+  if [[ "$TARGET_FORCE_PROXY" == "1" ]]; then
+    if jq -e --arg id "$BACKEND_ID" '.backends[$id].kind // "anthropic" | . == "ollama"' "$CONFIG" >/dev/null 2>&1; then
+      apply_resolved_backend "$BACKEND" "$TARGET_PROVIDER_MODEL" "$BACKEND_ID"
+    else
+      apply_proxy_fallback_client_block "" "{}"
+    fi
+  else
+    apply_resolved_backend "$BACKEND" "$TARGET_PROVIDER_MODEL" "$BACKEND_ID"
+  fi
+
+elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE_MODEL" '.model_routes[$m] // empty' "$CONFIG" 2>/dev/null) && [[ -n "$BACKEND_ID" ]]; then
   # 1b) New schema: .model_routes[$EFFECTIVE_MODEL] → .backends[$id]
   BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then

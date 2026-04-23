@@ -30,6 +30,9 @@ const CAPABILITY_KEYS = new Set([
 const CONNECTIVITY_MODES = new Set(['connected', 'disconnect']);
 const BACKEND_SIGIL_RE = /^(.+)@([A-Za-z0-9_-]+)$/;
 const LLM_MODES = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline', 'cloud-best-quality', 'local-best-quality']);
+const ON_FAILURE_VALUES = new Set(['cascade', 'hard_fail']);
+const JS_WRAPPER_FLAG = 'C_THRU_ENABLE_TARGET_JS';
+const TRUSTED_JS_FLAG = 'C_THRU_MODEL_MAP_TRUSTED_JS';
 
 function fail(message) {
   console.error(`model-map-validate: ${message}`);
@@ -38,6 +41,155 @@ function fail(message) {
 
 function isObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function deepClone(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function inferEnvDefaultType(value) {
+  if (Array.isArray(value)) return 'array';
+  if (value === null) return 'null';
+  return typeof value;
+}
+
+function coerceEnvValue(raw, defaultValue) {
+  if (defaultValue === undefined) return raw;
+  const defaultType = inferEnvDefaultType(defaultValue);
+  if (defaultType === 'string') return raw;
+  if (defaultType === 'number') {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) throw new Error(`could not coerce env value '${raw}' to number`);
+    return n;
+  }
+  if (defaultType === 'boolean') {
+    const normalized = String(raw).trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1') return true;
+    if (normalized === 'false' || normalized === '0') return false;
+    throw new Error(`could not coerce env value '${raw}' to boolean`);
+  }
+  if (defaultType === 'object' || defaultType === 'array' || defaultType === 'null') {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`could not parse env value as JSON: ${error.message}`);
+    }
+    const parsedType = inferEnvDefaultType(parsed);
+    if (parsedType !== defaultType) {
+      throw new Error(`expected env JSON type ${defaultType}, got ${parsedType}`);
+    }
+    return parsed;
+  }
+  return raw;
+}
+
+function isEnvWrapper(value) {
+  return isObject(value) && Object.prototype.hasOwnProperty.call(value, '$env');
+}
+
+function isJsWrapper(value) {
+  return isObject(value) && Object.prototype.hasOwnProperty.call(value, '$js');
+}
+
+function validateRequestDefaultValue(value, context, report, options) {
+  const opts = options || {};
+  if (Array.isArray(value)) {
+    value.forEach((item, idx) => validateRequestDefaultValue(item, `${context}[${idx}]`, report, opts));
+    return;
+  }
+  if (!isObject(value)) return;
+
+  if (isEnvWrapper(value)) {
+    const keys = Object.keys(value).sort();
+    if (keys.some(k => k !== '$env' && k !== 'default')) {
+      report(`'${context}' env wrapper only supports '$env' and optional 'default'`);
+    }
+    if (typeof value.$env !== 'string' || !value.$env.trim()) {
+      report(`'${context}.$env' must be a non-empty string`);
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'default')) {
+      validateRequestDefaultValue(value.default, `${context}.default`, report, opts);
+      if (typeof value.$env === 'string' && value.$env.trim()) {
+        const raw = process.env[value.$env];
+        if (raw != null) {
+          try {
+            coerceEnvValue(raw, value.default);
+          } catch (error) {
+            report(`'${context}' env '${value.$env}' is invalid: ${error.message}`);
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  if (isJsWrapper(value)) {
+    const keys = Object.keys(value).sort();
+    if (keys.length !== 1 || keys[0] !== '$js') {
+      report(`'${context}' JS wrapper only supports '$js'`);
+    }
+    if (typeof value.$js !== 'string' || !value.$js.trim()) {
+      report(`'${context}.$js' must be a non-empty string`);
+    }
+    if (!opts.jsEnabled) {
+      report(`'${context}' uses '$js' but ${JS_WRAPPER_FLAG}=1 is not set`);
+    }
+    if (!opts.trustedJs) {
+      report(`'${context}' uses '$js' but executable targets are only allowed in trusted profile config`);
+    }
+    return;
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    validateRequestDefaultValue(child, `${context}.${key}`, report, opts);
+  }
+}
+
+function validateTargets(targets, routes, backends, report, options) {
+  const opts = options || {};
+  if (!isObject(targets)) {
+    report("'targets' must be an object when present");
+    return;
+  }
+  if (!targets.default || !isObject(targets.default)) {
+    report("'targets.default' must be present and must be an object");
+  }
+  for (const targetId of Object.keys(targets)) {
+    if (isObject(routes) && Object.prototype.hasOwnProperty.call(routes, targetId)) {
+      report(`target id '${targetId}' conflicts with routes key '${targetId}'`);
+    }
+  }
+  for (const [targetId, target] of Object.entries(targets)) {
+    if (!isObject(target)) {
+      report(`'targets.${targetId}' must be an object`);
+      continue;
+    }
+    if (typeof target.backend !== 'string' || !target.backend.trim()) {
+      report(`'targets.${targetId}.backend' must be a non-empty string`);
+    } else if (isObject(backends) && !Object.prototype.hasOwnProperty.call(backends, target.backend)) {
+      report(`'targets.${targetId}.backend' references unknown backend '${target.backend}'`);
+    }
+    if (target.model != null) {
+      if (typeof target.model !== 'string' || !target.model.trim()) {
+        report(`'targets.${targetId}.model' must be a non-empty string when present`);
+      }
+    } else if (targetId !== 'default') {
+      report(`'targets.${targetId}.model' is required for named targets`);
+    }
+    if (target.request_defaults != null) {
+      if (!isObject(target.request_defaults)) {
+        report(`'targets.${targetId}.request_defaults' must be an object when present`);
+      } else {
+        for (const reservedKey of ['backend', 'model']) {
+          if (Object.prototype.hasOwnProperty.call(target.request_defaults, reservedKey)) {
+            report(`'targets.${targetId}.request_defaults.${reservedKey}' is reserved and may not be set`);
+          }
+        }
+        validateRequestDefaultValue(target.request_defaults, `targets.${targetId}.request_defaults`, report, opts);
+      }
+    }
+  }
 }
 
 function expectObject(parent, key, required = false) {
@@ -181,10 +333,14 @@ function validateFallbackGraph(config) {
   }
 }
 
-function validateConfig(config, _errors) {
+function validateConfig(config, _errors, options) {
   const report = _errors
     ? (msg) => _errors.push(msg)
     : (msg) => fail(msg);
+  const opts = Object.assign({
+    jsEnabled: process.env[JS_WRAPPER_FLAG] === '1',
+    trustedJs: process.env[TRUSTED_JS_FLAG] === '1',
+  }, options || {});
 
   if (!isObject(config)) { report('top-level config must be an object'); return; }
 
@@ -235,6 +391,9 @@ function validateConfig(config, _errors) {
             }
             if (typeof profileValue[aliasName].disconnect_model !== 'string' || !profileValue[aliasName].disconnect_model.trim()) {
               report(`'llm_profiles.${profileName}.${aliasName}.disconnect_model' must be a non-empty string`);
+            }
+            if (profileValue[aliasName].on_failure != null && !ON_FAILURE_VALUES.has(profileValue[aliasName].on_failure)) {
+              report(`'llm_profiles.${profileName}.${aliasName}.on_failure' must be one of: ${[...ON_FAILURE_VALUES].join(', ')}`);
             }
             const modesEntry = profileValue[aliasName].modes;
             if (modesEntry != null) {
@@ -299,6 +458,12 @@ function validateConfig(config, _errors) {
           report(`model_routes key '${modelKey}' references @backend '${backendId}' which is not declared in backends`);
         }
       }
+      const backendId = config.model_routes[modelKey];
+      if (typeof backendId !== 'string' || !backendId.trim()) {
+        report(`model_routes['${modelKey}'] must be a non-empty backend id string`);
+      } else if (!config.backends[backendId]) {
+        report(`model_routes['${modelKey}'] references unknown backend '${backendId}'`);
+      }
     }
   }
 
@@ -324,6 +489,10 @@ function validateConfig(config, _errors) {
 
   if (config.fallback_chains != null) {
     validateFallbackChains(config.fallback_chains, report, config.model_routes);
+  }
+
+  if (config.targets != null) {
+    validateTargets(config.targets, config.routes, config.backends, report, opts);
   }
 
   // agent_to_capability: flat map of agent-name → capability-alias, used for 2-hop resolution.
@@ -433,7 +602,13 @@ function main() {
     fail(`failed to read '${absolutePath}': ${error.message}`);
   }
   const errors = [];
-  validateConfig(parsed, errors);
+  const profileDir = process.env.CLAUDE_PROFILE_DIR || path.join(process.env.HOME || '', '.claude');
+  const trustedProfilePath = path.resolve(profileDir, 'model-map.json');
+  const options = {
+    jsEnabled: process.env[JS_WRAPPER_FLAG] === '1',
+    trustedJs: process.env[TRUSTED_JS_FLAG] === '1' || absolutePath === trustedProfilePath,
+  };
+  validateConfig(parsed, errors, options);
   if (errors.length > 0) {
     for (const e of errors) console.error(`model-map-validate: ${e}`);
     process.exit(1);

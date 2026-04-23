@@ -7,13 +7,16 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const vm = require('vm');
 const { spawn, spawnSync, execFile } = require('child_process');
 const { Transform } = require('stream');
+const { resolveSelectedConfigPath } = require('./model-map-config.js');
 const {
   resolveProfileModel,
   resolveLlmMode,
   resolveActiveTier,
   resolveCapabilityAlias,
+  resolveTerminalTarget,
   LLM_MODE_ENUM,
   LLM_PROFILE_ALIASES,
 } = require('./model-map-resolve.js');
@@ -65,93 +68,6 @@ function checkProxyLogRotation() {
   };
 })();
 
-// ── Config resolution ──────────────────────────────────────────────────
-
-function canonicalizeDir(dir) {
-  if (!dir || typeof dir !== 'string' || !dir.startsWith('/') || !fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return null;
-  try { return fs.realpathSync(dir); } catch { return null; }
-}
-
-function canonicalizeFile(file) {
-  if (!file || typeof file !== 'string' || !file.startsWith('/') || !fs.existsSync(file)) return null;
-  const dir = canonicalizeDir(path.dirname(file));
-  return dir ? path.join(dir, path.basename(file)) : null;
-}
-
-function findParentModelMap(dir) {
-  const real = canonicalizeDir(dir);
-  if (!real) return null;
-  let cur = real;
-  while (true) {
-    const candidate = path.join(cur, '.claude', 'model-map.json');
-    const realFile = canonicalizeFile(candidate);
-    if (realFile) return realFile;
-    if (cur === '/') break;
-    cur = path.dirname(cur);
-  }
-  return null;
-}
-
-function repoDefaultsPath() {
-  const candidate = canonicalizeFile(path.join(__dirname, '..', 'config', 'model-map.json'));
-  return candidate || null;
-}
-
-function maybeSyncLayeredProfileModelMap() {
-  const claudeDir = canonicalizeDir(process.env.CLAUDE_PROFILE_DIR || process.env.CLAUDE_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || '', '.claude'));
-  if (!claudeDir) return;
-  // Prefer model-map.system.json (installed by install.sh) over the repo defaults so the
-  // proxy works even when run from outside the repo. Fall back to the repo config/model-map.json.
-  const systemPath = path.join(claudeDir, 'model-map.system.json');
-  const defaultsPath = fs.existsSync(systemPath) ? systemPath : repoDefaultsPath();
-  if (!defaultsPath) return;
-  const overridesPath = path.join(claudeDir, 'model-map.overrides.json');
-  if (!fs.existsSync(overridesPath)) return;
-  const effectivePath = path.join(claudeDir, 'model-map.json');
-  const syncTool = path.join(__dirname, 'model-map-sync.js');
-  if (!fs.existsSync(syncTool)) return;
-  try {
-    const result = spawnSync(process.execPath, [syncTool, defaultsPath, overridesPath, effectivePath, effectivePath], { encoding: 'utf8', timeout: 5000 });
-    if (result.status !== 0 && DEBUG) {
-      console.error(`claude-proxy: layered model-map sync failed: ${result.stderr || result.stdout || 'unknown error'}`);
-    }
-  } catch {
-    /* layered sync is best effort here */
-  }
-}
-
-function resolveConfigPath() {
-  maybeSyncLayeredProfileModelMap();
-  const override = process.env.CLAUDE_MODEL_MAP_PATH;
-  if (override) {
-    const real = canonicalizeFile(override);
-    if (real) return { path: real, source: 'override' };
-  }
-
-  const launchCwd = process.env.CLAUDE_MODEL_MAP_LAUNCH_CWD || process.cwd();
-
-  // Check project dir env var
-  const projectDir = process.env.CLAUDE_PROJECT_DIR;
-  if (projectDir) {
-    const real = canonicalizeFile(path.join(projectDir, '.claude', 'model-map.json'));
-    if (real) return { path: real, source: 'project' };
-  }
-
-  // Walk upward from launch CWD
-  const walked = findParentModelMap(launchCwd);
-  if (walked) {
-    // Skip if it's the same as the profile config
-    const profileReal = canonicalizeFile(path.join(process.env.HOME || '', '.claude', 'model-map.json'));
-    if (walked !== profileReal) return { path: walked, source: 'project' };
-  }
-
-  // Fallback to profile config
-  const profileReal = canonicalizeFile(path.join(process.env.HOME || '', '.claude', 'model-map.json'));
-  if (profileReal) return { path: profileReal, source: 'profile' };
-
-  return null;
-}
-
 // ── Config loading & reload ────────────────────────────────────────────
 
 // ── CLI args: --port <n> and --hooks-port <n> ──────────────────────────
@@ -201,6 +117,8 @@ function numberFromEnv(name, fallback) {
 
 const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_DEBUG', 0));
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+const TARGET_JS_ENABLED = process.env.C_THRU_ENABLE_TARGET_JS === '1';
+const TARGET_JS_TIMEOUT_MS = numberFromEnv('C_THRU_TARGET_JS_TIMEOUT_MS', 50);
 
 let CONFIG;
 let CONFIG_PATH;
@@ -209,7 +127,7 @@ let CONFIG_MTIME_MS = 0;
 
 function debugLog(event, fields = {}) {
   if (!DEBUG) return;
-  console.error(`claude-proxy debug ${JSON.stringify({
+  console.error(`c-thru debug ${JSON.stringify({
     event,
     pid: process.pid,
     ts: nowIso(),
@@ -218,13 +136,23 @@ function debugLog(event, fields = {}) {
 }
 
 function proxyLog(event, fields = {}) {
-  console.error(`claude-proxy [${event}] ${JSON.stringify({ pid: process.pid, ts: nowIso(), ...fields })}`);
+  console.error(`c-thru [${event}] ${JSON.stringify({ pid: process.pid, ts: nowIso(), ...fields })}`);
 }
 
 function loadConfig() {
-  const resolved = resolveConfigPath();
+  const resolved = resolveSelectedConfigPath({
+    baseDir: __dirname,
+    onSyncFailure: (resultOrError) => {
+      if (!DEBUG) return;
+      if (resultOrError && typeof resultOrError === 'object' && Object.prototype.hasOwnProperty.call(resultOrError, 'status')) {
+        console.error(`c-thru: layered model-map sync failed: ${resultOrError.stderr || resultOrError.stdout || 'unknown error'}`);
+      } else if (resultOrError && resultOrError.message) {
+        console.error(`c-thru: layered model-map sync failed: ${resultOrError.message}`);
+      }
+    },
+  });
   if (!resolved) {
-    console.error('claude-proxy: no model-map.json found');
+    console.error('c-thru: no model-map.json found');
     process.exit(1);
   }
   CONFIG_PATH = resolved.path;
@@ -233,16 +161,30 @@ function loadConfig() {
     CONFIG = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
     CONFIG_MTIME_MS = fs.statSync(CONFIG_PATH).mtimeMs;
   } catch (e) {
-    console.error(`claude-proxy: failed to load ${CONFIG_PATH}: ${e.message}`);
+    console.error(`c-thru: failed to load ${CONFIG_PATH}: ${e.message}`);
     process.exit(1);
   }
   // Validate no cycles in routes — throws on error; exit on startup failure.
   try { validateRouteGraph(); } catch (e) {
-    console.error(`claude-proxy: ${e.message}`);
+    console.error(`c-thru: ${e.message}`);
     process.exit(1);
   }
   // Validate with external validator if available — exits on startup failure.
   if (!validateWithNode()) process.exit(1);
+}
+
+function resolveConfigSelectionForReload() {
+  return resolveSelectedConfigPath({
+    baseDir: __dirname,
+    onSyncFailure: (resultOrError) => {
+      if (!DEBUG) return;
+      if (resultOrError && typeof resultOrError === 'object' && Object.prototype.hasOwnProperty.call(resultOrError, 'status')) {
+        console.error(`c-thru: layered model-map sync failed: ${resultOrError.stderr || resultOrError.stdout || 'unknown error'}`);
+      } else if (resultOrError && resultOrError.message) {
+        console.error(`c-thru: layered model-map sync failed: ${resultOrError.message}`);
+      }
+    },
+  });
 }
 
 // validateRouteGraph accepts an explicit config object so callers can validate
@@ -277,27 +219,79 @@ function validateWithNode(pathToValidate) {
   const validator = path.join(path.dirname(process.argv[1] || ''), 'model-map-validate.js');
   if (!fs.existsSync(validator)) return true;
   try {
-    const result = spawnSync(process.execPath, [validator, pathToValidate], { encoding: 'utf8', timeout: 5000 });
+    const result = spawnSync(process.execPath, [validator, pathToValidate], {
+      encoding: 'utf8',
+      timeout: 5000,
+      env: {
+        ...process.env,
+        C_THRU_MODEL_MAP_TRUSTED_JS: CONFIG_SOURCE === 'profile' ? '1' : '0',
+      },
+    });
     if (result.status !== 0) {
-      console.error(`claude-proxy: invalid model-map config: ${pathToValidate}`);
+      console.error(`c-thru: invalid model-map config: ${pathToValidate}`);
       return false;
     }
   } catch (e) {
-    console.error(`claude-proxy: validator spawn failed: ${e.message}`);
+    console.error(`c-thru: validator spawn failed: ${e.message}`);
   }
   return true;
 }
 
 loadConfig();
 
+const PLAN_TEST_MODE = process.env.C_THRU_PLAN_TEST_MODE === '1';
+const PLAN_STUBS_PATH = process.env.C_THRU_PLAN_STUBS_PATH;
+let planStubs = null;
+let planStubsLoaded = false;
+
+function loadPlanStubs() {
+  if (planStubsLoaded) return planStubs;
+  planStubsLoaded = true;
+  if (!PLAN_STUBS_PATH || !fs.existsSync(PLAN_STUBS_PATH)) return null;
+  try {
+    planStubs = JSON.parse(fs.readFileSync(PLAN_STUBS_PATH, 'utf8'));
+    return planStubs;
+  } catch (e) {
+    console.error(`c-thru: failed to load plan stubs from ${PLAN_STUBS_PATH}: ${e.message}`);
+    return null;
+  }
+}
+
+function tryPlanStub(req, body) {
+  if (!PLAN_TEST_MODE) return null;
+  const stubs = loadPlanStubs();
+  if (!stubs) return null;
+
+  const prompt = (body.messages || []).map(m => m.content).join('\n') + '\n' + (body.system || '');
+  const model = body.model || '';
+
+  for (const stub of planStubs) {
+    let match = false;
+    if (stub.match_agent && model.includes(stub.match_agent)) match = true;
+    if (stub.match_prompt && prompt.includes(stub.match_prompt)) match = true;
+    if (stub.match_regex && new RegExp(stub.match_regex).test(prompt)) match = true;
+
+    if (match) {
+      debugLog('proxy.plan_stub.match', { model, match_agent: stub.match_agent, match_prompt: stub.match_prompt });
+      return stub.response;
+    }
+  }
+  return null;
+}
+
 function reloadConfigFromDisk() {
   try {
-    const nextConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    const previousPath = CONFIG_PATH;
+    const resolved = resolveConfigSelectionForReload();
+    if (!resolved) throw new Error('no model-map.json found');
+    const nextPath = resolved.path;
+    const nextSource = resolved.source;
+    const nextConfig = JSON.parse(fs.readFileSync(nextPath, 'utf8'));
     // Capture mtime before validation so that if statSync throws, CONFIG is never swapped.
-    const nextMtime = fs.statSync(CONFIG_PATH).mtimeMs;
+    const nextMtime = fs.statSync(nextPath).mtimeMs;
     // Validate before swapping so a bad config never replaces a good one.
     validateRouteGraph(nextConfig);
-    const tmpPath = path.join(os.tmpdir(), `claude-proxy-validate-${process.pid}.json`);
+    const tmpPath = path.join(os.tmpdir(), `c-thru-validate-${process.pid}.json`);
     try {
       fs.writeFileSync(tmpPath, JSON.stringify(nextConfig));
       if (!validateWithNode(tmpPath)) throw new Error('schema validation failed');
@@ -305,10 +299,15 @@ function reloadConfigFromDisk() {
       try { fs.unlinkSync(tmpPath); } catch {}
     }
     CONFIG = nextConfig;
+    CONFIG_PATH = nextPath;
+    CONFIG_SOURCE = nextSource;
     CONFIG_MTIME_MS = nextMtime;
+    if (CONFIG_PATH !== previousPath) {
+      try { startConfigWatcher(); } catch {}
+    }
     return true;
   } catch (e) {
-    console.error(`claude-proxy: config reload failed, keeping old config: ${e.message}`);
+    console.error(`c-thru: config reload failed, keeping old config: ${e.message}`);
     return false;
   }
 }
@@ -323,19 +322,30 @@ function refreshConfigIfChanged() {
 // Watch for config changes
 let configWatcher = null;
 let reloadTimer = null;
-try {
+function closeConfigWatcher() {
+  if (!configWatcher) return;
+  try { configWatcher.close(); } catch {}
+  configWatcher = null;
+}
+
+function startConfigWatcher() {
+  closeConfigWatcher();
   const watchDir = path.dirname(CONFIG_PATH);
   configWatcher = fs.watch(watchDir, (eventType, filename) => {
     if (filename === path.basename(CONFIG_PATH)) {
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => {
         if (reloadConfigFromDisk()) {
-          console.error(`claude-proxy: reloaded config from ${CONFIG_PATH}`);
+          console.error(`c-thru: reloaded config from ${CONFIG_PATH}`);
         }
       }, 50);
     }
   });
   configWatcher.on('error', () => {});
+}
+
+try {
+  startConfigWatcher();
 } catch { /* fs.watch not available on all platforms */ }
 
 // ── Route resolution ───────────────────────────────────────────────────
@@ -400,6 +410,246 @@ function resolveLogicalAlias(model) {
   if (!entry || typeof entry !== 'object') return model;
   const resolved = resolveProfileModel(entry, resolveLlmMode(CONFIG));
   return typeof resolved === 'string' && resolved ? resolved : model;
+}
+
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneJsonValue(value) {
+  if (value === undefined) return undefined;
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) {
+    throw new Error('value is not JSON-serializable');
+  }
+  return JSON.parse(encoded);
+}
+
+function inferEnvDefaultType(value) {
+  if (Array.isArray(value)) return 'array';
+  if (value === null) return 'null';
+  return typeof value;
+}
+
+function isEnvWrapper(value) {
+  return isPlainObject(value) && Object.prototype.hasOwnProperty.call(value, '$env');
+}
+
+function isJsWrapper(value) {
+  return isPlainObject(value) && Object.prototype.hasOwnProperty.call(value, '$js');
+}
+
+function coerceEnvValue(raw, defaultValue) {
+  if (defaultValue === undefined) return raw;
+  const defaultType = inferEnvDefaultType(defaultValue);
+  if (defaultType === 'string') return raw;
+  if (defaultType === 'number') {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) throw new Error(`could not coerce env value '${raw}' to number`);
+    return n;
+  }
+  if (defaultType === 'boolean') {
+    const normalized = String(raw).trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1') return true;
+    if (normalized === 'false' || normalized === '0') return false;
+    throw new Error(`could not coerce env value '${raw}' to boolean`);
+  }
+  if (defaultType === 'object' || defaultType === 'array' || defaultType === 'null') {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`could not parse env value as JSON: ${error.message}`);
+    }
+    const parsedType = inferEnvDefaultType(parsed);
+    if (parsedType !== defaultType) {
+      throw new Error(`expected env JSON type ${defaultType}, got ${parsedType}`);
+    }
+    return parsed;
+  }
+  return raw;
+}
+
+function deepFreeze(value) {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
+function evaluateTargetJs(source, ctx, contextPath) {
+  if (!TARGET_JS_ENABLED) {
+    throw new Error(`${contextPath} uses '$js' but C_THRU_ENABLE_TARGET_JS=1 is not set`);
+  }
+  if (CONFIG_SOURCE !== 'profile') {
+    throw new Error(`${contextPath} uses '$js' but executable targets are only allowed in trusted profile config`);
+  }
+  let fn;
+  try {
+    const script = new vm.Script(`(${source})`);
+    fn = script.runInNewContext(Object.create(null), { timeout: TARGET_JS_TIMEOUT_MS });
+  } catch (error) {
+    throw new Error(`${contextPath} failed to compile JS: ${error.message}`);
+  }
+  if (typeof fn !== 'function') {
+    throw new Error(`${contextPath} must evaluate to a function`);
+  }
+  let result;
+  try {
+    result = fn(ctx);
+  } catch (error) {
+    throw new Error(`${contextPath} threw: ${error.message}`);
+  }
+  if (result && typeof result.then === 'function') {
+    throw new Error(`${contextPath} must return synchronously`);
+  }
+  if (result === undefined) return undefined;
+  try {
+    return cloneJsonValue(result);
+  } catch (error) {
+    throw new Error(`${contextPath} returned non-JSON value: ${error.message}`);
+  }
+}
+
+function evaluateRequestDefaultValue(value, ctx, contextPath, sources) {
+  if (isEnvWrapper(value)) {
+    const raw = process.env[value.$env];
+    if (raw == null) {
+      if (Object.prototype.hasOwnProperty.call(value, 'default')) {
+        sources.add('env');
+        return cloneJsonValue(value.default);
+      }
+      return undefined;
+    }
+    sources.add('env');
+    return coerceEnvValue(raw, value.default);
+  }
+  if (isJsWrapper(value)) {
+    sources.add('js');
+    return evaluateTargetJs(value.$js, ctx, contextPath);
+  }
+  if (Array.isArray(value)) {
+    const out = [];
+    for (let i = 0; i < value.length; i++) {
+      const next = evaluateRequestDefaultValue(value[i], ctx, `${contextPath}[${i}]`, sources);
+      if (next !== undefined) out.push(next);
+    }
+    return out;
+  }
+  if (!isPlainObject(value)) return cloneJsonValue(value);
+
+  const out = {};
+  let hasAny = false;
+  for (const [key, child] of Object.entries(value)) {
+    const next = evaluateRequestDefaultValue(child, ctx, `${contextPath}.${key}`, sources);
+    if (next !== undefined) {
+      out[key] = next;
+      hasAny = true;
+    }
+  }
+  return hasAny ? out : {};
+}
+
+function mergeDefaultsIntoRequest(defaultValue, requestValue) {
+  if (requestValue === undefined) return cloneJsonValue(defaultValue);
+  if (defaultValue === undefined) return cloneJsonValue(requestValue);
+  if (Array.isArray(requestValue)) return cloneJsonValue(requestValue);
+  if (Array.isArray(defaultValue)) return cloneJsonValue(requestValue);
+  if (isPlainObject(defaultValue) && isPlainObject(requestValue)) {
+    const merged = {};
+    const keys = new Set([...Object.keys(defaultValue), ...Object.keys(requestValue)]);
+    for (const key of keys) {
+      merged[key] = mergeDefaultsIntoRequest(defaultValue[key], requestValue[key]);
+    }
+    return merged;
+  }
+  return cloneJsonValue(requestValue);
+}
+
+function buildTargetEvalContext(req, body, resolved) {
+  const headerCopy = Object.fromEntries(Object.entries(req.headers || {}).map(([k, v]) => [k, v]));
+  const requestBody = cloneJsonValue(body || {});
+  const request = deepFreeze({
+    method: req.method,
+    path: req.url,
+    headers: headerCopy,
+    body: requestBody,
+  });
+  const env = deepFreeze(Object.fromEntries(Object.entries(process.env)));
+  const target = resolved.target ? deepFreeze(cloneJsonValue(resolved.target)) : null;
+  return deepFreeze({
+    terminalLabel: resolved.terminalLabel || null,
+    targetId: resolved.targetId || null,
+    target,
+    backendId: resolved.backend?.id || null,
+    mode: resolveLlmMode(CONFIG),
+    tier: resolveActiveTier(CONFIG),
+    request,
+    headers: request.headers,
+    env,
+  });
+}
+
+function buildForwardBody(req, body, resolved) {
+  const providerModel = resolved.effectiveModel || body.model;
+  const rawDefaults = resolved.requestDefaults;
+
+  // SYSTEM PROMPT: Prepend /no_think for Qwen-based models to suppress thinking tokens
+  // A12: Qwen3 and some Qwen2.5 models support /no_think in system prompt to disable <think> blocks.
+  if (providerModel && (providerModel.includes('qwen3') || providerModel.includes('qwen2.5'))) {
+    if (body.system) {
+      if (!body.system.includes('/no_think')) {
+        body.system = `/no_think\n\n${body.system}`;
+      }
+    } else {
+      body.system = '/no_think';
+    }
+  }
+
+  if (!rawDefaults || !isPlainObject(rawDefaults) || Object.keys(rawDefaults).length === 0) {
+    return { body: { ...body, model: providerModel }, requestDefaultSources: [] };
+  }
+  const ctx = buildTargetEvalContext(req, body, resolved);
+  const sources = new Set();
+  const contextBase = resolved.targetId
+    ? `targets.${resolved.targetId}.request_defaults`
+    : 'targets.default.request_defaults';
+  let evaluatedDefaults = evaluateRequestDefaultValue(rawDefaults, ctx, contextBase, sources);
+  if (!isPlainObject(evaluatedDefaults)) evaluatedDefaults = {};
+  const merged = mergeDefaultsIntoRequest(evaluatedDefaults, body);
+  merged.model = providerModel;
+  if (sources.size === 0) sources.add('static');
+  return { body: merged, requestDefaultSources: [...sources] };
+}
+
+function formatRequestDefaultsError(error, context) {
+  return {
+    type: 'api_error',
+    message: `${context}: ${error.message}`,
+  };
+}
+
+function safeBuildForwardBody(req, res, body, resolved, context) {
+  try {
+    return buildForwardBody(req, body, resolved);
+  } catch (error) {
+    debugLog('proxy.request_defaults.error', {
+      context,
+      error: error.message,
+      target_id: resolved?.targetId || null,
+      terminal_label: resolved?.terminalLabel || body?.model || null,
+    });
+    if (!res.headersSent) send(res, 500, { error: formatRequestDefaultsError(error, context) });
+    else res.end();
+    return null;
+  }
+}
+
+function buildRoutingKey(resolved, fallbackLabel = null) {
+  if (resolved && resolved.targetId && resolved.targetId !== 'default') return resolved.targetId;
+  if (fallbackLabel) return fallbackLabel;
+  return resolved?.terminalLabel || resolved?.effectiveModel || null;
 }
 
 // ── Request stats tracking ─────────────────────────────────────────────
@@ -533,7 +783,7 @@ function flushPersistentUsageNowSync() {
   if (!usagePersistPending && !fs.existsSync(USAGE_STATS_FILE)) return;
   try {
     fs.mkdirSync(path.dirname(USAGE_STATS_FILE), { recursive: true });
-    const tmpPath = `${USAGE_STATS_FILE}.tmp.${crypto.randomUUID()}`;
+    const tmpPath = `${USAGE_STATS_FILE}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
     fs.writeFileSync(tmpPath, `${JSON.stringify(persistentUsage, null, 2)}\n`);
     fs.renameSync(tmpPath, USAGE_STATS_FILE);
     usagePersistPending = false;
@@ -725,7 +975,8 @@ function fireDesktopNotification(primary, served_by) {
 //   - honors the backend URL (CLI uses $OLLAMA_HOST which may be wrong)
 const ollamaWarmLastMs = new Map(); // model -> last warm timestamp
 const OLLAMA_WARM_DEBOUNCE_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_WARM_DEBOUNCE_MS', 30000);
-const OLLAMA_WARM_KEEP_ALIVE = process.env.CLAUDE_PROXY_OLLAMA_KEEP_ALIVE || '30m';
+const OLLAMA_WARM_KEEP_ALIVE = process.env.CLAUDE_PROXY_OLLAMA_KEEP_ALIVE || '60m';
+const OLLAMA_KEEP_ALIVE_SECONDS = Number(process.env.CLAUDE_PROXY_OLLAMA_KEEP_ALIVE_SECONDS || 3600);
 const OLLAMA_WARM_HTTP_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_WARM_TIMEOUT_MS', 5000);
 function warmOllamaModel(model, backendId, backendUrl) {
   if (!model) return;
@@ -776,7 +1027,9 @@ const OLLAMA_PULL_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_PULL_TIMEOUT_M
 const pullInFlight = new Map(); // key: backendUrl+'|'+model → Promise
 
 function _ollamaUrl(backendUrl, suffix) {
-  return (backendUrl || DEFAULT_OLLAMA_URL).replace(/\/$/, '') + suffix;
+  const base = (backendUrl || DEFAULT_OLLAMA_URL).replace(/\/+$/, '');
+  const path = suffix.replace(/^\/+/, '');
+  return `${base}/${path}`;
 }
 function _ollamaTransport(urlStr) {
   return urlStr.toLowerCase().startsWith('https:') ? https : http;
@@ -893,6 +1146,7 @@ function ollamaPull(backendUrl, model) {
 function ollamaLoad(backendUrl, model, opts) {
   const urlStr = _ollamaUrl(backendUrl, '/api/generate');
   const { numCtx, keepAlive } = opts || {};
+  debugLog('ollama.load.start', { model, url: urlStr, keep_alive: keepAlive || OLLAMA_WARM_KEEP_ALIVE });
   return new Promise((resolve, reject) => {
     let settled = false;
     const settle = (fn, arg) => { if (settled) return; settled = true; fn(arg); };
@@ -1265,18 +1519,10 @@ const DEFAULT_QUALITY_TOLERANCE_PCT = 5;
 // Returns true if the model routes to a local Ollama backend (not cloud, not anthropic).
 function modelIsLocal(model) {
   if (typeof model !== 'string' || !model) return false;
-  const modelRoutes = CONFIG.model_routes || {};
-  const backends = CONFIG.backends || {};
-  let backendId = modelRoutes[model];
-  if (!backendId) backendId = lookupPatternValue('model_routes', model);
-  if (!backendId) {
-    // Unrouted: claude-* → anthropic path (not local); others → ollama fallback (local)
-    return !/^claude-/i.test(model) && !model.endsWith(':cloud');
-  }
-  const backend = backends[backendId];
-  if (!backend) return false;
-  if ((backend.kind || 'anthropic') !== 'ollama') return false;
-  return isLocalOllamaBackend(model, backend.url);
+  const resolved = resolveBackend(model);
+  if (resolved.error || !resolved.backend) return false;
+  if ((resolved.backend.kind || 'anthropic') !== 'ollama') return false;
+  return isLocalOllamaBackend(resolved.effectiveModel || model, resolved.backend.url);
 }
 
 // Within-tolerance tiebreaker: sort quality band by speed_score desc, then strict quality rank.
@@ -1397,9 +1643,11 @@ function resolveFallbackModel(model, failureClass, logicalRole = null) {
 
   // Walk candidates, skipping cooled-down models
   for (const c of candidateObjects) {
-    const resolved = resolveLogicalAlias(resolveRouteModel(c.model));
-    if (!isCooledDown(resolved)) {
-      return { model: resolved, localTerminalAppended: !!c._isAppended };
+    const resolvedModel = resolveLogicalAlias(resolveRouteModel(c.model));
+    const resolvedBackend = resolveBackend(resolvedModel);
+    const candidateKey = resolvedBackend.error ? resolvedModel : (resolvedBackend.routingKey || resolvedModel);
+    if (!isCooledDown(candidateKey)) {
+      return { model: resolvedModel, localTerminalAppended: !!c._isAppended };
     }
   }
 
@@ -1440,7 +1688,7 @@ async function ensureOllamaModelLoaded(model, backendUrl, logicalRole = null) {
     let pending = pullInFlight.get(key);
     if (!pending) {
       proxyLog('ollama.pull.start', { model, backend_url: backendUrl });
-      console.error(`claude-proxy: '${model}' not cached on ${backendUrl} — pulling now...`);
+      console.error(`c-thru: '${model}' not cached on ${backendUrl} — pulling now...`);
       pending = ollamaPull(backendUrl, model).finally(() => pullInFlight.delete(key));
       pullInFlight.set(key, pending);
     }
@@ -1559,9 +1807,40 @@ function resolveBackend(model) {
     const [, baseModel, backendId] = sigilMatch;
     if (backends[backendId]) {
       // Strip the @suffix — it is a routing sigil, not part of the model name
-      return { backend: { id: backendId, ...backends[backendId] }, effectiveModel: baseModel, logicalRole };
+      return {
+        backend: { id: backendId, ...backends[backendId] },
+        effectiveModel: baseModel,
+        terminalLabel: terminalModel,
+        routingKey: baseModel,
+        logicalRole,
+      };
     }
     return { error: `@backend sigil '${backendId}' in '${terminalModel}' is not a declared backend`, status: 500, extra: { terminal_model: terminalModel } };
+  }
+
+  if (CONFIG.targets && typeof CONFIG.targets === 'object') {
+    const targetResolution = resolveTerminalTarget(CONFIG, terminalModel);
+    if (targetResolution) {
+      const backend = backends[targetResolution.backendId];
+      if (!backend) {
+        return {
+          error: `backend '${targetResolution.backendId}' not defined for target '${targetResolution.targetId}'`,
+          status: 500,
+          extra: { terminal_model: terminalModel, target_id: targetResolution.targetId },
+        };
+      }
+      return {
+        backend: { id: targetResolution.backendId, ...backend },
+        effectiveModel: targetResolution.providerModel,
+        logicalRole,
+        terminalLabel: terminalModel,
+        targetId: targetResolution.targetId,
+        target: targetResolution.target,
+        requestDefaults: targetResolution.requestDefaults || {},
+        explicitTarget: Boolean(targetResolution.explicitMatch),
+        routingKey: buildRoutingKey({ targetId: targetResolution.explicitMatch ? targetResolution.targetId : 'default', terminalLabel: terminalModel }, terminalModel),
+      };
+    }
   }
 
   // 2. Try exact match in model_routes
@@ -1569,7 +1848,7 @@ function resolveBackend(model) {
     const id = modelRoutes[terminalModel];
     const backend = backends[id];
     if (!backend) return { error: `backend '${id}' not defined for model '${terminalModel}'`, status: 500, extra: { terminal_model: terminalModel } };
-    return { backend: { id, ...backend }, effectiveModel: terminalModel, logicalRole };
+    return { backend: { id, ...backend }, effectiveModel: terminalModel, terminalLabel: terminalModel, routingKey: terminalModel, logicalRole };
   }
 
   // 3. Try pattern match in model_routes
@@ -1577,7 +1856,7 @@ function resolveBackend(model) {
   if (patternBackend) {
     const backend = backends[patternBackend];
     if (!backend) return { error: `backend '${patternBackend}' not defined for pattern-matched model '${terminalModel}'`, status: 500, extra: { terminal_model: terminalModel } };
-    return { backend: { id: patternBackend, ...backend }, effectiveModel: terminalModel, logicalRole };
+    return { backend: { id: patternBackend, ...backend }, effectiveModel: terminalModel, terminalLabel: terminalModel, routingKey: terminalModel, logicalRole };
   }
 
   // 4. If model was routed but terminal not in model_routes, try original model
@@ -1585,7 +1864,7 @@ function resolveBackend(model) {
     const id = modelRoutes[model];
     const backend = backends[id];
     if (!backend) return { error: `backend '${id}' not defined for model '${model}'`, status: 500 };
-    return { backend: { id, ...backend }, effectiveModel: model, logicalRole };
+    return { backend: { id, ...backend }, effectiveModel: model, terminalLabel: terminalModel, routingKey: model, logicalRole };
   }
 
   // 5. Default: unknown claude-* → anthropic, everything else → ollama fallback
@@ -1594,15 +1873,17 @@ function resolveBackend(model) {
     const anthroEntry = Object.entries(backends).find(([, v]) => (v.kind || 'anthropic') === 'anthropic');
     if (anthroEntry) {
       const [id, backend] = anthroEntry;
-      return { backend: { id, ...backend }, effectiveModel: terminalModel, logicalRole };
+      return { backend: { id, ...backend }, effectiveModel: terminalModel, terminalLabel: terminalModel, routingKey: terminalModel, logicalRole };
     }
   }
 
   // 6. Ollama fallback
-  console.error(`claude-proxy: '${terminalModel}' not in model_routes — assuming local Ollama at ${DEFAULT_OLLAMA_URL}`);
+  console.error(`c-thru: '${terminalModel}' not in model_routes — assuming local Ollama at ${DEFAULT_OLLAMA_URL}`);
   return {
     backend: { id: '__ollama_fallback__', kind: 'ollama', url: DEFAULT_OLLAMA_URL, _ollamaFallback: true },
     effectiveModel: terminalModel,
+    terminalLabel: terminalModel,
+    routingKey: terminalModel,
     logicalRole,
   };
 }
@@ -1618,6 +1899,9 @@ function addResolvedViaHeader(respHeaders, resolved) {
     capability,
     profile: resolved.logicalRole || capability,
     served_by: resolved.effectiveModel || resolved.served_by || null,
+    target_id: resolved.targetId || null,
+    backend_id: resolved.backend?.id || resolved.backendId || null,
+    request_defaults_sources: resolved.requestDefaultSources || [],
     tier: resolveActiveTier(CONFIG),
     mode: resolveLlmMode(CONFIG),
     local_terminal_appended: resolved.localTerminalAppended || false,
@@ -1639,7 +1923,7 @@ function sseEvent(res, eventName, data) {
 
 function addAnnotationHeaders(res, effectiveModel, backend) {
   if (ANNOTATE_MODEL) {
-    res.setHeader('x-claude-proxy-served-by', effectiveModel || '');
+    res.setHeader('x-c-thru-served-by', effectiveModel || '');
   }
 }
 
@@ -1735,7 +2019,7 @@ function forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta =
   const up = lib.request(options, upRes => {
     timeoutState.upstreamResponse = upRes;
     const respHeaders = { ...upRes.headers };
-    if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-claude-proxy-served-by'] = effectiveModel;
+    if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-c-thru-served-by'] = effectiveModel;
     addResolvedViaHeader(respHeaders, requestMeta);
     res.writeHead(upRes.statusCode, respHeaders);
     upRes.on('data', chunk => {
@@ -1834,7 +2118,7 @@ function forwardOllamaPassthrough(req, res, body, backend, effectiveModel, reque
   const up = lib.request(options, upRes => {
     timeoutState.upstreamResponse = upRes;
     const respHeaders = { ...upRes.headers };
-    if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-claude-proxy-served-by'] = effectiveModel;
+    if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-c-thru-served-by'] = effectiveModel;
     addResolvedViaHeader(respHeaders, requestMeta);
     if (upRes.statusCode !== 200) {
       const errChunks = [];
@@ -1881,6 +2165,16 @@ function forwardOllamaPassthrough(req, res, body, backend, effectiveModel, reque
         finalizeTrackedUsage(requestMeta, { status_code: upRes.statusCode, input_tokens: 0, output_tokens: 0 });
       }
     });
+
+    upRes.on('end', () => {
+      // Residency Pulse: Force model to stay loaded (1h) after main request finishes.
+      // We call ollamaLoad directly to bypass the debounce logic.
+      if (backend.kind === 'ollama') {
+        const numCtx = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
+        ollamaLoad(backend.url, effectiveModel || body.model, { numCtx, keepAlive: OLLAMA_WARM_KEEP_ALIVE }).catch(() => {});
+      }
+    });
+
     upRes.pipe(res);
   });
   attachFatalCallTimeout(up, res, targetUrl.origin, FATAL_CALL_TIMEOUT_MS, timeoutState);
@@ -1899,10 +2193,160 @@ function forwardOllamaPassthrough(req, res, body, backend, effectiveModel, reque
   up.end();
 }
 
+// ── Ollama /api/chat implementation ───────────────────────────────────
+// Converts Anthropic message format to Ollama and ensures 'think: false'
+// is passed for reasoning-capable models.
 function forwardOllama(req, res, body, backend, effectiveModel, requestMeta = null) {
-  return forwardOllamaPassthrough(req, res, body, backend, effectiveModel, requestMeta);
-}
+  const targetUrl = new URL(backend.url);
+  const authKey = backend.auth_env ? process.env[backend.auth_env] : null;
+  const timeoutState = { upstreamResponse: null, fatalTimeoutTriggered: false };
+  const streamUsage = createStreamUsageTracker();
 
+  // Convert Anthropic messages to Ollama messages
+  const messages = [];
+  if (body.system) {
+    messages.push({ role: 'system', content: body.system });
+  }
+
+  for (const m of (body.messages || [])) {
+    let content = '';
+    if (Array.isArray(m.content)) {
+      content = m.content.map(c => {
+        if (c.type === 'text') return c.text || '';
+        return '';
+      }).join('\n').trim();
+    } else {
+      content = String(m.content || '').trim();
+    }
+    if (content) {
+      messages.push({ role: m.role, content });
+    }
+  }
+
+  const outBody = {
+    model: effectiveModel || body.model,
+    messages,
+    stream: Boolean(body.stream),
+    think: false, // Disable reasoning overhead for worker tasks
+    options: {
+      temperature: body.temperature ?? 0,
+      num_ctx: (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536,
+      num_predict: body.max_tokens || 4096,
+    }
+  };
+
+  const bodyStr = JSON.stringify(outBody);
+  const urlStr = _ollamaUrl(backend.url, '/api/chat');
+  const headers = {
+    'content-type': 'application/json',
+    'content-length': Buffer.byteLength(bodyStr),
+  };
+  if (authKey) headers['authorization'] = `Bearer ${authKey}`;
+  if (!authKey && req.headers['x-api-key']) headers['authorization'] = `Bearer ${req.headers['x-api-key']}`;
+
+  const isHttps = targetUrl.protocol === 'https:';
+  const lib = isHttps ? https : http;
+
+  const up = lib.request(urlStr, {
+    method: 'POST',
+    headers,
+  }, upRes => {
+    timeoutState.upstreamResponse = upRes;
+    const respHeaders = { ...upRes.headers };
+
+    // CRITICAL: We are transforming the body to Anthropic format, 
+    // so the upstream Content-Length is invalid. Delete it so 
+    // Node.js uses chunked encoding or calculates a new one.
+    delete respHeaders['content-length'];
+
+    if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-c-thru-served-by'] = effectiveModel;
+    addResolvedViaHeader(respHeaders, requestMeta);
+
+    res.writeHead(upRes.statusCode, respHeaders);
+
+    let buf = '';
+    upRes.on('data', chunk => {
+      if (body.stream) {
+        buf += chunk.toString('utf8');
+        let idx;
+        while ((idx = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line) continue;
+          try {
+            const evt = JSON.parse(line);
+            if (evt.message && evt.message.content) {
+              const sse = {
+                type: 'content_block_delta',
+                index: 0,
+                delta: { type: 'text_delta', text: evt.message.content }
+              };
+              res.write(`data: ${JSON.stringify(sse)}\n\n`);
+            }
+            if (evt.done) {
+              const usage = {
+                input_tokens: evt.prompt_eval_count || 0,
+                output_tokens: evt.eval_count || 0
+              };
+              finalizeTrackedUsage(requestMeta, { status_code: 200, ...usage });
+              res.write(`data: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+              res.write('data: [DONE]\n\n');
+            }
+          } catch {}
+        }
+      } else {
+        buf += chunk.toString('utf8');
+      }
+    });
+
+    upRes.on('end', () => {
+      if (!body.stream) {
+        try {
+          const full = JSON.parse(buf);
+          const responseText = full.message?.content || '';
+          const msgId = `ollama-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          const anthroResp = {
+            id: msgId,
+            type: 'message',
+            role: 'assistant',
+            model: outBody.model,
+            content: [{ type: 'text', text: responseText }],
+            stop_reason: 'end_turn',
+            usage: {
+              input_tokens: full.prompt_eval_count || 0,
+              output_tokens: full.eval_count || 0
+            }
+          };
+          finalizeTrackedUsage(requestMeta, {
+            status_code: 200,
+            input_tokens: anthroResp.usage.input_tokens,
+            output_tokens: anthroResp.usage.output_tokens
+          });
+          if (!res.writableEnded) {
+            res.end(JSON.stringify(anthroResp));
+          }
+        } catch (e) {
+          debugLog('proxy.ollama.parse_error', { error: e.message, body: buf });
+          if (!res.headersSent) send(res, 500, { error: 'failed to parse ollama response' });
+          else res.end();
+        }
+      } else {
+        if (!res.writableEnded) res.end();
+      }
+      // Warm pulse (fire and forget)
+      ollamaLoad(backend.url, outBody.model).catch(() => {});
+    });
+  });
+
+  attachFatalCallTimeout(up, res, targetUrl.origin, FATAL_CALL_TIMEOUT_MS, timeoutState);
+  up.on('error', e => {
+    finalizeTrackedUsage(requestMeta, { status_code: 502, input_tokens: 0, output_tokens: 0, stop_reason: 'proxy_error' });
+    if (!res.headersSent) send(res, 502, { error: formatBackendError('ollama', targetUrl.origin, e) });
+    else res.end();
+  });
+  up.write(bodyStr);
+  up.end();
+}
 // ── Request handler ───────────────────────────────────────────────────
 
 async function readBody(req) {
@@ -1916,18 +2360,40 @@ function handleRequestWithFallback(req, res, body, resolved) {
   const clientModel = body.model;
   const endpoint = req.url;
 
-  const doForward = (b, em, fwdBody, extras = {}) => {
+  if (!backend) return send(res, 500, { error: 'no backend resolved' });
+
+  // Check if this model has fallback strategies or capability-layer chains
+  const terminalModel = effectiveModel || clientModel;
+  const terminalKey = resolved.routingKey || terminalModel;
+  const strategies = CONFIG.fallback_strategies || {};
+  const strategy = strategies[terminalModel];
+  const _hwTier = resolveActiveTier(CONFIG);
+  const _capKey = logicalRole ? profileAliasKey(logicalRole) : null;
+  const hasCapabilityChain = !!(_capKey && CONFIG.fallback_chains?.[_hwTier]?.[_capKey]);
+  const _activeMode = resolveLlmMode(CONFIG);
+  const _isBqMode = _activeMode === 'cloud-best-quality' || _activeMode === 'local-best-quality';
+  const _tolerancePct = typeof CONFIG.quality_tolerance_pct === 'number' ? CONFIG.quality_tolerance_pct : DEFAULT_QUALITY_TOLERANCE_PCT;
+
+  const doForward = (activeResolved, rawBody, extras = {}) => {
+    const forward = safeBuildForwardBody(req, res, rawBody, activeResolved, 'request default evaluation failed');
+    if (!forward) return;
+    const { body: fwdBody, requestDefaultSources } = forward;
+    const b = activeResolved.backend;
+    const em = activeResolved.effectiveModel;
     res._statsBackend = b;
-    res._statsEffectiveModel = em || fwdBody.model || clientModel;
+    res._statsEffectiveModel = activeResolved.routingKey || em || fwdBody.model || clientModel;
     const requestMeta = {
       endpoint,
       clientModel,
       effectiveModel: em || fwdBody.model || clientModel,
       backend: b,
+      backendId: b?.id || null,
       stream: Boolean(fwdBody && fwdBody.stream),
       startedAtMs: nowMs(),
       capability: logicalRole,
       logicalRole,
+      targetId: activeResolved.targetId || null,
+      requestDefaultSources,
       localTerminalAppended: extras.localTerminalAppended || false,
     };
     if (b.kind === 'ollama') {
@@ -1943,21 +2409,8 @@ function handleRequestWithFallback(req, res, body, resolved) {
     return send(res, 500, { error: `unknown backend kind: ${b.kind}` });
   };
 
-  if (!backend) return send(res, 500, { error: 'no backend resolved' });
-
-  // Check if this model has fallback strategies or capability-layer chains
-  const terminalModel = effectiveModel || clientModel;
-  const strategies = CONFIG.fallback_strategies || {};
-  const strategy = strategies[terminalModel];
-  const _hwTier = resolveActiveTier(CONFIG);
-  const _capKey = logicalRole ? profileAliasKey(logicalRole) : null;
-  const hasCapabilityChain = !!(_capKey && CONFIG.fallback_chains?.[_hwTier]?.[_capKey]);
-  const _activeMode = resolveLlmMode(CONFIG);
-  const _isBqMode = _activeMode === 'cloud-best-quality' || _activeMode === 'local-best-quality';
-  const _tolerancePct = typeof CONFIG.quality_tolerance_pct === 'number' ? CONFIG.quality_tolerance_pct : DEFAULT_QUALITY_TOLERANCE_PCT;
-
   if (!strategy && !hasCapabilityChain) {
-    return doForward(backend, effectiveModel, body);
+    return doForward(resolved, body);
   }
 
   // Chain fallback: iterate all candidates in strategy.event[failureClass] or fallback_chains,
@@ -1967,13 +2420,14 @@ function handleRequestWithFallback(req, res, body, resolved) {
     for (let i = startIdx; i < candidates.length; i++) {
       const rawCandidate = candidates[i];
       const candidateModel = resolveLogicalAlias(resolveRouteModel(rawCandidate));
-      if (isCooledDown(candidateModel)) {
-        proxyLog('fallback.skip_dead', { candidate: candidateModel, index: i });
-        continue;
-      }
       const cResolved = resolveBackend(candidateModel);
       if (cResolved.error) {
         proxyLog('fallback.skip_unresolvable', { candidate: candidateModel, error: cResolved.error });
+        continue;
+      }
+      const candidateKey = cResolved.routingKey || candidateModel;
+      if (isCooledDown(candidateKey)) {
+        proxyLog('fallback.skip_dead', { candidate: candidateModel, candidate_key: candidateKey, index: i });
         continue;
       }
       return attemptCandidate(candidateModel, cResolved, candidates, failureClass, i, appendedTerminalIdx);
@@ -1985,7 +2439,13 @@ function handleRequestWithFallback(req, res, body, resolved) {
 
   const attemptCandidate = (candidateModel, cResolved, candidates, failureClass, currentIdx, appendedTerminalIdx = -1) => {
     const cBackend = cResolved.backend;
-    const cBody = { ...body, model: candidateModel };
+    const candidateKey = cResolved.routingKey || candidateModel;
+    const candidateForward = safeBuildForwardBody(req, res, { ...body, model: candidateModel }, cResolved, 'fallback request default evaluation failed');
+    if (!candidateForward) return;
+    const { body: cBody, requestDefaultSources } = candidateForward;
+    if (cBackend.kind === 'ollama') {
+      cBody.keep_alive = OLLAMA_KEEP_ALIVE_SECONDS;
+    }
     const cBodyStr = JSON.stringify(cBody);
     const cUrl = new URL(cBackend.url);
     const cHeaders = {
@@ -2002,6 +2462,28 @@ function handleRequestWithFallback(req, res, body, resolved) {
       if (req.headers['anthropic-beta']) cHeaders['anthropic-beta'] = req.headers['anthropic-beta'];
       if (k) cHeaders['x-api-key'] = k;
     }
+    if (cBackend.kind === 'ollama') {
+      warmOllamaModel(cResolved.effectiveModel || candidateModel, cBackend.id, cBackend.url);
+      (async () => {
+        if (!(await ensureOllamaReadyOrSend(res, cResolved.effectiveModel || candidateModel, cBackend.url, logicalRole))) return;
+        return forwardOllama(req, res, { ...body, model: candidateModel }, cBackend, cResolved.effectiveModel, {
+          endpoint,
+          clientModel,
+          effectiveModel: cResolved.effectiveModel,
+          backend: cBackend,
+          startedAtMs: cStart,
+          capability: logicalRole,
+          logicalRole,
+          targetId: cResolved.targetId || null,
+          requestDefaultSources,
+          localTerminalAppended: appendedTerminalIdx !== -1 && currentIdx === appendedTerminalIdx,
+        });
+      })().catch(err => {
+        if (!res.headersSent) send(res, 500, { error: err.message });
+      });
+      return;
+    }
+    
     const cLib = cUrl.protocol === 'https:' ? https : http;
     const cStart = nowMs();
     proxyLog('fallback.attempt', { candidate: candidateModel, backend_id: cBackend.id, index: currentIdx });
@@ -2036,16 +2518,24 @@ function handleRequestWithFallback(req, res, body, resolved) {
         const cFailureClass = classifyError(upRes.statusCode, upRes.headers, cRaw);
         if (cFailureClass) {
           proxyLog('fallback.candidate_failed', { candidate: candidateModel, status_code: upRes.statusCode, failure_class: cFailureClass });
-          setCooldown(candidateModel, cFailureClass, upRes.statusCode, upRes.headers);
+          setCooldown(candidateKey, cFailureClass, upRes.statusCode, upRes.headers);
           return tryFallbackChain(candidates, failureClass, currentIdx + 1, appendedTerminalIdx);
         }
         const localTerminalFired = appendedTerminalIdx !== -1 && currentIdx === appendedTerminalIdx;
         proxyLog('fallback.candidate_success', { candidate: candidateModel, terminal_model: terminalModel, status_code: upRes.statusCode, elapsed_ms: nowMs() - cStart, capability: logicalRole, profile: logicalRole, local_terminal_appended: localTerminalFired });
         recordFallbackEvent(terminalModel, candidateModel, 'chain_success');
         const respHeaders = { ...upRes.headers };
-        if (ANNOTATE_MODEL) respHeaders['x-claude-proxy-served-by'] = candidateModel;
-        respHeaders['x-claude-proxy-fallback-from'] = terminalModel;
-        addResolvedViaHeader(respHeaders, { capability: logicalRole, logicalRole, effectiveModel: candidateModel, localTerminalAppended: localTerminalFired });
+        if (ANNOTATE_MODEL) respHeaders['x-c-thru-served-by'] = candidateModel;
+        respHeaders['x-c-thru-fallback-from'] = terminalModel;
+        addResolvedViaHeader(respHeaders, {
+          capability: logicalRole,
+          logicalRole,
+          effectiveModel: cResolved.effectiveModel,
+          backend: cResolved.backend,
+          targetId: cResolved.targetId || null,
+          requestDefaultSources,
+          localTerminalAppended: localTerminalFired,
+        });
         res.writeHead(upRes.statusCode, respHeaders);
         res.end(cRaw);
       });
@@ -2058,32 +2548,33 @@ function handleRequestWithFallback(req, res, body, resolved) {
     }
     cUp.on('error', e => {
       proxyLog('fallback.candidate_error', { candidate: candidateModel, error: e.message });
-      setCooldown(candidateModel, 'network_failure', 502, {});
+      setCooldown(candidateKey, 'network_failure', 502, {});
       return tryFallbackChain(candidates, failureClass, currentIdx + 1, appendedTerminalIdx);
     });
     // For Ollama candidates, fire-and-forget a warm-up so a cold local model
     // loads into memory in parallel with the first request. Debounced per-model.
-    if (cBackend.kind === 'ollama') warmOllamaModel(candidateModel, cBackend.id, cBackend.url);
+    if (cBackend.kind === 'ollama') warmOllamaModel(cResolved.effectiveModel || candidateModel, cBackend.id, cBackend.url);
     cUp.write(cBodyStr);
     cUp.end();
   };
 
-  const healthEntry = ensureBackendHealthEntry(backend, terminalModel);
-  const recoveryProbeDue = shouldBypassCooldownForRecoveryProbe(backend, terminalModel);
-  const cooldownActive = isCooledDown(terminalModel);
+  const healthEntry = ensureBackendHealthEntry(backend, terminalKey);
+  const recoveryProbeDue = shouldBypassCooldownForRecoveryProbe(backend, terminalKey);
+  const cooldownActive = isCooledDown(terminalKey);
   debugLog('proxy.remap.evaluate', {
     terminal_model: terminalModel,
+    terminal_key: terminalKey,
     backend_id: backend.id,
     backend_kind: backend.kind,
     health_state: healthEntry?.state || null,
     last_failure_class: healthEntry?.last_failure_class || null,
     next_probe_at_ms: healthEntry?.next_probe_at_ms || 0,
     cooldown_active: cooldownActive,
-    cooldown_failure_class: cooldowns.get(terminalModel)?.failureClass || null,
+    cooldown_failure_class: cooldowns.get(terminalKey)?.failureClass || null,
     recovery_probe_due: recoveryProbeDue,
   });
 
-  if (shouldPreferFallbackForHealth(backend, terminalModel)) {
+  if (shouldPreferFallbackForHealth(backend, terminalKey)) {
     const fallbackResult = resolveFallbackModel(terminalModel, healthEntry?.last_failure_class || 'network_failure', logicalRole);
     if (fallbackResult) {
       const { model: fallbackModel, localTerminalAppended } = fallbackResult;
@@ -2097,14 +2588,14 @@ function handleRequestWithFallback(req, res, body, resolved) {
           fallback_effective_model: fallbackResolved.effectiveModel,
           local_terminal_appended: localTerminalAppended,
         });
-        res.setHeader('x-claude-proxy-fallback-reason', `health-${healthEntry.state}`);
-        return doForward(fallbackResolved.backend, fallbackResolved.effectiveModel, { ...body, model: fallbackModel }, { localTerminalAppended });
+        res.setHeader('x-c-thru-fallback-reason', `health-${healthEntry.state}`);
+        return doForward(fallbackResolved, { ...body, model: fallbackModel }, { localTerminalAppended });
       }
     }
   }
 
   if (cooldownActive && !recoveryProbeDue) {
-    const fallbackResult = resolveFallbackModel(terminalModel, cooldowns.get(terminalModel)?.failureClass || 'rate_limit', logicalRole);
+    const fallbackResult = resolveFallbackModel(terminalModel, cooldowns.get(terminalKey)?.failureClass || 'rate_limit', logicalRole);
     if (fallbackResult) {
       const { model: fallbackModel, localTerminalAppended } = fallbackResult;
       const fallbackResolved = resolveBackend(fallbackModel);
@@ -2117,7 +2608,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
           fallback_effective_model: fallbackResolved.effectiveModel,
           local_terminal_appended: localTerminalAppended,
         });
-        return doForward(fallbackResolved.backend, fallbackResolved.effectiveModel, { ...body, model: fallbackModel }, { localTerminalAppended });
+        return doForward(fallbackResolved, { ...body, model: fallbackModel }, { localTerminalAppended });
       }
     }
   }
@@ -2132,8 +2623,10 @@ function handleRequestWithFallback(req, res, body, resolved) {
   });
 
   // Try primary — intercept the response to check for classified errors
+  const primaryForward = safeBuildForwardBody(req, res, body, resolved, 'request default evaluation failed');
+  if (!primaryForward) return;
   const targetUrl = new URL(backend.url);
-  const bodyStr = JSON.stringify(body);
+  const bodyStr = JSON.stringify(primaryForward.body);
   const fwdHeaders = {
     'content-type': 'application/json',
     'content-length': Buffer.byteLength(bodyStr),
@@ -2203,9 +2696,9 @@ function handleRequestWithFallback(req, res, body, resolved) {
       const raw = Buffer.concat(errChunks).toString();
       const failureClass = classifyError(upRes.statusCode, upRes.headers, raw);
       if (failureClass) {
-        noteBackendFailure(backend, terminalModel, failureClass, nowMs() - startedAt, `status_${upRes.statusCode}`);
+        noteBackendFailure(backend, terminalKey, failureClass, nowMs() - startedAt, `status_${upRes.statusCode}`);
         recordFailureClass(failureClass);
-        setCooldown(terminalModel, failureClass, upRes.statusCode, upRes.headers);
+        setCooldown(terminalKey, failureClass, upRes.statusCode, upRes.headers);
         let candidates = (CONFIG.fallback_strategies?.[terminalModel]?.event?.[failureClass]) || [];
         let appendedTerminalIdx = -1;
         if (candidates.length === 0 && _capKey) {
@@ -2217,7 +2710,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
           return tryFallbackChain(candidates, failureClass, 0, appendedTerminalIdx);
         }
       } else if (upRes.statusCode < 400) {
-        noteBackendSuccess(backend, terminalModel, nowMs() - startedAt);
+        noteBackendSuccess(backend, terminalKey, nowMs() - startedAt);
       }
       let usage = { input_tokens: 0, output_tokens: 0, stop_reason: null };
       try { usage = usageFromJsonPayload(JSON.parse(raw)); } catch { /* ignore */ }
@@ -2226,6 +2719,8 @@ function handleRequestWithFallback(req, res, body, resolved) {
         clientModel,
         effectiveModel,
         backend,
+        targetId: resolved.targetId || null,
+        requestDefaultSources: primaryForward.requestDefaultSources,
         stream: false,
         startedAtMs: startedAt,
       }, {
@@ -2235,8 +2730,15 @@ function handleRequestWithFallback(req, res, body, resolved) {
         stop_reason: usage.stop_reason,
       });
       const respHeaders = { ...upRes.headers };
-      if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-claude-proxy-served-by'] = effectiveModel;
-      addResolvedViaHeader(respHeaders, { capability: logicalRole, logicalRole, effectiveModel: effectiveModel || clientModel });
+      if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-c-thru-served-by'] = effectiveModel;
+      addResolvedViaHeader(respHeaders, {
+        capability: logicalRole,
+        logicalRole,
+        effectiveModel: effectiveModel || clientModel,
+        backend,
+        targetId: resolved.targetId || null,
+        requestDefaultSources: primaryForward.requestDefaultSources,
+      });
       res.writeHead(upRes.statusCode, respHeaders);
       res.end(raw);
     });
@@ -2276,13 +2778,15 @@ function handleRequestWithFallback(req, res, body, resolved) {
       is_fatal_timeout: isFatalCallTimeout(e),
     });
     if (isFatalCallTimeout(e)) {
-      noteBackendFailure(backend, terminalModel, 'network_failure', nowMs() - startedAt, 'fatal_call_timeout');
+      noteBackendFailure(backend, terminalKey, 'network_failure', nowMs() - startedAt, 'fatal_call_timeout');
       recordFailureClass('network_failure');
       finalizeTrackedUsage({
         endpoint,
         clientModel,
         effectiveModel,
         backend,
+        targetId: resolved.targetId || null,
+        requestDefaultSources: primaryForward.requestDefaultSources,
         stream: false,
         startedAtMs: startedAt,
       }, { status_code: 504, input_tokens: 0, output_tokens: 0, stop_reason: 'fatal_timeout' });
@@ -2291,9 +2795,9 @@ function handleRequestWithFallback(req, res, body, resolved) {
       return;
     }
     const failureClass = 'network_failure';
-    noteBackendFailure(backend, terminalModel, failureClass, nowMs() - startedAt, e.message || 'network_error');
+    noteBackendFailure(backend, terminalKey, failureClass, nowMs() - startedAt, e.message || 'network_error');
     recordFailureClass(failureClass);
-    setCooldown(terminalModel, failureClass, 502, {});
+    setCooldown(terminalKey, failureClass, 502, {});
     let candidates = (CONFIG.fallback_strategies?.[terminalModel]?.event?.[failureClass]) || [];
     let appendedTerminalIdx = -1;
     if (candidates.length === 0 && _capKey) {
@@ -2317,6 +2821,8 @@ function handleRequestWithFallback(req, res, body, resolved) {
       clientModel,
       effectiveModel,
       backend,
+      targetId: resolved.targetId || null,
+      requestDefaultSources: primaryForward.requestDefaultSources,
       stream: false,
       startedAtMs: startedAt,
     }, { status_code: 502, input_tokens: 0, output_tokens: 0, stop_reason: 'network_error' });
@@ -2370,6 +2876,7 @@ const server = http.createServer(async (req, res) => {
     // Merge upstream Anthropic models with model_routes and routes keys
     const modelRoutes = CONFIG.model_routes || {};
     const routes = CONFIG.routes || {};
+    const targets = CONFIG.targets || {};
     const backends = CONFIG.backends || {};
 
     // Find the anthropic backend to proxy the upstream models list
@@ -2384,6 +2891,12 @@ const server = http.createServer(async (req, res) => {
       })),
       ...Object.keys(routes).map(id => ({
         id: id,
+        type: 'model',
+        display_name: id,
+        capabilities: { thinking: { supported: true, types: {} } },
+      })),
+      ...Object.keys(targets).map(id => ({
+        id,
         type: 'model',
         display_name: id,
         capabilities: { thinking: { supported: true, types: {} } },
@@ -2485,21 +2998,25 @@ const server = http.createServer(async (req, res) => {
         return send(res, code, payload);
       }
       const { backend, effectiveModel, logicalRole: countTokRole } = resolved;
-      const fwdBody = { ...body, model: effectiveModel || model };
+      const targetBody = safeBuildForwardBody(req, res, body, resolved, 'request default evaluation failed');
+      if (!targetBody) return;
+      const fwdBody = targetBody.body;
       const requestMeta = {
         endpoint: req.url,
         clientModel: model,
         effectiveModel: effectiveModel || model,
         backend,
+        backendId: backend?.id || null,
         stream: Boolean(fwdBody.stream),
         startedAtMs: nowMs(),
         capability: countTokRole,
         logicalRole: countTokRole,
+        targetId: resolved.targetId || null,
+        requestDefaultSources: targetBody.requestDefaultSources,
       };
       if (backend.kind === 'ollama') {
         if (!(await ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url, countTokRole))) return;
-        // For Ollama: forward to Ollama's /v1/messages/count_tokens equivalent
-        return forwardOllamaPassthrough(req, res, fwdBody, backend, effectiveModel, requestMeta);
+        return forwardOllama(req, res, fwdBody, backend, effectiveModel, requestMeta);
       }
       return forwardAnthropic(req, res, fwdBody, backend, effectiveModel, requestMeta);
     }
@@ -2511,6 +3028,12 @@ const server = http.createServer(async (req, res) => {
     return send(res, 400, { error: 'model is required' });
   }
 
+  const stubResponse = tryPlanStub(req, body);
+  if (stubResponse) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify(stubResponse));
+  }
+
   const resolved = resolveBackend(model);
   if (resolved.error) {
     const code = resolved.status || 400;
@@ -2519,24 +3042,29 @@ const server = http.createServer(async (req, res) => {
     return send(res, code, payload);
   }
 
-  stats.currentInFlight++;
   const { backend, effectiveModel, logicalRole } = resolved;
   const clientModel = model;
-  const fwdBody = { ...body, model: effectiveModel || model };
+  const targetBody = safeBuildForwardBody(req, res, body, resolved, 'request default evaluation failed');
+  if (!targetBody) return;
+  const fwdBody = targetBody.body;
+  stats.currentInFlight++;
   const requestMeta = {
     endpoint: req.url,
     clientModel,
     effectiveModel: effectiveModel || model,
     backend,
+    backendId: backend?.id || null,
     stream: Boolean(fwdBody.stream),
     startedAtMs: nowMs(),
     capability: logicalRole,
     logicalRole,
+    targetId: resolved.targetId || null,
+    requestDefaultSources: targetBody.requestDefaultSources,
   };
 
   // Track status via response wrapper; use mutable refs so fallback paths update attribution.
   res._statsBackend = backend;
-  res._statsEffectiveModel = effectiveModel || model;
+  res._statsEffectiveModel = resolved.routingKey || effectiveModel || model;
   const originalWriteHead = res.writeHead.bind(res);
   res.writeHead = function(statusCode, ...args) {
     recordStats(req.url, res._statsBackend, clientModel, res._statsEffectiveModel, statusCode);
@@ -2546,25 +3074,37 @@ const server = http.createServer(async (req, res) => {
 
   // Use fallback-aware forwarding for models with strategies or capability-layer chains
   const terminalModel = effectiveModel || model;
+  const terminalKey = resolved.routingKey || terminalModel;
   const strategies = CONFIG.fallback_strategies || {};
   const _dispatchHw = resolveActiveTier(CONFIG);
   const _dispatchCapKey = logicalRole ? profileAliasKey(logicalRole) : null;
   const hasCapChain = !!(_dispatchCapKey && CONFIG.fallback_chains?.[_dispatchHw]?.[_dispatchCapKey]);
-  proxyLog('dispatch', { terminal_model: terminalModel, has_strategy: !!strategies[terminalModel], has_cap_chain: hasCapChain, backend_kind: backend.kind });
+  proxyLog('dispatch', { terminal_model: terminalModel, terminal_key: terminalKey, has_strategy: !!strategies[terminalModel], has_cap_chain: hasCapChain, backend_kind: backend.kind });
   if (strategies[terminalModel] || hasCapChain) {
-    handleRequestWithFallback(req, res, fwdBody, resolved);
+    handleRequestWithFallback(req, res, body, resolved);
   } else {
-    if (backend.kind === 'ollama' && !(await ensureOllamaReadyOrSend(res, effectiveModel || model, backend.url, logicalRole))) return;
-    if (backend.kind === 'anthropic') return forwardAnthropic(req, res, fwdBody, backend, effectiveModel, requestMeta);
-    if (backend.kind === 'ollama') return forwardOllama(req, res, fwdBody, backend, effectiveModel, requestMeta);
+    if (backend.kind === 'ollama') {
+      warmOllamaModel(effectiveModel || clientModel, backend.id, backend.url);
+      (async () => {
+        if (!(await ensureOllamaReadyOrSend(res, effectiveModel || clientModel, backend.url, logicalRole))) return;
+        return forwardOllama(req, res, fwdBody, backend, effectiveModel, requestMeta);
+      })().catch(err => {
+        if (!res.headersSent) send(res, 500, { error: err.message });
+      });
+      return;
+    }
+    
+    if (backend.kind === 'anthropic') {
+      return forwardAnthropic(req, res, fwdBody, backend, effectiveModel, requestMeta);
+    }
+
     return send(res, 500, { error: `unknown backend kind: ${backend.kind}` });
   }
-
 });
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`claude-proxy: port ${err.port || INITIAL_PORT} in use — singleton already running`);
+    console.error(`c-thru: port ${err.port || INITIAL_PORT} in use — singleton already running`);
     process.exit(0);
   }
   throw err;
@@ -2622,6 +3162,7 @@ async function probeModel(model, failureClassHint) {
   const resolved = resolveBackend(model);
   if (resolved.error) return;
   const { backend } = resolved;
+  const cooldownKey = resolved.routingKey || model;
   const probeUrl = probeUrlForBackend(backend);
   if (!probeUrl) return;
 
@@ -2637,9 +3178,9 @@ async function probeModel(model, failureClassHint) {
   const result = await httpProbe(probeUrl, probeHeaders, STARTUP_PROBE_TIMEOUT_MS);
   if (result.ok) {
     // Probe succeeded — if model was marked dead, bring it back alive.
-    if (cooldowns.has(model)) {
-      proxyLog('liveness.mark_alive', { model });
-      clearCooldown(model);
+    if (cooldowns.has(cooldownKey)) {
+      proxyLog('liveness.mark_alive', { model: cooldownKey });
+      clearCooldown(cooldownKey);
     }
     return;
   }
@@ -2647,8 +3188,8 @@ async function probeModel(model, failureClassHint) {
 
   const failureClass = classifyError(result.statusCode, result.headers, result.body) || failureClassHint || 'network_failure';
   debugLog('proxy.startup.probe.failure', { model, probe_url: probeUrl, status_code: result.statusCode, failure_class: failureClass });
-  console.error(`claude-proxy: startup probe: '${model}' → ${failureClass} (status=${result.statusCode || 'no-response'})`);
-  setCooldown(model, failureClass, result.statusCode, result.headers);
+  console.error(`c-thru: startup probe: '${model}' → ${failureClass} (status=${result.statusCode || 'no-response'})`);
+  setCooldown(cooldownKey, failureClass, result.statusCode, result.headers);
   return failureClass;
 }
 
@@ -2740,10 +3281,19 @@ async function runStartupProbes() {
   debugLog('proxy.startup.probe.done', {});
 }
 
+process.on('uncaughtException', err => {
+  process.stderr.write(`FATAL UNCAUGHT EXCEPTION: ${err.stack || err.message || err}\n`);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  process.stderr.write(`FATAL UNHANDLED REJECTION: ${reason?.stack || reason || 'Unknown reason'}\n`);
+  process.exit(1);
+});
+
 server.listen(INITIAL_PORT, '127.0.0.1', () => {
   proxyApiPort = server.address().port;
   if (!EXPLICIT_PORT) process.stdout.write(`READY ${proxyApiPort}\n`);
-  console.error(`claude-proxy listening on 127.0.0.1:${proxyApiPort} (pid=${process.pid})`);
+  console.error(`c-thru listening on 127.0.0.1:${proxyApiPort} (pid=${process.pid})`);
   try { fs.writeFileSync(PID_FILE, String(process.pid)); } catch {}
   if (STARTUP_PROBE_ENABLED) setImmediate(() => runStartupProbes().catch(() => {}));
   startLivenessProbeLoop();
@@ -2829,7 +3379,7 @@ const hooksServer = require('http').createServer((req, res) => {
                 issues.push(`Note: lightweight model active — this task may benefit from --route default (confidence: ${result.confidence}%)`);
               }
             } catch (classifyErr) {
-              console.error('claude-proxy: classify_intent error (skipped):', classifyErr.message);
+              console.error('c-thru: classify_intent error (skipped):', classifyErr.message);
             }
           }
 
@@ -2851,7 +3401,7 @@ const hooksServer = require('http').createServer((req, res) => {
             res.end('{}');
           }
         } catch (err) {
-          console.error('claude-proxy: /hooks/context error:', err.message);
+          console.error('c-thru: /hooks/context error:', err.message);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end('{}');
         }
@@ -2868,36 +3418,44 @@ let hooksListening = false;
 hooksServer.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     // Port busy — degrade gracefully. Core proxy continues; hooks features unavailable.
-    console.error(`claude-proxy: hooks port ${HOOKS_PORT} in use — hooks listener disabled (core proxy unaffected)`);
+    console.error(`c-thru: hooks port ${HOOKS_PORT} in use — hooks listener disabled (core proxy unaffected)`);
     return;
   }
-  console.error(`claude-proxy: hooks listener error: ${err.message}`);
+  console.error(`c-thru: hooks listener error: ${err.message}`);
 });
 
 hooksServer.listen(HOOKS_PORT, '127.0.0.1', () => {
   hooksListening = true;
-  console.error(`claude-proxy: hooks listener bound on :${HOOKS_PORT}`);
+  console.error(`c-thru: hooks listener bound on :${HOOKS_PORT}`);
 });
 
-function shutdown() {
-  try { fs.unlinkSync(PID_FILE); } catch {}
+function shutdown(sig) {
+  process.stderr.write(`>>> SHUTDOWN START: signal=${sig}\n`);
+  try {
+    if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
+  } catch {}
   if (usagePersistTimer) {
     clearTimeout(usagePersistTimer);
     usagePersistTimer = null;
   }
+  process.stderr.write('>>> SHUTDOWN: Flushing usage\n');
   flushPersistentUsageNowSync();
   const closers = [new Promise(r => server.close(r))];
   if (hooksListening) closers.push(new Promise(r => hooksServer.close(r)));
-  Promise.all(closers).then(() => process.exit(0)).catch(() => process.exit(0));
+  process.stderr.write('>>> SHUTDOWN: Waiting for closers\n');
+  Promise.all(closers).then(() => {
+    process.stderr.write('>>> SHUTDOWN: End exit 0\n');
+    process.exit(0);
+  }).catch((err) => {
+    process.stderr.write(`>>> SHUTDOWN: End exit 0 (with closer error ${err.message})\n`);
+    process.exit(0);
+  });
 }
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGHUP', () => {
-  // Re-sync layered config (overrides → effective) before reloading from disk so that
-  // edits to model-map.overrides.json take effect without a proxy restart.
-  maybeSyncLayeredProfileModelMap();
   if (reloadConfigFromDisk()) {
-    console.error('claude-proxy: config reloaded via SIGHUP');
+    console.error('c-thru: config reloaded via SIGHUP');
   }
 });

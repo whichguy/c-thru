@@ -54,16 +54,56 @@
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "hard_fail" },
-      "judge-strict":            { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "hard_fail" },
-      "orchestrator":            { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
-      "code-analyst":            { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
-      "pattern-coder":           { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
-      "deep-coder":              { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
-      "commit-message-generator":{ "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "cascade" },
-      "deep-coder-cloud":        { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "hard_fail" },
-      "code-analyst-cloud":      { "connected_model": "qwen3:1.7b", "disconnect_model": "qwen3:1.7b", "on_failure": "hard_fail" }
+      "judge": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "hard_fail"
+      },
+      "judge-strict": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "hard_fail"
+      },
+      "orchestrator": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "code-analyst": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "pattern-coder": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "deep-coder": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "local-planner": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "commit-message-generator": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "deep-coder-cloud": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "hard_fail"
+      },
+      "code-analyst-cloud": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "hard_fail"
+      }
     },
     "32gb": {
       "default": {
@@ -96,16 +136,56 @@
         "disconnect_model": "qwen3.5:9b",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "qwen3:1.7b",  "disconnect_model": "qwen3:1.7b",  "on_failure": "hard_fail" },
-      "judge-strict":            { "connected_model": "qwen3:1.7b",  "disconnect_model": "qwen3:1.7b",  "on_failure": "hard_fail" },
-      "orchestrator":            { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "cascade" },
-      "code-analyst":            { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "cascade" },
-      "pattern-coder":           { "connected_model": "qwen3.5:9b",  "disconnect_model": "qwen3.5:9b",  "on_failure": "cascade" },
-      "deep-coder":              { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "cascade" },
-      "commit-message-generator":{ "connected_model": "qwen3:1.7b",  "disconnect_model": "qwen3:1.7b",  "on_failure": "cascade" },
-      "deep-coder-cloud":        { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "hard_fail" },
-      "code-analyst-cloud":      { "connected_model": "gpt-oss:20b", "disconnect_model": "gpt-oss:20b", "on_failure": "hard_fail" }
+      "judge": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "hard_fail"
+      },
+      "judge-strict": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "hard_fail"
+      },
+      "orchestrator": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
+        "on_failure": "cascade"
+      },
+      "code-analyst": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
+        "on_failure": "cascade"
+      },
+      "pattern-coder": {
+        "connected_model": "qwen3.5:9b",
+        "disconnect_model": "qwen3.5:9b",
+        "on_failure": "cascade"
+      },
+      "deep-coder": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
+        "on_failure": "cascade"
+      },
+      "local-planner": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
+        "on_failure": "cascade"
+      },
+      "commit-message-generator": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "deep-coder-cloud": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
+        "on_failure": "hard_fail"
+      },
+      "code-analyst-cloud": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
+        "on_failure": "hard_fail"
+      }
     },
     "48gb": {
       "default": {
@@ -116,8 +196,8 @@
         "on_failure": "cascade"
       },
       "classifier": {
-        "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b",
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "explorer": {
@@ -127,29 +207,97 @@
       },
       "reviewer": {
         "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "workhorse": {
         "connected_model": "gemma4:26b",
-        "disconnect_model": "gemma4:26b",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "coder": {
-        "connected_model": "qwen3.5:35b-a3b-coding-nvfp4",
-        "disconnect_model": "qwen3.5:35b-a3b-coding-nvfp4",
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
-      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
-      "orchestrator":            { "connected_model": "gpt-oss:20b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
-      "code-analyst":            { "connected_model": "gpt-oss:20b",      "disconnect_model": "qwen3.6:35b",  "on_failure": "cascade" },
-      "pattern-coder":           { "connected_model": "qwen3.5:9b",       "disconnect_model": "qwen3.6:35b",  "on_failure": "cascade" },
-      "deep-coder":              { "connected_model": "gpt-oss:20b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.5:35b-a3b-coding-nvfp4", "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
-      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",   "on_failure": "cascade" },
-      "deep-coder-cloud":        { "connected_model": "claude-sonnet-4-6", "disconnect_model": "qwen3.6:35b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.5:35b-a3b-coding-nvfp4", "on_failure": "hard_fail" },
-      "code-analyst-cloud":      { "connected_model": "claude-sonnet-4-6", "disconnect_model": "qwen3.6:35b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "hard_fail" }
+      "judge": {
+        "connected_model": "claude-opus-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-opus-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-opus-4-6",
+          "cloud-judge-only": "claude-opus-4-6"
+        }
+      },
+      "judge-strict": {
+        "connected_model": "claude-opus-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-opus-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "hard_fail",
+        "modes": {
+          "semi-offload": "claude-opus-4-6",
+          "cloud-judge-only": "claude-opus-4-6"
+        }
+      },
+      "orchestrator": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "code-analyst": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "pattern-coder": {
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "deep-coder": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "local-planner": {
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "commit-message-generator": {
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "deep-coder-cloud": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "hard_fail"
+      },
+      "code-analyst-cloud": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "hard_fail"
+      }
     },
     "64gb": {
       "default": {
@@ -160,8 +308,8 @@
         "on_failure": "cascade"
       },
       "classifier": {
-        "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b",
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "hard_fail"
       },
       "explorer": {
@@ -171,29 +319,97 @@
       },
       "reviewer": {
         "connected_model": "gemma4:26b",
-        "disconnect_model": "gemma4:26b",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "workhorse": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gemma4:26b-mxfp8",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "coder": {
-        "connected_model": "qwen3.5:35b-a3b-coding-nvfp4",
-        "disconnect_model": "qwen3.5:35b-a3b-coding-nvfp4",
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
-      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
-      "orchestrator":            { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
-      "code-analyst":            { "connected_model": "gpt-oss:20b",      "disconnect_model": "gpt-oss:20b",  "on_failure": "cascade" },
-      "pattern-coder":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "gpt-oss:20b",  "on_failure": "cascade" },
-      "deep-coder":              { "connected_model": "gpt-oss:20b",      "disconnect_model": "gpt-oss:20b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.5:35b-a3b-coding-nvfp4", "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",  "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
-      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",   "on_failure": "cascade" },
-      "deep-coder-cloud":        { "connected_model": "claude-sonnet-4-6", "disconnect_model": "gpt-oss:20b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.5:35b-a3b-coding-nvfp4", "on_failure": "hard_fail" },
-      "code-analyst-cloud":      { "connected_model": "claude-sonnet-4-6", "disconnect_model": "gpt-oss:20b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "gpt-oss:20b",                "on_failure": "hard_fail" }
+      "judge": {
+        "connected_model": "claude-opus-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-opus-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-opus-4-6",
+          "cloud-judge-only": "claude-opus-4-6"
+        }
+      },
+      "judge-strict": {
+        "connected_model": "claude-opus-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-opus-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "hard_fail",
+        "modes": {
+          "semi-offload": "claude-opus-4-6",
+          "cloud-judge-only": "claude-opus-4-6"
+        }
+      },
+      "orchestrator": {
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "code-analyst": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "pattern-coder": {
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "deep-coder": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "local-planner": {
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "commit-message-generator": {
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "deep-coder-cloud": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "gpt-oss:20b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "hard_fail"
+      },
+      "code-analyst-cloud": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "gpt-oss:20b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "gpt-oss:20b",
+        "on_failure": "hard_fail"
+      }
     },
     "128gb": {
       "default": {
@@ -228,19 +444,88 @@
         "disconnect_model": "qwen3.5:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
-      "judge":                   { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",     "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
-      "judge-strict":            { "connected_model": "claude-opus-4-6",  "disconnect_model": "qwen3.6:35b",     "cloud_best_model": "claude-opus-4-6",   "local_best_model": "qwen3.6:35b",                "on_failure": "hard_fail", "modes": { "semi-offload": "claude-opus-4-6",   "cloud-judge-only": "claude-opus-4-6"  } },
-      "orchestrator":            { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",     "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
-      "code-analyst":            { "connected_model": "gpt-oss:20b",      "disconnect_model": "gpt-oss:20b",     "on_failure": "cascade" },
-      "pattern-coder":           { "connected_model": "qwen3-coder:30b",  "disconnect_model": "gpt-oss:20b",     "on_failure": "cascade" },
-      "deep-coder":              { "connected_model": "qwen3-coder:30b",  "disconnect_model": "qwen3-coder:30b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3-coder:30b",             "on_failure": "cascade" },
-      "local-planner":           { "connected_model": "qwen3.6:35b",      "disconnect_model": "qwen3.6:35b",     "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3.6:35b",                "on_failure": "cascade",  "modes": { "semi-offload": "claude-sonnet-4-6" } },
-      "commit-message-generator":{ "connected_model": "qwen3:1.7b",       "disconnect_model": "qwen3:1.7b",      "on_failure": "cascade" },
-      "deep-coder-cloud":        { "connected_model": "claude-sonnet-4-6", "disconnect_model": "qwen3-coder:30b", "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "qwen3-coder:30b",             "on_failure": "hard_fail" },
-      "code-analyst-cloud":      { "connected_model": "claude-sonnet-4-6", "disconnect_model": "gpt-oss:20b",     "cloud_best_model": "claude-sonnet-4-6", "local_best_model": "gpt-oss:20b",                "on_failure": "hard_fail" }
+      "judge": {
+        "connected_model": "claude-opus-4-6",
+        "disconnect_model": "qwen3.6:35b",
+        "cloud_best_model": "claude-opus-4-6",
+        "local_best_model": "qwen3.6:35b",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-opus-4-6",
+          "cloud-judge-only": "claude-opus-4-6"
+        }
+      },
+      "judge-strict": {
+        "connected_model": "claude-opus-4-6",
+        "disconnect_model": "qwen3.6:35b",
+        "cloud_best_model": "claude-opus-4-6",
+        "local_best_model": "qwen3.6:35b",
+        "on_failure": "hard_fail",
+        "modes": {
+          "semi-offload": "claude-opus-4-6",
+          "cloud-judge-only": "claude-opus-4-6"
+        }
+      },
+      "orchestrator": {
+        "connected_model": "qwen3.6:35b",
+        "disconnect_model": "qwen3.6:35b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "code-analyst": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
+        "on_failure": "cascade"
+      },
+      "pattern-coder": {
+        "connected_model": "qwen3-coder:30b",
+        "disconnect_model": "gpt-oss:20b",
+        "on_failure": "cascade"
+      },
+      "deep-coder": {
+        "connected_model": "qwen3-coder:30b",
+        "disconnect_model": "qwen3-coder:30b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3-coder:30b",
+        "on_failure": "cascade"
+      },
+      "local-planner": {
+        "connected_model": "qwen3.6:35b",
+        "disconnect_model": "qwen3.6:35b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "commit-message-generator": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "deep-coder-cloud": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3-coder:30b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3-coder:30b",
+        "on_failure": "hard_fail"
+      },
+      "code-analyst-cloud": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "gpt-oss:20b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "gpt-oss:20b",
+        "on_failure": "hard_fail"
+      }
     }
   },
   "model_routes": {
+    "qwen3.6:27b-coding-nvfp4": "ollama_local",
     "claude-sonnet-4-6": "anthropic",
     "claude-opus-4-6": "anthropic",
     "re:^claude-.*$": "anthropic",
@@ -265,7 +550,9 @@
     "qwen3.5:1.7b": "ollama_local",
     "qwen3.5:35b-a3b-coding-nvfp4": "ollama_local",
     "gpt-oss:20b": "ollama_local",
-    "devstral-small:2": "ollama_local"
+    "devstral-small:2": "ollama_local",
+    "qwen3.6:27b-coding-mxfp8": "ollama_local",
+    "qwen3.6:35b-a3b-coding-nvfp4": "ollama_local"
   },
   "routes": {
     "default": "general-default",
@@ -330,36 +617,43 @@
     }
   },
   "tool_capability_to_profile": {
-    "default":           "general-default",
-    "classify_intent":   "classifier",
-    "explore_local":     "explorer",
-    "explore_web":       "explorer",
-    "review_quality":    "reviewer",
-    "critique_plan":     "reviewer",
-    "detect_bugs":       "workhorse",
+    "default": "general-default",
+    "classify_intent": "classifier",
+    "explore_local": "explorer",
+    "explore_web": "explorer",
+    "review_quality": "reviewer",
+    "critique_plan": "reviewer",
+    "detect_bugs": "workhorse",
     "navigate_codebase": "workhorse",
-    "generate_tests":    "coder",
-    "deep_review":       "workhorse",
-    "heavy_coder":       "general-default",
-    "code_review_lint":  "classifier",
-    "summarize_light":   "classifier",
-    "code_fix":          "workhorse",
-    "plan_review":       "workhorse",
-    "review_code_full":  "reviewer",
-    "hard_reasoning":    "reviewer"
+    "generate_tests": "coder",
+    "deep_review": "workhorse",
+    "heavy_coder": "general-default",
+    "code_review_lint": "classifier",
+    "summarize_light": "classifier",
+    "code_fix": "workhorse",
+    "plan_review": "workhorse",
+    "review_code_full": "reviewer",
+    "hard_reasoning": "reviewer"
   },
   "models": [
     {
       "name": "glm-5.1:cloud",
-      "equivalents": ["gemma4:26b-mxfp8"]
+      "equivalents": [
+        "gemma4:26b-mxfp8"
+      ]
     },
     {
       "name": "claude-sonnet-4-6",
-      "equivalents": ["glm-5.1:cloud", "gemma4:26b-mxfp8"]
+      "equivalents": [
+        "glm-5.1:cloud",
+        "gemma4:26b-mxfp8"
+      ]
     },
     {
       "name": "claude-opus-4-6",
-      "equivalents": ["qwen3.6:35b"]
+      "equivalents": [
+        "qwen3.6:35b"
+      ]
     }
   ],
   "ollama_defaults": {
@@ -368,141 +662,513 @@
   "quality_tolerance_pct": 5,
   "fallback_chains": {
     "48gb": {
-      "default":      [
-        { "model": "gpt-oss:20b",   "quality_score": 75, "speed_score": 90 },
-        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
-        { "model": "gemma4:e4b",    "quality_score": 45, "speed_score": 70 }
+      "default": [
+        {
+          "model": "glm-5.1:cloud",
+          "quality_score": 72,
+          "speed_score": 80
+        },
+        {
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 82,
+          "speed_score": 85
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
-      "judge":        [
-        { "model": "claude-opus-4-6",              "quality_score": 100, "speed_score": 50 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      "judge": [
+        {
+          "model": "claude-opus-4-6",
+          "quality_score": 100,
+          "speed_score": 50
+        },
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 65
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
       "orchestrator": [
-        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 65
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
-      "deep-coder":   [
-        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      "deep-coder": [
+        {
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 82,
+          "speed_score": 85
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
       "local-planner": [
-        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 65
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
-      "coder":         [
-        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
-        { "model": "qwen3.5:9b",                   "quality_score": 55,  "speed_score": 95 }
+      "coder": [
+        {
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 82,
+          "speed_score": 85
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
-      "workhorse":     [
-        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
-        { "model": "gemma4:26b",                   "quality_score": 65,  "speed_score": 55 }
+      "workhorse": [
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 82,
+          "speed_score": 85
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ]
     },
     "64gb": {
-      "default":      [
-        { "model": "gpt-oss:20b",   "quality_score": 75, "speed_score": 90 },
-        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
-        { "model": "gemma4:26b",    "quality_score": 65, "speed_score": 55 }
+      "default": [
+        {
+          "model": "glm-5.1:cloud",
+          "quality_score": 72,
+          "speed_score": 80
+        },
+        {
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 82,
+          "speed_score": 85
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
-      "judge":        [
-        { "model": "claude-opus-4-6",              "quality_score": 100, "speed_score": 50 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      "judge": [
+        {
+          "model": "claude-opus-4-6",
+          "quality_score": 100,
+          "speed_score": 50
+        },
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 65
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
       "orchestrator": [
-        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 65
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
-      "deep-coder":   [
-        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      "deep-coder": [
+        {
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 82,
+          "speed_score": 85
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
       "local-planner": [
-        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 65
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
-      "coder":         [
-        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
-        { "model": "qwen3.5:9b",                   "quality_score": 55,  "speed_score": 95 }
+      "coder": [
+        {
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 82,
+          "speed_score": 85
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ],
-      "workhorse":     [
-        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
-        { "model": "gemma4:26b-mxfp8",             "quality_score": 65,  "speed_score": 60 }
+      "workhorse": [
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 82,
+          "speed_score": 85
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.5:9b",
+          "quality_score": 55,
+          "speed_score": 95
+        }
       ]
     },
     "128gb": {
-      "default":      [
-        { "model": "gpt-oss:20b",   "quality_score": 75, "speed_score": 90 },
-        { "model": "glm-5.1:cloud", "quality_score": 72, "speed_score": 80 },
-        { "model": "gemma4:26b",    "quality_score": 65, "speed_score": 55 }
+      "default": [
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "glm-5.1:cloud",
+          "quality_score": 72,
+          "speed_score": 80
+        },
+        {
+          "model": "gemma4:26b",
+          "quality_score": 65,
+          "speed_score": 55
+        }
       ],
-      "judge":        [
-        { "model": "claude-opus-4-6",              "quality_score": 100, "speed_score": 50 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      "judge": [
+        {
+          "model": "claude-opus-4-6",
+          "quality_score": 100,
+          "speed_score": 50
+        },
+        {
+          "model": "qwen3.6:35b",
+          "quality_score": 80,
+          "speed_score": 60
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ],
       "orchestrator": [
-        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3.6:35b",
+          "quality_score": 80,
+          "speed_score": 60
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ],
-      "deep-coder":   [
-        { "model": "qwen3-coder:30b",              "quality_score": 85,  "speed_score": 65 },
-        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      "deep-coder": [
+        {
+          "model": "qwen3-coder:30b",
+          "quality_score": 85,
+          "speed_score": 65
+        },
+        {
+          "model": "qwen3.5:35b-a3b-coding-nvfp4",
+          "quality_score": 82,
+          "speed_score": 85
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ],
       "local-planner": [
-        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
-        { "model": "qwen3.6:35b",                  "quality_score": 80,  "speed_score": 60 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3.6:35b",
+          "quality_score": 80,
+          "speed_score": 60
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ],
-      "coder":         [
-        { "model": "qwen3-coder:30b",              "quality_score": 85,  "speed_score": 65 },
-        { "model": "qwen3.5:35b-a3b-coding-nvfp4", "quality_score": 82,  "speed_score": 85 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 }
+      "coder": [
+        {
+          "model": "qwen3-coder:30b",
+          "quality_score": 85,
+          "speed_score": 65
+        },
+        {
+          "model": "qwen3.5:35b-a3b-coding-nvfp4",
+          "quality_score": 82,
+          "speed_score": 85
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ],
-      "workhorse":     [
-        { "model": "claude-sonnet-4-6",            "quality_score": 88,  "speed_score": 70 },
-        { "model": "gpt-oss:20b",                  "quality_score": 75,  "speed_score": 90 },
-        { "model": "gemma4:31b",                   "quality_score": 70,  "speed_score": 50 }
+      "workhorse": [
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "gemma4:31b",
+          "quality_score": 70,
+          "speed_score": 50
+        }
       ]
     }
   },
   "model_overrides": {},
   "agent_to_capability": {
-    "planner":              "judge",
-    "planner-local":        "local-planner",
-    "review-plan":          "judge",
-    "auditor":              "judge",
-    "security-reviewer":    "judge-strict",
-    "final-reviewer":       "judge",
-    "journal-digester":     "judge",
-    "plan-orchestrator":    "orchestrator",
-    "integrator":           "orchestrator",
-    "doc-writer":           "orchestrator",
-    "scaffolder":           "pattern-coder",
-    "test-writer":          "code-analyst",
-    "wave-reviewer":        "code-analyst",
-    "implementer":          "deep-coder",
-    "wave-synthesizer":     "code-analyst",
+    "planner": "judge",
+    "planner-local": "local-planner",
+    "review-plan": "judge",
+    "auditor": "judge",
+    "security-reviewer": "judge-strict",
+    "final-reviewer": "judge",
+    "journal-digester": "judge",
+    "plan-orchestrator": "orchestrator",
+    "integrator": "orchestrator",
+    "doc-writer": "orchestrator",
+    "scaffolder": "pattern-coder",
+    "test-writer": "code-analyst",
+    "wave-reviewer": "code-analyst",
+    "implementer": "deep-coder",
+    "wave-synthesizer": "code-analyst",
     "learnings-consolidator": "pattern-coder",
-    "explorer":             "pattern-coder",
-    "discovery-advisor":    "pattern-coder",
-    "uplift-decider":       "judge",
-    "implementer-cloud":    "deep-coder-cloud",
-    "test-writer-cloud":    "code-analyst-cloud",
-    "converger":            "code-analyst",
-    "judge-evaluator":      "judge"
+    "explorer": "pattern-coder",
+    "discovery-advisor": "pattern-coder",
+    "uplift-decider": "judge",
+    "implementer-cloud": "deep-coder-cloud",
+    "test-writer-cloud": "code-analyst-cloud",
+    "converger": "code-analyst",
+    "judge-evaluator": "judge"
   }
 }

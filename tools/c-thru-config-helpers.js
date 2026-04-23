@@ -29,6 +29,7 @@ const fs            = require('fs');
 const os            = require('os');
 const path          = require('path');
 const { execFileSync } = require('child_process');
+const { loadSelectedConfig } = require('./model-map-config.js');
 
 // ── Shared preamble ────────────────────────────────────────────────────────────
 
@@ -51,6 +52,14 @@ function readConfig() {
     return JSON.parse(fs.readFileSync(MAP_PATH, 'utf8'));
   } catch (e) {
     die(`cannot read ${MAP_PATH}: ${e.message}`);
+  }
+}
+
+function readSelectedConfig() {
+  try {
+    return loadSelectedConfig({ baseDir: __dirname });
+  } catch (e) {
+    die(`cannot load active model-map: ${e.message}`);
   }
 }
 
@@ -117,8 +126,9 @@ function cmdResolve(args) {
   const input = args[0];
   if (!input) { die('usage: c-thru-config-helpers resolve <capability>'); }
 
-  const config = readConfig();
-  const { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, LLM_MODE_ENUM } = loadResolve();
+  const selected = readSelectedConfig();
+  const config = selected.config;
+  const { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, LLM_MODE_ENUM } = loadResolve();
 
   const mode     = resolveLlmMode(config);
   const tier     = resolveActiveTier(config);
@@ -141,16 +151,23 @@ function cmdResolve(args) {
 
   const resolved = resolveProfileModel(entry, mode);
   if (!resolved) { die(`resolveProfileModel returned empty for ${JSON.stringify(capAlias)}`); }
+  const target = resolveTerminalTarget(config, resolved);
+  const providerModel = target ? target.providerModel : resolved;
 
   const envMode = process.env.CLAUDE_LLM_MODE;
   const modeSource = envMode
     ? 'CLAUDE_LLM_MODE env'
-    : (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) ? MAP_PATH : 'default';
+    : (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) ? `${selected.path} (${selected.source})` : 'default';
 
-  process.stdout.write(resolved + '\n');
+  process.stdout.write(providerModel + '\n');
   process.stderr.write(`  capability:  ${capAlias}${input !== capAlias ? `  (via agent: ${input})` : ''}\n`);
   process.stderr.write(`  mode:        ${mode}  (${modeSource})\n`);
   process.stderr.write(`  hw tier:     ${tier}\n`);
+  process.stderr.write(`  config:      ${selected.path}  (${selected.source})\n`);
+  if (target) {
+    process.stderr.write(`  target:      ${target.targetId}\n`);
+    process.stderr.write(`  backend:     ${target.backendId}\n`);
+  }
   process.stderr.write(`  on_failure:  ${entry.on_failure || 'cascade'}\n`);
 }
 

@@ -82,11 +82,45 @@ function resolveCapabilityAlias(model, config, tier) {
   return null;
 }
 
+function resolveTerminalTarget(config, terminalLabel) {
+  if (typeof terminalLabel !== 'string' || !terminalLabel.trim()) return null;
+  const targets = (config && config.targets) || null;
+  if (!targets || typeof targets !== 'object') return null;
+
+  const explicit = Object.prototype.hasOwnProperty.call(targets, terminalLabel)
+    ? targets[terminalLabel]
+    : null;
+  if (explicit && typeof explicit === 'object') {
+    return {
+      targetId: terminalLabel,
+      backendId: explicit.backend,
+      providerModel: explicit.model || terminalLabel,
+      requestDefaults: explicit.request_defaults || {},
+      target: explicit,
+      explicitMatch: true,
+      isDefaultTarget: terminalLabel === 'default',
+    };
+  }
+
+  const defaultTarget = targets.default;
+  if (!defaultTarget || typeof defaultTarget !== 'object') return null;
+  return {
+    targetId: 'default',
+    backendId: defaultTarget.backend,
+    providerModel: terminalLabel,
+    requestDefaults: defaultTarget.request_defaults || {},
+    target: defaultTarget,
+    explicitMatch: false,
+    isDefaultTarget: true,
+  };
+}
+
 module.exports = {
   resolveProfileModel,
   resolveLlmMode,
   resolveActiveTier,
   resolveCapabilityAlias,
+  resolveTerminalTarget,
   LLM_MODE_ENUM,
   LLM_PROFILE_ALIASES,
 };

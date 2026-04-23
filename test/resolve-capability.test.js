@@ -196,7 +196,7 @@ console.log('\n6. Integration — tools/c-thru-resolve output matches pure-funct
     for (const { cap, mode, tier, expected } of cases) {
       const env = {
         ...process.env,
-        CLAUDE_MODEL_MAP_DEFAULTS_PATH: fixturePath,
+        CLAUDE_MODEL_MAP_PATH: fixturePath,
         CLAUDE_LLM_MODE: mode,
         CLAUDE_LLM_PROFILE: tier,
       };
@@ -212,6 +212,62 @@ console.log('\n6. Integration — tools/c-thru-resolve output matches pure-funct
     }
   } finally {
     try { fs.unlinkSync(fixturePath); } catch {}
+  }
+}
+
+// ── 7. Active config selection — override/project/profile precedence ─────────
+console.log('\n7. tools/c-thru-resolve follows active config selection precedence');
+{
+  const fs = require('fs');
+  const os = require('os');
+  const profileHome = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-home-'));
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-project-'));
+  const overridePath = path.join(os.tmpdir(), `resolve-override-${process.pid}.json`);
+  const profileClaude = path.join(profileHome, '.claude');
+  const projectClaude = path.join(projectDir, '.claude');
+  fs.mkdirSync(profileClaude, { recursive: true });
+  fs.mkdirSync(projectClaude, { recursive: true });
+
+  const mkConfig = (model) => ({
+    llm_mode: 'connected',
+    llm_active_profile: '16gb',
+    llm_profiles: {
+      '16gb': {
+        workhorse: { connected_model: model, disconnect_model: model },
+      },
+    },
+  });
+
+  try {
+    fs.writeFileSync(path.join(profileClaude, 'model-map.json'), JSON.stringify(mkConfig('profile-model')));
+    fs.writeFileSync(path.join(projectClaude, 'model-map.json'), JSON.stringify(mkConfig('project-model')));
+    fs.writeFileSync(overridePath, JSON.stringify(mkConfig('override-model')));
+
+    const resolveScript = path.join(__dirname, '..', 'tools', 'c-thru-resolve');
+
+    const profileOut = execSync(`node ${resolveScript} workhorse`, {
+      cwd: projectDir,
+      env: { ...process.env, HOME: profileHome, CLAUDE_LLM_PROFILE: '16gb', CLAUDE_LLM_MODE: 'connected' },
+      encoding: 'utf8',
+    }).trim();
+    assert(profileOut === 'project-model', `project-local config wins over profile (got '${profileOut}')`);
+
+    const overrideOut = execSync(`node ${resolveScript} workhorse`, {
+      cwd: projectDir,
+      env: {
+        ...process.env,
+        HOME: profileHome,
+        CLAUDE_LLM_PROFILE: '16gb',
+        CLAUDE_LLM_MODE: 'connected',
+        CLAUDE_MODEL_MAP_PATH: overridePath,
+      },
+      encoding: 'utf8',
+    }).trim();
+    assert(overrideOut === 'override-model', `CLAUDE_MODEL_MAP_PATH wins over project/profile (got '${overrideOut}')`);
+  } finally {
+    try { fs.rmSync(profileHome, { recursive: true, force: true }); } catch {}
+    try { fs.rmSync(projectDir, { recursive: true, force: true }); } catch {}
+    try { fs.unlinkSync(overridePath); } catch {}
   }
 }
 

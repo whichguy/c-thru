@@ -11,7 +11,7 @@ Read-only discovery role. Do not write to any source files.
 
 Input: `gap_question` (the specific knowledge gap to answer) + `output_path` (where to write the summary).
 
-Read the relevant files, wiki entries, and existing plan state. Answer the gap question precisely. Do not speculate beyond what you can read.
+Read the relevant files, wiki entries, and existing plan state. Answer the gap question precisely. Do not speculate beyond what you can read. If a requested file is missing from the provided context or its contents cannot be read, you MUST state "File not found". DO NOT guess, infer, or hallucinate its structure, fields, or logic based on standard conventions.
 
 **Write one file** at `output_path`:
 ```markdown

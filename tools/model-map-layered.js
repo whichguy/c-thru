@@ -172,11 +172,21 @@ function syncLayeredConfig(defaultsPath, overridesPath, effectivePath, bootstrap
 
   if (overridesPath) {
     fs.mkdirSync(path.dirname(overridesPath), { recursive: true });
-    fs.writeFileSync(overridesPath, `${JSON.stringify(normalizedOverrides, null, 2)}\n`);
+    const content = `${JSON.stringify(normalizedOverrides, null, 2)}\n`;
+    let current = '';
+    try { current = fs.readFileSync(overridesPath, 'utf8'); } catch {}
+    if (content !== current) {
+      fs.writeFileSync(overridesPath, content);
+    }
   }
   if (effectivePath) {
     fs.mkdirSync(path.dirname(effectivePath), { recursive: true });
-    fs.writeFileSync(effectivePath, `${JSON.stringify(effective, null, 2)}\n`);
+    const content = `${JSON.stringify(effective, null, 2)}\n`;
+    let current = '';
+    try { current = fs.readFileSync(effectivePath, 'utf8'); } catch {}
+    if (content !== current) {
+      fs.writeFileSync(effectivePath, content);
+    }
   }
 
   return { defaults, overrides: normalizedOverrides, effective };

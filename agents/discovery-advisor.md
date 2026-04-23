@@ -2,7 +2,7 @@
 name: discovery-advisor
 description: Pre-exploration advisor. Reads a reconnaissance summary and produces a prioritized list of gap questions for explorer agents to answer.
 model: discovery-advisor
-tier_budget: 500
+tier_budget: 800
 ---
 
 # discovery-advisor
@@ -11,7 +11,7 @@ tier_budget: 500
 
 Input: `intent` (original user intent string) + `recon_path` (path to reconnaissance summary written in Stage 1) + `gaps_out` path.
 
-Read `recon_path`. Identify what is still unknown or ambiguous that would materially change the plan.
+Read `recon_path`. Identify what is still unknown or ambiguous that would materially change the plan. If a requested file is missing from the provided context or its contents cannot be read, you MUST state "File not found". DO NOT guess, infer, or hallucinate its structure, fields, or logic based on standard conventions.
 
 **Greenfield shortcut:** If the reconnaissance summary contains `no-gaps` or indicates a greenfield project with no existing code to survey, write an empty gaps file and return `GAPS: 0`.
 

@@ -1,27 +1,26 @@
 #!/usr/bin/env node
 'use strict';
-// CLI wrapper: resolve a capability alias to a concrete model under the current config.
-// Usage: CLAUDE_LLM_MODE=<mode> CLAUDE_MODEL_MAP_DEFAULTS_PATH=<path> node tools/c-thru-resolve <capability>
+// CLI wrapper: resolve a capability alias to a concrete model under the active selected config.
+// Usage: CLAUDE_LLM_MODE=<mode> CLAUDE_MODEL_MAP_PATH=<path> node tools/c-thru-resolve <capability>
 // Exit 0: resolved model on stdout. Exit 2: unknown capability. Exit 1: config/profile error.
 
-const fs   = require('fs');
-const os   = require('os');
-const path = require('path');
+const { loadSelectedConfig } = require('./model-map-config.js');
 const {
   resolveProfileModel,
   resolveLlmMode,
   resolveActiveTier,
   resolveCapabilityAlias,
+  resolveTerminalTarget,
 } = require('./model-map-resolve.js');
 
-const defaultsPath = process.env.CLAUDE_MODEL_MAP_DEFAULTS_PATH;
-const profileDir   = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
-const mapPath      = defaultsPath || path.join(profileDir, 'model-map.json');
-
 let config;
-try { config = JSON.parse(fs.readFileSync(mapPath, 'utf8')); }
+let selected;
+try {
+  selected = loadSelectedConfig({ baseDir: __dirname });
+  config = selected.config;
+}
 catch (e) {
-  process.stderr.write('c-thru-resolve: cannot read ' + mapPath + ': ' + e.message + '\n');
+  process.stderr.write('c-thru-resolve: cannot load active model-map: ' + e.message + '\n');
   process.exit(1);
 }
 
@@ -58,5 +57,5 @@ if (typeof resolved !== 'string' || !resolved) {
   process.stderr.write('c-thru-resolve: resolveProfileModel returned empty for ' + JSON.stringify(capAlias) + '\n');
   process.exit(1);
 }
-
-process.stdout.write(resolved + '\n');
+const target = resolveTerminalTarget(config, resolved);
+process.stdout.write((target ? target.providerModel : resolved) + '\n');
