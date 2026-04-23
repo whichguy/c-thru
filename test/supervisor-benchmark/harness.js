@@ -1,32 +1,45 @@
 /**
- * Supervisor Benchmark Harness
+ * Supervisor Benchmark Harness v3: THE ISOLATION PROTOCOL
  * 
- * Simulates the execution of a question bank against multiple system prompt variants.
- * Metrics:
- * - Decision Accuracy: Did it choose the correct pathway (Resolve/Explore/Shift/Delegate/Clarify)?
- * - Efficiency: How many simulated turns were required?
- * - Contextual Precision: Did it identify the correct files/dependencies?
+ * Ensures that every prompt execution is 100% independent.
+ * - ZERO persistent conversation history.
+ * - ZERO shared state between variants.
+ * - Each turn is a fresh instantiation of the System Prompt + Current Tool State.
  */
 
 const fs = require('fs');
 const path = require('path');
 
-const BANK_PATH = path.join(__dirname, 'bank.json');
-const RESULTS_DIR = path.join(__dirname, 'results');
+const BANK_PATH = path.join(__dirname, 'bank_1k.json');
 
-function runSimulation(promptVariant, questionId) {
+/**
+ * Executes a single scenario in total isolation.
+ */
+function runIsolatedTurn(variantPath, questionId, toolOutputs = []) {
   const bank = JSON.parse(fs.readFileSync(BANK_PATH, 'utf8'));
-  const question = bank.find(q => q.id === questionId);
-  
-  if (!question) throw new Error(`Question ${questionId} not found`);
+  const scenario = bank.find(q => q.id === questionId);
+  const systemPrompt = fs.readFileSync(variantPath, 'utf8');
 
-  // Simulation Logic:
-  // In a real environment, this would call the LLM API.
-  // For the benchmark, we use a rubric-based simulation.
-  
-  console.log(`Running Scenario ${questionId} against ${promptVariant}...`);
-  // ... (orchestration logic would go here)
+  // THE ISOLATION CONTRACT:
+  // 1. Start with fresh system prompt.
+  // 2. Add the User's original question.
+  // 3. Append ONLY the structured tool outputs from previous turns (if recursing).
+  // 4. NO other context, pre-existing chat, or environmental leaks allowed.
+
+  const context = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: scenario.prompt }
+  ];
+
+  if (toolOutputs.length > 0) {
+    context.push({ role: 'assistant', content: 'RECURSION_STEP' }); // Placeholder for state mapping
+    toolOutputs.forEach(out => {
+      context.push({ role: 'user', content: `[TOOL_RESULT]: ${out}` });
+    });
+  }
+
+  console.log(`[ISOLATION] Running ${questionId} against ${path.basename(variantPath)}`);
+  return context; // This object would be sent to the LLM API
 }
 
-// CLI usage: node harness.js run --variant <id> --question <id>
-// CLI usage: node harness.js batch --variant <id>
+module.exports = { runIsolatedTurn };
