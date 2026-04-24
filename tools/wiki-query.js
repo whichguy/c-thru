@@ -7,7 +7,7 @@ const CONTEXT_FILE = '.wiki-context.json';
 
 function getContext() {
     if (fs.existsSync(CONTEXT_FILE)) {
-        return JSON.parse(fs.readFileSync(CONTEXT_FILE, 'utf8'));
+        try { return JSON.parse(fs.readFileSync(CONTEXT_FILE, 'utf8')); } catch (e) {}
     }
     return {};
 }
@@ -15,105 +15,165 @@ function getContext() {
 function contextMatches(recordContext, currentContext) {
     if (!recordContext || Object.keys(recordContext).length === 0) return true;
     for (const key in recordContext) {
-        if (currentContext[key] && recordContext[key] !== currentContext[key]) {
-            return false;
-        }
+        if (currentContext[key] && recordContext[key] !== currentContext[key]) return false;
     }
     return true;
 }
 
+function levenshtein(a, b) {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    const matrix = [];
+    for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
+    for (let j = 0; j <= a.length; j++) { matrix[0][j] = j; }
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1,
+                    Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1)
+                );
+            }
+        }
+    }
+    return matrix[b.length][a.length];
+}
+
+function fuzzyMatch(queryTerms, text) {
+    if (!queryTerms || queryTerms.length === 0) return true;
+    if (!text) return false;
+    const t = text.toLowerCase();
+    
+    // Perform relaxed substring check first
+    for (const q of queryTerms) {
+        if (t.includes(q)) return true;
+    }
+
+    // Perform Levenshtein word-level check
+    const words = t.split(/\W+/);
+    for (const q of queryTerms) {
+        const maxDist = q.length <= 4 ? 1 : 2;
+        for (const word of words) {
+            if (Math.abs(word.length - q.length) > maxDist) continue;
+            if (levenshtein(q, word) <= maxDist) return true;
+        }
+    }
+    return false;
+}
+
 if (!fs.existsSync(WIKI_FILE)) {
-    console.log("Wiki is empty.");
+    console.log("[BC] WIKI:EMPTY");
     process.exit(0);
+}
+
+const args = process.argv.slice(2);
+const queryTerms = [];
+let verbose = false;
+
+for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--verbose' || args[i] === '-v') {
+        verbose = true;
+    } else if (args[i] === '--tag' && i + 1 < args.length) {
+        // Support both --tag "x y z" and positional "x y z"
+        args[i + 1].toLowerCase().split(/\s+/).forEach(t => queryTerms.push(t));
+        i++;
+    } else if (!args[i].startsWith('--')) {
+        args[i].toLowerCase().split(/\s+/).forEach(t => queryTerms.push(t));
+    }
 }
 
 const lines = fs.readFileSync(WIKI_FILE, 'utf8').trim().split('\n');
 const currentContext = getContext();
-
 const claims = {};
 const events = [];
 
 lines.forEach(line => {
+    if (!line.trim()) return;
     try {
-        if (!line.trim()) return;
         const obj = JSON.parse(line);
-        if (obj.kind === 'claim') {
-            claims[obj.id] = { ...obj, score: 0, evidence: [] };
-        } else {
-            events.push(obj);
-        }
+        if (!obj.id || !obj.kind) return;
+        if (obj.kind === 'claim') claims[obj.id] = { ...obj, score: 0, evidence: [], text: obj.text || "[[MISSING]]", tags: obj.tags || [], resolves: obj.resolves };
+        else events.push(obj);
     } catch (e) {}
 });
 
-// v73 Weighted Epistemology
 const weights = { 'live': 10, 'artifact': 6, 'doc': 3 };
 const SUSPICION_MULTIPLIER = 5.0;
 
-// Pass 1: Primary Evidence
 events.forEach(ev => {
     if (ev.kind === 'link') return;
-    (ev.supports || []).forEach(claimId => {
-        if (claims[claimId]) {
-            let contribution = 0;
-            if (ev.kind === 'obs') {
-                contribution = weights[ev.etype] || 0;
-            } else if (ev.kind === 'sus') {
-                // Confidence is 0.1 to 1.0, scaled by 5.0
-                contribution = (ev.confidence || 0.5) * SUSPICION_MULTIPLIER;
-            }
-            if (ev.polarity === '-') contribution *= -1;
-            
-            claims[claimId].score += contribution;
-            claims[claimId].evidence.push(ev);
+    (ev.supports || []).forEach(id => {
+        if (claims[id]) {
+            let contrib = ev.kind === 'obs' ? weights[ev.etype] : (ev.confidence || 0.5) * SUSPICION_MULTIPLIER;
+            if (ev.polarity === '-') contrib *= -1;
+            claims[id].score += contrib;
+            claims[id].evidence.push(ev);
         }
     });
 });
 
-// Pass 2: Causal Links
 events.forEach(ev => {
     if (ev.kind !== 'link') return;
-    const target = claims[ev.target];
-    const source = claims[ev.source];
-    if (target && source) {
-        if (source.score >= 10) { // Threshold for S in v73
-            let contribution = 10; // Acts as a Live observation
-            if (ev.polarity === '-') contribution *= -1;
-            target.score += contribution;
-            target.evidence.push(ev);
-        }
+    if (claims[ev.target] && claims[ev.source] && claims[ev.source].score >= 10) {
+        let contrib = 10;
+        if (ev.polarity === '-') contrib *= -1;
+        claims[ev.target].score += contrib;
+        claims[ev.target].evidence.push(ev);
     }
 });
 
 function getLabel(score, evidenceCount) {
     if (evidenceCount === 0) return '?';
-    if (score >= 10) return 'S'; // Supported
-    if (score >= 5) return 'T';  // Tentative
-    if (score <= -10) return 'D'; // Disproven
-    if (score <= -5) return 'U';  // Undermined
-    return 'C'; // Contested
+    if (score >= 10) return 'S';
+    if (score >= 5) return 'T';
+    if (score <= -10) return 'D';
+    if (score <= -5) return 'U';
+    return 'C';
 }
 
-const sections = { APPLIES: [], VETOES: [], CONJECTURES: [], OTHER_CONTEXTS: [] };
+const sections = { APPLIES: [], VETOES: [], CONJECTURES: [], OTHER: [] };
+const stats = { S: 0, T: 0, U: 0, D: 0, C: 0, '?': 0 };
 
 Object.values(claims).forEach(c => {
+    // Wide-Net Fuzzy search across tags, text, resolves intent, AND evidence strings
+    if (queryTerms.length > 0) {
+        const matchTags = c.tags.some(t => fuzzyMatch(queryTerms, t));
+        const matchText = fuzzyMatch(queryTerms, c.text);
+        const matchResolves = c.resolves ? fuzzyMatch(queryTerms, c.resolves) : false;
+        const matchEvidence = c.evidence.some(e => fuzzyMatch(queryTerms, e.text));
+        
+        if (!matchTags && !matchText && !matchResolves && !matchEvidence) return;
+    }
+
     const applies = contextMatches(c.context, currentContext);
     const label = getLabel(c.score, c.evidence.length);
-    const formatted = `[${c.id} ${label} ${c.score.toFixed(1)}] ${c.text}`;
-    const resLine = c.resolves ? [`  Resolves: ${c.resolves}`] : [];
-    const evidenceLines = c.evidence.map(e => {
-        if (e.kind === 'link') return `  ${e.polarity === '+' ? '+' : '-'}link     "From ${e.source}: ${e.text}"`;
-        const type = e.kind === 'obs' ? e.etype : `sus (${(e.confidence * SUSPICION_MULTIPLIER).toFixed(1)})`;
-        return `  ${e.polarity === '+' ? '+' : '-'}${type.padEnd(8)} "${e.text}"`;
-    });
-    const entry = [formatted, ...resLine, ...evidenceLines].join('\n');
-    if (!applies) sections.OTHER_CONTEXTS.push(entry);
+    if (applies) stats[label]++;
+    
+    let entry = `[${c.id} ${label} ${c.score.toFixed(1)}] ${c.text}` + 
+                  (c.resolves ? `\n  Resolves: ${c.resolves}` : "");
+                  
+    // Evidence Compression logic: hide evidence for S/T claims unless verbose is requested
+    if (verbose || ['D', 'U', '?', 'C'].includes(label)) {
+        const evidenceLines = c.evidence.map(e => {
+            if (e.kind === 'link') return `  ${e.polarity === '+' ? '+' : '-'}link     "From ${e.source}: ${e.text || "No reason"}"`;
+            const type = e.kind === 'obs' ? e.etype : `sus (${(e.confidence * SUSPICION_MULTIPLIER).toFixed(1)})`;
+            return `  ${e.polarity === '+' ? '+' : '-'}${type.padEnd(8)} "${e.text || "No text"}"`;
+        });
+        if (evidenceLines.length > 0) entry += '\n' + evidenceLines.join('\n');
+    }
+
+    if (!applies) sections.OTHER.push(entry);
     else if (label === '?' || (label === 'C' && c.evidence.length === 1 && c.evidence[0].kind === 'sus')) sections.CONJECTURES.push(entry);
     else if (label === 'D' || label === 'U') sections.VETOES.push(entry);
     else sections.APPLIES.push(entry);
 });
 
-console.log(`ENV: ${currentContext.environment}/${currentContext.project}/${currentContext.branch}\n`);
-if (sections.APPLIES.length > 0) console.log("APPLIES (this env)\n" + sections.APPLIES.join('\n\n') + '\n');
-if (sections.VETOES.length > 0) console.log("VETOES (disproven)\n" + sections.VETOES.join('\n\n') + '\n');
-if (sections.CONJECTURES.length > 0) console.log("CONJECTURES\n" + sections.CONJECTURES.join('\n\n') + '\n');
-if (sections.OTHER_CONTEXTS.length > 0) console.log("OTHER CONTEXTS\n" + sections.OTHER_CONTEXTS.join('\n\n'));
+// [SUM] Breadcrumb for the LLM header
+console.log(`[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T} U:${stats.U} D:${stats.D} C:${stats.C}${queryTerms.length > 0 ? `|Query:${queryTerms.join(',')}` : ''}\n`);
+
+if (sections.APPLIES.length) console.log("APPLIES (this env)\n" + sections.APPLIES.join('\n\n') + '\n');
+if (sections.VETOES.length) console.log("VETOES (disproven)\n" + sections.VETOES.join('\n\n') + '\n');
+if (sections.CONJECTURES.length) console.log("CONJECTURES\n" + sections.CONJECTURES.join('\n\n') + '\n');
+if (sections.OTHER.length) console.log("OTHER CONTEXTS\n" + sections.OTHER.join('\n\n'));
