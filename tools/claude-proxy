@@ -692,7 +692,7 @@ const HEALTH_EVENT_LOG_LIMIT = numberFromEnv('CLAUDE_PROXY_HEALTH_EVENT_LOG_LIMI
 const FATAL_CALL_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_FATAL_CALL_TIMEOUT_MS', 15 * 60 * 1000);
 // Socket-level connect timeout for cloud backends — fires if no bytes received within this window.
 // Keeps fallback latency bounded when wifi drops mid-session (OS TCP retransmit can take 1-2 min).
-const CLOUD_CONNECT_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_CLOUD_CONNECT_TIMEOUT_MS', 15000);
+const CLOUD_CONNECT_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_CLOUD_CONNECT_TIMEOUT_MS', 45000);
 // Inactivity timeout once streaming has started — fires if no bytes arrive for this window.
 // 5 min allows extended thinking / long tool calls while still detecting a dropped wifi mid-stream.
 const CLOUD_STREAM_INACTIVITY_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_CLOUD_STREAM_INACTIVITY_MS', 5 * 60 * 1000);

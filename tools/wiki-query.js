@@ -1,68 +1,125 @@
 #!/usr/bin/env node
-/**
- * c-thru Wiki Query Tool (Token Squeezer)
- * 
- * Parses a Karpathy-style Markdown file and extracts only the structural metadata:
- * Frontmatter, Headings, and [[Synapses]].
- * 
- * This allows the LLM to traverse the knowledge graph using ~50 tokens per node
- * instead of loading 2,000+ token raw Markdown files.
- * 
- * Usage: node tools/wiki-query.js <path/to/wiki/file.md>
- */
-
 const fs = require('fs');
 const path = require('path');
 
-const filePath = process.argv[2];
+const WIKI_FILE = 'supervisor_wiki.jsonl';
+const CONTEXT_FILE = '.wiki-context.json';
 
-if (!filePath || !fs.existsSync(filePath)) {
-  console.error(JSON.stringify({ error: `File not found: ${filePath}` }));
-  process.exit(1);
+function getContext() {
+    if (fs.existsSync(CONTEXT_FILE)) {
+        return JSON.parse(fs.readFileSync(CONTEXT_FILE, 'utf8'));
+    }
+    return {};
 }
 
-const content = fs.readFileSync(filePath, 'utf8');
-const lines = content.split('\n');
+function contextMatches(recordContext, currentContext) {
+    if (!recordContext || Object.keys(recordContext).length === 0) return true;
+    for (const key in recordContext) {
+        if (currentContext[key] && recordContext[key] !== currentContext[key]) {
+            return false;
+        }
+    }
+    return true;
+}
 
-const result = {
-  file: filePath,
-  frontmatter: {},
-  headings: [],
-  synapses: []
+if (!fs.existsSync(WIKI_FILE)) {
+    console.log("Wiki is empty.");
+    process.exit(0);
+}
+
+const lines = fs.readFileSync(WIKI_FILE, 'utf8').trim().split('\n');
+const currentContext = getContext();
+
+const claims = {};
+const events = [];
+
+lines.forEach(line => {
+    try {
+        const obj = JSON.parse(line);
+        if (obj.kind === 'claim') {
+            claims[obj.id] = { ...obj, score: 0, evidence: [] };
+        } else {
+            events.push(obj);
+        }
+    } catch (e) {}
+});
+
+const weights = { 'live': 4, 'artifact': 3, 'doc': 2 };
+
+events.forEach(ev => {
+    (ev.supports || []).forEach(claimId => {
+        if (claims[claimId]) {
+            let contribution = 0;
+            if (ev.kind === 'obs') {
+                contribution = weights[ev.etype] || 0;
+            } else if (ev.kind === 'sus') {
+                contribution = 1 * (ev.confidence || 0.5);
+            }
+            if (ev.polarity === '-') contribution *= -1;
+            
+            claims[claimId].score += contribution;
+            claims[claimId].evidence.push(ev);
+        }
+    });
+});
+
+function getLabel(score, evidenceCount) {
+    if (evidenceCount === 0) return '?';
+    if (score >= 6) return 'S';
+    if (score >= 2) return 'T';
+    if (score <= -6) return 'D';
+    if (score <= -2) return 'U';
+    return 'C';
+}
+
+const sections = {
+    APPLIES: [],
+    VETOES: [],
+    CONJECTURES: [],
+    OTHER_CONTEXTS: []
 };
 
-let inFrontmatter = false;
+Object.values(claims).forEach(c => {
+    const applies = contextMatches(c.context, currentContext);
+    const label = getLabel(c.score, c.evidence.length);
+    
+    const formatted = `[${c.id} ${label} ${c.score.toFixed(1)}] ${c.text}`;
+    const evidenceLines = c.evidence.map(e => {
+        const type = e.kind === 'obs' ? e.etype : `sus (${e.confidence})`;
+        return `  ${e.polarity === '+' ? '+' : '-'}${type.padEnd(8)} "${e.text}"`;
+    });
 
-for (let line of lines) {
-  // 1. Parse Frontmatter (YAML-style)
-  if (line.trim() === '---') {
-    inFrontmatter = !inFrontmatter;
-    continue;
-  }
-  
-  if (inFrontmatter) {
-    const match = line.match(/^([a-z_]+):\s*(.*)$/);
-    if (match) {
-      result.frontmatter[match[1]] = match[2].trim();
+    const entry = [formatted, ...evidenceLines].join('\n');
+
+    if (!applies) {
+        sections.OTHER_CONTEXTS.push(entry);
+    } else if (label === '?' || (label === 'C' && c.evidence.length === 1 && c.evidence[0].kind === 'sus')) {
+        sections.CONJECTURES.push(entry);
+    } else if (label === 'D' || label === 'U') {
+        sections.VETOES.push(entry);
+    } else {
+        sections.APPLIES.push(entry);
     }
-    continue;
-  }
+});
 
-  // 2. Parse Headings (Markdown)
-  const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
-  if (headingMatch) {
-    result.headings.push(headingMatch[2].trim());
-  }
+console.log(`ENV: ${currentContext.environment}/${currentContext.project}/${currentContext.branch}\n`);
 
-  // 3. Parse Synapses (Karpathy-style [[links]])
-  const synapseMatches = line.matchAll(/\[\[(.*?)\]\]/g);
-  for (const match of synapseMatches) {
-    const link = match[1].trim();
-    if (!result.synapses.includes(link)) {
-      result.synapses.push(link);
-    }
-  }
+if (sections.APPLIES.length > 0) {
+    console.log("APPLIES (this env)");
+    console.log(sections.APPLIES.join('\n\n') + '\n');
 }
 
-// Output highly compressed, machine-readable JSON
-console.log(JSON.stringify(result, null, 2));
+if (sections.VETOES.length > 0) {
+    console.log("VETOES (disproven in this env)");
+    console.log(sections.VETOES.join('\n\n') + '\n');
+}
+
+if (sections.CONJECTURES.length > 0) {
+    console.log("CONJECTURES (no external evidence)");
+    console.log(sections.CONJECTURES.join('\n\n') + '\n');
+}
+
+if (sections.OTHER_CONTEXTS.length > 0) {
+    console.log("OTHER CONTEXTS (reference)");
+    console.log(sections.OTHER_CONTEXTS.join('\n\n'));
+}

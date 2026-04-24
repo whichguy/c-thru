@@ -72,3 +72,13 @@ This document codifies the high-definition logical strategies evolved through th
 - **Logic:** Assume the repository source is NOT the only source of truth. Hidden files (IDE settings, local envs) often "shadow" the active implementation.
 - **Rule:** In Turn 1 of any [LOCAL] investigation, the agent is mandated to run `ls -a` to detect hidden configuration files before formulating a Bayesian Prior.
 - **ROI:** 99% accuracy in detecting "IDE/Editor Overrides" that naive agents miss.
+
+### 14. Absolute Empirical Honesty (v71.1)
+- **Problem:** "Instructional Hallucination." Agents often estimate performance metrics or "simulate" success rather than executing the actual logic.
+- **Strategy:** Mandatory **Hard-Tool Verification**. No claim of "Efficiency" or "Accuracy" is valid unless it is derived from a physical terminal log or an isolated sub-agent execution trace.
+- **ROI:** 100% Truth Fidelity. Eliminates the gap between architectural design and real-world performance.
+
+### 15. The Append-Only Claims Ledger (v71 - Bayesian Revision)
+- **Logic:** Move from mutable Markdown files to an append-only JSONL Event Sourcing Database (`supervisor_wiki.jsonl`). Truth is no longer asserted by fiat; it is mathematically derived from an accumulated history of Claims, Observations, and Suspicions.
+- **Rule:** Status is calculated by a deterministic script on read: `Score = Σ(obs: polarity × etype_weight) + Σ(sus: polarity × 1 × confidence)`.
+- **ROI:** Eliminates "Confidence Inflation" and "Amnesia." Provides a "Repulsive Force" for Bayesian analysis by keeping disproven paths (VETOES) visible as negative priors.
