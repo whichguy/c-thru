@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 const fs = require('fs');
-const path = require('path');
 const { execSync } = require('child_process');
 
 const WIKI_FILE = 'supervisor_wiki.jsonl';
@@ -25,6 +24,7 @@ function generateId(kind) {
     const prefix = kind.toUpperCase().charAt(0);
     lines.forEach(line => {
         try {
+            if (!line.trim()) return;
             const obj = JSON.parse(line);
             if (obj.id.startsWith(prefix)) {
                 const num = parseInt(obj.id.substring(1));
@@ -35,60 +35,77 @@ function generateId(kind) {
     return `${prefix}${String(max + 1).padStart(3, '0')}`;
 }
 
-function extractLinks(text) {
-    const regex = /[CGSO]\d{3}/g;
-    const matches = text.match(regex);
-    return matches ? [...new Set(matches)] : [];
+const args = process.argv.slice(2);
+let contextOverride = null;
+const cleanArgs = [];
+
+for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--context' && i + 1 < args.length) {
+        contextOverride = args[i + 1];
+        i++;
+    } else {
+        cleanArgs.push(args[i]);
+    }
 }
 
-const args = process.argv.slice(2);
-const kind = args[0];
+const kind = cleanArgs[0];
 
-if (!['claim', 'obs', 'sus'].includes(kind)) {
-    console.error("Usage: node tools/wiki-add.js <claim|obs|sus> [flags] <text>");
+if (!['claim', 'obs', 'sus', 'link'].includes(kind)) {
+    console.error("Usage: node tools/wiki-add.js <claim|obs|sus|link> [args] [--context <env>]");
     process.exit(1);
 }
 
 const context = getContext();
+if (contextOverride) {
+    context.environment = contextOverride;
+}
+
 const record = {
-    id: generateId(kind),
+    id: generateId(kind === 'link' ? 'obs' : kind), // Links share ID space or get O? Let's use L? No, let's use O for links too or L. 
+    // Wait, let's use O for links as they are evidence.
     kind: kind,
     timestamp: new Date().toISOString(),
     context: context
 };
 
 if (kind === 'claim') {
-    const tags = args[1].split(',');
-    const text = args[2];
+    const tags = cleanArgs[1].split(',');
+    const text = cleanArgs[2];
     record.tags = tags;
     record.text = text;
 } else if (kind === 'obs') {
-    const flag = args[1]; // +L, -d etc
-    const text = args[2];
+    const target = cleanArgs[1];
+    const flag = cleanArgs[2]; // +L, -d etc
+    const text = cleanArgs[3];
+    record.supports = [target];
     record.polarity = flag.startsWith('+') ? '+' : '-';
     const typeCode = flag.substring(1).toLowerCase();
     const typeMap = { 'l': 'live', 'a': 'artifact', 'd': 'doc' };
     record.etype = typeMap[typeCode] || 'unknown';
     record.text = text;
-    record.supports = extractLinks(text);
-    if (record.supports.length === 0) {
-        console.error("Error: Observations must link to a Claim (Cxxx) or Goal (Gxxx).");
-        process.exit(1);
-    }
 } else if (kind === 'sus') {
-    const flag = args[1]; // +strong, -weak etc
-    const text = args[2];
+    const target = cleanArgs[1];
+    const flag = cleanArgs[2]; // +strong, -weak etc
+    const text = cleanArgs[3];
+    record.supports = [target];
     record.polarity = flag.startsWith('+') ? '+' : '-';
     const tier = flag.substring(1).toLowerCase();
     const confidenceMap = { 'strong': 0.8, 'moderate': 0.5, 'weak': 0.25 };
     record.confidence = confidenceMap[tier] || 0.5;
     record.text = text;
-    record.supports = extractLinks(text);
-    if (record.supports.length === 0) {
-        console.error("Error: Suspicions must link to a Claim (Cxxx) or Goal (Gxxx).");
-        process.exit(1);
-    }
+} else if (kind === 'link') {
+    const target = cleanArgs[1];
+    const polarity = cleanArgs[2]; // + or -
+    const source = cleanArgs[3];
+    const text = cleanArgs[4];
+    record.target = target;
+    record.polarity = polarity;
+    record.source = source;
+    record.text = text;
 }
+
+// Generate real unique ID
+if (kind === 'link') record.id = generateId('obs'); // Reuse O prefix for links as they are evidence
 
 fs.appendFileSync(WIKI_FILE, JSON.stringify(record) + '\n');
 console.log(`[WIKI] Appended ${record.id}: ${record.text.substring(0, 50)}...`);

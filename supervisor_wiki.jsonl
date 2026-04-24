@@ -1,0 +1,3 @@
+{"id":"C001","kind":"claim","timestamp":"2026-04-24T20:21:47.290Z","context":{"environment":"local-mac","project":"c-thru","branch":"main","commit":"04315c0"},"tags":["port","local"],"text":"Port 9997 is the hardcoded proxy port"}
+{"id":"O001","kind":"obs","timestamp":"2026-04-24T20:21:50.810Z","context":{"environment":"local-mac","project":"c-thru","branch":"main","commit":"04315c0"},"polarity":"+","etype":"live","text":"lsof -i :9997 confirms node is listening, supports C001","supports":["C001"]}
+{"id":"S001","kind":"sus","timestamp":"2026-04-24T20:21:54.533Z","context":{"environment":"local-mac","project":"c-thru","branch":"main","commit":"04315c0"},"polarity":"+","confidence":0.8,"text":"tools/c-thru@53 hardcodes 9997, supports C001","supports":["C001"]}
