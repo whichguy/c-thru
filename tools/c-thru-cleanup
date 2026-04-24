@@ -1,10 +1,7 @@
 #!/bin/bash
-# c-thru State Archiver & Cleaner
+# c-thru State Archiver & Cleaner (v73 Optimized)
 # 
-# Moves active supervisor_state.md into a task-scoped archive to prevent
-# context pollution of subsequent prompts.
-# 
-# Usage: ./tools/c-thru-cleanup <scenario_id> [--delete]
+# Usage: ./tools/c-thru-cleanup <scenario_id>
 
 SCENARIO_ID=$1
 ARCHIVE_ROOT="test/supervisor-benchmark/results/archives"
@@ -16,16 +13,21 @@ fi
 
 mkdir -p "$ARCHIVE_ROOT/$SCENARIO_ID"
 
+# 1. Archive Volatile State
 if [[ -f "supervisor_state.md" ]]; then
     mv "supervisor_state.md" "$ARCHIVE_ROOT/$SCENARIO_ID/state.md"
-    echo "[CLEANUP] Archived supervisor_state.md to $ARCHIVE_ROOT/$SCENARIO_ID/"
+    echo "[CLEANUP] Archived supervisor_state.md"
 fi
 
-# Note: supervisor_wiki.md is NOT deleted as it is institutional memory.
-# But we can snapshot it for the archive if needed.
-if [[ -f "supervisor_wiki.md" ]]; then
-    cp "supervisor_wiki.md" "$ARCHIVE_ROOT/$SCENARIO_ID/wiki_snapshot.md"
-    echo "[CLEANUP] Snapshot of Wiki saved to archive."
+# 2. Snapshot the Bayesian Ledger (Do NOT delete - it is institutional memory)
+if [[ -f "supervisor_wiki.jsonl" ]]; then
+    cp "supervisor_wiki.jsonl" "$ARCHIVE_ROOT/$SCENARIO_ID/wiki_snapshot.jsonl"
+    echo "[CLEANUP] Snapshot of Bayesian Ledger saved."
+fi
+
+# 3. Snapshot Environment Context
+if [[ -f ".wiki-context.json" ]]; then
+    cp ".wiki-context.json" "$ARCHIVE_ROOT/$SCENARIO_ID/context_snapshot.json"
 fi
 
 echo "[CLEANUP] Workspace is now PURE for the next prompt."
