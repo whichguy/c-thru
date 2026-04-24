@@ -11,29 +11,13 @@ This skill manages the iterative refinement of agentic logic through competitive
 
 ## The Tournament Protocol
 
-### Phase 1: Isolation & Instantiation
-Every test run MUST be a "Fresh Context" event.
-1.  Strip all residual chat history.
-2.  Instantiate the candidate prompt as a sovereign entity.
-3.  Execute using **Harness v3 (Isolation Protocol)** to prevent context leakage.
+... [Previous phases remain] ...
 
-### Phase 2: Competitive Scoring
-Grade the response using the **Structural Gold Standard (100-pt Rubric)**:
-- **Pathway Accuracy (30 pts):** Optimal branch selected.
-- **Evidence Grounding (30 pts):** Surgical `Path@Lines` citations.
-- **Logical Parity (20 pts):** BLOCKING questions solved without self-deception.
-- **Senior Handoff (20 pts):** Side-Effects + Verification Strategy.
-
-### Phase 3: Flapping Audit
-Compare the result against previous iterations in the **Teacher-Researcher Journal**.
-- Identify if the variant is "toggling" between conclusions across turns.
-- Check for **Logical Divergence** (Expansion of search space without information gain).
-
-### Phase 4: Chronicler Handoff
-Record the outcome using the **Git Transaction Protocol**.
-```bash
-./tools/c-thru-journal [pass|fail] --component "..." --logic "..." --eval "Tournament Score: N/100"
-```
+### Phase 5: State-Space Archive (The Plan Outcome)
+Every tournament turn or resolution MUST emit the final **`supervisor_state.md`**.
+- This file serves as the **Immutable Knowledge Graph** of the operations.
+- It must contain the final **Inquiry Graph**, **Surgical Evidence Map**, and **Verification Proof**.
+- **Rule:** The "Well-Crafted Response" is not just the answer; it is the **State File** that proves how the answer was reached.
 
 ## Evolution Loop
 1.  **Select Champion:** Use the variant with the highest average score as the baseline.
