@@ -37,11 +37,15 @@ function generateId(kind) {
 
 const args = process.argv.slice(2);
 let contextOverride = null;
+let resolvesText = null;
 const cleanArgs = [];
 
 for (let i = 0; i < args.length; i++) {
     if (args[i] === '--context' && i + 1 < args.length) {
         contextOverride = args[i + 1];
+        i++;
+    } else if (args[i] === '--resolves' && i + 1 < args.length) {
+        resolvesText = args[i + 1];
         i++;
     } else {
         cleanArgs.push(args[i]);
@@ -51,7 +55,7 @@ for (let i = 0; i < args.length; i++) {
 const kind = cleanArgs[0];
 
 if (!['claim', 'obs', 'sus', 'link'].includes(kind)) {
-    console.error("Usage: node tools/wiki-add.js <claim|obs|sus|link> [args] [--context <env>]");
+    console.error("Usage: node tools/wiki-add.js <claim|obs|sus|link> [args] [--context <env>] [--resolves \"question\"]");
     process.exit(1);
 }
 
@@ -61,18 +65,20 @@ if (contextOverride) {
 }
 
 const record = {
-    id: generateId(kind === 'link' ? 'obs' : kind), // Links share ID space or get O? Let's use L? No, let's use O for links too or L. 
-    // Wait, let's use O for links as they are evidence.
+    id: generateId(kind === 'link' ? 'obs' : kind),
     kind: kind,
     timestamp: new Date().toISOString(),
     context: context
 };
 
 if (kind === 'claim') {
-    const tags = cleanArgs[1].split(',');
+    const tags = cleanArgs[1] ? cleanArgs[1].split(',') : [];
     const text = cleanArgs[2];
     record.tags = tags;
     record.text = text;
+    if (resolvesText) {
+        record.resolves = resolvesText;
+    }
 } else if (kind === 'obs') {
     const target = cleanArgs[1];
     const flag = cleanArgs[2]; // +L, -d etc

@@ -18,7 +18,7 @@ You MUST execute this mental loop in every turn:
 ## 3. HYPOTHESIZE & LOG CLAIMS (Act 2)
 - For every question, formulate a **Hypothesis of Truth**.
 - **Log as Claims:** If the hypothesis is a repo-wide fact, log it as a **Claim** in the Wiki:
-  `node tools/wiki-add.js claim <tags> "<Fact statement>"` [Cxxx]
+  `node tools/wiki-add.js claim <tags> "<Fact statement>" --resolves "<Question text>"` [Cxxx]
 - **The Link:** Link the Question in the State to the Claim in the Wiki.
 
 ## 4. TARGETED PROBE (Act 3)

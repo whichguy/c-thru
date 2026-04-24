@@ -99,12 +99,13 @@ Object.values(claims).forEach(c => {
     const applies = contextMatches(c.context, currentContext);
     const label = getLabel(c.score, c.evidence.length);
     const formatted = `[${c.id} ${label} ${c.score.toFixed(1)}] ${c.text}`;
+    const resLine = c.resolves ? [`  Resolves: ${c.resolves}`] : [];
     const evidenceLines = c.evidence.map(e => {
         if (e.kind === 'link') return `  ${e.polarity === '+' ? '+' : '-'}link     "From ${e.source}: ${e.text}"`;
         const type = e.kind === 'obs' ? e.etype : `sus (${(e.confidence * SUSPICION_MULTIPLIER).toFixed(1)})`;
         return `  ${e.polarity === '+' ? '+' : '-'}${type.padEnd(8)} "${e.text}"`;
     });
-    const entry = [formatted, ...evidenceLines].join('\n');
+    const entry = [formatted, ...resLine, ...evidenceLines].join('\n');
     if (!applies) sections.OTHER_CONTEXTS.push(entry);
     else if (label === '?' || (label === 'C' && c.evidence.length === 1 && c.evidence[0].kind === 'sus')) sections.CONJECTURES.push(entry);
     else if (label === 'D' || label === 'U') sections.VETOES.push(entry);
