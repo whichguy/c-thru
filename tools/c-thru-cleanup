@@ -1,0 +1,33 @@
+#!/bin/bash
+/**
+ * c-thru State Archiver & Cleaner
+ * 
+ * Moves active supervisor_state.md into a task-scoped archive to prevent
+ * context pollution of subsequent prompts.
+ * 
+ * Usage: ./tools/c-thru-cleanup <scenario_id> [--delete]
+ */
+
+SCENARIO_ID=$1
+ARCHIVE_ROOT="test/supervisor-benchmark/results/archives"
+
+if [[ -z "$SCENARIO_ID" ]]; then
+    echo "Usage: c-thru-cleanup <scenario_id>"
+    exit 1
+fi
+
+mkdir -p "$ARCHIVE_ROOT/$SCENARIO_ID"
+
+if [[ -f "supervisor_state.md" ]]; then
+    mv "supervisor_state.md" "$ARCHIVE_ROOT/$SCENARIO_ID/state.md"
+    echo "[CLEANUP] Archived supervisor_state.md to $ARCHIVE_ROOT/$SCENARIO_ID/"
+fi
+
+# Note: supervisor_wiki.md is NOT deleted as it is institutional memory.
+# But we can snapshot it for the archive if needed.
+if [[ -f "supervisor_wiki.md" ]]; then
+    cp "supervisor_wiki.md" "$ARCHIVE_ROOT/$SCENARIO_ID/wiki_snapshot.md"
+    echo "[CLEANUP] Snapshot of Wiki saved to archive."
+fi
+
+echo "[CLEANUP] Workspace is now PURE for the next prompt."
