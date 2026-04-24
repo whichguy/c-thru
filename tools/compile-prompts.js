@@ -15,14 +15,14 @@ function compilePrompt(filename) {
     // 1. Generate DEBUG version (Full fidelity)
     fs.writeFileSync(path.join(distDir, filename.replace('.md', '-debug.md')), content);
 
-    // 2. Generate PROD version (Maintain Thinking, Strip Configs)
+    // 2. Generate PROD version
     let prodContent = content.replace(/<debug_config>[\s\S]*?<\/debug_config>\n*/g, '');
     
-    // Rule: Mandate Svelte Thinking in PROD
-    prodContent += '\n\n# PRODUCTION CONSTRAINT\nKeep your <thinking> block under 150 tokens. Output ONLY <thinking> + <state> + Decision. No other prose.';
+    // v60 Refinement: Strict Production Constraints
+    prodContent += '\n\n# PRODUCTION CONSTRAINT\nFollow the THINKING_MODE rule strictly. If mode is RAW, emit ONLY the tool/decision result. Otherwise, keep <thinking> under 150 tokens.';
     
     fs.writeFileSync(path.join(distDir, filename), prodContent);
-    console.log(`Successfully compiled v59: ${filename}`);
+    console.log(`Successfully compiled v60: ${filename}`);
 }
 
 fs.readdirSync(srcDir).forEach(file => {
