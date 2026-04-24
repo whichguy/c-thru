@@ -1,0 +1,768 @@
+<script>
+(function() {
+  'use strict';
+
+  // === Console Panel ===
+  let _consoleEntries = [];
+  let _consoleFilter = 'all';
+
+  ConsolePanel.append = function(level, content) {
+    const entry = { level, content: String(content), timestamp: Date.now() };
+    _consoleEntries.push(entry);
+    if (_consoleFilter === 'all' || _consoleFilter === level) {
+      renderConsoleEntry(entry, document.getElementById('consoleOutput'));
+    }
+  };
+
+  ConsolePanel.setFilter = function(level) {
+    _consoleFilter = level;
+    document.querySelectorAll('.console-filter').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.level === level);
+    });
+    rerender();
+  };
+
+  ConsolePanel.clear = function() {
+    _consoleEntries = [];
+    document.getElementById('consoleOutput').replaceChildren();
+  };
+
+  ConsolePanel.getEntries = function(count, level) {
+    let entries = _consoleEntries;
+    if (level && level !== 'all') entries = entries.filter(e => e.level === level);
+    if (count) entries = entries.slice(-count);
+    return entries.map(e => ({ level: e.level, content: e.content, timestamp: e.timestamp }));
+  };
+
+  function renderConsoleEntry(entry, container) {
+    if (!container) return;
+    const row = document.createElement('div');
+
+    const isInput = entry.content.charAt(0) === '>';
+    const isReturn = entry.content.charAt(0) === '\u2190';
+
+    if (isInput) {
+      row.className = 'console-entry console-input';
+    } else if (isReturn) {
+      row.className = 'console-entry console-return';
+    } else {
+      row.className = `console-entry ${entry.level}`;
+    }
+
+    const time = document.createElement('span');
+    time.className = 'console-time';
+    time.textContent = new Date(entry.timestamp).toLocaleTimeString();
+    row.appendChild(time);
+
+    const content = document.createElement('span');
+    let highlighted = false;
+    if ((isReturn || entry.level === 'info') && !isInput) {
+      const textToHighlight = isReturn ? entry.content.substring(2) : entry.content;
+      try {
+        const parsed = JSON.parse(textToHighlight);
+        if (typeof parsed === 'object' && parsed !== null) {
+          if (isReturn) content.appendChild(document.createTextNode('\u2190 '));
+          content.appendChild(syntaxHighlightJson(parsed, 0));
+          highlighted = true;
+        }
+      } catch(e) {}
+    }
+    if (!highlighted) content.textContent = entry.content;
+    row.appendChild(content);
+
+    // Hover title for truncated entries + click to expand/collapse
+    row.title = entry.content;
+    row.addEventListener('click', (e) => {
+      if (window.getSelection().toString()) return; // Don't toggle during text selection
+      row.classList.toggle('expanded');
+    });
+
+    container.appendChild(row);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function rerender() {
+    const c = document.getElementById('consoleOutput');
+    if (!c) return;
+    c.replaceChildren();
+    for (const entry of _consoleEntries) {
+      if (_consoleFilter === 'all' || _consoleFilter === entry.level) {
+        renderConsoleEntry(entry, c);
+      }
+    }
+  }
+
+  // === JSON Syntax Highlighter for Console ===
+  function syntaxHighlightJson(obj, depth) {
+    if (depth > 4) return document.createTextNode(JSON.stringify(obj));
+    const frag = document.createDocumentFragment();
+    if (Array.isArray(obj)) {
+      frag.appendChild(makeSpan('json-brace', '['));
+      obj.forEach((item, i) => {
+        if (i > 0) frag.appendChild(document.createTextNode(', '));
+        frag.appendChild(syntaxHighlightJson(item, depth + 1));
+      });
+      frag.appendChild(makeSpan('json-brace', ']'));
+    } else if (obj === null) {
+      frag.appendChild(makeSpan('json-null', 'null'));
+    } else if (typeof obj === 'object') {
+      frag.appendChild(makeSpan('json-brace', '{ '));
+      Object.keys(obj).forEach((key, i) => {
+        if (i > 0) frag.appendChild(document.createTextNode(', '));
+        frag.appendChild(makeSpan('json-key', `"${key}"`));
+        frag.appendChild(document.createTextNode(': '));
+        frag.appendChild(syntaxHighlightJson(obj[key], depth + 1));
+      });
+      frag.appendChild(makeSpan('json-brace', ' }'));
+    } else if (typeof obj === 'string') {
+      frag.appendChild(makeSpan('json-str', `"${obj.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`));
+    } else if (typeof obj === 'number') {
+      frag.appendChild(makeSpan('json-num', String(obj)));
+    } else if (typeof obj === 'boolean') {
+      frag.appendChild(makeSpan('json-bool', String(obj)));
+    } else {
+      frag.appendChild(document.createTextNode(String(obj)));
+    }
+    return frag;
+  }
+
+  function makeSpan(cls, text) {
+    const s = document.createElement('span');
+    s.className = cls;
+    s.textContent = text;
+    return s;
+  }
+
+  // === Editor Tabs ===
+  let _tabs = [];
+  let _activeTabId = null;
+  let _cmInstance = null;
+
+  EditorTabs.init = function() {
+    try {
+      const saved = localStorage.getItem('debugger_tabs');
+      if (saved) _tabs = JSON.parse(saved);
+    } catch(e) {}
+
+    // Backfill _lastSetContent for tabs saved before dirty tracking was added
+    _tabs.forEach(t => { if (typeof t._lastSetContent !== 'string') t._lastSetContent = t.content || ''; });
+
+    if (_tabs.length === 0) EditorTabs.create('Untitled');
+
+    const editorArea = document.getElementById('editorArea');
+    if (typeof CodeMirror !== 'undefined') {
+      _cmInstance = CodeMirror(editorArea, {
+        mode: 'javascript',
+        theme: 'material-darker',
+        lineNumbers: true,
+        matchBrackets: true,
+        autoCloseBrackets: true,
+        tabSize: 2,
+        indentWithTabs: false,
+        lineWrapping: true,
+        extraKeys: {
+          // Ctrl+Enter and Shift+Ctrl+Enter handled by global keydown in debugger-core.html
+          // Do NOT duplicate here — causes double execution
+        }
+      });
+      // Update dirty indicator on tab when content changes (debounced)
+      let _dirtyTimer = null;
+      _cmInstance.on('change', () => {
+        if (_dirtyTimer) clearTimeout(_dirtyTimer);
+        _dirtyTimer = setTimeout(renderTabs, 300);
+      });
+    } else {
+      const ta = document.createElement('textarea');
+      ta.className = 'editor-fallback';
+      ta.placeholder = 'CodeMirror failed to load. Type your code here...';
+      ta.addEventListener('keydown', e => {
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          const start = ta.selectionStart;
+          ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(ta.selectionEnd);
+          ta.selectionStart = ta.selectionEnd = start + 2;
+        }
+      });
+      editorArea.appendChild(ta);
+      _cmInstance = {
+        _ta: ta,
+        getValue: () => ta.value,
+        setValue: v => { ta.value = v; },
+        getCursor: () => ({ line: 0, ch: ta.selectionStart }),
+        setCursor: () => {},
+        focus: () => ta.focus()
+      };
+    }
+
+    EditorTabs.activate(_tabs[0].id);
+    renderTabs();
+  };
+
+  EditorTabs.create = function(name) {
+    const tab = {
+      id: `tab_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      name: name || `Script ${_tabs.length + 1}`,
+      content: '',
+      cursorPos: { line: 0, ch: 0 },
+      _lastSetContent: ''
+    };
+    _tabs.push(tab);
+    EditorTabs.activate(tab.id);
+    renderTabs();
+    persist();
+  };
+
+  EditorTabs.close = function(id) {
+    if (_tabs.length <= 1) return;
+    const idx = _tabs.findIndex(t => t.id === id);
+    if (idx === -1) return;
+    _tabs.splice(idx, 1);
+    if (_activeTabId === id) EditorTabs.activate(_tabs[Math.max(0, idx - 1)].id);
+    renderTabs();
+    persist();
+  };
+
+  EditorTabs.activate = function(id) {
+    if (_activeTabId && _cmInstance) {
+      const current = _tabs.find(t => t.id === _activeTabId);
+      if (current) {
+        current.content = _cmInstance.getValue();
+        current.cursorPos = _cmInstance.getCursor();
+        if (!_cmInstance._ta) current._history = _cmInstance.getDoc().getHistory();
+      }
+    }
+
+    _activeTabId = id;
+    const tab = _tabs.find(t => t.id === id);
+    if (tab && _cmInstance) {
+      _cmInstance.setValue(tab.content);
+      if (!_cmInstance._ta && tab._history) _cmInstance.getDoc().setHistory(tab._history);
+      _cmInstance.setCursor(tab.cursorPos);
+      _cmInstance.focus();
+    }
+    renderTabs();
+    persist();
+  };
+
+  EditorTabs.rename = function(id, newName) {
+    const tab = _tabs.find(t => t.id === id);
+    if (tab) {
+      tab.name = newName;
+      renderTabs();
+      persist();
+    }
+  };
+
+  EditorTabs.getContent = function() {
+    if (_cmInstance) {
+      const current = _tabs.find(t => t.id === _activeTabId);
+      if (current) current.content = _cmInstance.getValue();
+      return _cmInstance.getValue();
+    }
+    return '';
+  };
+
+  EditorTabs.setContent = function(code) {
+    if (_cmInstance) {
+      if (_cmInstance._ta) {
+        _cmInstance.setValue(code);
+      } else {
+        // replaceRange preserves undo history — LLM writes become undoable
+        const doc = _cmInstance.getDoc();
+        const lastLine = _cmInstance.lastLine();
+        doc.replaceRange(code,
+          {line: 0, ch: 0},
+          {line: lastLine, ch: _cmInstance.getLine(lastLine).length}
+        );
+      }
+      const current = _tabs.find(t => t.id === _activeTabId);
+      if (current) {
+        current.content = code;
+        current._lastSetContent = code;
+      }
+      persist();
+    }
+  };
+
+  EditorTabs.isDirty = function() {
+    if (!_cmInstance) return false;
+    const current = _tabs.find(t => t.id === _activeTabId);
+    if (!current) return false;
+    return _cmInstance.getValue() !== current._lastSetContent;
+  };
+
+  EditorTabs.getActiveTabId = function() { return _activeTabId; };
+
+  EditorTabs.findTabByName = function(name) {
+    return _tabs.find(t => t.name === name) || null;
+  };
+
+  EditorTabs.getActiveTabName = function() {
+    const tab = _tabs.find(t => t.id === _activeTabId);
+    return tab ? tab.name : 'untitled';
+  };
+
+  EditorTabs.getTabs = function() {
+    if (_activeTabId && _cmInstance) {
+      const current = _tabs.find(t => t.id === _activeTabId);
+      if (current) current.content = _cmInstance.getValue();
+    }
+    return _tabs.map(t => ({
+      id: t.id, name: t.name, active: t.id === _activeTabId,
+      dirty: t.content !== t._lastSetContent, lines: t.content.split('\n').length
+    }));
+  };
+
+  EditorTabs.getTabContent = function(name) {
+    if (_activeTabId && _cmInstance) {
+      const current = _tabs.find(t => t.id === _activeTabId);
+      if (current) current.content = _cmInstance.getValue();
+    }
+    const tab = _tabs.find(t => t.name === name);
+    return tab ? tab.content : null;
+  };
+
+  function renderTabs() {
+    const container = document.getElementById('editorTabs');
+    container.replaceChildren();
+
+    for (const tab of _tabs) {
+      const el = document.createElement('div');
+      el.className = `editor-tab${tab.id === _activeTabId ? ' active' : ''}`;
+      el.dataset.id = tab.id;
+
+      // Dirty indicator: compare live content (active) or saved content (inactive) to baseline
+      const isTabDirty = tab.id === _activeTabId
+        ? (_cmInstance ? _cmInstance.getValue() !== tab._lastSetContent : false)
+        : tab.content !== tab._lastSetContent;
+      if (isTabDirty) el.classList.add('dirty');
+
+      const name = document.createElement('span');
+      // Show short name (filename only), full path on hover
+      const shortName = tab.name.includes('/') ? tab.name.split('/').pop() : tab.name;
+      name.textContent = shortName;
+      if (shortName !== tab.name) el.title = tab.name;
+      name.addEventListener('dblclick', () => {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = tab.name;
+        input.style.cssText = 'background:var(--bg);border:1px solid var(--accent);color:var(--text);font-size:11px;width:80px;padding:0 4px;font-family:inherit';
+        name.textContent = '';
+        name.appendChild(input);
+        input.focus();
+        input.select();
+        let cancelled = false;
+        let committed = false;
+        function finish() {
+          if (cancelled || committed) return;
+          committed = true;
+          EditorTabs.rename(tab.id, input.value || tab.name);
+        }
+        input.addEventListener('keydown', e => {
+          if (e.key === 'Enter') finish();
+          if (e.key === 'Escape') { cancelled = true; renderTabs(); }
+        });
+        input.addEventListener('blur', finish);
+      });
+      el.appendChild(name);
+
+      if (_tabs.length > 1) {
+        const close = document.createElement('span');
+        close.className = 'close-btn' + (isTabDirty ? ' dirty' : '');
+        close.textContent = isTabDirty ? '\u25CF' : '\u00D7';
+        if (isTabDirty) {
+          el.addEventListener('mouseenter', () => { close.textContent = '\u00D7'; close.classList.remove('dirty'); });
+          el.addEventListener('mouseleave', () => { close.textContent = '\u25CF'; close.classList.add('dirty'); });
+        }
+        close.addEventListener('click', e => {
+          e.stopPropagation();
+          EditorTabs.close(tab.id);
+        });
+        el.appendChild(close);
+      }
+
+      el.addEventListener('click', () => EditorTabs.activate(tab.id));
+      container.appendChild(el);
+    }
+
+    const newAddBtn = document.createElement('div');
+    newAddBtn.className = 'editor-tab-add';
+    newAddBtn.textContent = '+';
+    newAddBtn.setAttribute('aria-label', 'New tab');
+    newAddBtn.addEventListener('click', () => EditorTabs.create());
+    container.appendChild(newAddBtn);
+  }
+
+  function persist() {
+    try {
+      if (_activeTabId && _cmInstance) {
+        const current = _tabs.find(t => t.id === _activeTabId);
+        if (current) current.content = _cmInstance.getValue();
+      }
+      localStorage.setItem('debugger_tabs', JSON.stringify(_tabs, (key, value) =>
+        key === '_history' ? undefined : value
+      ));
+    } catch(e) {}
+  }
+
+  // === Shared REPL helpers ===
+  const _REPL_KEYWORD_RE = /^(var|let|const|if|for|while|return|await|function|class|switch|try|throw|delete|typeof|void|new)$/;
+  const _AUTO_RETURN_SKIP_RE = /^(var |let |const |if |for |while |return |await |\/\/|state\.[a-zA-Z_$][a-zA-Z0-9_$]*\s*[+\-*\/|&^%]?=(?!=))/;
+
+  function makeProxyConsole() {
+    return {
+      log: (...args) => ConsolePanel.append('info', formatArgs(args)),
+      warn: (...args) => ConsolePanel.append('warn', formatArgs(args)),
+      error: (...args) => ConsolePanel.append('error', formatArgs(args)),
+      info: (...args) => ConsolePanel.append('info', formatArgs(args))
+    };
+  }
+
+  function processReplCode(code) {
+    return code.split('\n').map(line => {
+      const trimmed = line.trim();
+      if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(trimmed) && !trimmed.startsWith('state')) {
+        return line.replace(/^(\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)$/, `$1state.$2`);
+      }
+      const bareAssign = trimmed.match(/^([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=(?!=)/);
+      if (bareAssign && !_REPL_KEYWORD_RE.test(bareAssign[1]) && !trimmed.startsWith('state.')) {
+        return line.replace(/^(\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=(?!=)/, '$1state.$2 =');
+      }
+      return line;
+    }).join('\n');
+  }
+
+  function wrapForAutoReturn(processedCode) {
+    const lines = processedCode.trim().split('\n');
+    const lastLine = lines[lines.length - 1].trim();
+    if (lines.length === 1 && !_AUTO_RETURN_SKIP_RE.test(lastLine)) {
+      return { code: `return (${processedCode})`, autoReturned: true };
+    }
+    return { code: processedCode, autoReturned: false };
+  }
+
+  // === Code Runner ===
+  // NOTE: This debugger intentionally evaluates arbitrary user-authored code via
+  // Function constructor. This is a developer tool for GAS debugging — the code
+  // execution is the core feature, not a vulnerability. Access is DOMAIN-scoped only.
+
+  // Unified Run: wraps user code in async IIFE with state, srv, console in scope
+  // Intentional dynamic code execution — this is a developer debugging tool (DOMAIN-scoped access)
+  // Server-only GAS globals — used to warn when running client-side
+  const _SERVER_API_RE = /\b(SpreadsheetApp|DriveApp|GmailApp|DocumentApp|SlidesApp|FormApp|CalendarApp|ScriptApp|Session|PropertiesService|CacheService|LockService|UrlFetchApp|MailApp|ContentService|HtmlService|CardService|Jdbc)\b/;
+
+  CodeRunner.run = function() {
+    const code = EditorTabs.getContent();
+    if (!code.trim()) return;
+
+    const btn = document.getElementById('btnRun');
+    btn.disabled = true;
+
+    // Warn if code uses server-only APIs (but don't block — srv.* proxies are valid)
+    const serverMatch = code.match(_SERVER_API_RE);
+    if (serverMatch && !code.includes('srv.')) {
+      ConsolePanel.append('warn', `${serverMatch[1]} is a server-side API — use "Run on Server" or srv.${serverMatch[1]}.method()`);
+    }
+
+    let preview = code.trim();
+    if (preview.includes('\n')) preview = `${preview.split('\n')[0]} ...`;
+    ConsolePanel.append('info', `> ${preview}`);
+
+    const proxyConsole = makeProxyConsole();
+    const hasExplicitReturn = /\breturn\b/.test(code);
+
+    const processedCode = processReplCode(code);
+    const { code: wrappedCode, autoReturned } = wrapForAutoReturn(processedCode);
+
+    let asyncFn;
+    try {
+      asyncFn = new Function('state', 'srv', 'console',  // eslint-disable-line no-new-func
+        `return (async function() {\n${wrappedCode}\n})()`);
+    } catch(syntaxErr) {
+      try {
+        asyncFn = new Function('state', 'srv', 'console',  // eslint-disable-line no-new-func
+          `return (async function() {\n${code}\n})()`);
+      } catch(e2) {
+        ConsolePanel.append('error', e2.toString());
+        btn.disabled = false;
+        return;
+      }
+    }
+
+    try {
+      Promise.resolve(asyncFn(window.debuggerState, window.srv, proxyConsole))
+        .then(result => {
+          if (result !== undefined) {
+            ConsolePanel.append('info', `\u2190 ${formatValue(result)}`);
+            if (hasExplicitReturn && !autoReturned) {
+              const stateKey = EditorTabs.getActiveTabName()
+                .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'result';
+              window.debuggerState[stateKey] = result;
+            }
+          }
+        })
+        .catch(err => ConsolePanel.append('error', err.toString()))
+        .finally(() => {
+          btn.disabled = false;
+          Debugger.refreshClientTree();
+        });
+    } catch(e) {
+      ConsolePanel.append('error', e.toString());
+      btn.disabled = false;
+      Debugger.refreshClientTree();
+    }
+  };
+
+  CodeRunner.processReplCode = processReplCode;
+  CodeRunner.wrapForAutoReturn = wrapForAutoReturn;
+
+  function formatArgs(args) {
+    return [...args].map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)).join(' ');
+  }
+
+  function formatValue(val) {
+    if (val === null) return 'null';
+    if (val === undefined) return 'undefined';
+    if (typeof val === 'object') return JSON.stringify(val, null, 2);
+    if (typeof val === 'string') return `"${val}"`;
+    return String(val);
+  }
+
+  CodeRunner.runServer = function() {
+    const code = EditorTabs.getContent();
+    if (!code.trim()) return;
+
+    const btnServer = document.getElementById('btnRunServer');
+    btnServer.disabled = true;
+    const stateKey = EditorTabs.getActiveTabName()
+      .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'server_result';
+
+    let preview = code.trim();
+    if (preview.includes('\n')) preview = `${preview.split('\n')[0]} ...`;
+    ConsolePanel.append('info', `> [server] ${preview}`);
+
+    _serverExec(`return (function(){${code}})()`)
+      .then(result => {
+        if (result && result.success) {
+          window.debuggerState[stateKey] = result.result;
+          ConsolePanel.append('info', `\u2190 ${formatValue(result.result)}`);
+        } else {
+          ConsolePanel.append('error', (result && result.error) || 'Execution failed');
+        }
+        if (result && result.logger_output) ConsolePanel.append('info', result.logger_output);
+      })
+      .catch(err => ConsolePanel.append('error', `Server error: ${err.message}`))
+      .finally(() => {
+        btnServer.disabled = false;
+        Debugger.refreshClientTree();
+        const perf = Debugger.getLastTiming();
+        if (perf) ConsolePanel.append('log', `\u23F1 ${perf.ms}ms`);
+      });
+  };
+
+  // === Console REPL ===
+  let _consoleHistory = [];
+  let _consoleHistoryIdx = -1;
+  let _consoleDraft = '';
+  try {
+    const savedCH = localStorage.getItem('debugger_console_history');
+    if (savedCH) _consoleHistory = JSON.parse(savedCH);
+  } catch(e) {}
+
+  // Persistent REPL scope — variables survive between console evaluations.
+  // Uses a Proxy-backed `with()` so both reads (`y`) and bare assignments (`y = 2`)
+  // go through _replScope. The `has` trap returns true for any name not in the
+  // whitelist, forcing `with` to treat it as a scope property. The `set` trap
+  // stores it. This is a developer debugging tool where dynamic code execution
+  // is the core feature (same as existing new Function usage).
+  const _replScope = {};
+  const _replScopeProxy = new Proxy(_replScope, {
+    has(target, key) {
+      if (key === Symbol.unscopables) return false;
+      if (['state', 'srv', 'console', 'undefined', 'NaN', 'Infinity'].includes(key)) return false;
+      if (key in window && !(key in target)) return false;
+      return true;
+    },
+    get(target, key) { return key in target ? target[key] : window[key]; },
+    set(target, key, value) { target[key] = value; window.debuggerState[key] = value; return true; }
+  });
+  function _replExec(code, proxyConsole) {
+    const fn = new Function('state', 'srv', 'console', '_scope', // eslint-disable-line no-new-func
+      `with(_scope) { return (async function() {\n${code}\n})() }`);
+    return fn(window.debuggerState, window.srv, proxyConsole, _replScopeProxy);
+  }
+
+  ConsolePanel.initRepl = function() {
+    const input = document.getElementById('consoleInput');
+    if (!input) return;
+
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const code = this.value.trim();
+        if (!code) return;
+        if (_consoleHistory.length === 0 || _consoleHistory[_consoleHistory.length - 1] !== code) {
+          _consoleHistory.push(code);
+          if (_consoleHistory.length > 100) _consoleHistory.shift();
+          try { localStorage.setItem('debugger_console_history', JSON.stringify(_consoleHistory)); } catch(ex) {}
+        }
+        _consoleHistoryIdx = -1;
+        _consoleDraft = '';
+        this.value = '';
+        this.style.height = 'auto';
+        ConsolePanel.append('info', `> ${code}`);
+        consoleExec(code);
+      }
+      if (e.key === 'ArrowUp') {
+        const before = this.value.substring(0, this.selectionStart);
+        if (!before.includes('\n') && _consoleHistory.length > 0) {
+          if (_consoleHistoryIdx === -1) { _consoleDraft = this.value; _consoleHistoryIdx = _consoleHistory.length - 1; }
+          else if (_consoleHistoryIdx > 0) { _consoleHistoryIdx--; }
+          this.value = _consoleHistory[_consoleHistoryIdx];
+          this.selectionStart = this.selectionEnd = this.value.length;
+          e.preventDefault();
+        }
+      }
+      if (e.key === 'ArrowDown') {
+        const after = this.value.substring(this.selectionEnd);
+        if (!after.includes('\n') && _consoleHistoryIdx !== -1) {
+          _consoleHistoryIdx++;
+          if (_consoleHistoryIdx >= _consoleHistory.length) { _consoleHistoryIdx = -1; this.value = _consoleDraft; }
+          else { this.value = _consoleHistory[_consoleHistoryIdx]; }
+          this.selectionStart = this.selectionEnd = this.value.length;
+          e.preventDefault();
+        }
+      }
+    });
+    input.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = `${Math.min(this.scrollHeight, 80)}px`;
+    });
+  };
+
+  // Intentional dynamic code execution — developer debugging REPL tool (DOMAIN-scoped)
+  function consoleExec(code) {
+    const { code: wrappedCode } = wrapForAutoReturn(code);
+    const proxyConsole = makeProxyConsole();
+
+    const handleResult = result => {
+      if (result !== undefined) ConsolePanel.append('info', `\u2190 ${formatValue(result)}`);
+      Debugger.refreshClientTree();
+    };
+    const handleError = err => ConsolePanel.append('error', err.toString());
+
+    try {
+      Promise.resolve(_replExec(wrappedCode, proxyConsole))
+        .then(handleResult)
+        .catch(handleError);
+    } catch(syntaxErr) {
+      try {
+        Promise.resolve(_replExec(code, proxyConsole))
+          .then(handleResult)
+          .catch(handleError);
+      } catch(e2) { ConsolePanel.append('error', e2.toString()); }
+    }
+  }
+
+  // === Error Stack Trace Visualization ===
+  const _origAppend = ConsolePanel.append;
+  ConsolePanel.append = function(level, content) {
+    if (level === 'error' && typeof content === 'string') {
+      const lineMatch = content.match(/(?:line\s+|:)(\d+)(?::(\d+))?/i);
+      if (lineMatch && _cmInstance) {
+        const jumpLine = parseInt(lineMatch[1], 10) - 1;
+        _origAppend.call(ConsolePanel, level, content);
+        const entries = document.querySelectorAll('#consoleOutput .console-entry.error');
+        const lastEntry = entries[entries.length - 1];
+        if (lastEntry) {
+          lastEntry.style.cursor = 'pointer';
+          lastEntry.title = `Click to jump to line ${jumpLine + 1}`;
+          lastEntry.addEventListener('click', (e) => {
+            e.stopImmediatePropagation(); // Prevent expand toggle
+            if (_cmInstance && _cmInstance.setCursor) {
+              _cmInstance.setCursor({ line: jumpLine, ch: 0 });
+              _cmInstance.focus();
+            }
+          });
+        }
+        return;
+      }
+      _origAppend.call(ConsolePanel, level, content);
+      return;
+    }
+    _origAppend.call(ConsolePanel, level, content);
+  };
+
+  // === Auto-complete (CodeMirror show-hint) ===
+  const GAS_COMPLETIONS = [
+    'SpreadsheetApp', 'DriveApp', 'GmailApp', 'DocumentApp', 'SlidesApp',
+    'FormApp', 'CalendarApp', 'ScriptApp', 'Session', 'Logger', 'Browser',
+    'Utilities', 'UrlFetchApp', 'ContentService', 'HtmlService',
+    'PropertiesService', 'CacheService', 'LockService', 'MailApp',
+    'Charts', 'Maps', 'Jdbc', 'CardService',
+    'getActiveSpreadsheet', 'getActiveSheet', 'getRange', 'getValues',
+    'setValues', 'getValue', 'setValue', 'getDataRange', 'getSheetByName',
+    'getLastRow', 'getLastColumn', 'appendRow', 'deleteRow', 'insertSheet',
+    'getActiveUser', 'getEffectiveUser', 'getScriptTimeZone',
+    'getScriptProperties', 'getUserProperties', 'getDocumentProperties',
+    'getProperty', 'setProperty', 'deleteProperty', 'getProperties',
+    'getProjectTriggers', 'newTrigger', 'deleteTrigger',
+    'getOAuthToken', 'getScriptId', 'getService',
+    'fetch', 'fetchAll', 'getRemainingDailyQuota',
+    'createHtmlOutput', 'createTemplateFromFile',
+    'console', 'state', 'srv', 'require'
+  ];
+
+  EditorTabs._setupAutocomplete = function() {
+    if (typeof CodeMirror === 'undefined' || !_cmInstance || _cmInstance._ta) return;
+
+    CodeMirror.registerHelper('hint', 'javascript', cm => {
+      const cur = cm.getCursor();
+      const token = cm.getTokenAt(cur);
+      const { string: word, start, end } = token;
+
+      if (word.length < 1) return null;
+
+      const completions = [];
+
+      try {
+        for (const k of Object.keys(ClientState.getRaw())) {
+          if (k.toLowerCase().startsWith(word.toLowerCase())) completions.push(`state.${k}`);
+        }
+      } catch(e) {}
+
+      for (const m of ['exec', 'diagnostics', 'debugger_api', 'gemini_api', 'hello']) {
+        if (`srv.${m}`.startsWith(word) || m.startsWith(word)) completions.push(`srv.${m}`);
+      }
+
+      for (const name of GAS_COMPLETIONS) {
+        if (name.toLowerCase().startsWith(word.toLowerCase()) && name !== word) completions.push(name);
+      }
+
+      if (completions.length === 0) return null;
+
+      return {
+        list: completions.slice(0, 15),
+        from: CodeMirror.Pos(cur.line, start),
+        to: CodeMirror.Pos(cur.line, end)
+      };
+    });
+
+    _cmInstance.on('inputRead', (cm, change) => {
+      if (change.text[0] && change.text[0].length >= 1) {
+        const token = cm.getTokenAt(cm.getCursor());
+        if (token.string.length >= 2 && /^[a-zA-Z_$]/.test(token.string)) {
+          CodeMirror.commands.autocomplete(cm, null, { completeSingle: false });
+        }
+      }
+    });
+  };
+
+  setTimeout(() => {
+    if (typeof EditorTabs !== 'undefined' && EditorTabs._setupAutocomplete) {
+      EditorTabs._setupAutocomplete();
+    }
+  }, 500);
+
+})();
+</script>

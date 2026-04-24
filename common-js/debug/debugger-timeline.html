@@ -1,0 +1,74 @@
+<script>
+(function() {
+  'use strict';
+
+  let _entries = [];
+  const _maxEntries = 500;
+  let _visible = false;
+
+  function makeSpan(cls, text) {
+    const el = document.createElement('span');
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  }
+
+  Timeline.record = function(entry) {
+    entry.timestamp = Date.now();
+    _entries.unshift(entry);
+    if (_entries.length > _maxEntries) _entries.pop();
+
+    const container = document.getElementById('timelineEntries');
+    const countEl = document.getElementById('timelineCount');
+    if (!container || !countEl) return;
+    countEl.textContent = `${_entries.length} events`;
+
+    const row = document.createElement('div');
+    row.className = 'timeline-entry';
+
+    const d = new Date(entry.timestamp);
+    row.appendChild(makeSpan('tl-time', `${d.toLocaleTimeString()}.${String(d.getMilliseconds()).padStart(3, '0')}`));
+
+    const safeType = String(entry.type || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    row.appendChild(makeSpan(`tl-badge ${safeType}`, safeType.toUpperCase()));
+    row.appendChild(makeSpan('tl-action', entry.action));
+    row.appendChild(makeSpan('tl-path', entry.path || ''));
+
+    if (entry.oldValue !== undefined) {
+      row.appendChild(makeSpan('tl-old', truncateVal(entry.oldValue)));
+    }
+
+    if (entry.newValue !== undefined) {
+      if (entry.oldValue !== undefined) {
+        row.appendChild(document.createTextNode(' \u2192 '));
+      }
+      row.appendChild(makeSpan('tl-new', truncateVal(entry.newValue)));
+    }
+
+    container.insertBefore(row, container.firstChild);
+  };
+
+  Timeline.toggle = function() {
+    _visible = !_visible;
+    document.getElementById('timelineEntries').style.display = _visible ? '' : 'none';
+    document.getElementById('timelineContainer').classList.toggle('expanded', _visible);
+  };
+
+  Timeline.clear = function() {
+    _entries = [];
+    _visible = false;
+    const container = document.getElementById('timelineEntries');
+    container.replaceChildren();
+    container.style.display = 'none';
+    document.getElementById('timelineContainer').classList.remove('expanded');
+    document.getElementById('timelineCount').textContent = '0 events';
+  };
+
+  function truncateVal(val) {
+    if (val === undefined) return 'undefined';
+    if (val === null) return 'null';
+    const s = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    return s.length > 40 ? `${s.substring(0, 40)}...` : s;
+  }
+})();
+</script>

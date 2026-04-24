@@ -1,0 +1,1011 @@
+<script>
+(function() {
+  'use strict';
+
+  // === Server Bridge (promise wrapper around google.script.run) ===
+  // Performance timing: tracks every server call duration
+  const _perfLog = [];
+  const MAX_PERF_LOG = 200;
+
+  function _runGasExec(code, label) {
+    const startTime = performance.now();
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(result => {
+          const ms = Math.round(performance.now() - startTime);
+          _perfLog.push({ label, ms, ts: Date.now(), ok: true });
+          if (_perfLog.length > MAX_PERF_LOG) _perfLog.shift();
+          resolve(result);
+        })
+        .withFailureHandler(err => {
+          const ms = Math.round(performance.now() - startTime);
+          _perfLog.push({ label, ms, ts: Date.now(), ok: false });
+          if (_perfLog.length > MAX_PERF_LOG) _perfLog.shift();
+          reject(err);
+        })
+        .apiExec({ func: code });
+    });
+  }
+
+  function serverCall(module, fn, ...args) {
+    const code = `return require(${JSON.stringify(module)}).${fn}(${args.map(a => JSON.stringify(a)).join(',')})`;
+    return _runGasExec(code, `${module}.${fn}`);
+  }
+
+  function serverExec(code) {
+    const label = code.length > 40 ? `exec: ${code.substring(0, 40)}...` : `exec: ${code}`;
+    return _runGasExec(code, label);
+  }
+
+  // Unwrap apiExec response envelope: {success, result} to result, or throw
+  function unwrap(response) {
+    if (!response) throw new Error('No response from server');
+    if (response.success) return response.result;
+    throw new Error(response.error || 'Server failed');
+  }
+
+  // === srv Proxy — unified server access ===
+  // srv.exec(code)                  — raw JS on server
+  // srv.<module>.<fn>(...args)      — CommonJS module call
+  // srv.SpreadsheetApp.getActiveSpreadsheet() — GAS built-in passthrough
+  // srv.Session.getActiveUser()     — GAS built-in passthrough
+
+  // GAS built-in global objects — these get called directly (no require())
+  const BUILTIN_SET = new Set([
+    'SpreadsheetApp', 'DriveApp', 'GmailApp', 'DocumentApp', 'SlidesApp',
+    'FormApp', 'CalendarApp', 'ContactsApp',
+    'ScriptApp', 'Session', 'Logger', 'Browser', 'Utilities',
+    'UrlFetchApp', 'ContentService', 'HtmlService',
+    'PropertiesService', 'CacheService', 'LockService',
+    'MailApp', 'Charts', 'Maps', 'Jdbc',
+    'CardService', 'OAuth2'
+  ]);
+
+  const srvBase = {
+    exec(code) {
+      return serverExec('return (function(){' + code + '})()').then(unwrap);
+    }
+  };
+
+  function _makeBuiltinProxy(name) {
+    return new Proxy({}, {
+      get(_, fnName) {
+        if (typeof fnName === 'symbol') return undefined;
+        return (...args) => {
+          const code = 'return ' + name + '.' + String(fnName) + '(' +
+            args.map(a => JSON.stringify(a)).join(',') + ')';
+          return serverExec(code).then(unwrap);
+        };
+      }
+    });
+  }
+
+  function _makeModuleProxy(name) {
+    return new Proxy({}, {
+      get(_, fnName) {
+        if (typeof fnName === 'symbol') return undefined;
+        return (...args) => {
+          const code = 'return require(' + JSON.stringify('common-js/' + name) + ').' +
+            String(fnName) + '(' + args.map(a => JSON.stringify(a)).join(',') + ')';
+          return serverExec(code).then(unwrap);
+        };
+      }
+    });
+  }
+
+  const srv = new Proxy(srvBase, {
+    get(target, prop) {
+      if (prop in target) return target[prop];
+      if (typeof prop === 'symbol') return undefined;
+      const name = String(prop);
+      return BUILTIN_SET.has(name) ? _makeBuiltinProxy(name) : _makeModuleProxy(name);
+    }
+  });
+
+  window.srv = srv;
+
+  // === Toast Notifications ===
+  function showToast(message, type) {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type || 'success'}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 3000);
+  }
+
+  // === Client State (Observable Proxy) ===
+  const _rawState = {};
+
+  function createObservable(target, path = []) {
+    return new Proxy(target, {
+      set(obj, prop, value) {
+        const oldValue = obj[prop];
+        obj[prop] = (typeof value === 'object' && value !== null && !Array.isArray(value))
+          ? createObservable(value, [...path, prop])
+          : value;
+        Timeline.record({ type: 'client', action: 'SET', path: [...path, prop].join('.'), oldValue, newValue: value });
+        Debugger.refreshClientTree();
+        return true;
+      },
+      deleteProperty(obj, prop) {
+        const oldValue = obj[prop];
+        delete obj[prop];
+        Timeline.record({ type: 'client', action: 'DELETE', path: [...path, prop].join('.'), oldValue, newValue: undefined });
+        Debugger.refreshClientTree();
+        return true;
+      }
+    });
+  }
+
+  window.debuggerState = createObservable(_rawState);
+  window.state = window.debuggerState;
+
+  ClientState.getRaw = function() { return _rawState; };
+
+  // === Poller ===
+  let _pollTimer = null;
+  let _pollActive = false;
+  const _pollInterval = 5000;
+  let _lastSnapshot = null;
+  let _pollPaused = false;
+
+  Poller.start = function() {
+    _pollActive = true;
+    if (_pollTimer) clearInterval(_pollTimer);
+    Poller.poll();
+    _pollTimer = setInterval(() => {
+      if (_pollActive && !_pollPaused) Poller.poll();
+    }, _pollInterval);
+  };
+
+  Poller.stop = function() {
+    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+  };
+
+  Poller._lastSnapshot = null;
+
+  Poller.poll = function() {
+    serverCall('common-js/diagnostics', 'gatherLite')
+      .then(response => {
+        if (!response || !response.success) return;
+        const snapshot = response.result;
+        Poller._lastSnapshot = snapshot;
+        if (_lastSnapshot) {
+          const diffs = Poller.computeDiff(_lastSnapshot, snapshot);
+          diffs.forEach(d => {
+            Timeline.record({ type: 'server', action: d.action, path: d.path, oldValue: d.oldValue, newValue: d.newValue });
+          });
+          if (diffs.length > 0) Debugger.highlightChanges(diffs);
+        }
+        _lastSnapshot = snapshot;
+        Debugger.refreshServerTree(snapshot);
+      })
+      .catch(err => {
+        console.error('Poll failed:', err);
+      });
+  };
+
+  Poller.pause = function() { _pollPaused = true; };
+  Poller.resume = function() { _pollPaused = false; };
+
+  Poller.computeDiff = function(oldState, newState) {
+    const diffs = [];
+    function compare(oldObj, newObj, prefix) {
+      const allKeys = new Set([
+        ...( oldObj && typeof oldObj === 'object' ? Object.keys(oldObj) : []),
+        ...( newObj && typeof newObj === 'object' ? Object.keys(newObj) : [])
+      ]);
+      for (const key of allKeys) {
+        if (key === 'executionTimestamp') continue;
+        const path = prefix ? `${prefix}.${key}` : key;
+        const oldVal = oldObj ? oldObj[key] : undefined;
+        const newVal = newObj ? newObj[key] : undefined;
+        if (oldVal === undefined && newVal !== undefined) {
+          diffs.push({ path, action: 'ADD', oldValue: undefined, newValue: newVal });
+        } else if (oldVal !== undefined && newVal === undefined) {
+          diffs.push({ path, action: 'DELETE', oldValue: oldVal, newValue: undefined });
+        } else if (typeof oldVal === 'object' && typeof newVal === 'object' && oldVal !== null && newVal !== null) {
+          compare(oldVal, newVal, path);
+        } else if (oldVal !== newVal) {
+          diffs.push({ path, action: 'SET', oldValue: oldVal, newValue: newVal });
+        }
+      }
+    }
+    compare(oldState, newState, '');
+    return diffs;
+  };
+
+  // === Visibility handling ===
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) Poller.pause(); else Poller.resume();
+  });
+
+  // === Cleanup ===
+  window.addEventListener('beforeunload', () => Poller.stop());
+
+  // === Debugger Main ===
+  const _changedPaths = {};
+
+  // === Workspace Splitter init-once guard ===
+  let _splittersInit = false;
+
+  Debugger.init = function() {
+    Debugger.refreshServerTree(INITIAL_DATA);
+    if (typeof EditorTabs !== 'undefined' && EditorTabs.init) EditorTabs.init();
+    if (!_splittersInit) {
+      Debugger.initSplitter();
+      Debugger.initStateSplitter();
+      Debugger.initConsoleSplitter();
+      Debugger.initChatSplitter();
+      _splittersInit = true;
+    }
+    TreeSearch.init();
+    if (typeof ConsolePanel !== 'undefined' && ConsolePanel.initRepl) ConsolePanel.initRepl();
+    if (typeof GeminiChat !== 'undefined' && GeminiChat.init) GeminiChat.init();
+    if (typeof FileTree !== 'undefined' && FileTree.refresh) FileTree.refresh();
+  };
+
+  // Manual refresh — single server fetch, no polling
+  Debugger.refreshServer = function() {
+    serverCall('common-js/diagnostics', 'gatherLite')
+      .then(response => {
+        if (!response || !response.success) return;
+        const snapshot = response.result;
+        Debugger.refreshServerTree(snapshot);
+        _lastSnapshot = snapshot;
+        Poller._lastSnapshot = snapshot;
+        showToast('Server state refreshed', 'success');
+      })
+      .catch(err => {
+        showToast(`Refresh failed: ${err.message}`, 'error');
+      });
+  };
+
+  // === Splitter drag helper ===
+  function _attachSplitter(divider, cursor, onMove) {
+    let isDragging = false;
+    divider.addEventListener('mousedown', e => {
+      isDragging = true;
+      e.preventDefault();
+      document.body.style.cursor = cursor;
+      document.body.style.userSelect = 'none';
+    });
+    document.addEventListener('mousemove', e => { if (isDragging) onMove(e); });
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    });
+  }
+
+  // === Workspace Splitter Drag Handler ===
+  Debugger.initSplitter = function() {
+    const divider = document.getElementById('splitDivider');
+    if (!divider) return;
+    const splitPane = document.querySelector('.workspace') || divider.parentElement;
+    _attachSplitter(divider, 'col-resize', e => {
+      const rect = splitPane.getBoundingClientRect();
+      const px = Math.max(180, Math.min(rect.width * 0.5, e.clientX - rect.left));
+      splitPane.style.gridTemplateColumns = `${px}px 4px 1fr`;
+    });
+  };
+
+  // === State Splitter (vertical resize between server state and client state) ===
+  Debugger.initStateSplitter = function() {
+    const divider = document.getElementById('stateDivider');
+    if (!divider) return;
+    const serverSection = divider.previousElementSibling;
+    const clientSection = divider.nextElementSibling;
+    if (!serverSection || !clientSection) return;
+    _attachSplitter(divider, 'row-resize', e => {
+      const parentRect = divider.parentElement.getBoundingClientRect();
+      const pct = Math.max(15, Math.min(85, ((e.clientY - parentRect.top) / parentRect.height) * 100));
+      serverSection.style.flex = `0 0 ${pct}%`;
+      clientSection.style.flex = '1';
+    });
+  };
+
+  // === Console Splitter (vertical resize between editor and console) ===
+  Debugger.initConsoleSplitter = function() {
+    const divider = document.getElementById('consoleDivider');
+    if (!divider) return;
+    const consolePanel = document.getElementById('editorConsole');
+    if (!consolePanel) return;
+    _attachSplitter(divider, 'row-resize', e => {
+      const containerRect = consolePanel.parentElement.getBoundingClientRect();
+      const px = Math.max(60, Math.min(containerRect.height * 0.7, containerRect.bottom - e.clientY));
+      consolePanel.style.height = `${px}px`;
+    });
+  };
+
+  // === Chat Divider (horizontal resize for chat panel width) ===
+  Debugger.initChatSplitter = function() {
+    const divider = document.getElementById('chatDivider');
+    if (!divider) return;
+    if (!document.getElementById('chatPanel')) return;
+    const workspace = document.querySelector('.workspace');
+    if (!workspace) return;
+    _attachSplitter(divider, 'col-resize', e => {
+      const rect = workspace.getBoundingClientRect();
+      const px = Math.max(240, Math.min(rect.width * 0.5, rect.right - e.clientX));
+      // Preserve the left column width set by the main splitter (don't hard-code 280px)
+      const leftPx = (workspace.style.gridTemplateColumns && workspace.style.gridTemplateColumns.split(' ')[0]) || '280px';
+      workspace.style.gridTemplateColumns = `${leftPx} 4px 1fr 4px ${px}px`;
+    });
+  };
+
+  Debugger.togglePolling = function() {
+    _pollActive = !_pollActive;
+    const toggle = document.getElementById('pollToggle');
+    const label = document.getElementById('pollLabel');
+    toggle.classList.toggle('active', _pollActive);
+    toggle.setAttribute('aria-pressed', String(_pollActive));
+    label.textContent = `Polling: ${_pollActive ? 'ON' : 'OFF'}`;
+    if (_pollActive) Poller.start(); else Poller.stop();
+  };
+
+  Debugger.refreshServerTree = function(data) {
+    const el = document.getElementById('serverTree');
+    el.replaceChildren();
+    if (!data || Object.keys(data).length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = 'No server state available';
+      el.appendChild(empty);
+      return;
+    }
+
+    // Render grouped sections instead of flat tree
+    const sections = [
+      { key: 'session', label: 'Session', icon: '\u{1F464}' },
+      { key: 'scriptProperties', label: 'Script Properties', icon: '\u{1F4CB}' },
+      { key: 'userProperties', label: 'User Properties', icon: '\u{1F464}' },
+      { key: 'triggers', label: 'Triggers', icon: '\u23F1' }
+    ];
+
+    for (const section of sections) {
+      const val = data[section.key];
+      if (val === undefined) continue;
+
+      const header = document.createElement('div');
+      header.className = 'state-group-header';
+      const count = Array.isArray(val) ? val.length : (typeof val === 'object' && val ? Object.keys(val).length : 0);
+      header.textContent = `${section.icon} ${section.label} (${count})`;
+      el.appendChild(header);
+
+      const hasContent = typeof val === 'object' && val !== null &&
+        (Array.isArray(val) ? val.length > 0 : Object.keys(val).length > 0);
+      if (hasContent) {
+        el.appendChild(TreeRenderer.render(val, [section.key], 'server'));
+      } else {
+        const emptySection = document.createElement('div');
+        emptySection.className = 'empty-state';
+        emptySection.style.paddingLeft = '16px';
+        emptySection.textContent = 'Empty';
+        el.appendChild(emptySection);
+      }
+    }
+
+    // Render remaining keys not in sections
+    const sectionKeySet = new Set([
+      ...sections.map(s => s.key),
+      'scriptPropertiesCount', 'userPropertiesCount', 'triggerCount', 'executionTimestamp'
+    ]);
+    const remaining = Object.fromEntries(Object.entries(data).filter(([k]) => !sectionKeySet.has(k)));
+    if (Object.keys(remaining).length > 0) {
+      el.appendChild(TreeRenderer.render(remaining, [], 'server'));
+    }
+  };
+
+  Debugger.refreshClientTree = function() {
+    const el = document.getElementById('clientTree');
+    const raw = ClientState.getRaw();
+    el.replaceChildren();
+    if (Object.keys(raw).length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = 'No client state yet. Use the editor to assign values to state.*';
+      el.appendChild(empty);
+      return;
+    }
+    el.appendChild(TreeRenderer.render(raw, [], 'client'));
+  };
+
+  // Enhanced diff highlights with action types
+  Debugger.highlightChanges = function(diffs) {
+    for (const d of diffs) _changedPaths[d.path] = { time: Date.now(), action: d.action };
+    setTimeout(() => {
+      const now = Date.now();
+      for (const p of Object.keys(_changedPaths)) {
+        if (now - _changedPaths[p].time > 3000) delete _changedPaths[p];
+      }
+    }, 3100);
+  };
+
+  Debugger.getChangeInfo = function(path) {
+    const info = _changedPaths[path];
+    if (!info || (Date.now() - info.time > 3000)) return null;
+    return info.action; // 'ADD', 'SET', or 'DELETE'
+  };
+
+  // Sparkline data ring buffer (persists across tree re-renders)
+  const _sparklineData = {};
+  Debugger.recordSparkline = function(path, value) {
+    if (typeof value !== 'number') return;
+    if (!_sparklineData[path]) _sparklineData[path] = [];
+    _sparklineData[path].push(value);
+    if (_sparklineData[path].length > 20) _sparklineData[path].shift();
+  };
+  Debugger.getSparklineData = function(path) {
+    return _sparklineData[path] || [];
+  };
+
+  // === Watch Expressions Panel ===
+  let _watches = [];
+  try { const savedW = localStorage.getItem('debugger_watches'); if (savedW) { const parsed = JSON.parse(savedW); if (Array.isArray(parsed)) _watches = parsed; } } catch(e) {}
+
+  WatchPanel.add = function(expr) {
+    if (!expr) {
+      const container = document.getElementById('watchList');
+      const input = document.createElement('input');
+      input.className = 'watch-input';
+      input.placeholder = 'Expression...';
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && this.value.trim()) { _watches.push(this.value.trim()); WatchPanel.persist(); WatchPanel.refresh(); }
+        if (e.key === 'Escape') WatchPanel.refresh();
+      });
+      input.addEventListener('blur', () => WatchPanel.refresh());
+      container.appendChild(input);
+      input.focus();
+      return;
+    }
+    _watches.push(expr); WatchPanel.persist(); WatchPanel.refresh();
+  };
+
+  WatchPanel.remove = function(idx) { _watches.splice(idx, 1); WatchPanel.persist(); WatchPanel.refresh(); };
+
+  WatchPanel.refresh = function() {
+    const container = document.getElementById('watchList');
+    if (!container) return;
+    container.replaceChildren();
+    if (_watches.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.style.fontSize = '10px';
+      empty.textContent = 'Click + to add watch';
+      container.appendChild(empty);
+      return;
+    }
+    _watches.forEach((expr, idx) => {
+      const row = document.createElement('div');
+      row.className = 'watch-row';
+      const exprSpan = document.createElement('span');
+      exprSpan.className = 'watch-expr';
+      exprSpan.textContent = expr;
+      exprSpan.title = expr;
+      row.appendChild(exprSpan);
+      const valSpan = document.createElement('span');
+      valSpan.className = 'watch-val';
+      try {
+        // Intentional dynamic eval — developer debugging tool (DOMAIN-scoped)
+        var fn = new Function('state', 'srv', 'return (' + expr + ')'); // eslint-disable-line no-new-func
+        const result = fn(window.debuggerState, window.srv);
+        valSpan.textContent = result === undefined ? 'undefined' : (typeof result === 'object' ? JSON.stringify(result) : String(result));
+        if (result === undefined || result === null) valSpan.style.color = 'var(--text-faint)';
+      } catch(e) {
+        valSpan.className = 'watch-val error';
+        valSpan.textContent = e.message;
+      }
+      row.appendChild(valSpan);
+      const removeBtn = document.createElement('span');
+      removeBtn.className = 'watch-remove';
+      removeBtn.textContent = '\u00D7';
+      removeBtn.addEventListener('click', () => WatchPanel.remove(idx));
+      row.appendChild(removeBtn);
+      container.appendChild(row);
+    });
+  };
+  WatchPanel.persist = function() { try { localStorage.setItem('debugger_watches', JSON.stringify(_watches)); } catch(e) {} };
+
+  // Auto-refresh watches on state change
+  const _origRefreshClient = Debugger.refreshClientTree;
+  Debugger.refreshClientTree = function() { _origRefreshClient.call(Debugger); WatchPanel.refresh(); };
+
+  // === File Tree ===
+  FileTree.refresh = function() {
+    const container = document.getElementById('fileTree');
+    if (!container) return;
+    container.replaceChildren();
+    const loading = document.createElement('div');
+    loading.className = 'empty-state';
+    loading.style.fontSize = '10px';
+    loading.textContent = 'Loading...';
+    container.appendChild(loading);
+
+    serverCall('common-js/debug/debugger_api', 'getProjectFiles')
+      .then(response => {
+        if (!response || !response.success) {
+          container.replaceChildren();
+          const err = document.createElement('div');
+          err.className = 'empty-state';
+          err.style.fontSize = '10px';
+          err.textContent = 'Failed to load';
+          container.appendChild(err);
+          return;
+        }
+        FileTree._render(container, response.result);
+      })
+      .catch(() => {
+        container.replaceChildren();
+        const err = document.createElement('div');
+        err.className = 'empty-state';
+        err.style.fontSize = '10px';
+        err.textContent = 'Error loading files';
+        container.appendChild(err);
+      });
+  };
+
+  FileTree._render = function(container, files) {
+    container.replaceChildren();
+    if (!files || files.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.style.fontSize = '10px';
+      empty.textContent = 'No files found';
+      container.appendChild(empty);
+      return;
+    }
+
+    const tree = {};
+    for (const f of files) {
+      const parts = f.name.split('/');
+      const fileName = parts.pop();
+      const folder = parts.join('/') || '(root)';
+      if (!tree[folder]) tree[folder] = [];
+      tree[folder].push({ name: fileName, path: f.name, type: f.type });
+    }
+
+    for (const folder of Object.keys(tree).sort()) {
+      const folderEl = document.createElement('div');
+      folderEl.className = 'file-folder';
+
+      const header = document.createElement('div');
+      header.className = 'file-folder-header';
+      header.textContent = '\u25B6 ' + folder;
+      header.addEventListener('click', () => {
+        const isOpen = folderEl.classList.toggle('open');
+        header.textContent = (isOpen ? '\u25BC ' : '\u25B6 ') + folder;
+      });
+      folderEl.appendChild(header);
+
+      const list = document.createElement('div');
+      list.className = 'file-folder-list';
+      for (const file of tree[folder].sort((a, b) => a.name.localeCompare(b.name))) {
+        const item = document.createElement('div');
+        item.className = 'file-item';
+        const icon = file.type === 'html' ? '\uD83C\uDF10 ' : file.type === 'json' ? '\u2699 ' : '\uD83D\uDCC4 ';
+        item.textContent = icon + file.name;
+        item.title = file.path + ' (' + file.type + ')';
+        item.addEventListener('click', () => FileTree.openFile(file.path));
+        list.appendChild(item);
+      }
+      folderEl.appendChild(list);
+      container.appendChild(folderEl);
+    }
+  };
+
+  FileTree.openFile = function(path) {
+    const existing = EditorTabs.findTabByName(path);
+    if (existing) {
+      EditorTabs.activate(existing.id);
+      return;
+    }
+
+    serverExec('return ScriptApp.getResource(' + JSON.stringify(path) + ').getDataAsString()')
+      .then(unwrap)
+      .then(source => {
+        EditorTabs.create(path);
+        EditorTabs.setContent(source);
+      })
+      .catch(err => {
+        showToast('Failed to open ' + path + ': ' + (err.message || err), 'error');
+      });
+  };
+
+  // === Theme Toggle ===
+  Debugger.toggleTheme = function() {
+    const html = document.documentElement;
+    const next = (html.dataset.theme || 'dark') === 'dark' ? 'light' : 'dark';
+    html.dataset.theme = next;
+    const icon = document.getElementById('themeIcon');
+    if (icon) icon.textContent = next === 'dark' ? '\uD83C\uDF19' : '\u2600\uFE0F';
+    try { localStorage.setItem('debugger_theme', next); } catch(e) {}
+  };
+  // Restore saved theme
+  try {
+    if (localStorage.getItem('debugger_theme') === 'light') {
+      document.documentElement.dataset.theme = 'light';
+      setTimeout(() => {
+        const icon = document.getElementById('themeIcon');
+        if (icon) icon.textContent = '\u2600\uFE0F';
+      }, 0);
+    }
+  } catch(e) {}
+
+  // === Keyboard Shortcuts ===
+  Debugger.showShortcuts = function() {
+    document.getElementById('shortcutsOverlay').classList.add('visible');
+  };
+
+  document.addEventListener('keydown', e => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    const isInput = tag === 'input' || tag === 'textarea';
+
+    // Escape closes any overlay
+    if (e.key === 'Escape') {
+      document.getElementById('shortcutsOverlay').classList.remove('visible');
+      CommandPalette.close();
+      return;
+    }
+    // Ctrl+Enter → Run (works from anywhere, including editor)
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      CodeRunner.run();
+      return;
+    }
+    // Shift+Ctrl+Enter → Run on Server
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && e.shiftKey) {
+      e.preventDefault();
+      CodeRunner.runServer();
+      return;
+    }
+    // Ctrl+K → command palette
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      CommandPalette.open();
+      return;
+    }
+    // Don't process remaining shortcuts when typing in an input
+    if (isInput) return;
+    // ? → shortcuts
+    if (e.key === '?') { Debugger.showShortcuts(); return; }
+  });
+
+  // Close overlays on click outside
+  document.getElementById('shortcutsOverlay').addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('visible');
+  });
+  document.getElementById('cmdOverlay').addEventListener('click', e => {
+    if (e.target === document.getElementById('cmdOverlay')) CommandPalette.close();
+  });
+
+  // === Command Palette ===
+  const _cmdActions = [];
+
+  CommandPalette.register = function(name, shortcut, callback) {
+    _cmdActions.push({ name, shortcut: shortcut || '', callback });
+  };
+
+  CommandPalette.open = function() {
+    const overlay = document.getElementById('cmdOverlay');
+    const input = document.getElementById('cmdInput');
+    overlay.classList.add('visible');
+    input.value = '';
+    input.focus();
+    CommandPalette._render('');
+  };
+
+  CommandPalette.close = function() {
+    document.getElementById('cmdOverlay').classList.remove('visible');
+  };
+
+  CommandPalette._render = function(query) {
+    const list = document.getElementById('cmdList');
+    list.replaceChildren();
+    const q = query.toLowerCase();
+    const filtered = _cmdActions.filter(a => !q || a.name.toLowerCase().includes(q));
+    filtered.forEach((action, idx) => {
+      const item = document.createElement('div');
+      item.className = `cmd-item${idx === 0 ? ' selected' : ''}`;
+      const nameSpan = document.createElement('span');
+      if (q) {
+        // Safe DOM-based highlighting (no innerHTML)
+        const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        let last = 0, match;
+        while ((match = re.exec(action.name)) !== null) {
+          if (match.index > last) nameSpan.appendChild(document.createTextNode(action.name.slice(last, match.index)));
+          const mark = document.createElement('mark');
+          mark.textContent = match[0];
+          nameSpan.appendChild(mark);
+          last = re.lastIndex;
+        }
+        if (last < action.name.length) nameSpan.appendChild(document.createTextNode(action.name.slice(last)));
+      } else {
+        nameSpan.textContent = action.name;
+      }
+      item.appendChild(nameSpan);
+      if (action.shortcut) {
+        const sc = document.createElement('span');
+        sc.className = 'cmd-shortcut';
+        sc.textContent = action.shortcut;
+        item.appendChild(sc);
+      }
+      item.addEventListener('click', () => { CommandPalette.close(); action.callback(); });
+      list.appendChild(item);
+    });
+  };
+
+  document.getElementById('cmdInput').addEventListener('input', function() {
+    CommandPalette._render(this.value);
+  });
+  document.getElementById('cmdInput').addEventListener('keydown', e => {
+    if (e.key === 'Escape') { CommandPalette.close(); return; }
+    if (e.key === 'Enter') {
+      const selected = document.querySelector('.cmd-item.selected');
+      if (selected) selected.click();
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const items = document.querySelectorAll('.cmd-item');
+      let idx = [...items].findIndex(el => el.classList.contains('selected'));
+      items.forEach(el => el.classList.remove('selected'));
+      idx = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0);
+      if (items[idx]) items[idx].classList.add('selected');
+    }
+  });
+
+  // Register default commands
+  CommandPalette.register('Run', 'Ctrl+Enter', () => CodeRunner.run());
+  CommandPalette.register('Run on Server', 'Shift+Ctrl+Enter', () => CodeRunner.runServer());
+  CommandPalette.register('Refresh Server State', '', () => Debugger.refreshServer());
+  CommandPalette.register('Toggle Polling', '', () => Debugger.togglePolling());
+  CommandPalette.register('Clear Console', '', () => ConsolePanel.clear());
+  CommandPalette.register('Clear Timeline', '', () => Timeline.clear());
+  CommandPalette.register('Toggle Gemini Chat', '', () => GeminiChat.toggle());
+  CommandPalette.register('Keyboard Shortcuts', '?', () => Debugger.showShortcuts());
+  CommandPalette.register('Export Session', '', () => Debugger.exportSession());
+  CommandPalette.register('Import Session', '', () => Debugger.importSession());
+  CommandPalette.register('Show Quotas', '', () => Debugger.showQuotas());
+  CommandPalette.register('Snapshot State', '', () => Debugger.snapshotState());
+  CommandPalette.register('Diff Snapshots', '', () => Debugger.diffSnapshots());
+  CommandPalette.register('View Sheet Data', '', () => Debugger.viewSheetData());
+
+  // === Export State ===
+  function _lsGet(key) {
+    try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; }
+  }
+
+  // Full session export (state + chat + tabs + history + timeline + watches)
+  Debugger.exportSession = function() {
+    const session = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      server: Poller._lastSnapshot || INITIAL_DATA,
+      client: ClientState.getRaw(),
+      chat: _lsGet('debugger_chat'),
+      editorTabs: _lsGet('debugger_tabs'),
+      consoleHistory: _lsGet('debugger_console_history'),
+      inputHistory: _lsGet('debugger_input_history'),
+      watches: _lsGet('debugger_watches'),
+      perfLog: _perfLog
+    };
+
+    const json = JSON.stringify(session, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gas-debugger-session-${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Session exported', 'success');
+  };
+
+  Debugger.importSession = function() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        try {
+          const session = JSON.parse(ev.target.result);
+          if (session.version == null) { showToast('Invalid session file', 'error'); return; }
+          if (session.client) {
+            for (const k of Object.keys(session.client)) window.debuggerState[k] = session.client[k];
+          }
+          const lsMap = {
+            'debugger_chat': session.chat,
+            'debugger_tabs': session.editorTabs,
+            'debugger_console_history': session.consoleHistory,
+            'debugger_input_history': session.inputHistory,
+            'debugger_watches': session.watches
+          };
+          for (const [key, val] of Object.entries(lsMap)) {
+            if (val) localStorage.setItem(key, JSON.stringify(val));
+          }
+          Debugger.refreshClientTree();
+          showToast('Session imported! Reload to see editor tabs and chat.', 'success');
+        } catch(err) {
+          showToast(`Import failed: ${err.message}`, 'error');
+        }
+      };
+      reader.readAsText(file);
+    });
+    input.click();
+  };
+
+  // Legacy alias
+  Debugger.exportState = Debugger.exportSession;
+
+  // Quota Dashboard
+  Debugger.showQuotas = function() {
+    if (typeof ConsolePanel !== 'undefined') ConsolePanel.append('info', '> Fetching quotas...');
+    serverCall('common-js/diagnostics', 'getQuotas')
+      .then(response => {
+        if (!response || !response.success) {
+          if (typeof ConsolePanel !== 'undefined') ConsolePanel.append('error', 'Failed to fetch quotas');
+          return;
+        }
+        const q = response.result;
+        const pctSP = Math.round((q.scriptPropsSize / q.propsMaxBytes) * 100);
+        const pctUP = Math.round((q.userPropsSize / q.propsMaxBytes) * 100);
+        const lines = [
+          '=== GAS Resource Quotas ===',
+          `Mail quota remaining: ${q.mailQuota}`,
+          `Script Properties: ${q.scriptPropsCount} keys, ${Math.round(q.scriptPropsSize/1024)}KB / 500KB (${pctSP}%)`,
+          `User Properties: ${q.userPropsCount} keys, ${Math.round(q.userPropsSize/1024)}KB / 500KB (${pctUP}%)`,
+          `Triggers: ${q.triggerCount} / ${q.triggerMax}`,
+          '==========================='
+        ];
+        if (typeof ConsolePanel !== 'undefined') lines.forEach(l => ConsolePanel.append('info', l));
+      })
+      .catch(err => {
+        if (typeof ConsolePanel !== 'undefined') ConsolePanel.append('error', `Quota fetch error: ${err.message}`);
+      });
+  };
+
+  // === Tree Search ===
+  function _attachTreeSearch(inputId, treeId) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    let debounce;
+    input.addEventListener('input', function() {
+      clearTimeout(debounce);
+      const q = this.value;
+      debounce = setTimeout(() => TreeSearch.filter(document.getElementById(treeId), q), 150);
+    });
+  }
+
+  TreeSearch.init = function() {
+    _attachTreeSearch('serverSearch', 'serverTree');
+    _attachTreeSearch('clientSearch', 'clientTree');
+  };
+
+  TreeSearch.filter = function(container, query) {
+    if (!container) return;
+    const nodes = container.querySelectorAll('.tree-node');
+    if (!query) {
+      nodes.forEach(n => n.classList.remove('search-hidden'));
+      return;
+    }
+    const q = query.toLowerCase();
+    nodes.forEach(node => {
+      const row = node.querySelector('.tree-row');
+      if (!row) return;
+      const keyEl = row.querySelector('.tree-key');
+      const valEl = row.querySelector('.tree-val');
+      const text = `${keyEl ? keyEl.textContent : ''} ${valEl ? valEl.textContent : ''}`;
+      if (text.toLowerCase().includes(q)) {
+        node.classList.remove('search-hidden');
+        let parent = node.parentElement;
+        while (parent && parent !== container) {
+          if (parent.classList.contains('tree-node')) parent.classList.remove('search-hidden');
+          if (parent.style && parent.style.display === 'none') parent.style.display = 'block';
+          parent = parent.parentElement;
+        }
+      } else {
+        node.classList.add('search-hidden');
+      }
+    });
+  };
+
+  // Expose for other modules (must be before any code that references window._Poller)
+  window._serverCall = serverCall;
+  window._serverExec = serverExec;
+  window._showToast = showToast;
+  window._Poller = Poller;
+  window._perfLog = _perfLog;
+
+  // Performance timing helper: get last call duration
+  Debugger.getLastTiming = function() {
+    return _perfLog.at(-1) ?? null;
+  };
+  Debugger.getPerfLog = function() { return _perfLog; };
+
+  // === State Diff Viewer ===
+  const _stateSnapshots = [];
+  Debugger.snapshotState = function() {
+    const snap = {
+      ts: new Date().toISOString(),
+      server: JSON.parse(JSON.stringify(Poller._lastSnapshot || INITIAL_DATA)),
+      client: JSON.parse(JSON.stringify(ClientState.getRaw()))
+    };
+    _stateSnapshots.push(snap);
+    if (_stateSnapshots.length > 20) _stateSnapshots.shift();
+    if (typeof ConsolePanel !== 'undefined') ConsolePanel.append('info', `Snapshot #${_stateSnapshots.length} saved`);
+    showToast(`Snapshot #${_stateSnapshots.length}`, 'success');
+  };
+  Debugger.diffSnapshots = function() {
+    if (_stateSnapshots.length < 2) { showToast('Need 2+ snapshots. Use Ctrl+K \u2192 "Snapshot State"', 'error'); return; }
+    const a = _stateSnapshots[_stateSnapshots.length - 2], b = _stateSnapshots[_stateSnapshots.length - 1];
+    const cDiffs = Poller.computeDiff(a.client, b.client);
+    const sDiffs = Poller.computeDiff(a.server, b.server);
+    if (typeof ConsolePanel !== 'undefined') {
+      ConsolePanel.append('info', `=== Diff: ${a.ts.slice(11,19)} \u2192 ${b.ts.slice(11,19)} ===`);
+      sDiffs.forEach(d => ConsolePanel.append('info', `[srv] ${d.action} ${d.path}: ${JSON.stringify(d.oldValue)} \u2192 ${JSON.stringify(d.newValue)}`));
+      cDiffs.forEach(d => ConsolePanel.append('info', `[cli] ${d.action} ${d.path}: ${JSON.stringify(d.oldValue)} \u2192 ${JSON.stringify(d.newValue)}`));
+      if (cDiffs.length + sDiffs.length === 0) ConsolePanel.append('info', 'No changes.');
+      ConsolePanel.append('info', `=== ${cDiffs.length + sDiffs.length} change(s) ===`);
+    }
+  };
+
+  // === Spreadsheet Data Viewer ===
+  Debugger.viewSheetData = function() {
+    // Non-blocking input via console REPL area instead of blocking prompt()
+    if (typeof ConsolePanel !== 'undefined') {
+      ConsolePanel.append('info', 'Enter sheet range in console (e.g., Sheet1!A1:D10):');
+    }
+    const input = document.getElementById('consoleInput');
+    if (!input) return;
+    input.value = 'Sheet1!A1:D10';
+    input.focus();
+    input.select();
+
+    function onSheetRangeEnter(e) {
+      if (e.key !== 'Enter' || e.shiftKey) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      input.removeEventListener('keydown', onSheetRangeEnter, true);
+      const range = input.value.trim();
+      input.value = '';
+      input.style.height = 'auto';
+      if (!range) return;
+      _fetchSheetData(range);
+    }
+    // Capture phase so this fires before the REPL's own Enter handler
+    input.addEventListener('keydown', onSheetRangeEnter, true);
+  };
+
+  function _fetchSheetData(range) {
+    if (typeof ConsolePanel !== 'undefined') ConsolePanel.append('info', `> Loading ${range}...`);
+    const parts = range.split('!');
+    const sheetName = parts.length > 1 ? parts[0] : 'Sheet1';
+    const rangeRef = parts.length > 1 ? parts[1] : parts[0];
+    const code = 'return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(' + JSON.stringify(sheetName) + ').getRange(' + JSON.stringify(rangeRef) + ').getValues()';
+    serverExec(code).then(response => {
+      if (response && response.success && response.result) {
+        const data = response.result;
+        if (typeof ConsolePanel !== 'undefined') {
+          ConsolePanel.append('info', `=== ${sheetName}!${rangeRef} (${data.length} rows) ===`);
+          data.forEach((row, i) => ConsolePanel.append('info', `[${i}] ${row.join(' | ')}`));
+        }
+        window.debuggerState._sheetData = data;
+        Debugger.refreshClientTree();
+      } else {
+        if (typeof ConsolePanel !== 'undefined') ConsolePanel.append('error', (response && response.error) || 'Failed');
+      }
+    }).catch(err => {
+      if (typeof ConsolePanel !== 'undefined') ConsolePanel.append('error', `Sheet error: ${err.message}`);
+    });
+  }
+
+  // Poller.poll and Poller._lastSnapshot defined above (single definition)
+})();
+</script>

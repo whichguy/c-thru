@@ -1,31 +1,41 @@
 ---
 name: competitive-evolution
 description: |
-  Codifies the 'Grand Tournament' process for evolving prompts and system logic.
-  Ensures isolation, strict scoring against gold standards, and institutional memory.
+  Evolve agentic logic through repeatable, isolated competitive stress-testing.
+  Enforces statelessness and strict 100-point structural scoring.
 ---
 
 # competitive-evolution
 
-This skill manages the iterative refinement of agentic logic through competitive stress-testing (The GAN Strategy).
+Use this skill to run a prompt variant (PROD or DEBUG) through the 2,200-case test bank in 100% isolated context.
 
-## The Tournament Protocol
+## Primary Tool: `c-thru-tournament`
 
-... [Previous phases remain] ...
+### The "Clean-Run" Benchmark
+Executes a batch of cases. For every single case, the system prompt is re-instantiated in a fresh Gemini context to prevent any context pollution.
 
-### Phase 5: State-Space Archive (The Plan Outcome)
-Every tournament turn or resolution MUST emit the final **`supervisor_state.md`**.
-- This file serves as the **Immutable Knowledge Graph** of the operations.
-- It must contain the final **Inquiry Graph**, **Surgical Evidence Map**, and **Verification Proof**.
-- **Rule:** The "Well-Crafted Response" is not just the answer; it is the **State File** that proves how the answer was reached.
+```bash
+# Run 100 isolated tests for the PROD variant
+node tools/c-thru-tournament.js --batch --variant agents/supervisor.md --count 100
 
-## Evolution Loop
-1.  **Select Champion:** Use the variant with the highest average score as the baseline.
-2.  **Hypothesize Improvement:** Generate a new candidate that specifically targets a failure mode (e.g., adding Anti-Flap logic).
-3.  **Stress Test:** Run the new candidate against the **High-Entropy Bank**.
-4.  **Audit:** If the score increases and logic converges, commit as `eval-pass`. If not, commit `eval-fail` and revert.
+# Run 100 isolated tests for the DEBUG variant
+node tools/c-thru-tournament.js --batch --variant agents/supervisor-debug.md --count 100
+```
 
-## Invariants
-- **No Self-Deception:** An agent cannot grade its own performance.
-- **Stateless Truth:** Truth is defined by the Evidence Map, not the conversation history.
-- **Pedagogical History:** Every failed experiment is a required lesson for the next iteration.
+## The Isolation Guarantee
+1.  **Fresh Context:** The harness strips all residual history before every test.
+2.  **Sovereign State:** Every run starts with a clean `supervisor_state.md`.
+3.  **Hermetic Archival:** Every outcome is moved to `test/results/archives/` via the cleanup tool before the next prompt is loaded.
+
+## Evaluation Workflow
+To verify a new change:
+1.  Stage your prompt change.
+2.  **Invoke:** "Gemini, run a clean-context benchmark on agents/supervisor.md for 20 cases."
+3.  **Score:** The evaluator will grade based on the 100-pt Gold Standard.
+4.  **Journal:** If the average score improves, commit as `eval-pass`. If it declines, commit `eval-fail` and revert.
+
+---
+
+### **Logical Directives**
+- **"Run PROD benchmark"**: Executes the batch using the token-optimized binary.
+- **"Run DEBUG benchmark"**: Executes the batch using the full-telemetry source.

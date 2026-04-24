@@ -1,12 +1,10 @@
 #!/bin/bash
-/**
- * c-thru State Archiver & Cleaner
- * 
- * Moves active supervisor_state.md into a task-scoped archive to prevent
- * context pollution of subsequent prompts.
- * 
- * Usage: ./tools/c-thru-cleanup <scenario_id> [--delete]
- */
+# c-thru State Archiver & Cleaner
+# 
+# Moves active supervisor_state.md into a task-scoped archive to prevent
+# context pollution of subsequent prompts.
+# 
+# Usage: ./tools/c-thru-cleanup <scenario_id> [--delete]
 
 SCENARIO_ID=$1
 ARCHIVE_ROOT="test/supervisor-benchmark/results/archives"

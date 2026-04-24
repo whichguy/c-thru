@@ -1,0 +1,317 @@
+<script>
+(function() {
+  'use strict';
+
+  const _TYPE_LABELS = { string: 'STR', number: 'NUM', boolean: 'BOOL', null: 'NULL', object: 'OBJ', array: 'ARR' };
+  const _TYPE_CLASSES = { string: 'str', number: 'num', boolean: 'bool', null: 'null' };
+
+  const truncate = (s, n) => {
+    s = String(s);
+    return s.length > n ? s.substring(0, n) + '...' : s;
+  };
+
+  const typeOf = val => {
+    if (val === null) return 'null';
+    if (Array.isArray(val)) return 'array';
+    return typeof val;
+  };
+
+  const typeLabel = t => _TYPE_LABELS[t] || t.toUpperCase();
+
+  const typeCssClass = t => _TYPE_CLASSES[t] || '';
+
+  const tryParseJson = val => {
+    if (typeof val !== 'string') return null;
+    try {
+      const parsed = JSON.parse(val);
+      if (typeof parsed === 'object' && parsed !== null) return parsed;
+    } catch(e) {}
+    return null;
+  };
+
+  const _expandedPaths = {};
+
+  TreeRenderer.isExpanded = function(pathStr) {
+    return !!_expandedPaths[pathStr];
+  };
+  TreeRenderer.setExpanded = function(pathStr, expanded) {
+    if (expanded) _expandedPaths[pathStr] = true;
+    else delete _expandedPaths[pathStr];
+  };
+
+  const _makeBtn = (label, ariaLabel, onClick) => {
+    const btn = document.createElement('button');
+    btn.className = 'tree-btn';
+    btn.textContent = label;
+    btn.setAttribute('aria-label', ariaLabel);
+    btn.addEventListener('click', e => { e.stopPropagation(); onClick(); });
+    return btn;
+  };
+
+  const _makeActionsSpan = (...buttons) => {
+    const span = document.createElement('span');
+    span.className = 'tree-actions';
+    for (const btn of buttons) span.appendChild(btn);
+    return span;
+  };
+
+  TreeRenderer.render = function(data, path, source) {
+    const frag = document.createDocumentFragment();
+
+    for (const [key, val] of Object.entries(data)) {
+      const currentPath = [...path, key];
+      const pathStr = currentPath.join('\x00');
+      const t = typeOf(val);
+
+      const node = document.createElement('div');
+      node.className = 'tree-node';
+
+      const row = document.createElement('div');
+      row.className = 'tree-row';
+      const changeAction = Debugger.getChangeInfo(pathStr);
+      if (changeAction) row.classList.add(`diff-${changeAction.toLowerCase()}`);
+      row.dataset.path = pathStr;
+
+      const parsed = tryParseJson(val);
+      const isExpandable = t === 'object' || t === 'array' || !!parsed;
+
+      const toggle = document.createElement('span');
+      toggle.className = 'tree-toggle';
+      toggle.setAttribute('role', 'button');
+      toggle.textContent = isExpandable ? '\u25B6' : ' ';
+      if (isExpandable) {
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.setAttribute('aria-label', `Expand ${key}`);
+      }
+      row.appendChild(toggle);
+
+      const keySpan = document.createElement('span');
+      keySpan.className = 'tree-key';
+      keySpan.textContent = key;
+      row.appendChild(keySpan);
+
+      const colon = document.createElement('span');
+      colon.className = 'tree-colon';
+      colon.textContent = ':';
+      row.appendChild(colon);
+
+      const valSpan = document.createElement('span');
+      valSpan.className = `tree-val ${typeCssClass(t)}`;
+
+      if (isExpandable) {
+        const displayObj = parsed || val;
+        const itemCount = Object.keys(displayObj).length;
+        valSpan.textContent = t === 'array' || Array.isArray(displayObj) ? `[${itemCount}]` : `{${itemCount}}`;
+        valSpan.style.color = 'var(--text-dim)';
+      } else {
+        valSpan.textContent = val === null ? 'null' :
+          typeof val === 'string' ? `"${truncate(val, 60)}"` : String(val);
+      }
+      row.appendChild(valSpan);
+
+      const badge = document.createElement('span');
+      badge.className = 'tree-type';
+      badge.textContent = typeLabel(parsed ? 'object' : t);
+      row.appendChild(badge);
+
+      if (t === 'number') {
+        Debugger.recordSparkline(pathStr, val);
+        const sparkData = Debugger.getSparklineData(pathStr);
+        if (sparkData.length >= 2) row.appendChild(renderSparkline(sparkData));
+      }
+
+      if (source === 'server' && !isExpandable) {
+        const editBtn = _makeBtn('edit', `Edit ${key}`, () => startInlineEdit(row, valSpan, currentPath, val, source));
+        const buttons = [editBtn];
+        if (currentPath.length >= 2 &&
+            (currentPath[0] === 'scriptProperties' || currentPath[0] === 'userProperties')) {
+          buttons.push(_makeBtn('\u00D7', `Delete ${key}`, () => deleteProperty(currentPath)));
+          buttons[buttons.length - 1].classList.add('delete');
+        }
+        row.appendChild(_makeActionsSpan(...buttons));
+      }
+
+      if (source === 'client' && !isExpandable) {
+        row.appendChild(_makeActionsSpan(
+          _makeBtn('edit', `Edit ${key}`, () => startClientEdit(row, valSpan, currentPath, val))
+        ));
+      }
+
+      node.appendChild(row);
+
+      if (isExpandable) {
+        const wasExpanded = TreeRenderer.isExpanded(pathStr);
+        const children = document.createElement('div');
+        children.style.display = wasExpanded ? 'block' : 'none';
+        children.appendChild(TreeRenderer.render(parsed || val, currentPath, source));
+        node.appendChild(children);
+
+        if (wasExpanded) {
+          toggle.textContent = '\u25BC';
+          toggle.setAttribute('aria-expanded', 'true');
+        }
+
+        toggle.addEventListener('click', e => {
+          e.stopPropagation();
+          const expanded = children.style.display !== 'none';
+          children.style.display = expanded ? 'none' : 'block';
+          toggle.textContent = expanded ? '\u25B6' : '\u25BC';
+          toggle.setAttribute('aria-expanded', String(!expanded));
+          TreeRenderer.setExpanded(pathStr, !expanded);
+        });
+
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', e => { e.stopPropagation(); toggle.click(); });
+      }
+
+      frag.appendChild(node);
+    }
+
+    return frag;
+  };
+
+  const _setupEditInput = (valSpan, currentVal) => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'tree-edit-input';
+    input.value = typeof currentVal === 'string' ? currentVal : JSON.stringify(currentVal);
+    const originalText = valSpan.textContent;
+    valSpan.textContent = '';
+    valSpan.appendChild(input);
+    input.focus();
+    input.select();
+    return { input, originalText };
+  };
+
+  function startInlineEdit(row, valSpan, path, currentVal, source) { // eslint-disable-line no-unused-vars
+    const { input, originalText } = _setupEditInput(valSpan, currentVal);
+    let committed = false;
+
+    const commit = () => {
+      committed = true;
+      const newVal = input.value;
+      valSpan.textContent = `"${truncate(newVal, 60)}"`;
+
+      let store = null;
+      if (path[0] === 'scriptProperties') store = 'script';
+      else if (path[0] === 'userProperties') store = 'user';
+
+      if (store && path.length >= 2) {
+        const key = path[path.length - 1];
+        _Poller.pause();
+        _serverCall('common-js/debugger_api', 'setProperty', store, key, newVal)
+          .then(response => {
+            if (response && response.success && response.result && response.result.success) {
+              _showToast(`Updated ${key}`, 'success');
+              row.classList.add('changed');
+              Timeline.record({ type: 'server', action: 'SET', path: path.join('.'), oldValue: currentVal, newValue: newVal });
+            } else {
+              valSpan.textContent = originalText;
+              const errMsg = (response && response.result && response.result.error) || 'Unknown error';
+              _showToast(`Failed: ${errMsg}`, 'error');
+            }
+          })
+          .catch(err => {
+            valSpan.textContent = originalText;
+            _showToast(`Error: ${err.message}`, 'error');
+          })
+          .finally(() => _Poller.resume());
+      }
+    };
+
+    const cancel = () => { if (!committed) valSpan.textContent = originalText; };
+
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+    input.addEventListener('blur', cancel);
+  }
+
+  function startClientEdit(row, valSpan, path, currentVal) {
+    const { input, originalText } = _setupEditInput(valSpan, currentVal);
+    let committed = false;
+
+    const commit = () => {
+      committed = true;
+      let newVal = input.value;
+      try { newVal = JSON.parse(newVal); } catch(e) {}
+
+      const obj = path.slice(0, -1).reduce((acc, key) => {
+        if (acc == null) return null;
+        return acc[key];
+      }, window.debuggerState);
+
+      if (obj == null) { _showToast('State path no longer exists', 'error'); return; }
+      obj[path[path.length - 1]] = newVal;
+
+      valSpan.textContent = typeof newVal === 'string' ? `"${truncate(newVal, 60)}"` : String(newVal);
+    };
+
+    const cancel = () => { if (!committed) valSpan.textContent = originalText; };
+
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+    input.addEventListener('blur', cancel);
+  }
+
+  function deleteProperty(path) {
+    let store = null;
+    if (path[0] === 'scriptProperties') store = 'script';
+    else if (path[0] === 'userProperties') store = 'user';
+
+    if (!store || path.length < 2) return;
+
+    const key = path[path.length - 1];
+    _Poller.pause();
+    _serverCall('common-js/debugger_api', 'deleteProperty', store, key)
+      .then(response => {
+        if (response && response.success && response.result && response.result.success) {
+          _showToast(`Deleted ${key}`, 'success');
+          Timeline.record({ type: 'server', action: 'DELETE', path: path.join('.'), oldValue: key, newValue: undefined });
+          _Poller.poll();
+        } else {
+          const errMsg = (response && response.result && response.result.error) || 'Unknown error';
+          _showToast(`Failed: ${errMsg}`, 'error');
+        }
+      })
+      .catch(err => _showToast(`Error: ${err.message}`, 'error'))
+      .finally(() => _Poller.resume());
+  }
+
+  function renderSparkline(data) {
+    const w = 56, h = 14, pad = 1;
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const range = max - min || 1;
+    const points = data.map((v, i) => {
+      const x = pad + (i / (data.length - 1)) * (w - pad * 2);
+      const y = pad + (1 - (v - min) / range) * (h - pad * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+
+    const last = data[data.length - 1];
+    const trend = last > data[0] ? 'var(--green)' : last < data[0] ? 'var(--red)' : 'var(--text-dim)';
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', w);
+    svg.setAttribute('height', h);
+    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    svg.setAttribute('class', 'sparkline-svg');
+
+    const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    polyline.setAttribute('points', points);
+    polyline.setAttribute('fill', 'none');
+    polyline.setAttribute('stroke', trend);
+    polyline.setAttribute('stroke-width', '1.5');
+    polyline.setAttribute('stroke-linecap', 'round');
+    polyline.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(polyline);
+
+    return svg;
+  }
+
+})();
+</script>

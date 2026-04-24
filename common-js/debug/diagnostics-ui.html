@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base target="_top">
+  <title>GAS Project Diagnostics</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --surface2: #334155;
+      --border: #475569;
+      --text: #e2e8f0;
+      --text-dim: #94a3b8;
+      --accent: #38bdf8;
+      --accent2: #818cf8;
+      --green: #4ade80;
+      --red: #f87171;
+      --orange: #fb923c;
+      --yellow: #facc15;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+    .header {
+      text-align: center;
+      padding: 40px 0 32px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 32px;
+    }
+    .header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+    .header .subtitle { color: var(--text-dim); font-size: 13px; }
+    .header .timestamp {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 4px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--accent);
+    }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 20px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .card:hover { border-color: var(--accent); }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 20px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .card-icon { font-size: 18px; }
+    .card-body { padding: 16px 20px; }
+
+    .kv { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(71,85,105,0.3); }
+    .kv:last-child { border-bottom: none; }
+    .kv-key { color: var(--text-dim); font-size: 12px; }
+    .kv-val { font-size: 12px; text-align: right; max-width: 60%; word-break: break-all; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-green { background: rgba(74,222,128,0.15); color: var(--green); }
+    .badge-red { background: rgba(248,113,113,0.15); color: var(--red); }
+    .badge-orange { background: rgba(251,146,60,0.15); color: var(--orange); }
+    .badge-blue { background: rgba(56,189,248,0.15); color: var(--accent); }
+
+    .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      background: rgba(15,23,42,0.5);
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .feature-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .feature-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .feature-dot.off { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+    .scope-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .scope-pill {
+      padding: 4px 10px;
+      background: rgba(129,140,248,0.1);
+      border: 1px solid rgba(129,140,248,0.3);
+      border-radius: 20px;
+      font-size: 11px;
+      color: var(--accent2);
+    }
+
+    .prop-empty { color: var(--text-dim); font-size: 12px; font-style: italic; padding: 8px 0; }
+
+    .trigger-item {
+      background: rgba(15,23,42,0.5);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 8px;
+    }
+    .trigger-item:last-child { margin-bottom: 0; }
+    .trigger-fn { color: var(--accent); font-weight: 600; font-size: 13px; }
+    .trigger-meta { color: var(--text-dim); font-size: 11px; margin-top: 4px; }
+
+    .card-full { grid-column: 1 / -1; }
+
+    .refresh-btn {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 48px; height: 48px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none;
+      color: white;
+      font-size: 20px;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(56,189,248,0.3);
+      transition: transform 0.3s;
+    }
+    .refresh-btn:hover { transform: scale(1.1); }
+    .refresh-btn.spinning { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .live-dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      background: var(--green);
+      border-radius: 50%;
+      margin-right: 8px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>GAS Project Diagnostics</h1>
+      <div class="subtitle">Runtime introspection &amp; environment analysis</div>
+      <div class="timestamp"><span class="live-dot"></span>Gathered at <span id="ts">loading...</span></div>
+    </div>
+    <div class="grid" id="dashboard"></div>
+  </div>
+  <button class="refresh-btn" onclick="refresh()" title="Refresh">&#8635;</button>
+
+  <script>
+    const DATA = <?!= JSON.stringify(data).replace(/<\//g, '<\\/') ?>;
+
+    function truncate(s, n) { s = String(s); return s.length > n ? `${s.substring(0, n)}...` : s; }
+    function formatDate(iso) { return new Date(iso).toLocaleString(); }
+
+    function buildDashboard(d) {
+      if (!d || typeof d !== 'object') {
+        document.getElementById('dashboard').textContent = 'No diagnostic data available.';
+        return;
+      }
+      const root = document.getElementById('dashboard');
+      document.getElementById('ts').textContent = d.executionTimestamp || 'unknown';
+
+      function makeCard(title, icon, bodyHtml, fullWidth) {
+        const card = document.createElement('div');
+        card.className = `card${fullWidth ? ' card-full' : ''}`;
+        const hdr = document.createElement('div');
+        hdr.className = 'card-header';
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'card-icon';
+        iconSpan.textContent = icon;
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = title;
+        hdr.append(iconSpan, titleSpan);
+        const body = document.createElement('div');
+        body.className = 'card-body';
+        body.appendChild(bodyHtml);
+        card.append(hdr, body);
+        return card;
+      }
+
+      function makeEl(tag, cls, text) {
+        const el = document.createElement(tag);
+        if (cls) el.className = cls;
+        if (text !== undefined) el.textContent = text;
+        return el;
+      }
+
+      function makeKV(key, valText, valColor) {
+        const row = makeEl('div', 'kv');
+        const k = makeEl('span', 'kv-key', key);
+        const v = makeEl('span', 'kv-val', valText);
+        if (valColor) v.style.color = `var(--${valColor})`;
+        row.append(k, v);
+        return row;
+      }
+
+      function makeBadge(text, color) {
+        return makeEl('span', `badge badge-${color}`, text);
+      }
+
+      function makeKVBadge(key, text, color) {
+        const row = makeEl('div', 'kv');
+        const k = makeEl('span', 'kv-key', key);
+        const v = makeEl('span', 'kv-val');
+        v.appendChild(makeBadge(text, color));
+        row.append(k, v);
+        return row;
+      }
+
+      const identFrag = document.createDocumentFragment();
+      identFrag.append(
+        makeKV('Script ID', d.scriptId, 'accent'),
+        makeKV('Project Name', (d.driveFile && d.driveFile.name) || 'N/A'),
+        makeKV('Service URL', d.serviceUrl !== 'N/A' ? truncate(d.serviceUrl, 50) : 'N/A', 'accent'),
+        makeKVBadge('Service Enabled', String(d.serviceEnabled), d.serviceEnabled ? 'green' : 'red')
+      );
+      root.appendChild(makeCard('Script Identity', '\u{1F6E0}', identFrag));
+
+      const sessFrag = document.createDocumentFragment();
+      sessFrag.append(
+        makeKV('Active User', d.activeUser),
+        makeKV('Effective User', d.effectiveUser),
+        makeKV('Temp User Key', truncate(d.tempActiveUserKey, 20), 'accent'),
+        makeKV('Locale', d.locale),
+        makeKV('Script Timezone', d.scriptTimeZone),
+        makeKV('Manifest Timezone', d.timeZone)
+      );
+      root.appendChild(makeCard('Session & Users', '\u{1F464}', sessFrag));
+
+      const rtFrag = document.createDocumentFragment();
+      rtFrag.append(
+        makeKVBadge('V8 Runtime', d.v8Runtime ? 'Yes' : 'No', d.v8Runtime ? 'green' : 'red'),
+        makeKVBadge('Runtime Version', d.runtimeVersion, d.runtimeVersion === 'V8' ? 'green' : 'orange'),
+        makeKVBadge('OAuth Token', d.oauthToken, (d.oauthToken && d.oauthToken.indexOf('Present') === 0) ? 'green' : 'red'),
+        makeKVBadge('Cache Service', d.cacheServiceWorking ? 'Working' : 'Failed', d.cacheServiceWorking ? 'green' : 'red'),
+        makeKV('Mail Quota Left', typeof d.remainingMailQuota === 'number' ? `${d.remainingMailQuota} emails` : String(d.remainingMailQuota))
+      );
+      root.appendChild(makeCard('Runtime Environment', '\u2699', rtFrag));
+
+      const df = d.driveFile;
+      if (df && !df.error) {
+        const driveFrag = document.createDocumentFragment();
+        driveFrag.append(
+          makeKV('Owner', df.owner),
+          makeKV('Created', formatDate(df.dateCreated)),
+          makeKV('Last Updated', formatDate(df.lastUpdated)),
+          makeKV('Size', `${df.size} bytes`),
+          makeKVBadge('Sharing Access', df.sharingAccess, 'blue'),
+          makeKVBadge('Sharing Permission', df.sharingPermission, 'blue')
+        );
+        root.appendChild(makeCard('Drive File Info', '\u{1F4C1}', driveFrag));
+      }
+
+      const featFrag = makeEl('div', 'feature-grid');
+      const feats = d.jsFeatures;
+      for (const f in feats) {
+        const label = f.replace(/([A-Z])/g, ' $1').trim();
+        const item = makeEl('div', 'feature-item');
+        item.append(makeEl('span', `feature-dot ${feats[f] ? 'on' : 'off'}`), document.createTextNode(label));
+        featFrag.appendChild(item);
+      }
+      root.appendChild(makeCard('V8 JS Feature Support', '\u26A1', featFrag));
+
+      function makePropSection(label, count, props, color, emptyMsg) {
+        const frag = document.createDocumentFragment();
+        const hdr = makeEl('div', null);
+        hdr.style.marginBottom = '12px';
+        const strong = makeEl('strong', null, `${label} `);
+        strong.style.cssText = `font-size:12px;color:var(--${color})`;
+        hdr.append(strong, makeBadge(`${count} keys`, 'blue'));
+        frag.appendChild(hdr);
+        if (count > 0) {
+          for (const key in props) frag.appendChild(makeKV(key, truncate(props[key], 40), color));
+        } else {
+          frag.appendChild(makeEl('div', 'prop-empty', emptyMsg));
+        }
+        return frag;
+      }
+
+      const propFrag = document.createDocumentFragment();
+      propFrag.appendChild(makePropSection('Script Properties', d.scriptPropertiesCount, d.scriptProperties, 'accent', 'No script properties set'));
+      const sep = makeEl('div', null);
+      sep.style.cssText = 'margin:16px 0 12px;border-top:1px solid var(--border);padding-top:12px';
+      sep.appendChild(makePropSection('User Properties', d.userPropertiesCount, d.userProperties, 'accent2', 'No user properties set'));
+      propFrag.appendChild(sep);
+      root.appendChild(makeCard('Properties Store', '\u{1F4CB}', propFrag));
+
+      const trigFrag = document.createDocumentFragment();
+      if (!d.triggers || d.triggers.length === 0) {
+        trigFrag.appendChild(makeEl('div', 'prop-empty', 'No installable triggers configured'));
+      } else {
+        d.triggers.forEach(t => {
+          const ti = makeEl('div', 'trigger-item');
+          ti.append(makeEl('div', 'trigger-fn', `${t.handlerFunction}()`), makeEl('div', 'trigger-meta', `${t.eventType} \u2022 ${t.triggerSource}`));
+          trigFrag.appendChild(ti);
+        });
+      }
+      root.appendChild(makeCard(`Triggers (${d.triggerCount})`, '\u23F1', trigFrag));
+
+      const scopeFrag = makeEl('div', 'scope-list');
+      (d.oauthScopes || []).forEach(s => {
+        const pill = makeEl('span', 'scope-pill', s.replace('https://www.googleapis.com/auth/', ''));
+        pill.title = s;
+        scopeFrag.appendChild(pill);
+      });
+      root.appendChild(makeCard(`OAuth Scopes (${(d.oauthScopes ? d.oauthScopes.length : 0)})`, '\u{1F512}', scopeFrag, true));
+
+      const limFrag = makeEl('div', 'feature-grid');
+      for (const lk in d.limits) {
+        const ll = lk.replace(/([A-Z])/g, ' $1').replace(/^max\s*/i, '').trim();
+        const li = makeEl('div', 'feature-item');
+        li.style.cssText = 'flex-direction:column;align-items:flex-start;gap:2px';
+        const lbl = makeEl('div', null, ll);
+        lbl.style.cssText = 'color:var(--text-dim);font-size:11px';
+        const val = makeEl('div', null, d.limits[lk]);
+        val.style.cssText = 'color:var(--yellow);font-size:12px';
+        li.append(lbl, val);
+        limFrag.appendChild(li);
+      }
+      root.appendChild(makeCard('Execution Limits Reference', '\u{1F4CA}', limFrag, true));
+
+      if (d.webapp) {
+        const waFrag = document.createDocumentFragment();
+        waFrag.append(
+          makeKVBadge('Execute As', d.webapp.executeAs || 'N/A', 'blue'),
+          makeKVBadge('Access', d.webapp.access || 'N/A', 'blue')
+        );
+        root.appendChild(makeCard('Web App Config', '\u{1F310}', waFrag));
+      }
+    }
+
+    function refresh() {
+      window.location.reload();
+    }
+
+    buildDashboard(DATA);
+  </script>
+</body>
+</html>

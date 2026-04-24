@@ -1,0 +1,1126 @@
+<script>
+(function() {
+  'use strict';
+
+  let _messages = [];
+  let _configured = false;
+  let _sending = false;
+  let _includeContext = false;
+  let _envContext = null;
+  let _sendStartTime = 0;
+
+  // === Input History (arrow key navigation like terminal/DevTools) ===
+  let _inputHistory = [];
+  let _historyIndex = -1;  // -1 = at bottom (current draft)
+  let _currentDraft = '';  // saves unsent text when navigating
+  const MAX_HISTORY = 100;
+  let _typingInterval = null;
+
+  // Load history from localStorage
+  try {
+    const savedHistory = localStorage.getItem('debugger_input_history');
+    if (savedHistory) _inputHistory = JSON.parse(savedHistory);
+  } catch(e) {}
+
+  function pushHistory(text) {
+    if (!text.trim()) return;
+    // Don't add consecutive duplicates
+    if (_inputHistory.length > 0 && _inputHistory[_inputHistory.length - 1] === text) return;
+    _inputHistory.push(text);
+    if (_inputHistory.length > MAX_HISTORY) _inputHistory.shift();
+    _historyIndex = -1;
+    _currentDraft = '';
+    try { localStorage.setItem('debugger_input_history', JSON.stringify(_inputHistory)); } catch(e) {}
+  }
+
+  function navigateHistory(direction, textarea) {
+    // direction: -1 = up (older), +1 = down (newer)
+    if (_inputHistory.length === 0) return false;
+
+    let newIndex;
+    if (_historyIndex === -1) {
+      // At bottom — going up
+      if (direction === -1) {
+        _currentDraft = textarea.value;
+        newIndex = _inputHistory.length - 1;
+      } else {
+        return false; // already at bottom, can't go down
+      }
+    } else {
+      newIndex = _historyIndex + direction;
+    }
+
+    if (newIndex < 0) return false; // can't go past oldest
+
+    if (newIndex >= _inputHistory.length) {
+      // Back to bottom — restore draft
+      _historyIndex = -1;
+      textarea.value = _currentDraft;
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 100)}px`;
+      return true;
+    }
+
+    _historyIndex = newIndex;
+    textarea.value = _inputHistory[_historyIndex];
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 100)}px`;
+    // Move cursor to end
+    textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
+    return true;
+  }
+
+  GeminiChat.init = function() {
+    try {
+      const saved = localStorage.getItem('debugger_chat');
+      if (saved) _messages = JSON.parse(saved);
+    } catch(e) {}
+
+    _serverCall('common-js/gemini_api', 'getConfig')
+      .then(response => {
+        _configured = !!(response && response.success && response.result.hasKey);
+        renderChat();
+      })
+      .catch(() => {
+        _configured = false;
+        renderChat();
+      });
+  };
+
+  GeminiChat.toggle = function() {
+    const workspace = document.querySelector('.workspace');
+    const panel = document.getElementById('chatPanel');
+    const divider = document.getElementById('chatDivider');
+    const isOpen = panel.style.display !== 'none';
+
+    if (isOpen) {
+      panel.style.display = 'none';
+      divider.style.display = 'none';
+      workspace.style.gridTemplateColumns = '280px 4px 1fr';
+    } else {
+      panel.style.display = 'flex';
+      divider.style.display = 'block';
+      workspace.style.gridTemplateColumns = '280px 4px 1fr 4px 340px';
+    }
+  };
+
+  GeminiChat.send = function() {
+    const input = document.getElementById('chatInput');
+    const text = input.value.trim();
+    if (!text || _sending) return;
+
+    pushHistory(text);
+    input.value = '';
+    input.style.height = 'auto';
+    _messages.push({ role: 'user', text: text });
+    renderMessages();
+    persistChat();
+
+    _sending = true;
+    _sendStartTime = Date.now();
+    updateSendBtn();
+    showTypingIndicator();
+
+    // Build context then send
+    buildContextAndSend();
+  };
+
+  function buildContextAndSend() {
+    if (!_includeContext) {
+      doSend(buildContents());
+      return;
+    }
+
+    if (_envContext) {
+      doSend(buildContents());
+      return;
+    }
+
+    appendSystemMsg('Fetching environment context…', 'tool-executing');
+    _serverCall('common-js/diagnostics', 'gather')
+      .then(response => {
+        if (response && response.success && response.result) {
+          _envContext = response.result;
+        }
+        doSend(buildContents());
+      })
+      .catch(() => {
+        doSend(buildContents());
+      });
+  }
+
+  // Max conversation size before trimming older turns
+  const MAX_MESSAGES = 40;
+
+  // Build Gemini API contents array from _messages
+  function buildContents() {
+    const contents = [];
+
+    // Add context as first user message if enabled
+    if (_includeContext) {
+      const ctx = buildContextString();
+      contents.push({ role: 'user', parts: [{ text: ctx }] });
+      contents.push({ role: 'model', parts: [{ text: 'Understood. I have the GAS environment context. How can I help?' }] });
+    }
+
+    // Add conversation messages (trim to last MAX_MESSAGES if too long)
+    const msgs = _messages.length > MAX_MESSAGES
+      ? _messages.slice(_messages.length - MAX_MESSAGES)
+      : _messages;
+    msgs.forEach(msg => {
+      if (msg.parts) {
+        // Already in Gemini format (tool call/response) — strip internal markers
+        contents.push({ role: msg.role, parts: msg.parts });
+      } else {
+        contents.push({
+          role: msg.role === 'model' ? 'model' : 'user',
+          parts: [{ text: msg.text }]
+        });
+      }
+    });
+
+    return contents;
+  }
+
+  function buildContextString() {
+    let ctx = 'Current state snapshot:\n';
+
+    // Server state from last refresh
+    if (_envContext) {
+      ctx += `Server: ${JSON.stringify(_envContext)}\n`;
+    }
+
+    // Client state (always current)
+    try {
+      const clientState = ClientState.getRaw();
+      if (Object.keys(clientState).length > 0) {
+        ctx += `Client: ${JSON.stringify(clientState)}\n`;
+      }
+    } catch(e) {}
+
+    return ctx;
+  }
+
+  function doSend(contents) {
+    // Estimate payload size — warn if large
+    const payloadSize = JSON.stringify(contents).length;
+    if (payloadSize > 50000) {
+      appendSystemMsg(`Large context (${Math.round(payloadSize/1024)}KB) — consider new chat`, 'chat-warning');
+    }
+
+    _serverCall('common-js/gemini_api', 'chat', contents)
+      .then(response => {
+        const chatResult = response && response.result;
+        if (!chatResult || !chatResult.success) {
+          _sending = false;
+          updateSendBtn();
+          hideTypingIndicator();
+          const err = (chatResult && chatResult.error) || (response && response.error) || 'Unknown error';
+          appendSystemMsg(err, 'tool-error');
+          if (typeof ConsolePanel !== 'undefined') ConsolePanel.append('error', `[Gemini] ${err}`);
+          return;
+        }
+
+        const result = chatResult.result;
+
+        // Check for function calls (tool use)
+        if (result.functionCalls && result.functionCalls.length > 0) {
+          if (result.text) {
+            _messages.push({ role: 'model', text: result.text });
+            renderMessages();
+          }
+
+          handleToolCalls(
+            result.pendingContents || contents,
+            result.modelParts,
+            result.functionCalls,
+            result.resolvedServerParts || [],
+            result.toolLog || []
+          );
+          return;
+        }
+
+        // Normal text response
+        _sending = false;
+        updateSendBtn();
+        hideTypingIndicator();
+
+        // Calculate elapsed time
+        const elapsed = _sendStartTime ? ((Date.now() - _sendStartTime) / 1000).toFixed(1) : null;
+
+        if (result.toolLog && result.toolLog.length > 0) {
+          result.toolLog.forEach(tl => {
+            appendSystemMsg(`srv_exec → ${(tl.result.result || tl.result.error || '').substring(0, 80)}`, tl.result.error ? 'tool-error' : 'tool-done');
+          });
+        }
+        if (result.text) {
+          _messages.push({ role: 'model', text: result.text, _elapsed: elapsed });
+          renderMessages();
+          persistChat();
+          updateTokenEstimate();
+        }
+        if (result.toolLog && result.toolLog.length > 0) {
+          Debugger.refreshClientTree();
+        }
+      })
+      .catch(err => {
+        _sending = false;
+        updateSendBtn();
+        hideTypingIndicator();
+        const msg = (err && err.message) ? err.message : String(err);
+        appendSystemMsg(msg, 'tool-error');
+        if (typeof ConsolePanel !== 'undefined') ConsolePanel.append('error', `[Gemini] ${msg}`);
+      });
+  }
+
+  // Execute client-side tool calls and send results back to Gemini
+  function handleToolCalls(contents, modelParts, functionCalls, serverParts, toolLog) {
+    // Add the model's function call response to conversation
+    contents.push({ role: 'model', parts: modelParts });
+
+    // Show server tool log
+    if (toolLog && toolLog.length > 0) {
+      toolLog.forEach(tl => {
+        appendSystemMsg(`srv_exec → ${(tl.result.result || tl.result.error || '').substring(0, 80)}`, tl.result.error ? 'tool-error' : 'tool-done');
+      });
+    }
+
+    const toolResults = [];
+    let pending = functionCalls.length;
+
+    functionCalls.forEach((fc, idx) => {
+      const pill = appendSystemMsg(`${fc.name}`, 'tool-executing');
+
+      executeTool(fc.name, fc.args || {})
+        .then(result => {
+          toolResults[idx] = { name: fc.name, response: result };
+          if (pill) {
+            pill.textContent = `${fc.name} ✓`;
+            pill.classList.remove('tool-executing');
+            pill.classList.add('tool-done');
+          }
+          pending--;
+          if (pending === 0) sendToolResults(contents, toolResults, serverParts);
+        })
+        .catch(err => {
+          toolResults[idx] = { name: fc.name, response: { error: err.message } };
+          if (pill) {
+            pill.textContent = `${fc.name} — ${err.message}`;
+            pill.classList.remove('tool-executing');
+            pill.classList.add('tool-error');
+          }
+          pending--;
+          if (pending === 0) sendToolResults(contents, toolResults, serverParts);
+        });
+    });
+  }
+
+  // Send tool results back to Gemini for continuation
+  function sendToolResults(contents, toolResults, serverParts) {
+    // Merge server-resolved parts + client-resolved parts
+    const responseParts = [...(serverParts || [])];
+    toolResults.forEach(tr => {
+      responseParts.push({
+        functionResponse: {
+          name: tr.name,
+          response: tr.response
+        }
+      });
+    });
+
+    contents.push({ role: 'user', parts: responseParts });
+
+    // Persist tool interaction turns into _messages for context continuity (C3 fix)
+    const modelTurn = contents.length >= 2 ? contents[contents.length - 2] : null;
+    _messages.push({ role: 'model', parts: modelTurn ? modelTurn.parts : [], _toolCall: true });
+    _messages.push({ role: 'user', parts: responseParts, _toolResponse: true });
+
+    // Refresh client state after tool execution (write_editor may have changed editor)
+    Debugger.refreshClientTree();
+    persistChat();
+
+    // Call Gemini again with the tool results
+    doSend(contents);
+  }
+
+  // Execute a single tool
+  function executeTool(name, args) {
+    if (name === 'srv_exec') {
+      const srvCode = args.code || '';
+      return _serverExec(srvCode).then(result => {
+        if (result && result.success) {
+          return { result: JSON.stringify(result.result) };
+        } else {
+          return { error: (result && result.error) || 'Execution failed' };
+        }
+      });
+    }
+
+    if (name === 'read_editor') {
+      if (typeof EditorTabs === 'undefined') return Promise.resolve({ content: '' });
+      // List mode — return all tabs
+      if (args.list) {
+        return Promise.resolve({ tabs: EditorTabs.getTabs ? EditorTabs.getTabs() : [] });
+      }
+      // Server file read
+      if (args.path) {
+        return _serverExec('return ScriptApp.getResource(' + JSON.stringify(args.path) + ').getDataAsString()')
+          .then(resp => resp.success
+            ? { content: resp.result, path: args.path, source: 'server' }
+            : { error: resp.error }
+          );
+      }
+      // Specific tab by name
+      if (args.tab && EditorTabs.getTabContent) {
+        const content = EditorTabs.getTabContent(args.tab);
+        if (content === null) return Promise.resolve({ error: 'Tab not found: ' + args.tab });
+        return Promise.resolve({ content, tab_name: args.tab, source: 'tab' });
+      }
+      // Default — active tab
+      const content = EditorTabs.getContent ? EditorTabs.getContent() : '';
+      return Promise.resolve({
+        content,
+        tab_name: EditorTabs.getActiveTabName ? EditorTabs.getActiveTabName() : 'unknown',
+        dirty: EditorTabs.isDirty ? EditorTabs.isDirty() : false
+      });
+    }
+
+    if (name === 'write_editor') {
+      const code = args.code || '';
+      const tabName = args.tab || null;
+      const overwrite = args.overwrite === true;
+
+      if (typeof EditorTabs === 'undefined' || !EditorTabs.setContent) {
+        const cm = document.querySelector('.CodeMirror');
+        if (cm && cm.CodeMirror) cm.CodeMirror.setValue(code);
+        return Promise.resolve({ success: true });
+      }
+
+      // Tab targeting: create or switch to named tab
+      if (tabName) {
+        const existing = EditorTabs.findTabByName(tabName);
+        if (existing) {
+          EditorTabs.activate(existing.id);
+        } else {
+          EditorTabs.create(tabName);
+          EditorTabs.setContent(code);
+          return Promise.resolve({
+            success: true, tab_name: tabName,
+            tab_id: EditorTabs.getActiveTabId(), created: true
+          });
+        }
+      }
+
+      // Dirty gate: warn if user modified, suggest new tab
+      if (!overwrite && EditorTabs.isDirty()) {
+        const suggestedTab = tabName
+          ? tabName + ' (new)'
+          : 'Script ' + new Date().toLocaleTimeString();
+        return Promise.resolve({
+          success: false, user_modified: true,
+          tab_name: EditorTabs.getActiveTabName(),
+          tab_id: EditorTabs.getActiveTabId(),
+          suggested_tab: suggestedTab,
+          warning: 'Tab "' + EditorTabs.getActiveTabName() + '" has user changes. '
+            + 'Set overwrite=true to replace, or use tab="' + suggestedTab + '" to write to a new tab.'
+        });
+      }
+
+      EditorTabs.setContent(code);
+      return Promise.resolve({
+        success: true,
+        tab_name: EditorTabs.getActiveTabName(),
+        tab_id: EditorTabs.getActiveTabId()
+      });
+    }
+
+    if (name === 'run_editor') {
+      // Silent mode — invisible execution (replaces client_exec)
+      if (args.mode === 'silent') {
+        const silentCode = args.code || '';
+        if (!silentCode.trim()) return Promise.resolve({ error: 'code param required for mode=silent' });
+        const outputLines = [];
+        const silentConsole = {
+          log: (...a) => outputLines.push(a.map(x => typeof x === 'object' ? JSON.stringify(x) : String(x)).join(' ')),
+          warn: (...a) => outputLines.push('[warn] ' + a.join(' ')),
+          error: (...a) => outputLines.push('[error] ' + a.join(' '))
+        };
+        try {
+          // Intentional dynamic code execution — developer debugging tool (DOMAIN-scoped)
+          const fn = new Function('state', 'srv', 'console', // eslint-disable-line no-new-func
+            'return (async function() {\n' + silentCode + '\n})()');
+          return Promise.resolve(fn(window.debuggerState, window.srv, silentConsole))
+            .then(result => {
+              Debugger.refreshClientTree();
+              let output = outputLines.join('\n');
+              if (result !== undefined) output += (output ? '\n' : '') + 'Result: ' + JSON.stringify(result);
+              return { output: output || 'Executed (no output)' };
+            })
+            .catch(err => ({ error: err.toString(), console_output: outputLines.join('\n') }));
+        } catch(syntaxErr) {
+          return Promise.resolve({ error: 'SyntaxError: ' + syntaxErr.message });
+        }
+      }
+
+      const code = (typeof EditorTabs !== 'undefined' && EditorTabs.getContent)
+        ? EditorTabs.getContent() : '';
+      if (!code.trim()) return Promise.resolve({ error: 'Editor is empty' });
+
+      const mode = (args.mode === 'server') ? 'server' : 'client';
+      const beforeCount = ConsolePanel.getEntries().length;
+
+      // Log command preview (matches CodeRunner.run/runServer behavior)
+      let preview = code.trim();
+      if (preview.includes('\n')) preview = preview.split('\n')[0] + ' ...';
+
+      if (mode === 'server') {
+        ConsolePanel.append('info', '> [server] ' + preview);
+        return _serverExec('return (function(){' + code + '})()')
+          .then(result => {
+            Debugger.refreshClientTree();
+            if (result && result.success) {
+              ConsolePanel.append('info', '\u2190 ' + (result.result !== undefined ? JSON.stringify(result.result) : 'undefined'));
+            } else {
+              ConsolePanel.append('error', (result && result.error) || 'Failed');
+            }
+            const newEntries = ConsolePanel.getEntries().slice(beforeCount);
+            const output = newEntries.map(e => e.content).join('\n');
+            if (result && result.success) {
+              return { output, result: JSON.stringify(result.result) };
+            }
+            return { output, error: (result && result.error) || 'Failed' };
+          });
+      }
+
+      // Client mode — log preview, process code, run with real ConsolePanel
+      ConsolePanel.append('info', '> ' + preview);
+
+      const processedCode = CodeRunner.processReplCode(code);
+      const { code: wrappedCode } = CodeRunner.wrapForAutoReturn(processedCode);
+
+      const proxyConsole = {
+        log: (...a) => ConsolePanel.append('info', a.map(x => typeof x === 'object' ? JSON.stringify(x) : String(x)).join(' ')),
+        warn: (...a) => ConsolePanel.append('warn', a.join(' ')),
+        error: (...a) => ConsolePanel.append('error', a.join(' '))
+      };
+      try {
+        // Intentional dynamic code execution — developer debugging tool (DOMAIN-scoped)
+        const fn = new Function('state', 'srv', 'console', // eslint-disable-line no-new-func
+          'return (async function() {\n' + wrappedCode + '\n})()');
+        return Promise.resolve(fn(window.debuggerState, window.srv, proxyConsole))
+          .then(result => {
+            Debugger.refreshClientTree();
+            if (result !== undefined) {
+              ConsolePanel.append('info', '\u2190 ' + JSON.stringify(result));
+            }
+            const newEntries = ConsolePanel.getEntries().slice(beforeCount);
+            const output = newEntries.map(e => e.content).join('\n');
+            return { output, result: result !== undefined ? JSON.stringify(result) : undefined };
+          })
+          .catch(err => {
+            const newEntries = ConsolePanel.getEntries().slice(beforeCount);
+            return { error: err.toString(), output: newEntries.map(e => e.content).join('\n') };
+          });
+      } catch(syntaxErr) {
+        return Promise.resolve({ error: 'SyntaxError: ' + syntaxErr.message });
+      }
+    }
+
+    if (name === 'read_console') {
+      const count = args.count || 20;
+      const level = args.level || 'all';
+      return Promise.resolve({ entries: ConsolePanel.getEntries(count, level) });
+    }
+
+    if (name === 'read_state') {
+      const scope = args.scope || 'both';
+      const result = {};
+      if (scope === 'client' || scope === 'both') result.client = ClientState.getRaw();
+      if (scope === 'server' || scope === 'both') result.server = Poller._lastSnapshot || null;
+      if (args.path) {
+        const parts = args.path.split('.');
+        for (const key of ['client', 'server']) {
+          if (result[key]) {
+            let val = result[key];
+            for (const p of parts) { val = val && val[p]; }
+            result[key] = val;
+          }
+        }
+      }
+      return Promise.resolve(result);
+    }
+
+    if (name === 'grep') {
+      const pattern = args.pattern;
+      const scope = args.scope || 'tabs';
+      const targetPath = args.path || null;
+      if (!pattern) return Promise.resolve({ error: 'pattern required' });
+
+      if (scope === 'tabs') {
+        const re = new RegExp(pattern, (args.flags || 'gi').replace(/[^gimsuy]/g, ''));
+        const matches = [];
+        if (typeof EditorTabs !== 'undefined' && EditorTabs.getTabs) {
+          const tabs = EditorTabs.getTabs();
+          tabs.forEach(tab => {
+            const content = EditorTabs.getTabContent(tab.name) || '';
+            content.split('\n').forEach((line, idx) => {
+              if (re.test(line)) {
+                matches.push({ tab: tab.name, line: idx + 1, text: line.trim() });
+                re.lastIndex = 0;
+              }
+            });
+          });
+        }
+        return Promise.resolve({ scope: 'tabs', pattern, matches, total: matches.length });
+      }
+
+      if (scope === 'server') {
+        const safeFlags = (args.flags || 'gi').replace(/[^gimsuy]/g, '');
+        const code = targetPath
+          ? 'var src = ScriptApp.getResource(' + JSON.stringify(targetPath) + ').getDataAsString(); var lines = src.split("\\n"); var re = new RegExp(' + JSON.stringify(pattern) + ', ' + JSON.stringify(safeFlags) + '); var m = []; lines.forEach(function(l, i) { if (re.test(l)) { m.push({line: i+1, text: l.trim().substring(0, 120)}); re.lastIndex = 0; } }); return JSON.stringify(m)'
+          : 'var factories = Object.keys(globalThis.__moduleFactories__); var re = new RegExp(' + JSON.stringify(pattern) + ', ' + JSON.stringify(safeFlags) + '); var m = []; factories.forEach(function(name) { try { var src = ScriptApp.getResource(name).getDataAsString(); src.split("\\n").forEach(function(l, i) { if (re.test(l)) { m.push({file: name, line: i+1, text: l.trim().substring(0, 120)}); re.lastIndex = 0; } }); } catch(e) {} }); return JSON.stringify(m)';
+        return _serverExec(code).then(resp => {
+          let matches = [];
+          try { if (resp.success) matches = JSON.parse(resp.result); } catch(e) {}
+          return { scope: 'server', pattern, path: targetPath, matches, total: matches.length };
+        });
+      }
+
+      return Promise.resolve({ error: 'scope must be "tabs" or "server"' });
+    }
+
+    if (name === 'edit') {
+      const oldStr = args.old_string;
+      const newStr = args.new_string;
+      const tabName = args.tab || null;
+      const serverPath = args.path || null;
+      if (!oldStr || newStr === undefined) return Promise.resolve({ error: 'old_string and new_string required' });
+
+      if (serverPath) {
+        return _serverExec('return ScriptApp.getResource(' + JSON.stringify(serverPath) + ').getDataAsString()')
+          .then(resp => {
+            if (!resp.success) return { error: resp.error };
+            const source = resp.result;
+            if (!source.includes(oldStr)) return { error: 'old_string not found in ' + serverPath };
+            const edited = source.replace(oldStr, newStr);
+            const editTabName = serverPath + ' (edited)';
+            EditorTabs.create(editTabName);
+            EditorTabs.setContent(edited);
+            return { success: true, tab_name: editTabName, note: 'Server files are read-only at runtime. Edit opened in new tab for review.' };
+          });
+      }
+
+      if (tabName) {
+        const tab = EditorTabs.findTabByName(tabName);
+        if (!tab) return Promise.resolve({ error: 'Tab not found: ' + tabName });
+        EditorTabs.activate(tab.id);
+      }
+      const content = EditorTabs.getContent();
+      if (!content.includes(oldStr)) return Promise.resolve({ error: 'old_string not found in active tab' });
+      EditorTabs.setContent(content.replace(oldStr, newStr));
+      return Promise.resolve({
+        success: true,
+        tab_name: EditorTabs.getActiveTabName(),
+        tab_id: EditorTabs.getActiveTabId()
+      });
+    }
+
+    return Promise.resolve({ error: 'Unknown tool: ' + name });
+  }
+
+  GeminiChat.showSettings = function() {
+    const view = document.getElementById('chatSettingsView');
+    const msgs = document.getElementById('chatMessagesView');
+    if (view.style.display === 'none') {
+      view.style.display = 'block';
+      msgs.style.display = 'none';
+    } else {
+      view.style.display = 'none';
+      msgs.style.display = 'flex';
+    }
+  };
+
+  GeminiChat.saveKey = function() {
+    const keyInput = document.getElementById('geminiKeyInput');
+    const modelSelect = document.getElementById('geminiModelSelect');
+    const saveBtn = document.getElementById('geminiSaveBtn');
+    const key = keyInput.value.trim();
+    const model = modelSelect.value;
+    if (!key) return;
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Validating...';
+
+    _serverCall('common-js/gemini_api', 'saveConfig', key, model)
+      .then(response => {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save & Connect';
+        const result = response && response.result;
+        if (result && result.success) {
+          _configured = true;
+          keyInput.value = '';
+          _showToast(result.warning || 'Gemini connected!', 'success');
+          renderChat();
+        } else {
+          _showToast((result && result.error) || 'Save failed', 'error');
+        }
+      })
+      .catch(err => {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save & Connect';
+        _showToast(`Error: ${(err && err.message) ? err.message : String(err)}`, 'error');
+      });
+  };
+
+  GeminiChat.removeKey = function() {
+    _serverCall('common-js/gemini_api', 'removeConfig')
+      .then(() => {
+        _configured = false;
+        _messages = [];
+        persistChat();
+        _showToast('API key removed', 'success');
+        renderChat();
+      })
+      .catch(err => {
+        _showToast(`Error: ${(err && err.message) ? err.message : String(err)}`, 'error');
+      });
+  };
+
+  GeminiChat.updateConfig = function(newKey, newModel) {
+    // If only model changed (no key), save just the model via ConfigManager
+    if (!newKey) {
+      _serverExec("var cm = new (require('common-js/ConfigManager'))('GEMINI'); cm.setUser('MODEL', " + JSON.stringify(newModel) + "); return {success: true}")
+        .then(response => {
+          if (response && response.success && response.result && response.result.success) {
+            _showToast(`Model updated to ${newModel}`, 'success');
+            GeminiChat.showSettings();
+          } else {
+            _showToast((response && response.error) || 'Model update failed', 'error');
+          }
+        })
+        .catch(err => {
+          _showToast(`Error: ${(err && err.message) ? err.message : String(err)}`, 'error');
+        });
+      return;
+    }
+    // Full key + model update
+    _serverCall('common-js/gemini_api', 'saveConfig', newKey, newModel)
+      .then(response => {
+        const result = response && response.result;
+        if (result && result.success) {
+          _configured = true;
+          const settingsKey = document.getElementById('settingsKeyInput');
+          if (settingsKey) settingsKey.value = '';
+          _showToast(result.warning || 'Key and model updated!', 'success');
+          GeminiChat.showSettings();
+        } else {
+          _showToast((result && result.error) || 'Update failed', 'error');
+        }
+      })
+      .catch(err => {
+        _showToast(`Error: ${(err && err.message) ? err.message : String(err)}`, 'error');
+      });
+  };
+
+  GeminiChat.clearHistory = function() {
+    _messages = [];
+    _envContext = null;
+    persistChat();
+    renderMessages();
+    updateMsgCount();
+  };
+
+  GeminiChat.newChat = function() {
+    _messages = [];
+    _envContext = null;
+    persistChat();
+    renderMessages();
+    updateMsgCount();
+    _showToast('New chat started', 'success');
+  };
+
+  GeminiChat.toggleContext = function() {
+    _includeContext = !_includeContext;
+    _envContext = null; // clear cache so next send fetches fresh
+    const toggle = document.getElementById('contextToggle');
+    if (toggle) toggle.classList.toggle('active', _includeContext);
+  };
+
+  // === Rendering ===
+  function renderChat() {
+    const container = document.getElementById('chatContent');
+    if (!container) return;
+    container.replaceChildren();
+
+    if (!_configured) {
+      container.appendChild(renderSetup());
+    } else {
+      container.appendChild(renderChatView());
+    }
+  }
+
+  function renderSetup() {
+    const div = document.createElement('div');
+    div.className = 'chat-setup';
+
+    const icon = document.createElement('div');
+    icon.className = 'chat-setup-icon';
+    icon.textContent = '\u2728';
+    div.appendChild(icon);
+
+    const h3 = document.createElement('h3');
+    h3.textContent = 'Connect Gemini';
+    div.appendChild(h3);
+
+    const p = document.createElement('p');
+    p.textContent = 'Add your API key to enable AI chat. Free tier available.';
+    div.appendChild(p);
+
+    const link = document.createElement('a');
+    link.href = 'https://aistudio.google.com/apikey';
+    link.target = '_blank';
+    link.className = 'chat-link';
+    link.textContent = 'Get API key from Google AI Studio \u2197';
+    div.appendChild(link);
+
+    const keyInput = document.createElement('input');
+    keyInput.type = 'password';
+    keyInput.id = 'geminiKeyInput';
+    keyInput.className = 'chat-key-input';
+    keyInput.placeholder = 'AIzaSy...';
+    keyInput.autocomplete = 'off';
+    keyInput.spellcheck = false;
+    div.appendChild(keyInput);
+
+    const select = document.createElement('select');
+    select.id = 'geminiModelSelect';
+    select.className = 'chat-model-select';
+    const models = [
+      ['gemini-2.5-flash', 'Gemini 2.5 Flash (fast, recommended)'],
+      ['gemini-2.5-pro', 'Gemini 2.5 Pro (advanced reasoning)'],
+      ['gemini-2.0-flash-001', 'Gemini 2.0 Flash 001']
+    ];
+    models.forEach(([value, text]) => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = text;
+      select.appendChild(opt);
+    });
+    div.appendChild(select);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.id = 'geminiSaveBtn';
+    saveBtn.className = 'chat-save-btn';
+    saveBtn.textContent = 'Save & Connect';
+    saveBtn.addEventListener('click', GeminiChat.saveKey);
+    div.appendChild(saveBtn);
+
+    return div;
+  }
+
+  function renderChatView() {
+    const frag = document.createDocumentFragment();
+
+    const msgsView = document.createElement('div');
+    msgsView.id = 'chatMessagesView';
+    msgsView.className = 'chat-messages';
+    frag.appendChild(msgsView);
+
+    const settingsView = document.createElement('div');
+    settingsView.id = 'chatSettingsView';
+    settingsView.style.display = 'none';
+    settingsView.className = 'chat-settings-panel';
+
+    // Status row
+    const row1 = document.createElement('div');
+    row1.className = 'chat-settings-row';
+    const l1 = document.createElement('span');
+    l1.textContent = 'Status';
+    const v1 = document.createElement('span');
+    v1.textContent = 'Connected';
+    v1.style.color = 'var(--green)';
+    row1.appendChild(l1);
+    row1.appendChild(v1);
+    settingsView.appendChild(row1);
+
+    // Update API key
+    const keyLabel = document.createElement('div');
+    keyLabel.className = 'chat-settings-label';
+    keyLabel.textContent = 'Update API Key';
+    settingsView.appendChild(keyLabel);
+    const keyInput = document.createElement('input');
+    keyInput.type = 'password';
+    keyInput.id = 'settingsKeyInput';
+    keyInput.className = 'chat-key-input';
+    keyInput.placeholder = 'Paste new key to update...';
+    keyInput.autocomplete = 'off';
+    settingsView.appendChild(keyInput);
+
+    // Update model
+    const modelLabel = document.createElement('div');
+    modelLabel.className = 'chat-settings-label';
+    modelLabel.textContent = 'Model';
+    settingsView.appendChild(modelLabel);
+    const modelSelect = document.createElement('select');
+    modelSelect.id = 'settingsModelSelect';
+    modelSelect.className = 'chat-model-select';
+    const models = [
+      ['gemini-2.5-flash', 'Gemini 2.5 Flash (fast)'],
+      ['gemini-2.5-pro', 'Gemini 2.5 Pro (advanced)'],
+      ['gemini-2.0-flash-001', 'Gemini 2.0 Flash 001']
+    ];
+    models.forEach(([value, text]) => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = text;
+      modelSelect.appendChild(opt);
+    });
+    settingsView.appendChild(modelSelect);
+
+    // Actions
+    const actions = document.createElement('div');
+    actions.className = 'chat-settings-actions';
+
+    const saveSettingsBtn = document.createElement('button');
+    saveSettingsBtn.className = 'chat-save-btn';
+    saveSettingsBtn.style.width = 'auto';
+    saveSettingsBtn.style.fontSize = '11px';
+    saveSettingsBtn.style.padding = '6px 14px';
+    saveSettingsBtn.textContent = 'Save Changes';
+    saveSettingsBtn.addEventListener('click', () => {
+      const newKey = keyInput.value.trim() || null;
+      GeminiChat.updateConfig(newKey, modelSelect.value);
+    });
+    actions.appendChild(saveSettingsBtn);
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'chat-settings-btn';
+    clearBtn.textContent = 'Clear History';
+    clearBtn.addEventListener('click', GeminiChat.clearHistory);
+    actions.appendChild(clearBtn);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'chat-settings-btn danger';
+    removeBtn.textContent = 'Remove Key';
+    removeBtn.addEventListener('click', GeminiChat.removeKey);
+    actions.appendChild(removeBtn);
+    settingsView.appendChild(actions);
+    frag.appendChild(settingsView);
+
+    const inputArea = document.createElement('div');
+    inputArea.className = 'chat-input-area';
+
+    const inputRow = document.createElement('div');
+    inputRow.className = 'chat-input-row';
+    const textarea = document.createElement('textarea');
+    textarea.id = 'chatInput';
+    textarea.className = 'chat-input';
+    textarea.placeholder = 'Ask Gemini...';
+    textarea.rows = 1;
+    textarea.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); GeminiChat.send(); return; }
+      if (e.key === 'ArrowUp') {
+        const beforeCursor = this.value.substring(0, this.selectionStart);
+        if (beforeCursor.indexOf('\n') === -1) {
+          if (navigateHistory(-1, this)) { e.preventDefault(); }
+        }
+      }
+      if (e.key === 'ArrowDown') {
+        const afterCursor = this.value.substring(this.selectionEnd);
+        if (afterCursor.indexOf('\n') === -1) {
+          if (navigateHistory(1, this)) { e.preventDefault(); }
+        }
+      }
+    });
+    textarea.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = `${Math.min(this.scrollHeight, 100)}px`;
+    });
+    inputRow.appendChild(textarea);
+
+    const sendBtn = document.createElement('button');
+    sendBtn.className = 'chat-send-btn';
+    sendBtn.id = 'chatSendBtn';
+    sendBtn.textContent = '\u25B6';
+    sendBtn.addEventListener('click', GeminiChat.send);
+    inputRow.appendChild(sendBtn);
+    inputArea.appendChild(inputRow);
+
+    const options = document.createElement('div');
+    options.className = 'chat-input-options';
+    const ctxLabel = document.createElement('label');
+    ctxLabel.className = 'chat-context-toggle';
+    ctxLabel.id = 'contextToggle';
+    ctxLabel.addEventListener('click', GeminiChat.toggleContext);
+    const dot = document.createElement('span');
+    dot.className = 'chat-toggle-dot';
+    ctxLabel.appendChild(dot);
+    ctxLabel.appendChild(document.createTextNode(' Include debugger context'));
+    options.appendChild(ctxLabel);
+    inputArea.appendChild(options);
+    frag.appendChild(inputArea);
+
+    setTimeout(renderMessages, 0);
+    return frag;
+  }
+
+  function renderMessages() {
+    const container = document.getElementById('chatMessagesView');
+    if (!container) return;
+    container.replaceChildren();
+
+    if (_messages.length === 0) {
+      const welcome = document.createElement('div');
+      welcome.className = 'chat-welcome';
+      welcome.textContent = 'Ask me anything about Google Apps Script!';
+      container.appendChild(welcome);
+    }
+
+    _messages.forEach(msg => {
+      if (msg._toolCall || msg._toolResponse) return;
+      if (!msg.text && msg.parts) return;
+      if (!msg.text) return;
+
+      const el = document.createElement('div');
+      el.className = `chat-message chat-${msg.role}`;
+
+      const content = document.createElement('div');
+      content.className = 'chat-msg-content';
+
+      renderMessageContent(content, msg.text);
+      el.appendChild(content);
+
+      // Timing ghost for model responses
+      if (msg.role === 'model' && msg._elapsed) {
+        const ghost = document.createElement('div');
+        ghost.className = 'chat-timing-ghost';
+        ghost.textContent = `${msg._elapsed}s`;
+        el.appendChild(ghost);
+      }
+
+      container.appendChild(el);
+    });
+
+    container.scrollTop = container.scrollHeight;
+    updateMsgCount();
+    updateTokenEstimate();
+  }
+
+  // Safe message rendering with code block detection
+  function renderMessageContent(container, text) {
+    text.split(/(```[\s\S]*?```)/g).forEach(part => {
+      if (part.startsWith('```') && part.endsWith('```')) {
+        let code = part.slice(3, -3);
+        const firstNewline = code.indexOf('\n');
+        if (firstNewline > 0 && firstNewline < 20 && code.substring(0, firstNewline).indexOf(' ') === -1) {
+          code = code.slice(firstNewline + 1);
+        }
+        const pre = document.createElement('pre');
+        pre.className = 'chat-code';
+        const codeEl = document.createElement('code');
+        codeEl.textContent = code.trim();
+        pre.appendChild(codeEl);
+        container.appendChild(pre);
+      } else {
+        part.split(/(`[^`]+`)/g).forEach(ip => {
+          if (ip.startsWith('`') && ip.endsWith('`')) {
+            const inlineCode = document.createElement('code');
+            inlineCode.className = 'chat-inline-code';
+            inlineCode.textContent = ip.slice(1, -1);
+            container.appendChild(inlineCode);
+          } else {
+            ip.split('\n').forEach((line, idx) => {
+              if (idx > 0) container.appendChild(document.createElement('br'));
+              if (line) container.appendChild(document.createTextNode(line));
+            });
+          }
+        });
+      }
+    });
+  }
+
+  function appendSystemMsg(text, variant) {
+    const container = document.getElementById('chatMessagesView');
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className = 'chat-message chat-system';
+    if (variant) el.classList.add(variant);
+    el.textContent = text;
+    container.appendChild(el);
+    container.scrollTop = container.scrollHeight;
+    return el;
+  }
+
+  function updateMsgCount() {
+    const el = document.getElementById('chatMsgCount');
+    if (el) {
+      el.textContent = _messages.length > 0 ? `(${_messages.length})` : '';
+    }
+  }
+
+  // === Typing Indicator ===
+  function showTypingIndicator() {
+    const container = document.getElementById('chatMessagesView');
+    if (!container) return;
+    if (document.getElementById('typingIndicator')) return;
+    const el = document.createElement('div');
+    el.id = 'typingIndicator';
+    el.className = 'chat-typing';
+    const dots = document.createElement('span');
+    dots.className = 'typing-dots';
+    dots.textContent = '';
+    el.appendChild(dots);
+    const label = document.createElement('span');
+    label.className = 'typing-label';
+    label.textContent = 'Thinking';
+    el.appendChild(label);
+    const timer = document.createElement('span');
+    timer.className = 'typing-timer';
+    timer.textContent = '0s';
+    el.appendChild(timer);
+    container.appendChild(el);
+    container.scrollTop = container.scrollHeight;
+    // Animate dots and timer — stored in module variable to survive DOM removal
+    _typingInterval = setInterval(() => {
+      const d = dots.textContent;
+      dots.textContent = d.length >= 3 ? '' : `${d}.`;
+      if (_sendStartTime) {
+        timer.textContent = `${((Date.now() - _sendStartTime) / 1000).toFixed(0)}s`;
+      }
+    }, 400);
+  }
+
+  function hideTypingIndicator() {
+    if (_typingInterval) { clearInterval(_typingInterval); _typingInterval = null; }
+    const el = document.getElementById('typingIndicator');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // === Token Estimate ===
+  function updateTokenEstimate() {
+    const totalChars = _messages.reduce((sum, m) => sum + (m.text ? m.text.length : 0), 0);
+    const approxTokens = Math.round(totalChars / 4);
+    const el = document.getElementById('chatTokens');
+    if (el) {
+      if (approxTokens > 0) {
+        el.textContent = approxTokens < 1000 ? `${approxTokens} tok` : `${(approxTokens / 1000).toFixed(1)}k tok`;
+        el.style.display = 'inline';
+      } else {
+        el.style.display = 'none';
+      }
+    }
+  }
+
+  function updateSendBtn() {
+    const btn = document.getElementById('chatSendBtn');
+    if (btn) {
+      btn.disabled = _sending;
+      btn.textContent = _sending ? '...' : '\u25B6';
+    }
+  }
+
+  function persistChat() {
+    try { localStorage.setItem('debugger_chat', JSON.stringify(_messages)); } catch(e) {}
+  }
+})();
+</script>

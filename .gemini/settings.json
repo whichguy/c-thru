@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mcp-gas-deploy": {
+      "command": "node",
+      "args": [
+        "/Users/jameswiese/src5/mcp_gas_deploy/dist/server.js"
+      ]
+    }
+  }
+}
