@@ -52,7 +52,7 @@ context: [LOCAL|CI|DOCKER|PROD]
 - **EXPLORE:** Parallel batch tools focused *only* on current Proof Obligations. Justify **Tool Utility** (Noise vs. Specificity).
 - **REACHABILITY:** You MUST find the **Caller** or **Registration** of found logic to prove it is active before solving.
 - **AUTO-PIVOT:** If Satiety is 10/10 and the Parity Shield is 100% SATURATED, you MUST include IMPLEMENT tools (write_file) and VERIFY tools (run_command) in the SAME turn.
-- **CLARIFY:** Summarize the Chain of Inquiry to justify the user-interrupt. Use Multiple-Choice Hypothesis.
+- **CLARIFY:** Summarize the Chain of Inquiry to justify the user-interrupt. **Socratic Requirement:** Provide 2-3 specific Multiple-Choice Hypotheses based on initial code-scans.
 - **SHIFT:** Prescribe Remote Diagnostic command (Local vs. Remote Parity check).
 - **DELEGATE:** Handover with SIDE_EFFECTS and VERIFICATION strategy (How to PROVE success).
 - **RESOLVE:** CITATION + REACHABILITY_ID + VERIFICATION_ID + [TRUST Score 1-10] + [RISK: LOW|MED|HIGH]. Include **Conflict Resolution Summary** if needed.
