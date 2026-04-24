@@ -1,0 +1,740 @@
+  // ⚠️ WARNING: This file is an HTML include - DO NOT add CommonJS wrapper!
+  // SidebarAppCore - Core variables and utility functions
+  // Always use raw_write with fileType: "HTML" when editing this file.
+
+  console.log('[SidebarApp] Initializing main application - Version 2025-10-31-picker-security-fixes');
+
+  // ============================================================================
+  // DOMPURIFY HOOK INITIALIZATION (must run before any sanitization calls)
+  // ============================================================================
+  // Note: DOMPurify.addHook() is the correct API for hooks - HOOKS config key does not exist
+  if (typeof DOMPurify !== 'undefined' && !window._domPurifyHooksSet) {
+    DOMPurify.addHook('afterSanitizeAttributes', function(node) {
+      // Add target="_blank" and rel="noopener noreferrer" to all links for security
+      if (node.tagName === 'A' && node.hasAttribute('href')) {
+        node.setAttribute('target', '_blank');
+        node.setAttribute('rel', 'noopener noreferrer');
+        node.setAttribute('class', 'external-link');
+      }
+    });
+    window._domPurifyHooksSet = true;
+    console.log('[SidebarApp] DOMPurify afterSanitizeAttributes hook registered');
+  }
+
+  // ============================================================================
+  // CONFIGURATION CONSTANTS
+  // ============================================================================
+  const CONFIG = {
+    polling: {
+      MAX_WAIT_MS: 7000,           // Server waits up to 7s for messages per poll
+      CHECK_INTERVAL_MS: 300,      // Server checks every 300ms
+      MAX_DURATION_MS: 180000,     // Maximum polling duration: 3 minutes (180s)
+    },
+    retry: {
+      MAX_ATTEMPTS: 3,             // Retry failed requests 3 times
+      INITIAL_DELAY_MS: 1000,      // Start with 1s delay
+    },
+    api: {
+      module: 'sheets-chat/UISupport',
+      functions: {
+        sendMessage: 'sendMessageToClaude',
+        pollMessages: 'pollMessages',
+        saveConversation: 'saveConversationToSheet',
+        loadConversation: 'loadConversationFromJournal',
+        listConversations: 'listConversations',
+        loadCommandHistory: 'loadCommandHistory'
+      }
+    }
+  };
+
+  // ============================================================================
+  // MESSAGE HISTORY MANAGEMENT
+  // ============================================================================
+  const messageHistory = {
+    items: [],           // Array of previous messages
+    index: -1,          // Current position in history (-1 = not navigating)
+    currentDraft: '',   // Save current draft when starting navigation
+    MAX_ITEMS: 100      // HIGH-2: Maximum history size to prevent memory leak
+  };
+
+  /**
+   * Save a message to history with maximum size enforcement
+   * @param {string} message - The message to save
+   */
+  function saveToHistory(message) {
+    console.log('[MessageHistory] saveToHistory called with message:', message ? message.substring(0, 50) + '...' : 'empty');
+    
+    if (!message || !message.trim()) {
+      console.log('[MessageHistory] Empty message, skipping save');
+      return;
+    }
+    
+    const trimmedMessage = message.trim();
+    
+    // Don't save duplicate consecutive messages
+    if (messageHistory.items.length > 0 && 
+        messageHistory.items[messageHistory.items.length - 1] === trimmedMessage) {
+      console.log('[MessageHistory] Duplicate message, skipping save');
+      return;
+    }
+    
+    messageHistory.items.push(trimmedMessage);
+    console.log('[MessageHistory] Message added to history. Total:', messageHistory.items.length);
+    
+    // HIGH-2: Enforce maximum history size
+    if (messageHistory.items.length > messageHistory.MAX_ITEMS) {
+      const removed = messageHistory.items.shift(); // Remove oldest
+      console.log('[MessageHistory] Max size reached, removed oldest message');
+    }
+    
+    messageHistory.index = -1;
+    messageHistory.currentDraft = '';
+    
+    console.log('[MessageHistory] Current history items:', messageHistory.items.length, 'Index:', messageHistory.index);
+  }
+
+  // ============================================================================
+  // SEND BUTTON STATE MANAGEMENT
+  // ============================================================================
+
+  // Cache DOM elements for performance
+  let $cachedSendBtn = null;
+  let $cachedMessageInput = null;
+
+  /**
+   * Auto-grow textarea as user types
+   * Expands/contracts based on content while respecting min/max height
+   */
+  function autoGrowTextarea() {
+    if (!$cachedMessageInput) {
+      $cachedMessageInput = $('#messageInput');
+    }
+    
+    if (!$cachedMessageInput.length) {
+      return;
+    }
+    
+    const textarea = $cachedMessageInput[0];
+    
+    // Reset height to auto to get accurate scrollHeight
+    textarea.style.height = 'auto';
+    
+    // Set height to scrollHeight (content height)
+    // Min 40px (roughly 2 lines), max 120px (roughly 6 lines)
+    const minHeight = 40;
+    const maxHeight = 120;
+    const newHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
+    
+    textarea.style.height = newHeight + 'px';
+    
+    // Add scrollbar if content exceeds max height
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }
+
+  /**
+   * Load saved conversations into dropdown selector
+   * Called on initialization to populate conversation list
+   * @param {number} retryCount - Current retry attempt (internal use)
+   */
+  function loadConversationDropdown(retryCount) {
+    retryCount = retryCount || 0;
+    var maxRetries = 2;
+
+    const $selector = $('#conversationSelector');
+    if (!$selector.length) {
+      console.log('[Conversation] Dropdown selector not found in DOM, skipping load');
+      return;
+    }
+
+    // SIMPLIFIED 2026-01-16: Use window.server directly instead of waitForServer().
+    // google.script.run is typically available immediately when GAS HTML loads.
+    // The window.server getter lazily initializes on first access.
+    if (!window.server) {
+      console.error('[Conversation] Server not available - google.script.run may be blocked');
+      showToast('Server connection failed. Check browser extensions.', 'error');
+      return;
+    }
+
+    console.log('[Conversation] Loading saved conversations into dropdown...');
+    server.exec_api(null, CONFIG.api.module, CONFIG.api.functions.listConversations)
+      .then(function(result) {
+        // With auto-unwrap, result is the function's return value directly
+        // Errors auto-throw to catch block
+        const conversations = result && result.conversations || [];
+
+        // Clear existing options except placeholder
+        $selector.find('option:not(:first)').remove();
+
+        if (conversations.length === 0) {
+          console.log('[Conversation] No saved conversations found');
+          return;
+        }
+
+        // Add conversation options
+        conversations.forEach(function(conv) {
+          const $option = $('<option></option>');
+          $option.val(conv.id);
+          const title = conv.title || 'Untitled conversation';
+          const dateStr = conv.savedAt ? new Date(conv.savedAt).toLocaleDateString() : 'Unknown date';
+          $option.text(title + ' (' + dateStr + ')');
+          $selector.append($option);
+        });
+
+        console.log('[Conversation] Loaded', conversations.length, 'conversations into dropdown');
+
+        // Handle selection change with confirmation dialog
+        $selector.off('change').on('change', function() {
+          var selectedId = $(this).val();
+          if (!selectedId) return;
+
+          var hasMessages = currentMessages.length > 0;
+          var needsProcessingConfirm = typeof isProcessing !== 'undefined' && isProcessing;
+
+          // Case 1: Processing in progress - warn about lost response
+          if (needsProcessingConfirm) {
+            showConfirmBar({
+              message: 'A message is being processed',
+              submessage: 'Load different conversation? The current response will be lost.',
+              confirmText: 'Load',
+              cancelText: 'Cancel'
+            }).then(function(confirmed) {
+              if (confirmed) {
+                // Cancel current request before loading
+                if (typeof currentCancellableCall !== 'undefined' && currentCancellableCall) {
+                  currentCancellableCall.cancel('Loading different conversation');
+                }
+                loadConversation(selectedId);
+              } else {
+                // Reset dropdown to blank placeholder on cancel
+                $selector.val('');
+              }
+            });
+            return;
+          }
+
+          // Case 2: Has messages but not processing - simple confirmation
+          if (hasMessages) {
+            showConfirmBar({
+              message: 'Load a different conversation?',
+              submessage: 'Your current conversation is saved to Google Drive.',
+              confirmText: 'Load',
+              cancelText: 'Cancel'
+            }).then(function(confirmed) {
+              if (confirmed) {
+                loadConversation(selectedId);
+              } else {
+                $selector.val('');
+              }
+            });
+            return;
+          }
+
+          // Case 3: No messages, not processing - load directly
+          loadConversation(selectedId);
+        });
+      })
+      .catch(function(error) {
+        console.error('[Conversation] Failed to load conversations:', error && error.message || error);
+
+        // Retry logic for transient failures
+        if (retryCount < maxRetries) {
+          console.log('[Conversation] Retrying dropdown load, attempt', retryCount + 1, 'of', maxRetries);
+          setTimeout(function() { loadConversationDropdown(retryCount + 1); }, 2000);
+          return;
+        }
+
+        // After all retries failed, show user feedback
+        console.error('[Conversation] Failed to load conversations after', maxRetries, 'retries');
+        showToast('Could not load conversations. Try refreshing the sidebar.', 'warning');
+      });
+  }
+
+  /**
+   * Update send button enabled/disabled state based on input content OR attachments
+   */
+  function updateSendButtonState() {
+    // Cache selectors for better performance
+    if (!$cachedSendBtn || !$cachedMessageInput) {
+      $cachedSendBtn = $('#sendBtn');
+      $cachedMessageInput = $('#messageInput');
+      
+      if (!$cachedSendBtn.length || !$cachedMessageInput.length) {
+        console.warn('[SendButton] Elements not found, cannot cache');
+        return;
+      }
+    }
+    
+    const message = $cachedMessageInput.val().trim();
+    const hasMessage = message.length > 0;
+    const hasAttachments = currentAttachments && currentAttachments.length > 0;
+    
+    // Enable send button if EITHER text OR attachments are present
+    const canSend = hasMessage || hasAttachments;
+    
+    $cachedSendBtn.prop('disabled', !canSend);
+    
+    // Visual feedback
+    if (canSend) {
+      $cachedSendBtn.removeClass('disabled');
+    } else {
+      $cachedSendBtn.addClass('disabled');
+    }
+  }
+
+  // ============================================================================
+  // GLOBAL STATE
+  // ============================================================================
+  let currentThreadId = null;  // Track conversation thread (Drive file ID)
+  let isProcessing = false;    // Track if message is being processed
+  let currentRequestId = null; // Track current request for thinking polling
+  let messageStartTime = null; // Track message send time for stats display
+  let timerInterval = null;    // Live timer interval for counting up during message send
+  let currentMessages = [];    // Track current conversation messages for saving
+  let loadedConversationId = null; // Track which conversation is currently loaded
+  let currentCancellableCall = null; // Track current CancellableCall for cancel functionality
+  let currentPollingController = null; // Track current polling controller to prevent orphaned loops
+
+  // ============================================================================
+  // MESSAGE QUEUE
+  // ============================================================================
+  // Allows users to continue typing while a prompt is processing.
+  // New messages are queued and processed FIFO (First In, First Out) as each
+  // prompt completes. The #pendingQueue container displays queued messages as
+  // chips that users can remove before processing.
+  // Queue items: { text: string, attachments: Array, timestamp: number }
+  let pendingMessageQueue = [];
+
+  // ============================================================================
+  // ATTACHMENT CONFIGURATION AND STORAGE
+  // ============================================================================
+  const ATTACHMENT_CONFIG = {
+    // Supported file types (based on Anthropic API specs)
+    IMAGE_TYPES: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+    DOCUMENT_TYPES: ['application/pdf'],
+    
+    // File extension validation (prevent MIME spoofing)
+    VALID_EXTENSIONS: {
+      'image/jpeg': ['.jpg', '.jpeg', '.jpe'],
+      'image/png': ['.png'],
+      'image/gif': ['.gif'],
+      'image/webp': ['.webp'],
+      'application/pdf': ['.pdf']
+    },
+    
+    // Size limits
+    MAX_FILE_SIZE: 25 * 1024 * 1024,        // 25MB per file (user specified)
+    MAX_REQUEST_SIZE: 32 * 1024 * 1024,     // 32MB total (API limit)
+    MAX_IMAGE_COUNT: 100,                    // API limit
+    MAX_PDF_PAGES: 100,                      // API limit (verified server-side)
+    
+    // Display limits
+    MAX_FILENAME_LENGTH: 30
+  };
+
+  // Attachment storage
+  let currentAttachments = [];
+
+  // ============================================================================
+  // FONT SIZE MANAGEMENT
+  // ============================================================================
+
+  // Default font size (matches CSS variable --font-size-base)
+  const DEFAULT_FONT_SIZE = 10;
+
+  /**
+   * Apply font size to the document by scaling CSS variables
+   * @param {number} size - Base font size in pixels (8-16)
+   */
+  function applyFontSize(size) {
+    var baseSize = parseInt(size, 10);
+    if (isNaN(baseSize) || baseSize < 8 || baseSize > 16) {
+      console.warn('[FontSize] Invalid size, using default:', DEFAULT_FONT_SIZE);
+      baseSize = DEFAULT_FONT_SIZE;
+    }
+
+    // Calculate the scale factor relative to default
+    var scale = baseSize / DEFAULT_FONT_SIZE;
+
+    // Apply scaled font sizes to :root
+    var root = document.documentElement;
+    root.style.setProperty('--font-size-xs', Math.round(8 * scale) + 'px');
+    root.style.setProperty('--font-size-sm', Math.round(9 * scale) + 'px');
+    root.style.setProperty('--font-size-base', baseSize + 'px');
+    root.style.setProperty('--font-size-md', Math.round(11 * scale) + 'px');
+    root.style.setProperty('--font-size-lg', Math.round(12 * scale) + 'px');
+    root.style.setProperty('--font-size-xl', Math.round(13 * scale) + 'px');
+    root.style.setProperty('--font-size-2xl', Math.round(14 * scale) + 'px');
+
+    console.log('[FontSize] Applied size:', baseSize + 'px', 'scale:', scale.toFixed(2));
+  }
+
+  /**
+   * Load saved font size from ConfigManager and apply it
+   */
+  function loadSavedFontSize() {
+    console.log('[FontSize] Loading saved font size...');
+
+    server.exec_api(null, CONFIG.api.module, 'getFontSize', DEFAULT_FONT_SIZE)
+      .then(function(savedSize) {
+        var size = parseInt(savedSize, 10);
+        if (isNaN(size) || size < 8 || size > 16) {
+          size = DEFAULT_FONT_SIZE;
+        }
+
+        console.log('[FontSize] Loaded saved size:', size);
+
+        // Update slider UI
+        $('#fontSizeSlider').val(size);
+        $('#fontSizeValue').text(size + 'px');
+
+        // Apply the font size
+        applyFontSize(size);
+      })
+      .catch(function(error) {
+        console.warn('[FontSize] Failed to load saved size, using default:', error);
+        // Use default on error
+        applyFontSize(DEFAULT_FONT_SIZE);
+      });
+  }
+
+  /**
+   * Save font size to ConfigManager
+   * @param {number} size - Font size to save
+   */
+  function saveFontSize(size) {
+    console.log('[FontSize] Saving size:', size);
+
+    server.exec_api(null, CONFIG.api.module, 'setFontSize', size)
+      .then(function(result) {
+        if (result && result.success) {
+          console.log('[FontSize] Size saved successfully');
+        } else {
+          console.error('[FontSize] Save failed:', result && result.error);
+          showToast('Failed to save font size setting', 'error');
+        }
+      })
+      .catch(function(error) {
+        console.error('[FontSize] Failed to save size:', error);
+        showToast('Failed to save font size setting', 'error');
+      });
+  }
+
+  // ============================================================================
+  // UTILITY FUNCTIONS
+  // ============================================================================
+
+  /**
+   * CRITICAL-5: Validate and limit thinking text length
+   * NOTE: No HTML sanitization here - DOMPurify handles all sanitization in convertMarkdownToHtml()
+   * This prevents the XSS window that could occur from partial HTML tag removal
+   * @param {*} text - Text to validate
+   * @returns {string} Validated text
+   */
+  function sanitizeThinkingText(text) {
+    if (typeof text !== 'string') {
+      console.warn('[Sanitize] Non-string input:', typeof text);
+      return '';
+    }
+    
+    // Limit length to prevent DoS
+    const maxLength = 100000; // 100KB
+    if (text.length > maxLength) {
+      console.warn('[Sanitize] Text exceeds max length, truncating');
+      return text.substring(0, maxLength) + '\n\n[... content truncated ...]';
+    }
+    
+    // Return text as-is - DOMPurify will handle all sanitization
+    return text;
+  }
+
+  /**
+   * Convert markdown to safe HTML with DOMPurify sanitization
+   * Handles both markdown and HTML inputs
+   * @param {string} text - Markdown or HTML text to convert
+   * @returns {string} Sanitized HTML
+   */
+  function convertMarkdownToHtml(text) {
+    if (!text || typeof text !== 'string') {
+      return '';
+    }
+    
+    try {
+      // Check if marked library is loaded
+      if (typeof marked === 'undefined') {
+        console.warn('[Markdown] marked.js not loaded, using plain text');
+        return $('<div>').text(text).html(); // XSS-safe fallback
+      }
+      
+      // Parse markdown to HTML
+      const rawHtml = marked.parse(text, {
+        breaks: true,              // Convert \n to <br>
+        gfm: true,                 // GitHub Flavored Markdown
+        headerIds: false,          // Don't add IDs to headers (security)
+        mangle: false              // Don't mangle email addresses
+      });
+      
+      // Check if DOMPurify is loaded
+      if (typeof DOMPurify === 'undefined') {
+        console.warn('[Markdown] DOMPurify not loaded, using plain text');
+        return $('<div>').text(text).html(); // XSS-safe fallback
+      }
+      
+      // Sanitize the HTML with enhanced link security configuration
+      const sanitizedHtml = DOMPurify.sanitize(rawHtml, {
+        ALLOWED_TAGS: [
+          'p', 'br', 'strong', 'em', 'b', 'i', 'u', 's',
+          'code', 'pre', 'ul', 'ol', 'li',
+          'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+          'blockquote', 'hr', 'a', 'span', 'div',
+          'table', 'thead', 'tbody', 'tr', 'th', 'td',
+          'img'
+        ],
+        ALLOWED_ATTR: ['href', 'title', 'target', 'rel', 'class', 'src', 'alt', 'width', 'height'],
+        ALLOWED_URI_REGEXP: /^(https?:\/\/|mailto:|tel:)/,  // Allow http(s), mailto, tel links
+        FORBID_TAGS: [
+          'script', 'style', 'iframe', 'object',
+          'embed', 'form', 'input', 'textarea', 'button'
+        ],
+        FORBID_ATTR: [
+          'style', 'onerror', 'onload', 'onclick',
+          'onmouseover', 'onfocus', 'onblur'
+        ],
+        KEEP_CONTENT: true,        // Keep content of removed tags
+        RETURN_DOM: false,         // Return HTML string
+        RETURN_DOM_FRAGMENT: false
+        // Note: Link security (target="_blank", rel="noopener noreferrer") handled by
+        // DOMPurify.addHook() at file initialization - HOOKS config key does not exist
+      });
+      
+      return sanitizedHtml;
+      
+    } catch (error) {
+      console.error('[Markdown] Conversion failed:', error);
+      // XSS-safe fallback on error
+      return $('<div>').text(text).html();
+    }
+  }
+
+  /**
+   * CRITICAL-2: Sanitize folder URL to prevent XSS
+   * @param {string} url - URL to sanitize
+   * @returns {string} Sanitized URL or empty string if invalid
+   */
+  function sanitizeFolderUrl(url) {
+    if (typeof url !== 'string') {
+      console.warn('[Sanitize] URL is not a string:', typeof url);
+      return '';
+    }
+    
+    // Only allow Google Drive URLs
+    const drivePattern = /^https:\/\/drive\.google\.com\/drive\/folders\/[a-zA-Z0-9_-]+/;
+    if (!drivePattern.test(url)) {
+      console.warn('[Sanitize] URL does not match Drive folder pattern');
+      return '';
+    }
+    
+    return url;
+  }
+
+  /**
+   * CRITICAL-2: Sanitize folder name for display
+   * @param {string} name - Folder name to sanitize
+   * @returns {string} Sanitized name
+   */
+  function sanitizeFolderName(name) {
+    if (typeof name !== 'string') {
+      return '';
+    }
+    
+    // Remove HTML tags and limit length
+    const withoutHtml = name.replace(/<[^>]*>/g, '');
+    return withoutHtml.substring(0, 100); // Max 100 chars
+  }
+
+  // ============================================================================
+  // FILE ATTACHMENT VALIDATION
+  // ============================================================================
+
+  /**
+   * Validate file for attachment with comprehensive checks
+   * @param {File} file - File object to validate
+   * @returns {object} Validation result with {valid: boolean, error?: string}
+   */
+  function validateFile(file) {
+    if (!file || !(file instanceof File)) {
+      return {
+        valid: false,
+        error: 'Invalid file object'
+      };
+    }
+    
+    // Check if file type is supported
+    const allTypes = [...ATTACHMENT_CONFIG.IMAGE_TYPES, ...ATTACHMENT_CONFIG.DOCUMENT_TYPES];
+    if (!allTypes.includes(file.type)) {
+      return {
+        valid: false,
+        error: 'Unsupported file type: ' + file.type + '. Supported types: images (JPEG, PNG, GIF, WebP) and PDF'
+      };
+    }
+    
+    // Check MIME type + extension match (prevent spoofing)
+    const ext = file.name.toLowerCase().match(/\.[^.]+$/)?.[0];
+    const validExts = ATTACHMENT_CONFIG.VALID_EXTENSIONS[file.type];
+    if (!validExts || !validExts.includes(ext)) {
+      return {
+        valid: false,
+        error: 'File extension ' + ext + ' does not match type ' + file.type
+      };
+    }
+    
+    // Check file size
+    if (file.size > ATTACHMENT_CONFIG.MAX_FILE_SIZE) {
+      const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+      const limitMB = (ATTACHMENT_CONFIG.MAX_FILE_SIZE / 1024 / 1024).toFixed(0);
+      return {
+        valid: false,
+        error: 'File too large: ' + file.name + ' (' + fileSizeMB + 'MB) exceeds ' + limitMB + 'MB limit'
+      };
+    }
+    
+    // Check if zero-byte file
+    if (file.size === 0) {
+      return {
+        valid: false,
+        error: 'Empty file: ' + file.name
+      };
+    }
+    
+    return { valid: true };
+  }
+
+  /**
+   * Validate total attachment size limits
+   * @param {number} newFileSize - Size of file being added
+   * @returns {object} Validation result with {valid: boolean, error?: string}
+   */
+  function validateAttachmentLimits(newFileSize) {
+    // Calculate current total size
+    const currentSize = currentAttachments.reduce((sum, att) => sum + (att.size || 0), 0);
+    const totalSize = currentSize + newFileSize;
+    
+    // Check total request size (base64 increases size by ~33%)
+    const estimatedBase64Size = totalSize * 1.33;
+    if (estimatedBase64Size > ATTACHMENT_CONFIG.MAX_REQUEST_SIZE) {
+      const currentMB = (currentSize / 1024 / 1024).toFixed(2);
+      const newMB = (newFileSize / 1024 / 1024).toFixed(2);
+      const totalMB = (totalSize / 1024 / 1024).toFixed(2);
+      const limitMB = (ATTACHMENT_CONFIG.MAX_REQUEST_SIZE / 1024 / 1024).toFixed(0);
+      return {
+        valid: false,
+        error: 'Total size would exceed ' + limitMB + 'MB limit. Current: ' + currentMB + 'MB, Adding: ' + newMB + 'MB, Total: ' + totalMB + 'MB'
+      };
+    }
+    
+    // Check image count limit
+    const imageCount = currentAttachments.filter(att => 
+      ATTACHMENT_CONFIG.IMAGE_TYPES.includes(att.mediaType)
+    ).length;
+    
+    if (imageCount >= ATTACHMENT_CONFIG.MAX_IMAGE_COUNT) {
+      return {
+        valid: false,
+        error: 'Maximum ' + ATTACHMENT_CONFIG.MAX_IMAGE_COUNT + ' images allowed per message'
+      };
+    }
+    
+    return { valid: true };
+  }
+
+  /**
+   * Check if file is already attached
+   * @param {File} file - File to check
+   * @returns {boolean} True if file is already attached
+   */
+  function isDuplicateFile(file) {
+    return currentAttachments.some(att => 
+      att.name === file.name && att.size === file.size
+    );
+  }
+
+  // ============================================================================
+  // ATTACHMENT MANAGEMENT UI
+  // ============================================================================
+
+  // Track pending file operations to prevent race conditions
+  const pendingFiles = new Set();
+
+  /**
+   * CRITICAL-4: Show loading state for file being processed
+   * @param {string} fileName - Name of file being loaded
+   */
+  function showFileLoading(fileName) {
+    // CRITICAL-4: Add to pending set to prevent duplicates during processing
+    pendingFiles.add(fileName);
+    
+    // Create a temporary loading chip
+    const $attachmentArea = $('#attachmentPreview');
+    if (!$attachmentArea.length) {
+      console.warn('[Attachment] Preview area not found');
+      return;
+    }
+    
+    // Truncate long filenames
+    const displayName = fileName.length > ATTACHMENT_CONFIG.MAX_FILENAME_LENGTH
+      ? fileName.substring(0, ATTACHMENT_CONFIG.MAX_FILENAME_LENGTH - 3) + '...'
+      : fileName;
+    
+    // XSS defense-in-depth: Use jQuery DOM construction instead of template literal interpolation
+    const $loadingChip = $('<div>')
+      .addClass('attachment-chip loading')
+      .attr('data-filename', fileName)
+      .append(
+        $('<span>').addClass('material-icons spinning').text('refresh'),
+        $('<span>').addClass('attachment-name').text(displayName)
+      );
+    
+    $attachmentArea.append($loadingChip);
+    console.log('[Attachment] Showing loading state for', fileName);
+  }
+
+  /**
+   * Hide loading state for file (cleanup on error or completion)
+   * @param {string} fileName - Name of file to remove loading state for
+   */
+  function hideFileLoading(fileName) {
+    pendingFiles.delete(fileName);
+    // Use CSS.escape for defense-in-depth with filename in selector
+    $('.attachment-chip.loading[data-filename="' + CSS.escape(fileName) + '"]').remove();
+    console.log('[Attachment] Hiding loading state for', fileName);
+  }
+
+  /**
+   * CRITICAL-1: Add attachment to array and render with security fixes
+   * @param {object} attachment - Attachment object with {name, size, mediaType, data, timestamp}
+   */
+  function addAttachment(attachment) {
+    if (!attachment || typeof attachment !== 'object') {
+      console.error('[Attachment] Invalid attachment object');
+      return;
+    }
+    
+    // CRITICAL-4: Remove from pending set
+    pendingFiles.delete(attachment.name);
+    
+    // Remove loading chip for this file
+    $('.attachment-chip.loading[data-filename="' + attachment.name + '"]').remove();
+    
+    // Add to attachments array
+    currentAttachments.push(attachment);
+    
+    // Render attachment chip
+    renderAttachmentChip(attachment, currentAttachments.length - 1);
+    
+    // Update attach button badge
+    updateAttachButtonBadge();
+    
+    // Update send button state (now enabled with attachments)
+    updateSendButtonState();
+    
+    console.log('[Attachment] Added attachment:', attachment.name, 'Total:', currentAttachments.length);
+  }

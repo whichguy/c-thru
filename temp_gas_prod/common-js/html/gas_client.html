@@ -1,0 +1,540 @@
+<script>
+/**
+ * @fileoverview Promise-based wrapper for google.script.run API
+ * 
+ * NOTE: This file uses ES5 string concatenation instead of template literals
+ * because GAS template processing interprets ${...} as scriptlets when loaded
+ * via include(). Do NOT convert to template literals.
+ */
+
+/**
+ * Factory function to create a Promise-based wrapper for google.script.run
+ */
+function createGasServer(config) {
+  config = config || {};
+  
+  // Configuration with defaults
+  const debug = config.debug || false;
+  const throwOnUnhandled = config.throwOnUnhandled !== false;
+  const onError = config.onError || null;
+  const onSuccess = config.onSuccess || null;
+  const logger = config.logger || console;
+  const checkNetwork = config.checkNetwork !== false;
+  const networkTimeout = config.networkTimeout || 30000;
+  const validateArgs = config.validateArgs !== false;
+  const warnOnLargePayload = config.warnOnLargePayload !== false;
+  const memoryLeakWarningMs = config.memoryLeakWarningMs || 30000;
+  const mock = config.mock || null;
+
+  // Validation
+  if (onError && typeof onError !== 'function') {
+    throw new TypeError('onError must be a function');
+  }
+  if (onSuccess && typeof onSuccess !== 'function') {
+    throw new TypeError('onSuccess must be a function');
+  }
+  if (typeof logger !== 'object' || !logger.log) {
+    throw new TypeError('logger must have a .log() method');
+  }
+
+  // Use mock in testing or google.script.run in production
+  const target = mock || (typeof google !== 'undefined' && google.script ? google.script.run : null);
+  
+  if (!target && !mock) {
+    throw new Error('google.script.run is not available and no mock provided');
+  }
+
+  // TOKEN MANAGEMENT
+  // Note: const is safe here - we mutate _token.property, never reassign _token itself
+  const _token = { value: null, expiry: 0, promise: null, resolve: null, reject: null, timer: null, fetching: false, refreshRetries: 0 };
+
+  function _fetchToken(retry) {
+    retry = retry || 0;
+    if (_token.fetching) return _token.promise;
+    _token.fetching = true;
+
+    var doFetch = function() {
+      return new Promise(function(res, rej) {
+        var t = setTimeout(function() { rej(new Error('Token timeout')); }, 30000);
+        // NOTE: 'sheets-chat/UISupport' is intentionally hardcoded here.
+        // This module provides OAuth token management for the sidebar client.
+        // The coupling is acceptable because gas_client is specifically designed
+        // for the sheets-chat application's authentication flow.
+        target
+          .withSuccessHandler(function(r) { clearTimeout(t); res(r && r.result ? r.result : r); })
+          .withFailureHandler(function(e) { clearTimeout(t); rej(e); })
+          .exec_api(null, 'sheets-chat/UISupport', 'getOAuthToken');
+      });
+    };
+
+    return doFetch().then(function(token) {
+      _token.value = token;
+      _token.expiry = Date.now() + 55 * 60 * 1000;
+      _token.fetching = false;
+      if (_token.resolve) { _token.resolve(token); _token.resolve = _token.reject = null; }
+
+      if (debug) {
+        var expiryTime = new Date(_token.expiry).toLocaleTimeString();
+        logger.log('[GasServer] Token cached until ' + expiryTime);
+      }
+
+      if (_token.timer) clearTimeout(_token.timer);
+      _token.refreshRetries = 0;
+      _token.timer = setTimeout(function() {
+        _fetchToken(0).catch(function(e) {
+          logger.warn('[GasServer] Token refresh failed:', e.message);
+          var maxRetries = 5;
+          if (_token.refreshRetries < maxRetries) {
+            var retryDelay = Math.min(60000 * Math.pow(2, _token.refreshRetries), 240000);
+            _token.refreshRetries++;
+            logger.warn('[GasServer] Scheduling retry in ' + (retryDelay / 1000) + 's (attempt ' + _token.refreshRetries + '/' + maxRetries + ')');
+            _token.timer = setTimeout(function() { _fetchToken(0); }, retryDelay);
+          } else {
+            logger.error('[GasServer] Token refresh failed after ' + maxRetries + ' retries');
+            _token.refreshRetries = 0;
+          }
+        });
+      }, 50 * 60 * 1000);
+      return token;
+    }).catch(function(e) {
+      _token.fetching = false;
+      if (retry < 3) {
+        if (debug) {
+          logger.log('[GasServer] Token fetch retry ' + (retry + 1) + '/3 after error:', e.message);
+        }
+        return new Promise(function(r) { setTimeout(r, 5000); }).then(function() { return _fetchToken(retry + 1); });
+      }
+      logger.error('[GasServer] Token fetch failed after 3 retries:', e.message);
+      if (_token.reject) { _token.reject(e); _token.resolve = _token.reject = null; }
+      throw e;
+    });
+  }
+
+  // Start token fetch immediately
+  _token.promise = new Promise(function(res, rej) { _token.resolve = res; _token.reject = rej; });
+  _fetchToken(0);
+
+  // GoogleApiError class
+  function GoogleApiError(status, body, url) {
+    var err = new Error('Google API error ' + status + ': ' + body);
+    err.name = 'GoogleApiError';
+    err.status = status;
+    err.body = body;
+    err.url = url;
+    return err;
+  }
+
+  function _ensureToken() {
+    if (!_token.value || Date.now() > _token.expiry) {
+      return _fetchToken(0);
+    }
+    return Promise.resolve();
+  }
+
+  function _refreshToken() {
+    _token.value = null;
+    _token.expiry = 0;
+    return _fetchToken(0);
+  }
+
+  function _googleApi(url, options) {
+    options = options || {};
+    return _ensureToken().then(function() {
+      var fullUrl = url.indexOf('http') === 0 ? url : 'https://www.googleapis.com/' + url;
+
+      return fetch(fullUrl, {
+        method: options.method || 'GET',
+        headers: Object.assign({
+          'Authorization': 'Bearer ' + _token.value,
+          'Content-Type': 'application/json'
+        }, options.headers || {}),
+        body: options.body ? JSON.stringify(options.body) : undefined
+      }).then(function(response) {
+        if (!response.ok) {
+          return response.text().then(function(errorText) {
+            if (response.status === 401 && !options._retried) {
+              if (debug) {
+                logger.log('[GasServer] googleApi: 401 received, refreshing token and retrying');
+              }
+              return _refreshToken().then(function() {
+                return _googleApi(url, Object.assign({}, options, { _retried: true }));
+              });
+            }
+            throw new GoogleApiError(response.status, errorText, fullUrl);
+          });
+        }
+        var contentType = response.headers.get('content-type');
+        if (!contentType || contentType.indexOf('application/json') === -1) {
+          return null;
+        }
+        return response.json();
+      });
+    });
+  }
+
+  function validateSerializability(args, funcName) {
+    if (!validateArgs) return;
+    for (var i = 0; i < args.length; i++) {
+      var arg = args[i];
+      if (typeof arg === 'function') {
+        throw new TypeError('Argument ' + i + ' to ' + funcName + '() is a function and cannot be sent to server.');
+      }
+      if (typeof arg === 'object' && arg !== null) {
+        if (arg instanceof Element || arg instanceof Node) {
+          throw new TypeError('Argument ' + i + ' to ' + funcName + '() is a DOM element and cannot be sent to server.');
+        }
+        try {
+          JSON.stringify(arg);
+        } catch (e) {
+          if (e.message.indexOf('circular') !== -1) {
+            throw new TypeError('Argument ' + i + ' to ' + funcName + '() contains circular references.');
+          }
+          throw e;
+        }
+      }
+    }
+  }
+
+  function checkPayloadSize(args, funcName) {
+    if (!warnOnLargePayload) return;
+    try {
+      var json = JSON.stringify(args);
+      var sizeBytes = new Blob([json]).size;
+      var sizeMB = sizeBytes / (1024 * 1024);
+      if (sizeMB > 50) {
+        logger.warn('[GasServer] Large payload for ' + funcName + '(): ' + sizeMB.toFixed(2) + 'MB');
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  function enhanceError(error, funcName, args) {
+    var enhanced = new Error(error.message || String(error));
+    enhanced.originalError = error;
+    enhanced.functionName = funcName;
+    enhanced.arguments = args;
+    enhanced.timestamp = new Date().toISOString();
+    if (error.message && error.message.indexOf('not found') !== -1) {
+      enhanced.hint = 'Function "' + funcName + '" not found on server.';
+    } else if (error.message && error.message.indexOf('permission') !== -1) {
+      enhanced.hint = 'Permission denied.';
+    } else if (error.message && error.message.indexOf('timeout') !== -1) {
+      enhanced.hint = 'Server function timed out.';
+    }
+    return enhanced;
+  }
+
+  return new Proxy(target, {
+    get: function(target, prop) {
+      if (typeof prop === 'symbol' || prop.indexOf('_') === 0) {
+        return target[prop];
+      }
+
+      if (prop === 'googleApi') {
+        return _googleApi;
+      }
+
+      if (prop === 'GoogleApiError') {
+        return GoogleApiError;
+      }
+
+      if (target[prop] && typeof target[prop] === 'object') {
+        return new Proxy(target[prop], this);
+      }
+
+      return function() {
+        var args = Array.prototype.slice.call(arguments);
+        
+        // Web app mode: inject ssid
+        if (typeof window !== 'undefined' && window.GAS_CONTEXT && 
+            window.GAS_CONTEXT.isWebAppMode && window.GAS_CONTEXT.ssid) {
+          if (prop === 'exec_api' && args.length >= 4 && typeof args[3] === 'object' && args[3] !== null) {
+            args[3].__ssid = window.GAS_CONTEXT.ssid;
+          } else if (args.length >= 1 && typeof args[0] === 'object' && args[0] !== null) {
+            args[0].__ssid = window.GAS_CONTEXT.ssid;
+          }
+        }
+
+        var requestId = prop + '-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        var userObject;
+        var isExecuted = false;
+        var executionPromise = null;
+        var networkCheckInterval = null;
+        var memoryLeakTimer = null;
+        var isCancelled = false;
+        var cancelReason = null;
+        var cancelResolve = null;
+
+        if (debug) {
+          logger.log('[GasServer][' + requestId + '] Creating call to ' + prop + '()');
+        }
+
+        if (memoryLeakWarningMs > 0) {
+          memoryLeakTimer = setTimeout(function() {
+            if (!isExecuted) {
+              logger.warn('[GasServer][' + requestId + '] Potential memory leak: ' + prop + '() was created but never executed');
+            }
+          }, memoryLeakWarningMs);
+        }
+
+        function cleanup() {
+          if (networkCheckInterval) { clearInterval(networkCheckInterval); networkCheckInterval = null; }
+          if (memoryLeakTimer) { clearTimeout(memoryLeakTimer); memoryLeakTimer = null; }
+        }
+
+        var api = {
+          withUserObject: function(obj) {
+            if (isExecuted) throw new Error('Cannot call withUserObject() after ' + prop + '() has been executed');
+            userObject = obj;
+            return this;
+          },
+
+          cancel: function(reason) {
+            reason = reason || 'Cancelled by user';
+            if (debug) logger.log('[GasServer][' + requestId + '] Cancel requested: ' + reason);
+            if (isCancelled) {
+              return Promise.resolve({ success: true, reason: cancelReason, cancelled: true, alreadyCancelled: true });
+            }
+            isCancelled = true;
+            cancelReason = reason;
+            cleanup();
+            if (api._pollingController && api._pollingController.isActive()) {
+              api._pollingController.stop();
+            }
+            var origReqId = (args[3] && args[3].requestId) || (args[0] && args[0].requestId) || null;
+            if (origReqId && typeof google !== 'undefined' && google.script) {
+              google.script.run
+                .withSuccessHandler(function() {})
+                .withFailureHandler(function() {})
+                .postCancelRequest(origReqId, reason);
+            }
+            if (!isExecuted) {
+              return Promise.resolve({ success: true, reason: reason, cancelled: true, executionPrevented: true });
+            }
+            if (cancelResolve) {
+              cancelResolve({ success: true, reason: reason, cancelled: true, serverMayContinue: true });
+            }
+            return Promise.resolve({ success: true, reason: reason, cancelled: true, serverMayContinue: true });
+          },
+
+          isCancelled: function() { return isCancelled; },
+
+          poll: function(callback, options) {
+            options = options || {};
+            var pollModule = options.pollModule || 'sheets-chat/UISupport';
+            var pollFunction = options.pollFunction || 'pollMessages';
+            var checkIntervalMs = options.checkIntervalMs || 300;
+            var maxDuration = options.maxDuration || 180000;
+            var continuous = options.continuous !== false;
+            var isActive = true;
+            var pollStartTime = Date.now();
+
+            var origReqId = (args[3] && args[3].requestId) || (args[0] && args[0].requestId) || null;
+
+            function doPoll() {
+              if (!isActive) return;
+              if (Date.now() - pollStartTime > maxDuration) { isActive = false; return; }
+
+              google.script.run
+                .withSuccessHandler(function(result) {
+                  if (!isActive) return;
+                  var messages = (result && result.result && result.result.messages) ||
+                                (result && result.data && result.data.messages) ||
+                                (result && result.messages) || [];
+                  if (messages.length > 0) {
+                    try { callback(messages); } catch (e) { logger.error('[GasServer] Poll callback error:', e); }
+                  }
+                  if (isActive && continuous) setTimeout(doPoll, checkIntervalMs);
+                })
+                .withFailureHandler(function(error) {
+                  if (!isActive) return;
+                  logger.error('[GasServer] Poll error:', error);
+                  if (isActive && continuous) setTimeout(doPoll, checkIntervalMs);
+                })
+                .exec_api(null, pollModule, pollFunction, 'thinking-' + origReqId, { maxWaitMs: 5000, checkIntervalMs: checkIntervalMs });
+            }
+
+            setTimeout(doPoll, checkIntervalMs);
+
+            var controller = {
+              stop: function() { isActive = false; },
+              isActive: function() { return isActive; }
+            };
+            api._pollingController = controller;
+            return controller;
+          },
+
+          then: function(onResolve, onReject) {
+            if (executionPromise) {
+              return executionPromise.then(onResolve, onReject);
+            }
+            if (isCancelled) {
+              return Promise.resolve({ success: true, reason: cancelReason, cancelled: true }).then(onResolve, onReject);
+            }
+
+            var finalOnReject = onReject;
+            if (!onReject && throwOnUnhandled) {
+              finalOnReject = function(error) { throw error; };
+            }
+
+            isExecuted = true;
+
+            try {
+              validateSerializability(args, prop);
+              checkPayloadSize(args, prop);
+
+              if (checkNetwork && !navigator.onLine) {
+                var error = new Error('No internet connection');
+                cleanup();
+                return Promise.reject(error).then(onResolve, finalOnReject);
+              }
+
+              var startTime = Date.now();
+
+              // Execute google.script.run calls immediately without waiting for OAuth token.
+              // Token is only needed by _googleApi() for Bearer auth headers.
+              // Previously this blocked on _token.promise, causing all calls to hang
+              // if the initial getOAuthToken fetch was slow or failed.
+              var executeWithToken = function() {
+                return new Promise(function(resolve, reject) {
+                    cancelResolve = resolve;
+
+                    if (checkNetwork) {
+                      networkCheckInterval = setInterval(function() {
+                        if (!navigator.onLine) {
+                          cleanup();
+                          reject(new Error('Network connection lost'));
+                        }
+                      }, 1000);
+                      setTimeout(cleanup, networkTimeout);
+                    }
+
+                    var successHandler = function(result) {
+                      if (isCancelled) return;
+                      cleanup();
+                      var duration = Date.now() - startTime;
+
+                      var isExecApiResponse = result && typeof result === 'object' &&
+                                            'success' in result && 'result' in result &&
+                                            result.execution_type === 'exec_api';
+                      var lastArg = args[args.length - 1];
+                      var wantsRaw = lastArg && typeof lastArg === 'object' && lastArg.raw === true;
+
+                      if (isExecApiResponse && !wantsRaw) {
+                        if (!result.success) {
+                          var message = result.error || result.message || 'Server execution failed';
+                          var err = new Error(message);
+                          err.name = 'ServerError';
+                          err.serverError = result.error;
+                          err.serverStack = result.stack;
+                          err.logger_output = result.logger_output;
+                          if (onError) { try { onError(err, prop, args, duration); } catch (e) {} }
+                          reject(err);
+                          return;
+                        }
+                        result = result.result;
+                      }
+
+                      if (debug) logger.log('[GasServer][' + requestId + '] ' + prop + '() succeeded in ' + duration + 'ms');
+                      if (onSuccess) { try { onSuccess(result, prop, args, duration); } catch (e) {} }
+                      resolve(result);
+                    };
+
+                    var failureHandler = function(error) {
+                      if (isCancelled) return;
+                      cleanup();
+                      var enhanced = enhanceError(error, prop, args);
+                      if (debug) logger.error('[GasServer][' + requestId + '] ' + prop + '() failed:', enhanced);
+                      if (onError) { try { onError(enhanced, prop, args); } catch (e) {} }
+                      reject(enhanced);
+                    };
+
+                    var runner = target.withSuccessHandler(successHandler).withFailureHandler(failureHandler);
+                    if (userObject !== undefined) runner = runner.withUserObject(userObject);
+
+                    if (typeof runner[prop] !== 'function') {
+                      var err = new Error('Function "' + prop + '" is not available on google.script.run');
+                      err.code = 'FUNCTION_NOT_FOUND';
+                      reject(err);
+                      return;
+                    }
+
+                    runner[prop].apply(runner, args);
+                });
+              };
+
+              executionPromise = executeWithToken();
+              return executionPromise.then(onResolve, finalOnReject);
+
+            } catch (error) {
+              cleanup();
+              executionPromise = Promise.reject(enhanceError(error, prop, args));
+              return executionPromise.then(onResolve, finalOnReject);
+            }
+          },
+
+          catch: function(onReject) {
+            return this.then(null, onReject);
+          },
+
+          finally: function(onFinally) {
+            return this.then(
+              function(value) { return Promise.resolve(onFinally && onFinally()).then(function() { return value; }); },
+              function(reason) { return Promise.resolve(onFinally && onFinally()).then(function() { return Promise.reject(reason); }); }
+            );
+          }
+        };
+
+        return api;
+      };
+    }
+  });
+}
+
+// Make available globally
+if (typeof window !== 'undefined') {
+  window.createGasServer = createGasServer;
+  window._serverInstance = null;
+  window._serverInitError = null;
+  window._serverReadyCallbacks = [];
+
+  function initializeServer() {
+    if (window._serverInstance) return true;
+    if (typeof google === 'undefined' || !google.script || !google.script.run) return false;
+
+    try {
+      window._serverInstance = createGasServer({ debug: false });
+      console.log('[gas_client] Server instance created successfully');
+      while (window._serverReadyCallbacks.length > 0) {
+        var callback = window._serverReadyCallbacks.shift();
+        try { callback(window._serverInstance); } catch (e) { console.error('[gas_client] Ready callback error:', e); }
+      }
+      return true;
+    } catch (e) {
+      window._serverInitError = e;
+      console.error('[gas_client] Failed to create server instance:', e.message);
+      return false;
+    }
+  }
+
+  window.waitForServer = function() {
+    return new Promise(function(resolve, reject) {
+      if (window._serverInstance) { resolve(window._serverInstance); return; }
+      if (window._serverInitError) { reject(window._serverInitError); return; }
+      if (initializeServer()) { resolve(window._serverInstance); return; }
+      reject(new Error('google.script.run not available'));
+    });
+  };
+
+  Object.defineProperty(window, 'server', {
+    get: function() {
+      if (!window._serverInstance) initializeServer();
+      return window._serverInstance;
+    },
+    configurable: true
+  });
+
+  if (!initializeServer()) {
+    console.warn('[gas_client] google.script.run not available yet');
+  }
+}
+</script>

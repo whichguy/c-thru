@@ -1,0 +1,200 @@
+<style>
+  /* ⚠️ WARNING: This file is an HTML include - DO NOT add CommonJS wrapper!
+   * This file is included in Sidebar.gs via include('SidebarVariables')
+   * Always use raw_write with fileType: "HTML" when editing this file.
+   *
+   * CONTENTS: Shared CSS variables for design tokens (colors, spacing, shadows, z-index)
+   * PURPOSE: Maintain brand consistency and enable theming across all sidebar CSS files
+   */
+  
+  :root {
+    /* ============================================
+       COLOR PALETTE - Google Material Design
+       ============================================ */
+    
+    /* Primary Colors */
+    --color-primary: #1a73e8;           /* Main blue - buttons, links, focus states */
+    --color-primary-hover: #1765cc;     /* Darker blue for hover states */
+    --color-primary-light: #4285f4;     /* Light blue for accents */
+    --color-primary-bg: #d2e3fc;        /* Light blue background */
+    --color-primary-border: #aecbfa;    /* Light blue border */
+    
+    /* Secondary/Accent Colors */
+    --color-purple-start: #4285f4;      /* User message gradient start */
+    --color-purple-end: #1a73e8;        /* User message gradient end */
+    --color-gemini-blue: #8ab4f8;       /* Gemini-style light blue */
+    
+    /* Status Colors */
+    --color-success: #1e8e3e;           /* Success green */
+    --color-success-light: #81c995;     /* Light green for toasts */
+    --color-error: #d93025;             /* Error red */
+    --color-error-dark: #b31412;        /* Darker red for hover */
+    --color-error-bg: #fee;             /* Error background */
+    --color-error-border: #fcc;         /* Error border */
+    --color-error-text: #c00;           /* Error text */
+    --color-error-toast: #f28b82;       /* Error toast accent */
+    --color-warning: #fdd663;           /* Warning yellow */
+    --color-info: #8ab4f8;              /* Info blue */
+    
+    /* Neutral Grays */
+    --color-text-primary: #202124;      /* Primary text color */
+    --color-text-secondary: #5f6368;    /* Secondary text, labels */
+    --color-text-tertiary: #9aa0a6;     /* Placeholders, disabled text */
+    
+    /* Background Colors */
+    --color-bg-white: #ffffff;          /* Pure white backgrounds */
+    --color-bg-light: #f8f9fa;          /* Light gray background */
+    --color-bg-lighter: #fafbfc;        /* Even lighter gray */
+    --color-bg-subtle: #f1f3f4;         /* Subtle background */
+    --color-bg-hover: #f1f3f4;          /* Hover background */
+    
+    /* Border Colors */
+    --color-border-light: #e8eaed;      /* Light borders */
+    --color-border-medium: #dadce0;     /* Medium borders */
+    --color-border-dark: #bdc1c6;       /* Darker borders */
+    --color-border-input: #e0e0e0;      /* Input borders */
+    --color-border-focus: #4285f4;      /* Focus border */
+    
+    /* Code & Inline Styles */
+    --color-code-bg: rgba(0, 0, 0, 0.05);
+    --color-code-text: #d63384;
+    --color-code-border: rgba(0, 0, 0, 0.08);
+    --color-code-accent: #6442d6;       /* Purple accent for code blocks */
+    
+    /* ============================================
+       SPACING SCALE - 4px base unit
+       ============================================ */
+    
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 12px;
+    --spacing-lg: 16px;
+    --spacing-xl: 24px;
+    --spacing-2xl: 32px;
+    
+    /* Gap Sizes */
+    --gap-xs: 6px;
+    --gap-sm: 8px;
+    --gap-md: 10px;
+    --gap-lg: 16px;
+    
+    /* ============================================
+       BORDER RADIUS - Rounded corners
+       ============================================ */
+    
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 18px;
+    --radius-pill: 22px;
+    --radius-round: 50%;
+    
+    /* ============================================
+       SHADOWS - Material Design elevations
+       ============================================ */
+    
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+    --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-xl: 0 4px 12px rgba(0, 0, 0, 0.15);
+    
+    /* Focus Shadows */
+    --shadow-focus: 0 0 0 2px rgba(66, 133, 244, 0.1);
+    --shadow-focus-ring: 0 0 0 3px rgba(66, 133, 244, 0.1), 0 3px 8px rgba(66, 133, 244, 0.15), 0 2px 4px rgba(66, 133, 244, 0.1);
+    
+    /* Button Shadows */
+    --shadow-btn-primary: 0 1px 3px rgba(26, 115, 232, 0.3);
+    --shadow-btn-primary-hover: 0 2px 6px rgba(26, 115, 232, 0.4);
+    --shadow-btn-error: 0 1px 3px rgba(234, 67, 53, 0.3);
+    --shadow-btn-error-hover: 0 2px 6px rgba(234, 67, 53, 0.4);
+    
+    /* User Message Gradient Shadow */
+    --shadow-user-message: 0 2px 8px rgba(66, 133, 244, 0.25);
+    
+    /* Toast Shadows */
+    --shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.28), 0 8px 24px rgba(0, 0, 0, 0.16);
+    
+    /* Chip Shadows */
+    --shadow-chip: 0 2px 4px rgba(0, 0, 0, 0.06), 0 4px 8px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    --shadow-chip-hover: 0 3px 6px rgba(0, 0, 0, 0.08), 0 6px 12px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    
+    /* ============================================
+       Z-INDEX SCALE - Layering hierarchy
+       ============================================ */
+    
+    --z-content: 1;                     /* Normal content */
+    --z-sticky: 10;                     /* Sticky elements */
+    --z-overlay: 100;                   /* Overlays, dropdowns */
+    --z-modal: 200;                     /* Modal dialogs */
+    --z-popover: 300;                   /* Popovers, tooltips */
+    --z-toast: 9000;                    /* Toast notifications (top layer) */
+    
+    /* ============================================
+       TYPOGRAPHY - Font sizes and weights
+       ============================================ */
+    
+    --font-size-xs: 10px;
+    --font-size-sm: 11px;
+    --font-size-base: 12px;
+    --font-size-md: 13px;
+    --font-size-lg: 14px;
+    --font-size-xl: 15px;
+    --font-size-2xl: 16px;
+    
+    --font-weight-normal: 400;
+    --font-weight-medium: 500;
+    --font-weight-semibold: 600;
+    
+    /* Line Heights */
+    --line-height-tight: 1.4;
+    --line-height-base: 1.5;
+    --line-height-relaxed: 1.6;
+    
+    /* ============================================
+       TRANSITIONS - Animation timing
+       ============================================ */
+    
+    --transition-fast: 0.2s;
+    --transition-base: 0.3s;
+    --transition-slow: 0.6s;
+    
+    /* Timing Functions - Material Design */
+    --timing-standard: cubic-bezier(0.4, 0, 0.2, 1);    /* Standard easing */
+    --timing-enter: cubic-bezier(0, 0, 0.2, 1);         /* Enter from screen */
+    --timing-exit: cubic-bezier(0.4, 0, 1, 1);          /* Exit to screen */
+    --timing-bounce: cubic-bezier(0.34, 1.56, 0.64, 1); /* Bounce effect */
+    
+    /* ============================================
+       COMPONENT-SPECIFIC VARIABLES
+       ============================================ */
+    
+    /* Input Box */
+    --input-padding: 8px;
+    --input-height-min: 44px;
+    --input-height-max: 300px;
+    
+    /* Message Bubbles */
+    --bubble-padding: 16px;
+    --bubble-radius: 18px;
+    
+    /* Thinking Bubbles */
+    --thinking-max-height: 600px;
+    
+    /* Queue Container */
+    --queue-max-height: 200px;
+    
+    /* Scrollbar */
+    --scrollbar-width: 6px;
+    --scrollbar-width-md: 8px;
+  }
+  
+  /* ============================================
+     FIREFOX SCROLLBAR SUPPORT
+     ============================================ */
+  
+  /* Default thin scrollbar for Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-medium) var(--color-bg-subtle);
+  }
+</style>

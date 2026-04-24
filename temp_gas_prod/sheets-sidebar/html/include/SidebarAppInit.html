@@ -1,0 +1,1110 @@
+  // ⚠️ WARNING: This file is an HTML include - DO NOT add CommonJS wrapper!
+  // SidebarAppInit - Event handlers and initialization
+  // Always use raw_write with fileType: "HTML" when editing this file.
+
+  // ============================================================================
+
+  // Wait for jQuery to load before initializing
+  (function waitForJQuery() {
+    if (typeof $ !== 'undefined' && typeof jQuery !== 'undefined') {
+      // jQuery is loaded, initialize app
+      initApp();
+    } else {
+      // jQuery not loaded yet, wait and try again
+      setTimeout(waitForJQuery, 50);
+    }
+  })();
+
+  function initApp() {
+    console.log('[SidebarApp] jQuery loaded, initializing app');
+
+  /**
+   * Load configuration values from server and populate form
+   * With auto-unwrap, server returns: {config: {apiKey, modelName, journalFolderId, ...}}
+   */
+  /**
+   * Load auto-sync status and update toggle
+   */
+  function loadAutoSyncStatus() {
+    window.server.exec_api(null, 'sheets-chat/UISupport', 'getAutoSyncStatus')
+      .then(function(result) {
+        if (result) {
+          $('#autoSyncToggle').prop('checked', result.enabled);
+          $('#autoSyncStatus').text(result.enabled ? 'Enabled' : 'Disabled');
+        }
+      })
+      .catch(function() {
+        $('#autoSyncStatus').text('Unknown');
+      });
+  }
+
+  /**
+   * Load theme preference and update segmented control
+   */
+  function loadThemePreference() {
+    window.server.exec_api(null, 'sheets-chat/UISupport', 'getThemePreference')
+      .then(function(theme) {
+        if (theme) {
+          $('#themeSelector .segment').removeClass('active');
+          $(`#themeSelector .segment[data-value="${theme}"]`).addClass('active');
+        }
+      })
+      .catch(function() {
+        // Default to system on error
+      });
+  }
+
+  function loadSavedWidth() {
+    var DEFAULT_WIDTH = 400;
+    window.server.exec_api(null, CONFIG.api.module, 'getSidebarWidth', DEFAULT_WIDTH)
+      .then(function(width) { applyWidthSelection(width); })
+      .catch(function() { applyWidthSelection(DEFAULT_WIDTH); });
+  }
+
+  function applyWidthSelection(width) {
+    $('#widthSelector .segment').removeClass('active');
+    $(`#widthSelector .segment[data-value="${width}"]`).addClass('active');
+  }
+
+  function loadAutoOpenSidebar() {
+    window.server.exec_api(null, 'sheets-chat/UISupport', 'getUiConfig')
+      .then(function(cfg) {
+        if (cfg) {
+          $('#autoOpenSidebar').prop('checked', cfg.autoOpenSidebar !== false);
+          $('#responseNotifications').prop('checked', cfg.responseNotifications !== false);
+          window._notifEnabled = cfg.responseNotifications !== false;
+        }
+      })
+      .catch(function() {
+        // Default: checked (auto-open enabled, notifications enabled)
+      });
+  }
+
+  function loadConfigValues() {
+    console.log('[Config] Loading configuration values');
+
+    window.server.exec_api(null, 'sheets-chat/UISupport', 'getConfig')
+      .then(function(response) {
+        console.log('[Config] Loaded:', response);
+
+        // With auto-unwrap, response is the function's return value directly
+        // Errors automatically throw to catch block
+        if (!response || !response.config) {
+          console.error('[Config] Invalid response structure:', response);
+          showToast('Failed to load configuration', 'error');
+          return;
+        }
+
+        var config = response.config;
+
+        // Populate form fields
+        if (config.apiKey) {
+          $('#apiKey').val(config.apiKey);
+        }
+        if (config.modelName) {
+          $('#modelName').val(config.modelName);
+        }
+        if (config.journalFolderId) {
+          $('#journalFolderUrl').val('https://drive.google.com/drive/folders/' + config.journalFolderId);
+        } else {
+          $('#journalFolderUrl').val('');
+        }
+
+        // Populate retention days
+        if (config.journalRetentionDays !== undefined) {
+          $('#journalRetentionDays').val(config.journalRetentionDays);
+        }
+        $('#apiUrlPrefix').val(config.apiUrlPrefix || 'https://api.anthropic.com');
+      })
+      .catch(function(error) {
+        console.error('[Config] Failed to load config:', error);
+        showToast('Failed to load configuration', 'error');
+      });
+  }
+  
+  // LLM: SidebarAppInit initAmbientPolling polls getRecommendations every 15s
+  var _ambientIntervalId = null;
+  function initAmbientPolling() {
+    if (_ambientIntervalId) return; // guard: already initialized
+    var _ambientFailCount = 0;
+    var _initialAnalysisTriggered = false;
+    _ambientIntervalId = setInterval(function() {
+      var _pollStart = Date.now();
+      ambientLog('poll → getRecommendations');
+      server.exec_api(null, 'sheets-chat/UISupport', 'getRecommendations')
+        // exec_api auto-unwraps: r is the GAS function return value directly (not {result:...})
+        .then(function(r) {
+          var elapsed = Date.now() - _pollStart;
+          ambientLog('poll → ok', {
+            ms: elapsed,
+            hasResult: !!r,
+            count: (r && r.recommendations) ? r.recommendations.length : 0,
+            priorFailCount: _ambientFailCount
+          });
+          _ambientFailCount = 0;
+          if (!r) return;
+
+          // Update advisor config panel state (only when config panel is open)
+          if (r.advisorState && typeof updateAdvisorState === 'function') {
+            try { updateAdvisorState(r.advisorState); } catch(e) {
+              ambientLog('updateAdvisorState error', { err: e && e.message });
+            }
+          }
+
+          // Render recommendation cards
+          try { renderRecommendationCards(r.recommendations); } catch(e) {
+            ambientLog('renderRecommendationCards error', { err: e && e.message });
+          }
+
+          // Ensure gear/config panel is always accessible (siblings of recommendationsPanel)
+          try { ensureAdvisorConfigPanel(); } catch(e) {
+            ambientLog('ensureAdvisorConfigPanel error', { err: e && e.message });
+          }
+
+          // Initial analysis: if first poll returns no cached cards, schedule analysis in 5s
+          if (!_initialAnalysisTriggered) {
+            _initialAnalysisTriggered = true;
+            if (!r.recommendations || r.recommendations.length === 0) {
+              setTimeout(runAmbientOnce, 5000);
+            }
+          }
+
+          // Scheduler task completion toasts
+          if (r.schedulerNotifications && r.schedulerNotifications.length > 0) {
+            try { renderSchedulerNotifications(r.schedulerNotifications); } catch(e) {
+              ambientLog('renderSchedulerNotifications error', { err: e && e.message });
+            }
+          }
+        })
+        .catch(function(e) {
+          _ambientFailCount++;
+          ambientLog('poll → error', { failCount: _ambientFailCount, err: e && e.message });
+          if (_ambientFailCount === 3) showAmbientError();
+        });
+    }, 15000);
+  }
+
+  function showAmbientError() {
+    ambientLog('showAmbientError — 3 consecutive poll failures');
+    // Subtle non-blocking indicator - just log, don't interrupt user
+    console.warn('[SheetsChat] Ambient recommendations unavailable');
+  }
+
+  // Extract a human-readable message from server error strings that embed raw JSON,
+  // e.g. "Sonnet call failed: Non-retryable HTTP error (400): {\"type\":\"error\",\"error\":{\"message\":\"...\"}}"
+  function _parseServerError(errMsg) {
+    if (!errMsg) return 'please try again';
+    try {
+      var jsonStart = errMsg.indexOf('{');
+      if (jsonStart !== -1) {
+        var parsed = JSON.parse(errMsg.slice(jsonStart));
+        if (parsed && parsed.error && parsed.error.message) {
+          return parsed.error.message;
+        }
+      }
+    } catch(e) { /* fall through to raw string */ }
+    return errMsg;
+  }
+
+  function triggerAnalysis() {
+    ambientLog('triggerAnalysis → call');
+    var btn = document.getElementById('analyzeBtn');
+    if (btn) { btn.disabled = true; btn.classList.add('analyzing'); }
+
+    // Show glowing thinking bubble in chat area (matches send-message UX)
+    var $analysisBubble = addThinkingBlock(true);
+    updateThinkingBubble([{text: 'Analyzing spreadsheet for recommendations...'}], $analysisBubble);
+
+    server.exec_api(null, 'sheets-chat/UISupport', 'triggerAnalysis')
+      // exec_api auto-unwraps: r is the GAS function return value directly (not {result:...})
+      .then(function(r) {
+        ambientLog('triggerAnalysis → ok', { success: r && r.success, count: r && r.count });
+        var analysisSuccess = r && r.success !== false;
+        var count = r && r.count;
+        if (!analysisSuccess) {
+          $analysisBubble.find('.thinking-message').last().text('Analysis could not complete.');
+          finalizeThinkingBlock($analysisBubble);
+          if (btn) { btn.disabled = false; btn.classList.remove('analyzing'); }
+          var errMsg = _parseServerError(r && r.error);
+          ambientLog('triggerAnalysis → analysis failed', { error: errMsg });
+          if (typeof showToast === 'function') { showToast('Analysis failed: ' + errMsg, 'error'); }
+          return;
+        }
+        server.exec_api(null, 'sheets-chat/UISupport', 'getRecommendations')
+          // exec_api auto-unwraps: rec is the GAS function return value directly (not {result:...})
+          .then(function(rec) {
+            var msg = 'Analysis complete — found ' + (count || 0) + ' recommendation' + ((count !== 1) ? 's' : '') + '.';
+            $analysisBubble.find('.thinking-message').last().text(msg);
+            finalizeThinkingBlock($analysisBubble);
+            if (btn) { btn.disabled = false; btn.classList.remove('analyzing'); }
+            if (rec && rec.recommendations) {
+              try { renderRecommendationCards(rec.recommendations); } catch(e) {
+                ambientLog('renderRecommendationCards error', { err: e && e.message });
+              }
+            }
+            if (btn && typeof count === 'number') {
+              _flashAnalyzeBtnFeedback(btn, count);
+            }
+          })
+          .catch(function(e) {
+            finalizeThinkingBlock($analysisBubble);
+            if (btn) { btn.disabled = false; btn.classList.remove('analyzing'); }
+            ambientLog('triggerAnalysis → getRecommendations error', { err: e && e.message });
+          });
+      })
+      .catch(function(e) {
+        $analysisBubble.find('.thinking-message').last().text('Analysis failed.');
+        finalizeThinkingBlock($analysisBubble);
+        ambientLog('triggerAnalysis → error', { err: e && e.message });
+        if (btn) { btn.disabled = false; btn.classList.remove('analyzing'); }
+        console.error('triggerAnalysis error:', e);
+        if (typeof showToast === 'function') { showToast('Analysis failed: ' + ((e && e.message) || 'server error'), 'error'); }
+      });
+  }
+
+  function _flashAnalyzeBtnFeedback(btn, count) {
+    var icon = btn.querySelector('.material-icons');
+    if (!icon) return;
+    var original = icon.textContent;
+    icon.textContent = count > 0 ? String(count) + ' new' : 'done';
+    setTimeout(function() { icon.textContent = original; }, 2000);
+  }
+
+  // Expose to global scope so SidebarAppUI's injectAnalyzeButton click handler can reach it
+  window.triggerAnalysis = triggerAnalysis;
+
+  $(document).ready(function() {
+    console.log('[SidebarApp] Document ready, initializing event handlers');
+    
+    // Tab switching
+    $('.tab').on('click', function() {
+      var tabName = $(this).data('tab');
+      console.log('[Tab] Switching to:', tabName);
+
+      // Update tab buttons
+      $('.tab').removeClass('active').attr('aria-selected', 'false');
+      $(this).addClass('active').attr('aria-selected', 'true');
+
+      // Update tab content
+      $('.tab-content').removeClass('active');
+      $(`#${tabName}Tab`).addClass('active');
+
+      // Load config values when switching to config tab
+      if (tabName === 'config') {
+        loadConfigValues();
+        loadAutoSyncStatus();
+        loadThemePreference();
+        loadSavedWidth();
+        loadAutoOpenSidebar();
+      }
+    });
+
+    // Save configuration button
+    $('#saveConfigBtn').on('click', function() {
+      console.log('[Config] Save button clicked');
+
+      var apiKey = $('#apiKey').val().trim();
+      var modelName = $('#modelName').val();
+      var journalFolderUrl = $('#journalFolderUrl').val().trim();
+      var journalRetentionDays = parseInt($('#journalRetentionDays').val(), 10) || 0;
+      var apiUrlPrefix = $('#apiUrlPrefix').val().trim();
+
+      // Extract folder ID from URL if provided
+      var journalFolderId = '';
+      if (journalFolderUrl) {
+        var match = journalFolderUrl.match(/folders\/([a-zA-Z0-9_-]+)/);
+        if (match) {
+          journalFolderId = match[1];
+        } else if (/^[a-zA-Z0-9_-]+$/.test(journalFolderUrl)) {
+          // Direct folder ID
+          journalFolderId = journalFolderUrl;
+        }
+      }
+
+      // Build config object
+      var config = {
+        apiKey: apiKey,
+        modelName: modelName,
+        journalFolderId: journalFolderId,
+        journalRetentionDays: journalRetentionDays,
+        apiUrlPrefix: apiUrlPrefix
+      };
+
+      console.log('[Config] Saving:', { modelName: modelName, hasApiKey: !!apiKey, journalFolderId: journalFolderId });
+
+      window.server.exec_api(null, 'sheets-chat/UISupport', 'saveConfig', config)
+        .then(function(result) {
+          console.log('[Config] Save result:', result);
+          if (result && result.success) {
+            showToast('Configuration saved', 'success');
+          } else {
+            showToast('Failed to save configuration', 'error');
+          }
+        })
+        .catch(function(error) {
+          console.error('[Config] Save error:', error);
+          showToast(`Failed to save: ${error.message}`, 'error');
+        });
+    });
+    
+    // Send button click
+    $('#sendBtn').on('click', function() {
+      console.log('[SidebarApp] Send button clicked');
+      sendMessage();
+    });
+    
+    // Cancel button click
+    $('#cancelBtn').on('click', function() {
+      console.log('[SidebarApp] Cancel button clicked');
+      if (currentCancellableCall) {
+        currentCancellableCall.cancel('User cancelled the request')
+          .then(function(result) {
+            console.log('[Cancel] Cancel result:', result);
+            if (result.success) {
+              showToast('Request cancelled', 'info');
+            } else {
+              showToast(`Could not cancel: ${result.reason}`, 'warning');
+            }
+          })
+          .catch(function(error) {
+            console.error('[Cancel] Error:', error);
+            showToast(`Cancel failed: ${error.message}`, 'error');
+          });
+      } else {
+        console.warn('[Cancel] No active request to cancel');
+        showToast('No active request to cancel', 'info');
+      }
+    });
+    
+    // Escape key to cancel during prompt execution
+    $(document).on('keydown', function(e) {
+      if (e.key === 'Escape' && isProcessing && currentCancellableCall) {
+        console.log('[SidebarApp] Escape pressed, cancelling request');
+        e.preventDefault();
+
+        currentCancellableCall.cancel('User pressed Escape')
+          .then(function(result) {
+            console.log('[Cancel] Escape cancel result:', result);
+            if (result.success) {
+              showToast('Request cancelled', 'info');
+            } else {
+              showToast(`Could not cancel: ${result.reason}`, 'warning');
+            }
+          })
+          .catch(function(error) {
+            console.error('[Cancel] Escape error:', error);
+            showToast(`Cancel failed: ${error.message}`, 'error');
+          });
+      }
+    });
+    
+    // Combined keydown handler for Enter key and arrow key navigation
+    $('#messageInput').on('keydown', function(e) {
+      console.log('[MessageInput] Keydown event:', e.key, 'Shift:', e.shiftKey);
+      
+      // Handle Enter key to send (Shift+Enter for new line)
+      if (e.key === 'Enter' && !e.shiftKey) {
+        console.log('[MessageInput] Enter pressed, sending message');
+        e.preventDefault();
+        sendMessage();
+        return;  // Exit early after handling
+      }
+      
+      // Handle arrow keys for message history navigation
+      // Only handle arrow keys if not holding Shift (allow Shift+Arrow for text selection)
+      if (e.shiftKey) {
+        console.log('[MessageHistory] Shift key held, allowing default arrow behavior');
+        return;
+      }
+      
+      // Get cursor position for smart history navigation
+      // Only trigger history when cursor is at start (ArrowUp) or end (ArrowDown)
+      const textarea = this;
+      const cursorPos = textarea.selectionStart;
+      const textLength = textarea.value.length;
+      const cursorAtStart = cursorPos === 0;
+      const cursorAtEnd = cursorPos === textLength;
+      
+      if (e.key === 'ArrowUp') {
+        // Only navigate history if cursor is at the very start of the text
+        // This allows normal cursor movement within multiline text
+        if (!cursorAtStart && messageHistory.index === -1) {
+          console.log('[MessageHistory] ArrowUp ignored - cursor not at start (pos:', cursorPos, ')');
+          return; // Let default behavior move cursor up
+        }
+        
+        console.log('[MessageHistory] ArrowUp pressed. Current index:', messageHistory.index, 'History length:', messageHistory.items.length);
+        e.preventDefault();
+        
+        // Start navigating from the end if not already navigating
+        if (messageHistory.index === -1) {
+          messageHistory.currentDraft = $(this).val();
+          messageHistory.index = messageHistory.items.length;
+          console.log('[MessageHistory] Starting navigation. Saved draft:', messageHistory.currentDraft.substring(0, 30));
+        }
+        
+        // Move to previous message
+        if (messageHistory.index > 0) {
+          messageHistory.index--;
+          const message = messageHistory.items[messageHistory.index];
+          console.log('[MessageHistory] Moving to index', messageHistory.index, 'Message:', message.substring(0, 50));
+          $(this).val(message);
+          updateSendButtonState();
+        } else {
+          console.log('[MessageHistory] Already at beginning of history');
+        }
+      } else if (e.key === 'ArrowDown') {
+        // Only navigate history if:
+        // 1. We're already navigating history (index !== -1), OR
+        // 2. Cursor is at the very end of the text
+        if (messageHistory.index === -1 && !cursorAtEnd) {
+          console.log('[MessageHistory] ArrowDown ignored - cursor not at end (pos:', cursorPos, '/', textLength, ')');
+          return; // Let default behavior move cursor down
+        }
+        
+        console.log('[MessageHistory] ArrowDown pressed. Current index:', messageHistory.index, 'History length:', messageHistory.items.length);
+        e.preventDefault();
+        
+        // Only handle if we're currently navigating
+        if (messageHistory.index !== -1) {
+          // Move to next message
+          if (messageHistory.index < messageHistory.items.length - 1) {
+            messageHistory.index++;
+            const message = messageHistory.items[messageHistory.index];
+            console.log('[MessageHistory] Moving to index', messageHistory.index, 'Message:', message.substring(0, 50));
+            $(this).val(message);
+          } else {
+            // Reached the end, restore current draft
+            console.log('[MessageHistory] Reached end, restoring draft:', messageHistory.currentDraft.substring(0, 30));
+            messageHistory.index = -1;
+            $(this).val(messageHistory.currentDraft);
+          }
+          updateSendButtonState();
+        } else {
+          console.log('[MessageHistory] Not currently navigating history');
+        }
+      }
+    });
+    
+    // Input event for send button state and auto-grow
+    $('#messageInput').on('input', function() {
+      updateSendButtonState();
+      autoGrowTextarea();
+    });
+    
+    // Settings button
+    $('#settingsBtn').on('click', function() {
+      console.log('[SidebarApp] Settings button clicked');
+      showSettings();
+    });
+    
+    // Save conversation button
+    $('#saveConversationBtn').on('click', function() {
+      console.log('[SidebarApp] Save conversation button clicked');
+      saveConversation();
+    });
+    
+    // Load conversation button
+    $('#loadConversationBtn').on('click', function() {
+      console.log('[SidebarApp] Load conversation button clicked');
+      showConversationList();
+    });
+    
+    // View Journal button
+    $('#viewJournalBtn').on('click', function() {
+      const journalUrl = $(this).data('journal-url');
+      if (journalUrl) {
+        window.open(journalUrl, '_blank');
+      } else {
+        showToast('No journal URL available', 'error');
+      }
+    });
+    
+    // New Chat button handler
+    var $newChatBtn = $('#newChatBtn');
+    if ($newChatBtn.length) {
+      console.log('[NewChat] Button found, attaching handler');
+      $newChatBtn.on('click', function() {
+        console.log('[NewChat] Button clicked');
+
+        // Helper function to perform the actual clear
+        function performClearChat() {
+          // Abandon pending welcome if clearing chat
+          abandonWelcome('New chat');
+
+          // Clear client-side state
+          currentMessages = [];
+          currentThreadId = null;
+
+          // Clear pending message queue if any
+          if (typeof pendingMessageQueue !== 'undefined') {
+            pendingMessageQueue = [];
+            if (typeof renderPendingQueue === 'function') {
+              renderPendingQueue();
+            }
+          }
+
+          // Clear UI
+          $('#chatContainer').empty();
+          $('#conversationSelector').val('');
+          $('#viewJournalBtn').hide();
+
+          // Call server-side clearChat to reset sequence counter
+          server.exec_api(null, 'sheets-chat/UISupport', 'clearChat')
+            .then(function(result) {
+              if (result && result.success) {
+                console.log('[NewChat] Server-side state cleared');
+              } else {
+                console.warn('[NewChat] Server response:', result);
+              }
+              showToast('Started new conversation', 'success');
+            })
+            .catch(function(error) {
+              console.error('[NewChat] Server error (non-blocking):', error);
+              // Still show success - client state is cleared
+              showToast('Started new conversation', 'success');
+            });
+
+          // Re-trigger welcome for the fresh session
+          requestWelcomeMessage();
+        }
+
+        // Check if processing - needs different confirmation message
+        var needsProcessingConfirm = typeof isProcessing !== 'undefined' && isProcessing;
+        var hasMessages = currentMessages.length > 0 || $('#chatContainer').children().length > 0;
+
+        // Case 1: Processing in progress
+        if (needsProcessingConfirm) {
+          showConfirmBar({
+            message: 'A message is being processed',
+            submessage: 'Start new chat anyway? The current response will be lost.',
+            confirmText: 'New Chat',
+            cancelText: 'Cancel'
+          }).then(function(confirmed) {
+            if (!confirmed) return;
+
+            // Cancel current request
+            if (typeof currentCancellableCall !== 'undefined' && currentCancellableCall) {
+              currentCancellableCall.cancel('Starting new chat');
+            }
+
+            performClearChat();
+          });
+          return;  // Exit - async flow handles the rest
+        }
+
+        // Case 2: Has messages but not processing
+        if (hasMessages) {
+          showConfirmBar({
+            message: 'Start a new conversation?',
+            submessage: 'Your current conversation is saved to Google Drive.',
+            confirmText: 'New Chat',
+            cancelText: 'Cancel'
+          }).then(function(confirmed) {
+            if (!confirmed) return;
+            performClearChat();
+          });
+          return;  // Exit - async flow handles the rest
+        }
+
+        // LLM-FIX-2026-01-13: Always clear chat container on "new chat" action.
+        // Previously: Case 3 (no messages, not processing) only showed toast, didn't clear.
+        // Now: Calls performClearChat() to remove orphaned UI (thinking bubbles, error states).
+        // Rationale: hasMessages check may miss race conditions with orphaned thinking bubbles.
+        // performClearChat() is idempotent - safe to call even if already empty.
+        // Case 3: No messages - still clear UI to handle orphaned elements
+        performClearChat();
+      });
+    }
+    
+    // LLM-FIX-2026-01-13: Screenshot/paste button - shows instructions.
+    // Screen Capture API (getDisplayMedia) not viable in GAS iframe sandbox.
+    // Alternative workflow: OS screenshot tool → clipboard → Ctrl/Cmd+V paste.
+    $('#screenshotBtn').on('click', function() {
+      var isMac = (navigator.userAgentData ? navigator.userAgentData.platform : navigator.platform).toUpperCase().indexOf('MAC') >= 0;
+      var shortcut = isMac ? 'Cmd+V' : 'Ctrl+V';
+      showToast(`Take a screenshot, then press ${shortcut} to paste`, 'info');
+      // Focus the textarea for easy pasting
+      $('#messageInput').focus();
+    });
+    
+    // Attach button
+    $('#attachBtn').on('click', function() {
+      $('#fileInput').click();
+    });
+    
+    // Clear attachments button
+    $('#clearAttachmentsBtn').on('click', function() {
+      clearAllAttachments();
+    });
+    
+    // File input change handler with CRITICAL security fixes
+    $('#fileInput').on('change', function(e) {
+      const files = e.target.files;
+      if (!files || files.length === 0) {
+        return;
+      }
+      
+      console.log('[FileInput] Files selected:', files.length);
+      
+      // Process each file
+      Array.from(files).forEach(file => {
+        // CRITICAL-4: Check for duplicate files (including pending files)
+        if (isDuplicateFileEnhanced(file)) {
+          showToast(`File already attached or being processed: ${file.name}`, 'info');
+          return;
+        }
+        
+        // Validate file
+        const validation = validateFile(file);
+        if (!validation.valid) {
+          showToast(validation.error, 'error');
+          return;
+        }
+        
+        // Validate attachment limits
+        const limitsValidation = validateAttachmentLimits(file.size);
+        if (!limitsValidation.valid) {
+          showToast(limitsValidation.error, 'error');
+          return;
+        }
+        
+        // CRITICAL-4: Show loading state BEFORE starting FileReader
+        showFileLoading(file.name);
+        
+        // Read file as base64
+        const reader = new FileReader();
+        
+        reader.onload = function(e) {
+          try {
+            // CRITICAL-5: No need to store FileReader - garbage collector handles cleanup
+            
+            // Extract base64 data (remove data URL prefix)
+            const base64Data = e.target.result.split(',')[1];
+            
+            // Create attachment object
+            const attachment = {
+              name: file.name,
+              size: file.size,
+              mediaType: file.type,
+              data: base64Data,
+              timestamp: Date.now()
+            };
+            
+            // Add to attachments
+            addAttachment(attachment);
+            
+            console.log('[FileInput] File processed successfully:', file.name);
+          } catch (error) {
+            console.error('[FileInput] Error processing file:', error);
+            showToast(`Failed to process ${file.name}: ${error.message}`, 'error');
+            
+            // CRITICAL-4: Remove from pending set on error
+            pendingFiles.delete(file.name);
+            
+            // Remove loading chip
+            $(`.attachment-chip.loading[data-filename="${CSS.escape(file.name)}"]`).remove();
+          }
+        };
+        
+        reader.onerror = function(error) {
+          console.error('[FileInput] FileReader error:', error);
+          showToast(`Failed to read ${file.name}`, 'error');
+          
+          // CRITICAL-4: Remove from pending set on error
+          pendingFiles.delete(file.name);
+          
+          // Remove loading chip
+          $(`.attachment-chip.loading[data-filename="${CSS.escape(file.name)}"]`).remove();
+        };
+        
+        // Start reading
+        reader.readAsDataURL(file);
+      });
+      
+      // Clear file input so same file can be selected again
+      $(this).val('');
+    });
+
+    // ============================================================================
+    // PASTE-TO-ATTACH HANDLER
+    // ============================================================================
+
+    /**
+     * Generate filename for pasted images (clipboard images have no filename)
+     * @param {string} mediaType - MIME type (e.g., 'image/png')
+     * @returns {string} Generated filename with timestamp
+     */
+    function generatePastedFilename(mediaType) {
+      var ext = mediaType.split('/')[1] || 'png';
+      var timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      return `pasted-${timestamp}.${ext}`;
+    }
+
+    /**
+     * Process files for attachment (used by paste handler)
+     * @param {FileList|Array<File>} files - Files to process
+     */
+    function processFilesForAttachment(files) {
+      Array.from(files).forEach(function(file) {
+        // Generate filename for pasted images (they have no name)
+        var fileName = file.name || generatePastedFilename(file.type);
+
+        // Create a File-like object with the generated name for validation
+        var fileWithName = file.name ? file : new File([file], fileName, {type: file.type});
+
+        // Check for duplicate files (including pending)
+        if (isDuplicateFileEnhanced(fileWithName)) {
+          showToast(`File already attached or being processed: ${fileName}`, 'info');
+          return;
+        }
+
+        // Validate file type and size
+        var validation = validateFile(fileWithName);
+        if (!validation.valid) {
+          showToast(validation.error, 'error');
+          return;
+        }
+
+        // Validate attachment limits
+        var limitsValidation = validateAttachmentLimits(fileWithName.size);
+        if (!limitsValidation.valid) {
+          showToast(limitsValidation.error, 'error');
+          return;
+        }
+
+        // Show loading state
+        showFileLoading(fileName);
+
+        // Read file as base64
+        var reader = new FileReader();
+
+        reader.onload = function(e) {
+          try {
+            var base64Data = e.target.result.split(',')[1];
+
+            var attachment = {
+              name: fileName,
+              size: fileWithName.size,
+              mediaType: fileWithName.type,
+              data: base64Data,
+              timestamp: Date.now()
+            };
+
+            addAttachment(attachment);
+            console.log('[Paste] File processed successfully:', fileName);
+          } catch (error) {
+            console.error('[Paste] Error processing file:', error);
+            showToast(`Failed to process ${fileName}: ${error.message}`, 'error');
+            pendingFiles.delete(fileName);
+            $(`.attachment-chip.loading[data-filename="${CSS.escape(fileName)}"]`).remove();
+          }
+        };
+
+        reader.onerror = function() {
+          console.error('[Paste] FileReader error');
+          showToast(`Failed to read ${fileName}`, 'error');
+          pendingFiles.delete(fileName);
+          $(`.attachment-chip.loading[data-filename="${CSS.escape(fileName)}"]`).remove();
+        };
+
+        reader.readAsDataURL(fileWithName);
+      });
+    }
+
+    // LLM-FIX-2026-01-13: Paste handler for clipboard images - on both textarea and input container.
+    // Expanded from textarea-only to allow pasting after clicking camera button.
+    // Shows success toast when screenshot is added as attachment.
+    function handleImagePaste(e) {
+      var clipboardData = e.originalEvent.clipboardData;
+      if (!clipboardData || !clipboardData.files || clipboardData.files.length === 0) {
+        return; // No files - let normal paste behavior continue (text)
+      }
+
+      // Filter for image files only
+      var imageFiles = Array.from(clipboardData.files).filter(function(file) {
+        return file.type.startsWith('image/');
+      });
+
+      if (imageFiles.length > 0) {
+        e.preventDefault(); // Prevent pasting as text/data URL
+        console.log('[Paste] Processing', imageFiles.length, 'image(s) from clipboard');
+        processFilesForAttachment(imageFiles);
+        showToast('Screenshot added', 'success');
+      }
+      // If no images, let default paste behavior continue for text
+    }
+
+    // Bind paste handler to textarea (primary target)
+    $('#messageInput').on('paste', handleImagePaste);
+
+    // Also bind to input container for broader paste target (e.g., after camera click)
+    $('#inputContainer').on('paste', function(e) {
+      // Only handle if target is not the textarea (avoid double-handling)
+      if (!$(e.target).is('#messageInput')) {
+        handleImagePaste(e);
+      }
+    });
+
+    // Font size slider handler with live preview (input event fires while dragging)
+    $('#fontSizeSlider').on('input', function() {
+      var size = $(this).val();
+      $('#fontSizeValue').text(`${size}px`);
+      applyFontSize(size);
+      console.log('[FontSize] Live preview:', `${size}px`);
+    });
+
+    // Save font size when slider is released (change event fires on release)
+    $('#fontSizeSlider').on('change', function() {
+      var size = $(this).val();
+      saveFontSize(size);
+      console.log('[FontSize] Saved:', `${size}px`);
+    });
+
+    // ============================================================================
+    // GITHUB TOOLS BUTTON HANDLERS
+    // ============================================================================
+
+    // Sync GitHub Tools Now
+    $('#syncToolsBtn').on('click', function() {
+      var $btn = $(this);
+      $btn.prop('disabled', true).find('.material-icons').addClass('spinning');
+      
+      window.server.exec_api(null, 'sheets-chat/UISupport', 'syncGitHubTools')
+        .then(function(result) {
+          showToast('Tools synced successfully', 'success');
+        })
+        .catch(function(err) {
+          showToast(`Sync failed: ${err.message}`, 'error');
+        })
+        .finally(function() {
+          $btn.prop('disabled', false).find('.material-icons').removeClass('spinning');
+        });
+    });
+
+    // Invalidate & Reload Tools
+    $('#invalidateToolsBtn').on('click', function() {
+      var $btn = $(this);
+      $btn.prop('disabled', true).find('.material-icons').addClass('spinning');
+      
+      window.server.exec_api(null, 'sheets-chat/UISupport', 'invalidateAndReloadTools')
+        .then(function(result) {
+          showToast('Tools reloaded successfully', 'success');
+        })
+        .catch(function(err) {
+          showToast(`Reload failed: ${err.message}`, 'error');
+        })
+        .finally(function() {
+          $btn.prop('disabled', false).find('.material-icons').removeClass('spinning');
+        });
+    });
+
+    // (Auto-sync Enable/Disable replaced by toggle switch - see AUTO-SYNC TOGGLE section)
+
+    // ============================================================================
+    // JOURNAL CONTROLS
+    // ============================================================================
+
+    // Clean Up Now button - runs journal cleanup
+    $('#cleanupNowBtn').on('click', function() {
+      var $btn = $(this);
+      $btn.prop('disabled', true);
+      showToast('Running journal cleanup...', 'info');
+
+      window.server.exec_api(null, 'sheets-chat/UISupport', 'runJournalCleanup')
+        .then(function(result) {
+          if (result && result.deleted !== undefined) {
+            showToast(`Cleanup complete: ${result.deleted} old journal(s) removed`, 'success');
+          } else {
+            showToast('Journal cleanup complete', 'success');
+          }
+        })
+        .catch(function(err) {
+          showToast(`Cleanup failed: ${err.message}`, 'error');
+        })
+        .finally(function() {
+          $btn.prop('disabled', false);
+        });
+    });
+
+    // Browse button for journal folder (Config tab)
+    $('#browseFolderBtn').on('click', function() {
+      console.log('[Config] Browse folder button clicked');
+      if (typeof PickerManager !== 'undefined' && PickerManager.showPicker) {
+        PickerManager.showPicker();
+      } else {
+        showToast('Folder picker not available', 'error');
+      }
+    });
+
+    // ============================================================================
+    // API KEY REVEAL TOGGLE
+    // ============================================================================
+
+    $('#toggleApiKeyBtn').on('click', function() {
+      var $input = $('#apiKey');
+      var $icon = $(this).find('.material-icons');
+      if ($input.attr('type') === 'password') {
+        $input.attr('type', 'text');
+        $icon.text('visibility');
+      } else {
+        $input.attr('type', 'password');
+        $icon.text('visibility_off');
+      }
+    });
+
+    // ============================================================================
+    // THEME SELECTOR
+    // ============================================================================
+
+    // Theme segmented control
+    $('#themeSelector .segment').on('click', function() {
+      var $btn = $(this);
+      var theme = $btn.data('value');
+      $('#themeSelector .segment').removeClass('active');
+      $btn.addClass('active');
+
+      window.server.exec_api(null, 'sheets-chat/UISupport', 'setThemePreference', theme)
+        .then(function() {
+          showToast(`Theme set to ${theme}`, 'success');
+        })
+        .catch(function(err) {
+          showToast(`Failed to set theme: ${err.message}`, 'error');
+        });
+    });
+
+    // ============================================================================
+    // WIDTH SELECTOR
+    // ============================================================================
+
+    $('#widthSelector .segment').on('click', function() {
+      var $btn = $(this);
+      var width = parseInt($btn.data('value'), 10);
+      $('#widthSelector .segment').removeClass('active');
+      $btn.addClass('active');
+
+      window.server.exec_api(null, CONFIG.api.module, 'setSidebarWidth', width)
+        .then(function(result) {
+          if (result && result.success === false) {
+            showToast(`Failed to set width: ${result.error || 'unknown'}`, 'error');
+          } else {
+            showToast('Width saved — reopen sidebar to apply', 'success');
+          }
+        })
+        .catch(function(err) {
+          showToast(`Failed to set width: ${err.message}`, 'error');
+        });
+    });
+
+    // ============================================================================
+    // AUTO-OPEN SIDEBAR TOGGLE
+    // ============================================================================
+
+    $('#autoOpenSidebar').on('change', function() {
+      var checked = $(this).is(':checked');
+      window.server.exec_api(null, 'sheets-chat/UISupport', 'setUiConfig', { autoOpenSidebar: checked })
+        .then(function() {
+          showToast(checked ? 'Auto-open enabled' : 'Auto-open disabled', 'success');
+        })
+        .catch(function(err) {
+          showToast('Failed to save: ' + (err && err.message || 'unknown error'), 'error');
+        });
+    });
+
+    // ============================================================================
+    // RESPONSE NOTIFICATION TOGGLE
+    // ============================================================================
+
+    $('#responseNotifications').on('change', function() {
+      var checked = $(this).is(':checked');
+      window._notifEnabled = checked;
+      window.server.exec_api(null, 'sheets-chat/UISupport', 'setUiConfig', { responseNotifications: checked })
+        .then(function() {
+          showToast(checked ? 'Response notifications enabled' : 'Response notifications disabled', 'success');
+        })
+        .catch(function(err) {
+          console.error('[Notify] setUiConfig error:', err);
+        });
+    });
+
+    // ============================================================================
+    // AUTO-SYNC TOGGLE
+    // ============================================================================
+
+    // Auto-sync toggle switch
+    $('#autoSyncToggle').on('change', function() {
+      var enabled = $(this).is(':checked');
+      var action = enabled ? 'enableAutoSync' : 'disableAutoSync';
+
+      window.server.exec_api(null, 'sheets-chat/UISupport', action)
+        .then(function() {
+          $('#autoSyncStatus').text(enabled ? 'Enabled' : 'Disabled');
+          showToast(`Auto-sync ${enabled ? 'enabled' : 'disabled'}`, 'success');
+        })
+        .catch(function(err) {
+          // Revert toggle on failure
+          $('#autoSyncToggle').prop('checked', !enabled);
+          showToast(`Failed: ${err.message}`, 'error');
+        });
+    });
+
+    // Load notification preference on init (corrects window._notifEnabled from module-scope default)
+    loadAutoOpenSidebar();
+
+    // Load saved font size on init
+    loadSavedFontSize();
+
+    // Inject Analyze button into the toolbar (defined in SidebarAppUI)
+    if (typeof injectAnalyzeButton === 'function') {
+      injectAnalyzeButton();
+    }
+
+    // ============================================================================
+    // THINKING BLOCK EXPAND/COLLAPSE (EVENT DELEGATION)
+    // ============================================================================
+    // Delegated click handler for dynamically created thinking blocks.
+    // Toggles between collapsed/expanded using class pair.
+    $(document).on('click', '.all-thoughts-header', function(e) {
+      e.stopPropagation();
+
+      var $bubble = $(this).closest('.all-thoughts-bubble');
+      if (!$bubble.length) return;
+
+      if ($bubble.hasClass('expanded')) {
+        $bubble.removeClass('expanded').addClass('collapsed');
+      } else {
+        $bubble.removeClass('collapsed').addClass('expanded');
+      }
+      $bubble[0].offsetHeight; // Force reflow for CSS transition
+    });
+
+    // Track user scroll position for smart auto-scroll
+    $('#chatContainer').on('scroll', function() {
+      var $container = $(this);
+      var scrollBottom = $container[0].scrollHeight - $container.scrollTop() - $container.height();
+      userScrolledAway = scrollBottom > SCROLL_THRESHOLD;
+    });
+
+    // Load saved conversations into dropdown
+    loadConversationDropdown();
+
+    // Initialize send button state
+    updateSendButtonState();
+
+    // Request welcome message for fresh sessions (async, non-blocking)
+    requestWelcomeMessage();
+
+    // Start ambient polling for recommendations (every 15s)
+    initAmbientPolling();
+
+    // Log initialization complete
+    console.log('[SidebarApp] Initialization complete');
+    console.log('[SidebarApp] Message history enabled - Use ArrowUp/ArrowDown to navigate (max 100)');
+    console.log('[SidebarApp] Send button state management enabled');
+    console.log('[SidebarApp] Enter to send (Shift+Enter for new line)');
+    console.log('[SidebarApp] Conversation persistence enabled');
+    console.log('[SidebarApp] Paste-to-attach enabled - Cmd+V/Ctrl+V images in textarea');
+    console.log('[SidebarApp] Escape key cancels request during prompt execution');
+    console.log('[SidebarApp] All CRITICAL and HIGH fixes applied - v2025-10-31-picker-security-fixes');
+  });
+  } // End of initApp()

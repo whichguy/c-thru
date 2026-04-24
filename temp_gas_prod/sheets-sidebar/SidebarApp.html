@@ -1,0 +1,9 @@
+<script>
+<?!= include('sheets-sidebar/html/include/SidebarAppCore') ?>
+
+<?!= include('sheets-sidebar/html/include/SidebarAppUI') ?>
+
+<?!= include('sheets-sidebar/html/include/SidebarAppMessaging') ?>
+
+<?!= include('sheets-sidebar/html/include/SidebarAppInit') ?>
+</script>

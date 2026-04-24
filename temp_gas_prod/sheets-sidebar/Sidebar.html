@@ -1,0 +1,339 @@
+
+<!DOCTYPE html>
+<!--
+  SIDEBAR LOADING CHAIN
+  =====================
+  Entry point: Code.gs → showSidebar() → createTemplateFromFile('sheets-sidebar/Sidebar')
+  
+  This file includes:
+    CSS:  SidebarVariables → SidebarCore → SidebarBubbles → SidebarInput
+    JS:   gas_client (Promise wrapper for google.script.run)
+          SidebarApp → SidebarAppCore, SidebarAppUI, SidebarAppMessaging, SidebarAppInit
+  
+  SIDEBAR CSS ARCHITECTURE
+  ========================
+  CSS is split into 3 logical files for improved navigation and maintainability:
+  
+  1. SidebarCore.html (15.6KB, 702 lines)
+     - Foundation: Base styles, resets, header, buttons, containers
+     - Markdown Content: Code blocks, lists, headers, links, images
+     - Toast Notifications: Gemini-style success/error/info/warning toasts
+     - Accessibility: Focus indicators, reduced motion support
+  
+  2. SidebarBubbles.html (8.6KB, 344 lines) - HOT EDIT ZONE
+     - Message Bubbles: User, assistant, error message styling
+     - AI Thinking Bubbles: "Last Thinking" (pulsing) + "All Thoughts" (collapsible)
+     - Error Bubbles: Collapsible error display
+     - This file is edited most frequently (~50% of CSS edits)
+  
+  3. SidebarInput.html (13.9KB, 635 lines)
+     - Message Queue: Pending message chips (Gemini bubble style)
+     - Attachments: Thumbnail/PDF chips with remove buttons
+     - V2 Input Layout: Unified input box, button row, submit button
+     - Attach Buttons: Top-right micro icons with badges
+  
+  EDITING GUIDELINES:
+  - Use raw_write with fileType: "HTML" when editing CSS files
+  - Do NOT add CommonJS wrappers - these are HTML includes
+  - Maintain CSS cascade order: Core → Bubbles → Input
+  - Each file has warning header explaining its contents
+  
+  BENEFITS:
+  - 75% reduction in scroll distance for bubble edits
+  - Logical grouping improves code navigation
+  - Minimal overhead: +12ms server-side eval (negligible)
+  - Preserved git history for all styles
+-->
+<!-- Cache refresh: 2025-11-09 19:30 - Fixed jQuery race condition with waitForJQuery wrapper -->
+<html>
+<head>
+  <base target="_top">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
+  <script 
+    src="https://code.jquery.com/jquery-3.7.1.min.js"
+    integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo="
+    crossorigin="anonymous"></script>
+  <!-- Google APIs: No SRI - bootstrap loader dynamically loads other scripts, SRI would break functionality -->
+  <script src="https://apis.google.com/js/api.js"></script>
+  
+  <!-- Markdown and HTML sanitization libraries -->
+  <script 
+    src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"
+    integrity="sha256-8zoteDYr3gAWcOOimwH9DcFqf5GU0EKnda+JJwqzi3Q="
+    crossorigin="anonymous"></script>
+  <script
+    src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"
+    integrity="sha256-0kaYYq3qitkkVZpP/6uKTJwfTpqFNM6OHDbsaYzw9Uw="
+    crossorigin="anonymous"></script>
+
+  <!-- Syntax highlighting for code blocks -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css">
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+
+  <!-- Template Includes: CSS Split into 4 Logical Files -->
+  <!-- ⚠️ CSS INCLUDE ORDER - DO NOT CHANGE ⚠️ -->
+  <!-- Variables must load first (design tokens), then Core, Bubbles, Input -->
+  <!-- All  include()  scriptlets evaluate server-side and inject inline. -->
+  <!-- Note: These are HTML files, NOT CommonJS modules. -->
+  <!-- Cache refresh timestamp: 2026-01-13 UTC -->
+  <?!= include('sheets-sidebar/css/SidebarVariables') ?>
+  <?!= include('sheets-sidebar/css/SidebarCore') ?>
+  <?!= include('sheets-sidebar/css/SidebarBubbles') ?>
+  <?!= include('sheets-sidebar/css/SidebarInput') ?>
+</head>
+<body>
+  <div class="header">
+    <div class="tabs" role="tablist" aria-label="Main navigation">
+      <button class="tab active" data-tab="chat" role="tab" aria-selected="true" aria-controls="chatTab">Chat</button>
+      <button class="tab" data-tab="config" role="tab" aria-selected="false" aria-controls="configTab">Config</button>
+    </div>
+    <div class="header-actions">
+      <select id="conversationSelector" class="conversation-dropdown">
+        <option value="">Select conversation...</option>
+      </select>
+      <button class="icon-btn" id="viewJournalBtn" title="View conversation in Google Drive" style="display: none;">
+        <span class="material-icons">folder_open</span>
+      </button>
+      <button class="icon-btn" id="newChatBtn" title="New conversation">
+        <span class="material-icons">edit</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Chat Tab -->
+  <div class="tab-content active" id="chatTab" style="position: relative;">
+    <!-- Inline confirmation bar for New Chat -->
+    <div class="confirm-bar" id="confirmBar">
+      <div class="confirm-bar-message" id="confirmBarMessage">Start new conversation?</div>
+      <div class="confirm-bar-submessage" id="confirmBarSubmessage">Your current conversation is saved to Google Drive.</div>
+      <div class="confirm-bar-actions">
+        <button class="confirm-bar-btn cancel" id="confirmBarCancel">Cancel</button>
+        <button class="confirm-bar-btn confirm" id="confirmBarConfirm">New Chat</button>
+      </div>
+    </div>
+
+    <div class="chat-container" id="chatContainer"></div>
+
+    <div class="input-container" id="inputContainer">
+      <!-- Resize Handle -->
+      <div class="resize-handle" id="resizeHandle"></div>
+
+      <!-- Pending Queue (outside unified box) -->
+      <div class="pending-queue-container" id="pendingQueue"></div>
+
+      <!-- V2: Wrapper for input box and button row -->
+      <div class="v2-input-wrapper">
+        <!-- V2: Unified Gemini-style input box -->
+        <div class="v2-input-box" id="geminiInputBox">
+          <!-- Attachment chips INSIDE the box -->
+          <div class="attachment-chips" id="attachmentPreview"></div>
+
+          <!-- LLM-FIX-2026-01-13: Screenshot paste button - Screen Capture API not viable in GAS iframe sandbox.
+               Alternative: User takes screenshot with OS tool, pastes via Ctrl/Cmd+V.
+               Button shows instructions and focuses textarea for easy pasting. -->
+          <button class="attach-btn screenshot-btn" id="screenshotBtn" title="Paste screenshot (Ctrl/Cmd+V)" aria-label="Paste screenshot">
+            <span class="material-icons">photo_camera</span>
+          </button>
+          
+          <!-- Micro attach icon (top-right corner) with badge -->
+          <button class="attach-btn" id="attachBtn" title="Attach files" aria-label="Attach files">
+            <span class="material-icons">attach_file</span>
+            <span class="attachment-badge" id="attachmentBadge" style="display: none;">0</span>
+          </button>
+          
+          <!-- Clear attachments button (shows when attachments exist) -->
+          <button class="clear-attachments-btn" id="clearAttachmentsBtn" title="Clear all attachments" aria-label="Clear attachments" style="display: none;">
+            <span class="material-icons">close</span>
+          </button>
+
+          <!-- Textarea -->
+          <textarea
+            id="messageInput"
+            rows="1"
+            placeholder="Enter a prompt here"
+            aria-label="Enter your message"></textarea>
+        </div>
+
+        <!-- V2: Button row with status and submit button -->
+        <div class="v2-button-row">
+          <div class="v2-status-group" id="statusArea" role="status" aria-live="polite" style="display: none;">
+            <span id="statusText">Processing...</span>
+            <span class="status-spinner hidden" id="statusSpinner" aria-label="Processing"></span>
+          </div>
+          <button class="v2-cancel-btn" id="cancelBtn" style="display: none;" aria-label="Cancel request">
+            <span class="material-icons">close</span>
+          </button>
+          <button class="v2-submit-btn" id="sendBtn" disabled aria-label="Send message">
+            <span class="material-icons">arrow_upward</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Hidden file input for attach button -->
+      <input type="file" id="fileInput" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf" multiple hidden>
+    </div>
+  </div>
+
+  <!-- Config Tab -->
+  <div class="tab-content" id="configTab">
+    <div class="config-container">
+      <div class="config-section">
+        <h3>AI API Configuration</h3>
+        <form id="configForm">
+          <div class="form-group">
+            <!-- Hidden username field for accessibility compliance -->
+            <input type="text" id="username" autocomplete="username" style="display:none;" aria-hidden="true">
+            
+            <label for="apiKey">API Key</label>
+            <div style="position: relative;">
+              <input type="password" id="apiKey" placeholder="sk-ant-api03-..." autocomplete="new-password" style="padding-right: 36px;">
+              <button type="button" id="toggleApiKeyBtn" class="icon-btn" style="position: absolute; right: 4px; top: 50%; transform: translateY(-50%); min-width: 28px; height: 28px;" title="Show/hide API key">
+                <span class="material-icons" style="font-size: 16px;">visibility_off</span>
+              </button>
+            </div>
+            <div class="help-text">Your Anthropic API key. Get one at console.anthropic.com</div>
+          </div>
+          <div class="form-group">
+            <label for="modelName">Model</label>
+            <select id="modelName">
+              <option value="claude-sonnet-4-5" selected>Claude Sonnet 4.5</option>
+              <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
+              <option value="claude-opus-4-5">Claude Opus 4.5</option>
+            </select>
+            <div class="help-text">Select the Claude model to use for conversations</div>
+          </div>
+          
+          <h3 style="margin-top: 24px;">Display Settings</h3>
+          <div class="form-group">
+            <label for="fontSizeSlider">Font Size</label>
+            <div class="slider-container">
+              <input type="range"
+                     id="fontSizeSlider"
+                     min="8"
+                     max="16"
+                     value="10"
+                     step="1"
+                     class="font-slider">
+              <span id="fontSizeValue" class="slider-value">10px</span>
+            </div>
+            <div class="help-text">Adjust the font size for messages and UI elements</div>
+          </div>
+          <div class="form-group">
+            <label>Theme</label>
+            <div class="segmented-control" id="themeSelector">
+              <button type="button" class="segment" data-value="light">Light</button>
+              <button type="button" class="segment active" data-value="system">System</button>
+              <button type="button" class="segment" data-value="dark">Dark</button>
+            </div>
+            <div class="help-text">Choose light, dark, or follow your system preference</div>
+          </div>
+
+          <h3 style="margin-top: 24px;">Conversation Journal</h3>
+          <div class="form-group">
+            <label for="journalFolderUrl">Journal Folder (Optional)</label>
+            
+            <div style="display: flex; gap: 8px; align-items: stretch;">
+              <input type="text" 
+                     id="journalFolderUrl" 
+                     placeholder="Paste Drive URL or click Browse..."
+                     style="flex: 1;">
+              <button type="button" 
+                      id="browseFolderBtn" 
+                      class="secondary-btn"
+                      style="white-space: nowrap;">
+                📁 Browse
+              </button>
+            </div>
+            
+            <div class="help-text">
+              All conversations are saved to Google Drive. Choose a folder or leave empty to auto-create "Sheets Chat Conversations".
+            </div>
+            
+            <div id="folderStatus" style="margin-top: 8px;"></div>
+          </div>
+          
+          <div class="form-group">
+            <label>Auto-delete journals older than</label>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <input type="number" 
+                     id="journalRetentionDays" 
+                     min="0" 
+                     value="0"
+                     placeholder="0"
+                     style="width: 80px;">
+              <span>days</span>
+              <button type="button" 
+                      id="cleanupNowBtn" 
+                      class="secondary-btn"
+                      style="white-space: nowrap;">
+                Clean Up Now
+              </button>
+            </div>
+            <div class="help-text">Set to 0 to keep journals forever. Cleanup moves files to trash (recoverable).</div>
+          </div>
+          
+          <button type="button" class="primary" id="saveConfigBtn">Save Configuration</button>
+        </form>
+      </div>
+      
+      <!-- GitHub Tools Section -->
+      <div class="config-section">
+        <h3>GitHub Tools</h3>
+        <div class="form-group">
+          <label>Tool Synchronization</label>
+          <div class="button-group-vertical">
+            <button type="button" id="syncToolsBtn" class="secondary-btn">
+              <span class="material-icons">sync</span>
+              Sync GitHub Tools Now
+            </button>
+            <button type="button" id="invalidateToolsBtn" class="secondary-btn">
+              <span class="material-icons">refresh</span>
+              Invalidate & Reload Tools
+            </button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Auto-Sync</label>
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <label class="toggle-switch">
+              <input type="checkbox" id="autoSyncToggle">
+              <span class="toggle-slider"></span>
+            </label>
+            <span id="autoSyncStatus" class="help-text" style="margin-top: 0;">Checking...</span>
+          </div>
+          <div class="help-text">Periodically checks GitHub for tool updates (every 5 min)</div>
+        </div>
+      </div>
+      <div class="status" id="configStatus"></div>
+    </div>
+  </div>
+
+  <!-- Toast notification container -->
+  <div class="toast-container" id="toastContainer"></div>
+        
+
+  <!-- Web App Mode Detection -->
+  <!-- When loaded via iframe (staging/prod), these variables are set by SidebarDoGet.gs template -->
+  <!-- Dev mode: variables are undefined (falsy), sidebar runs in bound script context -->
+  <script>
+    window.GAS_CONTEXT = {
+      isWebAppMode: <?= isWebAppMode || false ?>,
+      ssid: <?!= JSON.stringify(ssid || '') ?>  // JSON.stringify for safe escaping
+    };
+    if (window.GAS_CONTEXT.isWebAppMode) {
+      console.log('[Sidebar] Running in web app mode, ssid=' + window.GAS_CONTEXT.ssid);
+    }
+  </script>
+
+  <!-- Template Include: gas_client -->
+  <!-- Promise-based wrapper for google.script.run API -->
+  <!-- MUST load before SidebarScript since SidebarScript uses window.server -->
+  <?!= include('common-js/html/gas_client') ?>
+
+  <!-- Template Include: SidebarApp (Modular JavaScript) -->
+  <!-- The include() scriptlet evaluates server-side and injects the contents inline. -->
+  <!-- SidebarApp.html includes 4 modular JS files: SidebarAppCore, SidebarAppUI, -->
+  <!-- SidebarAppMessaging, and SidebarAppInit. These are HTML files, NOT CommonJS modules. -->
+  <?!= include('sheets-sidebar/SidebarApp') ?>
+</body>
+</html>
