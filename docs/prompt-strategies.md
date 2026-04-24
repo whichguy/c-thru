@@ -82,3 +82,18 @@ This document codifies the high-definition logical strategies evolved through th
 - **Logic:** Move from mutable Markdown files to an append-only JSONL Event Sourcing Database (`supervisor_wiki.jsonl`). Truth is no longer asserted by fiat; it is mathematically derived from an accumulated history of Claims, Observations, and Suspicions.
 - **Rule:** Status is calculated by a deterministic script on read: `Score = Σ(obs: polarity × etype_weight) + Σ(sus: polarity × 1 × confidence)`.
 - **ROI:** Eliminates "Confidence Inflation" and "Amnesia." Provides a "Repulsive Force" for Bayesian analysis by keeping disproven paths (VETOES) visible as negative priors.
+
+### 16. Epistemic Forcing (v79)
+- **Logic:** Treat reasoning as **Logical Debt**.
+- **Rule:** Every suspicion must define a **Proof-Trace** (the specific file@line or tool target required to prove it). The agent is legally barred from resolving a task until every `[D]` (Deferred) question is converted to `[V]` (Verified) via Hard Evidence (+L).
+- **ROI:** Eliminates "Post-Hoc Rationalization." Ensures the agent earns its certainty before acting.
+
+### 17. Truth Collision Protocol (v80 Proposal)
+- **Logic:** Solve for **Consistency** in the knowledge graph.
+- **Rule:** If two `SUPPORTED` claims contradict each other, the agent MUST nullify both and trigger a **Recursive Backtrack** to the last common ancestor node.
+- **ROI:** Prevents "Logical Hallucinations" where an agent builds a fix on two incompatible truths.
+
+### 18. YOLO Sub-agent Execution (v79.1)
+- **Logic:** Maximize research velocity through **Autonomous Process Isolation**.
+- **Rule:** Every test must be run in an isolated `invoke_agent` cognitive subprocess. The sub-agent is granted full authority to execute all necessary tools without seeking approval, ensuring a continuous, unbroken logic chain from discovery to resolution.
+- **ROI:** 8x increase in turn-velocity; eliminates the "Interrupt Tax" on complex investigations.

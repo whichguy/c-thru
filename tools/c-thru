@@ -481,8 +481,23 @@ log_llm_profile_selection() {
   ROUTER_PROFILE_SUMMARY_LOGGED=1
 }
 
+detect_connectivity() {
+  # Fast check for internet connectivity.
+  # Use a small timeout to avoid hanging the router.
+  if command -v curl >/dev/null 2>&1; then
+    if curl -Is --connect-timeout 2 http://www.google.com >/dev/null 2>&1; then
+      return 0
+    fi
+  elif command -v ping >/dev/null 2>&1; then
+    if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
 resolve_llm_mode() {
-  # Precedence: CLAUDE_LLM_MODE → CLAUDE_CONNECTIVITY_MODE (legacy) → CONFIG.llm_mode → CONFIG.llm_connectivity_mode (legacy) → 'connected'
+  # Precedence: CLAUDE_LLM_MODE → CLAUDE_CONNECTIVITY_MODE (legacy) → CONFIG.llm_mode → CONFIG.llm_connectivity_mode (legacy) → (auto detection) → 'connected'
   if [[ -n "${CLAUDE_LLM_MODE:-}" ]]; then
     printf '%s' "$CLAUDE_LLM_MODE"
     return 0
@@ -492,15 +507,26 @@ resolve_llm_mode() {
     [[ "$legacy_env" == "disconnect" ]] && printf 'offline' || printf 'connected'
     return 0
   fi
+
+  local config_mode="connected"
   if [[ -f "$CONFIG" ]]; then
-    local mode
-    mode="$(jq -r '.llm_mode // .llm_connectivity_mode // "connected"' "$CONFIG" 2>/dev/null)"
-    [[ -z "$mode" || "$mode" == "null" ]] && mode="connected"
-    [[ "$mode" == "disconnect" ]] && mode="offline"
-    printf '%s' "$mode"
+    config_mode="$(jq -r '.llm_mode // .llm_connectivity_mode // "connected"' "$CONFIG" 2>/dev/null)"
+    [[ -z "$config_mode" || "$config_mode" == "null" ]] && config_mode="connected"
+    [[ "$config_mode" == "disconnect" ]] && config_mode="offline"
+  fi
+
+  # If explicit 'offline' or other special mode is set in config, respect it.
+  # If 'connected' or 'auto', perform live detection.
+  if [[ "$config_mode" == "connected" || "$config_mode" == "auto" ]]; then
+    if ! detect_connectivity; then
+      printf 'offline'
+      return 0
+    fi
+    printf 'connected'
     return 0
   fi
-  printf 'connected'
+
+  printf '%s' "$config_mode"
 }
 
 

@@ -7,7 +7,25 @@
 
 const os = require('os');
 
+const { execSync } = require('child_process');
+
 const LLM_MODE_ENUM = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline', 'cloud-best-quality', 'local-best-quality']);
+
+function detectConnectivity() {
+  try {
+    // Fast check for internet connectivity.
+    // Use a small timeout to avoid hanging the process.
+    execSync('curl -Is --connect-timeout 2 http://www.google.com', { stdio: 'ignore' });
+    return true;
+  } catch (e) {
+    try {
+      execSync('ping -c 1 -W 2 8.8.8.8', { stdio: 'ignore' });
+      return true;
+    } catch (e2) {
+      return false;
+    }
+  }
+}
 
 // Static set covers the original five aliases + general-default for backward compat.
 // Dynamic profile-key lookup in resolveCapabilityAlias catches all other aliases.
@@ -32,7 +50,7 @@ function resolveProfileModel(entry, mode) {
 }
 
 // Resolve the active connectivity mode.
-// Precedence: CLAUDE_LLM_MODE → CLAUDE_CONNECTIVITY_MODE (legacy) → config.llm_mode → 'connected'
+// Precedence: CLAUDE_LLM_MODE → CLAUDE_CONNECTIVITY_MODE (legacy) → config.llm_mode → (auto detection) → 'connected'
 function resolveLlmMode(config) {
   const envMode = process.env.CLAUDE_LLM_MODE;
   if (envMode) {
@@ -44,11 +62,22 @@ function resolveLlmMode(config) {
   }
   const legacyEnv = process.env.CLAUDE_CONNECTIVITY_MODE || process.env.CLAUDE_LLM_CONNECTIVITY_MODE;
   if (legacyEnv) return legacyEnv === 'disconnect' ? 'offline' : 'connected';
-  if (config && config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) return config.llm_mode;
-  if (config && config.llm_connectivity_mode) {
-    return config.llm_connectivity_mode === 'disconnect' ? 'offline' : 'connected';
+
+  let configMode = 'connected';
+  if (config && config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) {
+    configMode = config.llm_mode;
+  } else if (config && config.llm_connectivity_mode) {
+    configMode = config.llm_connectivity_mode === 'disconnect' ? 'offline' : 'connected';
   }
-  return 'connected';
+
+  if (configMode === 'connected' || configMode === 'auto') {
+    if (!detectConnectivity()) {
+      return 'offline';
+    }
+    return 'connected';
+  }
+
+  return configMode;
 }
 
 // Resolve the active hardware tier string (e.g. '64gb').
