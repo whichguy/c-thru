@@ -8,31 +8,23 @@ if (!fs.existsSync(srcDir)) fs.mkdirSync(srcDir, { recursive: true });
 
 function compilePrompt(filename) {
     const srcPath = path.join(srcDir, filename);
-    if (!fs.existsSync(srcPath)) {
-        console.error(`Source prompt not found: ${srcPath}`);
-        return;
-    }
+    if (!fs.existsSync(srcPath)) return;
 
     let content = fs.readFileSync(srcPath, 'utf8');
 
-    // 1. Generate DEBUG version (Full fidelity + Explicit Debug rules)
-    let debugContent = content;
-    fs.writeFileSync(path.join(distDir, filename.replace('.md', '-debug.md')), debugContent);
+    // 1. Generate DEBUG version (Full fidelity)
+    fs.writeFileSync(path.join(distDir, filename.replace('.md', '-debug.md')), content);
 
-    // 2. Generate PROD version (Strip debug blocks + Add strict constraints)
-    // Strip <debug_config> blocks
+    // 2. Generate PROD version (Maintain Thinking, Strip Configs)
     let prodContent = content.replace(/<debug_config>[\s\S]*?<\/debug_config>\n*/g, '');
     
-    // Add production-specific constraints to the end
-    prodContent += '\n\n# STRICT PRODUCTION CONSTRAINT\nDo NOT output <thinking>, <debug_signal>, or conversational prose. Output ONLY the <state> and Decision block to minimize token latency.';
+    // Rule: Mandate Svelte Thinking in PROD
+    prodContent += '\n\n# PRODUCTION CONSTRAINT\nKeep your <thinking> block under 150 tokens. Output ONLY <thinking> + <state> + Decision. No other prose.';
     
     fs.writeFileSync(path.join(distDir, filename), prodContent);
-    console.log(`Successfully compiled: ${filename} -> agents/${filename} (PROD) & agents/${filename.replace('.md', '-debug.md')} (DEBUG)`);
+    console.log(`Successfully compiled v59: ${filename}`);
 }
 
-// Automatically compile any .md files in the agents/src directory
 fs.readdirSync(srcDir).forEach(file => {
-    if (file.endsWith('.md')) {
-        compilePrompt(file);
-    }
+    if (file.endsWith('.md')) compilePrompt(file);
 });
