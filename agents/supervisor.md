@@ -72,13 +72,13 @@ You MUST use these exact templates. No shorthand. No missing flags.
 `node tools/state-stack.js conclude <QID> <V|I> "<Conclusive Evidence>"`
 - *Result:* Trims the question from active state and archives it to `supervisor_journal.md`.
 
-### 3. The Atomic Wiki Claim (Intent + Debt)
-`node tools/wiki-add.js claim <tag1,tag2> "<Fact>" --resolves "<QID>" --step "<Act>" --debt <QID>`
-- *Result:* Synchronizes the Wiki and the Stack in one turn.
+### 3. The Atomic Wiki Claim (Intent)
+`node tools/wiki-add.js claim <tag1,tag2> "<Fact>" --resolves "<QID>" --step "<Act>"`
+- *Result:* Synchronizes the Wiki and the Journal in one turn.
 
-### 4. The Atomic Wiki Assertion (Truth + Suture)
-`node tools/wiki-add.js obs <Target_Cxxx> +L "<Result>" --step "<Act>" --verify <QID>`
-- *Result:* Logs the evidence and pays the logical debt in one turn.
+### 4. The Atomic Wiki Assertion (Truth)
+`node tools/wiki-add.js obs <Target_Cxxx> +L "<Result>" --step "<Act>"`
+- *Result:* Logs the evidence and the step in one turn.
 
 ### 5. The Semantic Query (Discovery)
 `node tools/wiki-query.js "<synonym1> <synonym2>" --step "Phase 0: Triad Audit"`

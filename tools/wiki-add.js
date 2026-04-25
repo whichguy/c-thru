@@ -1,33 +1,14 @@
 #!/usr/bin/env node
 /**
- * wiki-add.js v2: Atomic Write Client
- * Uses lib-memory for unified logic.
+ * wiki-add.js v3: Sovereign Write Client
+ * Uses lib-memory. Stripped of volatile state management (now handled by state-stack.js).
  */
 const fs = require('fs');
-const { getContext, generateId, WIKI_FILE, JOURNAL_FILE, STATE_FILE } = require('./lib-memory');
-
-function updateStateMarker(qnId, marker) {
-    if (!fs.existsSync(STATE_FILE) || fs.readFileSync(STATE_FILE, 'utf8').trim() === "") {
-        fs.writeFileSync(STATE_FILE, "# Supervisor State\n\n## Active Backlog\n");
-    }
-    let content = fs.readFileSync(STATE_FILE, 'utf8');
-    const regex = new RegExp(`- \\[${qnId}\\]: \\[.[^\\]]*\\]`, 'g');
-    const replacement = `- [${qnId}]: [${marker}]`;
-    if (content.match(regex)) {
-        fs.writeFileSync(STATE_FILE, content.replace(regex, replacement));
-        return true;
-    } else {
-        fs.appendFileSync(STATE_FILE, `- [${qnId}]: [${marker}] Added via Atomic Stream\n`);
-        return true;
-    }
-}
+const { getContext, generateId, WIKI_FILE, JOURNAL_FILE } = require('./lib-memory');
 
 const args = process.argv.slice(2);
 let contextOverride = null;
 let resolvesText = null;
-let verifyQid = null;
-let debtQid = null;
-let killQid = null;
 let stepJournal = null;
 let taskJournal = null;
 const cleanArgs = [];
@@ -35,9 +16,6 @@ const cleanArgs = [];
 for (let i = 0; i < args.length; i++) {
     if (args[i] === '--context' && i + 1 < args.length) { contextOverride = args[i + 1]; i++; }
     else if (args[i] === '--resolves' && i + 1 < args.length) { resolvesText = args[i + 1]; i++; }
-    else if (args[i] === '--verify' && i + 1 < args.length) { verifyQid = args[i + 1]; i++; }
-    else if (args[i] === '--debt' && i + 1 < args.length) { debtQid = args[i + 1]; i++; }
-    else if (args[i] === '--kill' && i + 1 < args.length) { killQid = args[i + 1]; i++; }
     else if (args[i] === '--step' && i + 1 < args.length) { stepJournal = args[i + 1]; i++; }
     else if (args[i] === '--task' && i + 1 < args.length) { taskJournal = args[i + 1]; i++; }
     else { cleanArgs.push(args[i]); }
@@ -77,17 +55,14 @@ try {
         record.polarity = cleanArgs[2];
         record.source = cleanArgs[3];
         record.text = cleanArgs[4];
+    } else {
+        throw new Error("Invalid kind. Use: claim, obs, sus, or link.");
     }
 
     fs.appendFileSync(WIKI_FILE, JSON.stringify(record) + '\n');
     
-    let markerMsg = "";
-    if (verifyQid) { if (updateStateMarker(verifyQid, "V")) markerMsg = `|STATE:${verifyQid}➔V`; }
-    else if (debtQid) { if (updateStateMarker(debtQid, "D")) markerMsg = `|STATE:${debtQid}➔D`; }
-    else if (killQid) { if (updateStateMarker(killQid, "I")) markerMsg = `|STATE:${killQid}➔I`; }
-
     const target = record.supports ? record.supports[0] : record.id;
-    const breadcrumb = `[BC] ${target}|ADDED:${record.id}${markerMsg}`;
+    const breadcrumb = `[BC] ${target}|ADDED:${record.id}`;
     
     const ts = new Date().toISOString();
     if (taskJournal) fs.appendFileSync(JOURNAL_FILE, `* [${ts}] **TASK**: ${taskJournal}\n`);
