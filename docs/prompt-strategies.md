@@ -93,6 +93,11 @@ This document codifies the high-definition logical strategies evolved through th
 - **Rule:** If two `SUPPORTED` claims contradict each other, the agent MUST nullify both and trigger a **Recursive Backtrack** to the last common ancestor node.
 - **ROI:** Prevents "Logical Hallucinations" where an agent builds a fix on two incompatible truths.
 
+### 18. The Scientific Method (v83)
+- **Logic:** Unify the Zero-Shot guess with the Decomposition of proof.
+- **Rule:** Mandate a 3-step sequence: (1) The Root Shot (Hypothesis), (2) The Ablation (Alternative Theory), and (3) The Burden of Proof (Atomic Questions). Every question asked must be a direct requirement to prove the Shot.
+- **ROI:** 100% intentional discovery. Eliminates "Data Browsing" by forcing every tool call to be a surgical probe for a specific proof obligation.
+
 ### 18. YOLO Sub-agent Execution (v79.1)
 - **Logic:** Maximize research velocity through **Autonomous Process Isolation**.
 - **Rule:** Every test must be run in an isolated `invoke_agent` cognitive subprocess. The sub-agent is granted full authority to execute all necessary tools without seeking approval, ensuring a continuous, unbroken logic chain from discovery to resolution.

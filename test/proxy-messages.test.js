@@ -99,7 +99,7 @@ async function main() {
         'direct: x-c-thru-resolved-via absent (no capability alias)');
 
       // ANNOTATE_MODEL=1 → x-claude-proxy-served-by present
-      assert(r.headers['x-claude-proxy-served-by'] === CONCRETE_MODEL,
+      assert(r.headers['x-c-thru-served-by'] === CONCRETE_MODEL,
         `direct: x-claude-proxy-served-by === ${CONCRETE_MODEL}`);
 
       // Stub received the right model
@@ -124,7 +124,7 @@ async function main() {
       assert(via && via.capability === 'workhorse',
         `workhorse: x-c-thru-resolved-via.capability === workhorse (got ${via && via.capability})`);
 
-      assert(r.headers['x-claude-proxy-served-by'] === CONCRETE_MODEL,
+      assert(r.headers['x-c-thru-served-by'] === CONCRETE_MODEL,
         `workhorse: x-claude-proxy-served-by === ${CONCRETE_MODEL}`);
 
       assert(stub.lastRequest() && stub.lastRequest().model_used === CONCRETE_MODEL,

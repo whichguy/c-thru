@@ -1083,6 +1083,32 @@ function ollamaPs(backendUrl) {
   });
 }
 
+function pollOllamaWarmup(backendUrl, model, timeoutMs = 300000) {
+  const start = Date.now();
+  const pollInterval = 3000;
+  debugLog('ollama.poll.start', { model, backendUrl, timeoutMs });
+  return new Promise((resolve) => {
+    const check = async () => {
+      try {
+        const loaded = await ollamaPs(backendUrl);
+        if (loaded.some(m => m.name === model)) {
+          debugLog('ollama.poll.success', { model, elapsed: Date.now() - start });
+          return resolve(true);
+        }
+      } catch (e) {
+        debugLog('ollama.poll.error', { model, error: e.message });
+      }
+
+      if (Date.now() - start >= timeoutMs) {
+        debugLog('ollama.poll.timeout', { model, elapsed: Date.now() - start });
+        return resolve(false);
+      }
+      setTimeout(check, pollInterval);
+    };
+    check();
+  });
+}
+
 function ollamaPull(backendUrl, model) {
   const urlStr = _ollamaUrl(backendUrl, '/api/pull');
   return new Promise((resolve, reject) => {
@@ -2083,14 +2109,13 @@ function forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta =
 function forwardOllamaPassthrough(req, res, body, backend, effectiveModel, requestMeta = null) {
   const targetUrl = new URL(backend.url);
   const authKey = backend.auth_env ? process.env[backend.auth_env] : null;
-  const timeoutState = { upstreamResponse: null, fatalTimeoutTriggered: false };
   const streamUsage = createStreamUsageTracker();
   const responseChunks = [];
 
   // Replace model with the resolved terminal model
   const outBody = { ...body, model: effectiveModel || body.model };
-
   const bodyStr = JSON.stringify(outBody);
+
   const headers = {
     'content-type': 'application/json',
     'content-length': Buffer.byteLength(bodyStr),
@@ -2115,82 +2140,107 @@ function forwardOllamaPassthrough(req, res, body, backend, effectiveModel, reque
     headers,
   };
 
-  const up = lib.request(options, upRes => {
-    timeoutState.upstreamResponse = upRes;
-    const respHeaders = { ...upRes.headers };
-    if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-c-thru-served-by'] = effectiveModel;
-    addResolvedViaHeader(respHeaders, requestMeta);
-    if (upRes.statusCode !== 200) {
-      const errChunks = [];
-      upRes.on('data', c => errChunks.push(c));
-      upRes.on('end', () => {
-        finalizeTrackedUsage(requestMeta, { status_code: upRes.statusCode, input_tokens: 0, output_tokens: 0, stop_reason: 'error_response' });
-        if (!res.headersSent) {
-          res.writeHead(upRes.statusCode, respHeaders);
-          res.end(Buffer.concat(errChunks));
+  const attemptRequest = (isRetry = false) => {
+    const timeoutState = { upstreamResponse: null, fatalTimeoutTriggered: false };
+    const up = lib.request(options, upRes => {
+      timeoutState.upstreamResponse = upRes;
+      const respHeaders = { ...upRes.headers };
+      if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-c-thru-served-by'] = effectiveModel;
+      addResolvedViaHeader(respHeaders, requestMeta);
+      if (upRes.statusCode !== 200) {
+        const errChunks = [];
+        upRes.on('data', c => errChunks.push(c));
+        upRes.on('end', () => {
+          finalizeTrackedUsage(requestMeta, { status_code: upRes.statusCode, input_tokens: 0, output_tokens: 0, stop_reason: 'error_response' });
+          if (!res.headersSent) {
+            res.writeHead(upRes.statusCode, respHeaders);
+            res.end(Buffer.concat(errChunks));
+          }
+        });
+        return;
+      }
+      // Stream SSE through
+      res.writeHead(200, respHeaders);
+      upRes.on('data', chunk => {
+        const contentType = String(upRes.headers['content-type'] || '');
+        if (contentType.includes('text/event-stream')) {
+          noteStreamUsageChunk(streamUsage, chunk);
+        } else if (contentType.includes('application/json')) {
+          responseChunks.push(chunk);
         }
       });
-      return;
-    }
-    // Stream SSE through
-    res.writeHead(200, respHeaders);
-    upRes.on('data', chunk => {
-      const contentType = String(upRes.headers['content-type'] || '');
-      if (contentType.includes('text/event-stream')) {
-        noteStreamUsageChunk(streamUsage, chunk);
-      } else if (contentType.includes('application/json')) {
-        responseChunks.push(chunk);
-      }
-    });
-    upRes.on('end', () => {
-      const contentType = String(upRes.headers['content-type'] || '');
-      if (contentType.includes('text/event-stream')) {
-        finalizeTrackedUsage(requestMeta, {
-          status_code: upRes.statusCode,
-          input_tokens: streamUsage.input_tokens,
-          output_tokens: streamUsage.output_tokens,
-          stop_reason: streamUsage.stop_reason,
-        });
-      } else if (contentType.includes('application/json')) {
-        let parsed = null;
-        try { parsed = JSON.parse(Buffer.concat(responseChunks).toString('utf8')); } catch { parsed = null; }
-        const usage = usageFromJsonPayload(parsed);
-        finalizeTrackedUsage(requestMeta, {
-          status_code: upRes.statusCode,
-          input_tokens: usage.input_tokens,
-          output_tokens: usage.output_tokens,
-          stop_reason: usage.stop_reason,
-        });
-      } else {
-        finalizeTrackedUsage(requestMeta, { status_code: upRes.statusCode, input_tokens: 0, output_tokens: 0 });
-      }
+      upRes.on('end', () => {
+        const contentType = String(upRes.headers['content-type'] || '');
+        if (contentType.includes('text/event-stream')) {
+          finalizeTrackedUsage(requestMeta, {
+            status_code: upRes.statusCode,
+            input_tokens: streamUsage.input_tokens,
+            output_tokens: streamUsage.output_tokens,
+            stop_reason: streamUsage.stop_reason,
+          });
+        } else if (contentType.includes('application/json')) {
+          let parsed = null;
+          try { parsed = JSON.parse(Buffer.concat(responseChunks).toString('utf8')); } catch { parsed = null; }
+          const usage = usageFromJsonPayload(parsed);
+          finalizeTrackedUsage(requestMeta, {
+            status_code: upRes.statusCode,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            stop_reason: usage.stop_reason,
+          });
+        } else {
+          finalizeTrackedUsage(requestMeta, { status_code: upRes.statusCode, input_tokens: 0, output_tokens: 0 });
+        }
+      });
+
+      upRes.on('end', () => {
+        // Residency Pulse: Force model to stay loaded (1h) after main request finishes.
+        // We call ollamaLoad directly to bypass the debounce logic.
+        if (backend.kind === 'ollama') {
+          const numCtx = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
+          ollamaLoad(backend.url, effectiveModel || body.model, { numCtx, keepAlive: OLLAMA_WARM_KEEP_ALIVE }).catch(() => {});
+        }
+      });
+
+      upRes.pipe(res);
     });
 
-    upRes.on('end', () => {
-      // Residency Pulse: Force model to stay loaded (1h) after main request finishes.
-      // We call ollamaLoad directly to bypass the debounce logic.
-      if (backend.kind === 'ollama') {
+    attachFatalCallTimeout(up, res, targetUrl.origin, FATAL_CALL_TIMEOUT_MS, timeoutState);
+
+    up.on('error', async e => {
+      const isRetryable = isFatalCallTimeout(e) || e.code === 'ECONNRESET' || e.code === 'ETIMEDOUT';
+      if (!isRetry && isRetryable && isLocalOllamaBackend(effectiveModel || body.model, backend.url)) {
+        proxyLog('ollama.warmup.fallback', { model: effectiveModel || body.model, error: e.message });
+        console.error(`c-thru: connection failed while ${effectiveModel || body.model} is warming up — polling...`);
+        
+        // Single warmup trigger attempt before polling
         const numCtx = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
         ollamaLoad(backend.url, effectiveModel || body.model, { numCtx, keepAlive: OLLAMA_WARM_KEEP_ALIVE }).catch(() => {});
+
+        const ready = await pollOllamaWarmup(backend.url, effectiveModel || body.model);
+        if (ready) {
+          proxyLog('ollama.warmup.retry', { model: effectiveModel || body.model });
+          return attemptRequest(true);
+        }
+      }
+
+      finalizeTrackedUsage(requestMeta, { status_code: 502, input_tokens: 0, output_tokens: 0, stop_reason: 'proxy_error' });
+      if (!res.headersSent) {
+        if (isFatalCallTimeout(e)) {
+          send(res, 504, { error: formatFatalCallTimeout(targetUrl.origin, FATAL_CALL_TIMEOUT_MS) });
+        } else {
+          send(res, 502, { error: formatBackendError('ollama', targetUrl.origin, e) });
+        }
+      } else {
+        res.end();
       }
     });
 
-    upRes.pipe(res);
-  });
-  attachFatalCallTimeout(up, res, targetUrl.origin, FATAL_CALL_TIMEOUT_MS, timeoutState);
-  up.on('error', e => {
-    if (isFatalCallTimeout(e)) {
-      finalizeTrackedUsage(requestMeta, { status_code: 504, input_tokens: 0, output_tokens: 0, stop_reason: 'fatal_timeout' });
-      if (!res.headersSent) send(res, 504, { error: formatFatalCallTimeout(targetUrl.origin, FATAL_CALL_TIMEOUT_MS) });
-      else res.end();
-      return;
-    }
-    finalizeTrackedUsage(requestMeta, { status_code: 502, input_tokens: 0, output_tokens: 0, stop_reason: 'proxy_error' });
-    if (!res.headersSent) send(res, 502, { error: formatBackendError('ollama', targetUrl.origin, e) });
-    else res.end();
-  });
-  up.write(bodyStr);
-  up.end();
+    up.write(bodyStr);
+    up.end();
+  };
+
+  attemptRequest();
 }
 
 // ── Ollama /api/chat implementation ───────────────────────────────────
@@ -2199,7 +2249,6 @@ function forwardOllamaPassthrough(req, res, body, backend, effectiveModel, reque
 function forwardOllama(req, res, body, backend, effectiveModel, requestMeta = null) {
   const targetUrl = new URL(backend.url);
   const authKey = backend.auth_env ? process.env[backend.auth_env] : null;
-  const timeoutState = { upstreamResponse: null, fatalTimeoutTriggered: false };
   const streamUsage = createStreamUsageTracker();
 
   // Convert Anthropic messages to Ollama messages
@@ -2247,105 +2296,134 @@ function forwardOllama(req, res, body, backend, effectiveModel, requestMeta = nu
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
 
-  const up = lib.request(urlStr, {
-    method: 'POST',
-    headers,
-  }, upRes => {
-    timeoutState.upstreamResponse = upRes;
-    const respHeaders = { ...upRes.headers };
+  const attemptRequest = (isRetry = false) => {
+    const timeoutState = { upstreamResponse: null, fatalTimeoutTriggered: false };
+    const up = lib.request(urlStr, {
+      method: 'POST',
+      headers,
+    }, upRes => {
+      timeoutState.upstreamResponse = upRes;
+      const respHeaders = { ...upRes.headers };
 
-    // CRITICAL: We are transforming the body to Anthropic format, 
-    // so the upstream Content-Length is invalid. Delete it so 
-    // Node.js uses chunked encoding or calculates a new one.
-    delete respHeaders['content-length'];
+      // CRITICAL: We are transforming the body to Anthropic format, 
+      // so the upstream Content-Length is invalid. Delete it so 
+      // Node.js uses chunked encoding or calculates a new one.
+      delete respHeaders['content-length'];
 
-    if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-c-thru-served-by'] = effectiveModel;
-    addResolvedViaHeader(respHeaders, requestMeta);
+      if (ANNOTATE_MODEL && effectiveModel) respHeaders['x-c-thru-served-by'] = effectiveModel;
+      addResolvedViaHeader(respHeaders, requestMeta);
 
-    res.writeHead(upRes.statusCode, respHeaders);
+      res.writeHead(upRes.statusCode, respHeaders);
 
-    let buf = '';
-    upRes.on('data', chunk => {
-      if (body.stream) {
-        buf += chunk.toString('utf8');
-        let idx;
-        while ((idx = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, idx).trim();
-          buf = buf.slice(idx + 1);
-          if (!line) continue;
-          try {
-            const evt = JSON.parse(line);
-            if (evt.message && evt.message.content) {
-              const sse = {
-                type: 'content_block_delta',
-                index: 0,
-                delta: { type: 'text_delta', text: evt.message.content }
-              };
-              res.write(`data: ${JSON.stringify(sse)}\n\n`);
-            }
-            if (evt.done) {
-              const usage = {
-                input_tokens: evt.prompt_eval_count || 0,
-                output_tokens: evt.eval_count || 0
-              };
-              finalizeTrackedUsage(requestMeta, { status_code: 200, ...usage });
-              res.write(`data: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
-              res.write('data: [DONE]\n\n');
-            }
-          } catch {}
-        }
-      } else {
-        buf += chunk.toString('utf8');
-      }
-    });
-
-    upRes.on('end', () => {
-      if (!body.stream) {
-        try {
-          const full = JSON.parse(buf);
-          const responseText = full.message?.content || '';
-          const msgId = `ollama-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-          const anthroResp = {
-            id: msgId,
-            type: 'message',
-            role: 'assistant',
-            model: outBody.model,
-            content: [{ type: 'text', text: responseText }],
-            stop_reason: 'end_turn',
-            usage: {
-              input_tokens: full.prompt_eval_count || 0,
-              output_tokens: full.eval_count || 0
-            }
-          };
-          finalizeTrackedUsage(requestMeta, {
-            status_code: 200,
-            input_tokens: anthroResp.usage.input_tokens,
-            output_tokens: anthroResp.usage.output_tokens
-          });
-          if (!res.writableEnded) {
-            res.end(JSON.stringify(anthroResp));
+      let buf = '';
+      upRes.on('data', chunk => {
+        if (body.stream) {
+          buf += chunk.toString('utf8');
+          let idx;
+          while ((idx = buf.indexOf('\n')) !== -1) {
+            const line = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 1);
+            if (!line) continue;
+            try {
+              const evt = JSON.parse(line);
+              if (evt.message && evt.message.content) {
+                const sse = {
+                  type: 'content_block_delta',
+                  index: 0,
+                  delta: { type: 'text_delta', text: evt.message.content }
+                };
+                res.write(`data: ${JSON.stringify(sse)}\n\n`);
+              }
+              if (evt.done) {
+                const usage = {
+                  input_tokens: evt.prompt_eval_count || 0,
+                  output_tokens: evt.eval_count || 0
+                };
+                finalizeTrackedUsage(requestMeta, { status_code: 200, ...usage });
+                res.write(`data: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+                res.write('data: [DONE]\n\n');
+              }
+            } catch {}
           }
-        } catch (e) {
-          debugLog('proxy.ollama.parse_error', { error: e.message, body: buf });
-          if (!res.headersSent) send(res, 500, { error: 'failed to parse ollama response' });
-          else res.end();
+        } else {
+          buf += chunk.toString('utf8');
+        }
+      });
+
+      upRes.on('end', () => {
+        if (!body.stream) {
+          try {
+            const full = JSON.parse(buf);
+            const responseText = full.message?.content || '';
+            const msgId = `ollama-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            const anthroResp = {
+              id: msgId,
+              type: 'message',
+              role: 'assistant',
+              model: outBody.model,
+              content: [{ type: 'text', text: responseText }],
+              stop_reason: 'end_turn',
+              usage: {
+                input_tokens: full.prompt_eval_count || 0,
+                output_tokens: full.eval_count || 0
+              }
+            };
+            finalizeTrackedUsage(requestMeta, {
+              status_code: 200,
+              input_tokens: anthroResp.usage.input_tokens,
+              output_tokens: anthroResp.usage.output_tokens
+            });
+            if (!res.writableEnded) {
+              res.end(JSON.stringify(anthroResp));
+            }
+          } catch (e) {
+            debugLog('proxy.ollama.parse_error', { error: e.message, body: buf });
+            if (!res.headersSent) send(res, 500, { error: 'failed to parse ollama response' });
+            else res.end();
+          }
+        } else {
+          if (!res.writableEnded) res.end();
+        }
+        // Warm pulse (fire and forget)
+        ollamaLoad(backend.url, outBody.model).catch(() => {});
+      });
+    });
+
+    attachFatalCallTimeout(up, res, targetUrl.origin, FATAL_CALL_TIMEOUT_MS, timeoutState);
+
+    up.on('error', async e => {
+      const isRetryable = isFatalCallTimeout(e) || e.code === 'ECONNRESET' || e.code === 'ETIMEDOUT';
+      if (!isRetry && isRetryable && isLocalOllamaBackend(outBody.model, backend.url)) {
+        proxyLog('ollama.warmup.fallback', { model: outBody.model, error: e.message });
+        console.error(`c-thru: connection failed while ${outBody.model} is warming up — polling...`);
+        
+        // Single warmup trigger attempt before polling
+        ollamaLoad(backend.url, outBody.model).catch(() => {});
+
+        const ready = await pollOllamaWarmup(backend.url, outBody.model);
+        if (ready) {
+          proxyLog('ollama.warmup.retry', { model: outBody.model });
+          return attemptRequest(true);
+        }
+      }
+
+      finalizeTrackedUsage(requestMeta, { status_code: 502, input_tokens: 0, output_tokens: 0, stop_reason: 'proxy_error' });
+      if (!res.headersSent) {
+        if (isFatalCallTimeout(e)) {
+          send(res, 504, { error: formatFatalCallTimeout(targetUrl.origin, FATAL_CALL_TIMEOUT_MS) });
+        } else {
+          send(res, 502, { error: formatBackendError('ollama', targetUrl.origin, e) });
         }
       } else {
-        if (!res.writableEnded) res.end();
+        res.end();
       }
-      // Warm pulse (fire and forget)
-      ollamaLoad(backend.url, outBody.model).catch(() => {});
     });
-  });
 
-  attachFatalCallTimeout(up, res, targetUrl.origin, FATAL_CALL_TIMEOUT_MS, timeoutState);
-  up.on('error', e => {
-    finalizeTrackedUsage(requestMeta, { status_code: 502, input_tokens: 0, output_tokens: 0, stop_reason: 'proxy_error' });
-    if (!res.headersSent) send(res, 502, { error: formatBackendError('ollama', targetUrl.origin, e) });
-    else res.end();
-  });
-  up.write(bodyStr);
-  up.end();
+    up.write(bodyStr);
+    up.end();
+  };
+
+  attemptRequest();
 }
 // ── Request handler ───────────────────────────────────────────────────
 
