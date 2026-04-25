@@ -1104,6 +1104,12 @@ async function pollOllamaWarmup(backendUrl, model, timeoutMs = 300000) {
   }
 
   debugLog('ollama.poll.start', { model, backendUrl, timeoutMs });
+  console.error(`c-thru: connection failed while ${model} is warming up — polling...`);
+
+  // Single warmup trigger attempt
+  const numCtx = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
+  ollamaLoad(backendUrl, model, { numCtx, keepAlive: OLLAMA_WARM_KEEP_ALIVE }).catch(() => {});
+
   return new Promise((resolve) => {
     const check = async () => {
       try {
@@ -2197,15 +2203,9 @@ function forwardOllamaPassthrough(req, res, body, backend, effectiveModel, reque
     attachFatalCallTimeout(up, res, targetUrl.origin, FATAL_CALL_TIMEOUT_MS, timeoutState);
 
     up.on('error', async e => {
-      const isRetryable = isFatalCallTimeout(e) || e.code === 'ECONNRESET' || e.code === 'ETIMEDOUT';
+      const isRetryable = isFatalCallTimeout(e) || e.code === 'ECONNRESET' || e.code === 'ETIMEDOUT' || e.message === 'socket hang up';
       if (!isRetry && isRetryable && isLocalOllamaBackend(effectiveModel || body.model, backend.url)) {
         proxyLog('ollama.warmup.fallback', { model: effectiveModel || body.model, error: e.message });
-        console.error(`c-thru: connection failed while ${effectiveModel || body.model} is warming up — polling...`);
-        
-        // Single warmup trigger attempt before polling
-        const numCtx = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
-        ollamaLoad(backend.url, effectiveModel || body.model, { numCtx, keepAlive: OLLAMA_WARM_KEEP_ALIVE }).catch(() => {});
-
         const ready = await pollOllamaWarmup(backend.url, effectiveModel || body.model);
         if (ready) {
           proxyLog('ollama.warmup.retry', { model: effectiveModel || body.model });
@@ -2381,14 +2381,9 @@ function forwardOllama(req, res, body, backend, effectiveModel, requestMeta = nu
     attachFatalCallTimeout(up, res, targetUrl.origin, FATAL_CALL_TIMEOUT_MS, timeoutState);
 
     up.on('error', async e => {
-      const isRetryable = isFatalCallTimeout(e) || e.code === 'ECONNRESET' || e.code === 'ETIMEDOUT';
+      const isRetryable = isFatalCallTimeout(e) || e.code === 'ECONNRESET' || e.code === 'ETIMEDOUT' || e.message === 'socket hang up';
       if (!isRetry && isRetryable && isLocalOllamaBackend(outBody.model, backend.url)) {
         proxyLog('ollama.warmup.fallback', { model: outBody.model, error: e.message });
-        console.error(`c-thru: connection failed while ${outBody.model} is warming up — polling...`);
-        
-        // Single warmup trigger attempt before polling
-        ollamaLoad(backend.url, outBody.model).catch(() => {});
-
         const ready = await pollOllamaWarmup(backend.url, outBody.model);
         if (ready) {
           proxyLog('ollama.warmup.retry', { model: outBody.model });
