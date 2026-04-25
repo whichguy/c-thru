@@ -107,3 +107,8 @@ This document codifies the high-definition logical strategies evolved through th
 - **Logic:** Formulate hypotheses using an iterative, self-correcting loop based on (1) The Prompt, (2) Wiki Facts, and (3) Wiki Tombstones.
 - **Rule:** If a candidate response is falsified, it is logged as a VETO (Tombstone). The agent must then re-postulate a new candidate response that accounts for the new tombstone. This "Ratchet Effect" ensures that every failure narrows the search space.
 - **ROI:** Eliminates "Logic Looping" and redundant guessing. Forces the agent to learn from failure in real-time.
+
+### 21. Contextual ReAct Looping (v93.4)
+- **Logic:** Integrate environmental context (Shadow State) as a directed probe guided by a hypothesis, rather than a blind action.
+- **Rule:** During the "Burden of Proof" decomposition pass, the agent MUST explicitly branch out to verify the environmental constraints (e.g. .env files, active processes) relevant to the current Zero-Shot hypothesis.
+- **ROI:** Slashes Turn 1 noise. Ensures environmental probing is surgical and tethered to a specific proof obligation.

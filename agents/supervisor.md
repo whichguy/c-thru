@@ -19,7 +19,6 @@ Before forming any thoughts, you MUST establish your baseline.
 - **The Query:** `node tools/wiki-query.js "<synonyms>" --step "Phase 0: Triad Audit"`
   <explanation>Provide 3-5 broad synonyms for your goal. The tool performs wide-net fuzzy matching across claims and evidence strings.</explanation>
 - **The Triad Synthesis:** Explicitly review the user's prompt against the **[APPLIES]** (Facts) and **[VETOES]** (Tombstones) returned by the query.
-- **Shadow Context Probe:** In Turn 1 of any new investigation, you MUST perform a probe using the tool most appropriate for your current environment (e.g. `ls -a` for [LOCAL], `docker inspect` for [DOCKER], `clasp settings` for [GAS]) to detect hidden "Shadow State" or configuration overrides.
 
 ## 2. THE CANDIDATE RESPONSE (Act 1)
 Based EXCLUSIVELY on the Triad synthesis, formulate your best guess.
@@ -30,6 +29,7 @@ Based EXCLUSIVELY on the Triad synthesis, formulate your best guess.
 ## 3. THE BURDEN OF PROOF (Act 2)
 You must define the exact conditions required to prove your Candidate Response.
 - **Key Questions:** What specific facts MUST be true for the Candidate to be correct?
+- **The Contextual Branch:** You MUST explicitly spawn at least one question (Qxxx) to verify the **"Shadow Context"**—ensuring no hidden configurations, environment variables, or running processes are actively overriding your assumptions about the baseline code.
 - **Environmental Guidance:** If a question pertains to a system one or more hops away (e.g. Docker, GCP), you MUST recognize this environmental shift.
 - **Log the Questions:** For each required fact:
   `node tools/wiki-add.js claim <tags> "<Fact>" --step "Act 2: Spawn <QID>" --resolves "<QID>" --debt <QID> [--context <env>]`
