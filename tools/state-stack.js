@@ -1,13 +1,26 @@
 #!/usr/bin/env node
 /**
- * state-stack.js v2: LIFO Execution Stack Manager
- * Uses lib-memory for unified logic.
+ * state-stack.js v3: LIFO Execution Stack Manager (P/Q Nomenclature)
+ * P-Nodes (Pxxx): Root Postulations (Parent: NONE).
+ * Q-Nodes (Qxxx): Truthy Questions (Parent: anything else).
  */
 const fs = require('fs');
-const { generateId, STATE_FILE, JOURNAL_FILE } = require('./lib-memory');
+const { STATE_FILE, JOURNAL_FILE } = require('./lib-memory');
 
 const args = process.argv.slice(2);
 const command = args[0];
+
+function generateId(parentIsNone) {
+    const prefix = parentIsNone ? 'P' : 'Q';
+    const content = fs.existsSync(STATE_FILE) ? fs.readFileSync(STATE_FILE, 'utf8') : '';
+    const journal = fs.existsSync(JOURNAL_FILE) ? fs.readFileSync(JOURNAL_FILE, 'utf8') : '';
+    const combined = content + journal;
+    const regex = new RegExp(`\\[${prefix}(\\d{3})\\]`, 'g');
+    const matches = combined.match(regex);
+    if (!matches) return `${prefix}001`;
+    const nums = matches.map(m => parseInt(m.match(/\d+/)[0]));
+    return `${prefix}${String(Math.max(...nums) + 1).padStart(3, '0')}`;
+}
 
 function getActiveBlock() {
     if (!fs.existsSync(STATE_FILE)) return null;
@@ -24,7 +37,7 @@ try {
             const parentId = args[1] || 'NONE';
             const text = args[2];
             if (!text) throw new Error("Usage: push <parent_id> \"<text>\"");
-            const id = generateId('question');
+            const id = generateId(parentId === 'NONE');
             const block = `\n---\n[${id}]\nPARENT: ${parentId}\nTEXT: "${text}"\n---\n`;
             fs.appendFileSync(STATE_FILE, block);
             console.log(`[STACK] Pushed: ${id} | PARENT: ${parentId}`);
@@ -39,9 +52,8 @@ try {
             if (!fs.existsSync(STATE_FILE)) throw new Error("State file missing.");
             let content = fs.readFileSync(STATE_FILE, 'utf8');
             const blocks = content.split('---').filter(b => b.trim());
-            
             const targetIndex = blocks.findIndex(b => b.includes(`[${qid}]`));
-            if (targetIndex === -1) throw new Error(`Question ${qid} not found in active stack.`);
+            if (targetIndex === -1) throw new Error(`Node ${qid} not found in active stack.`);
             
             const targetBlock = blocks[targetIndex].trim();
             const parentMatch = targetBlock.match(/PARENT: (\w+)/);
@@ -49,20 +61,18 @@ try {
             const textMatch = targetBlock.match(/TEXT: "(.+)"/);
             const questionText = textMatch ? textMatch[1] : 'Unknown';
 
-            const journalEntry = `* [${new Date().toISOString()}] **CONCLUDED**: [${qid}] ${questionText} | STATUS: ${status} | EVIDENCE: ${evidence}\n`;
-            fs.appendFileSync(JOURNAL_FILE, journalEntry);
+            fs.appendFileSync(JOURNAL_FILE, `* [${new Date().toISOString()}] **CONCLUDED**: [${qid}] ${questionText} | STATUS: ${status} | EVIDENCE: ${evidence}\n`);
 
             const newBlocks = blocks.slice(0, targetIndex);
             fs.writeFileSync(STATE_FILE, newBlocks.length > 0 ? '\n---\n' + newBlocks.join('\n---\n') + '\n---\n' : '');
 
             console.log(`[STACK] Concluded: ${qid} | Popped to parent: ${parentIdRef}`);
-            if (status === 'I' && parentIdRef !== 'NONE') console.log(`[ABLATION] ABLATION_REQUIRED for parent: ${parentIdRef}`);
             break;
 
         case 'active':
             const active = getActiveBlock();
-            if (active) console.log("### ACTIVE QUESTION (Top of Stack)\n" + active);
-            else console.log("STACK EMPTY. Return to Root Shot.");
+            if (active) console.log("### ACTIVE NODE (Top of Stack)\n" + active);
+            else console.log("STACK EMPTY. Transition to [STATE 1].");
             break;
 
         default:

@@ -119,6 +119,7 @@ This document codifies the high-definition logical strategies evolved through th
 - **ROI:** Prevents "Logical Thinning" in deep investigations. Ensures every level of the recursive tree receives the same rigorous Bayesian treatment as the root prompt.
 
 ### 23. The Call Stack Architecture (v96)
-- **Logic:** Transform the volatile state file into a physical LIFO (Last-In, First-Out) Call Stack. Treat resolution as a "Pop + Archive" operation.
-- **Rule:** Use `tools/state-stack.js` to manage inquiries. Every question is pushed to the bottom of the state file. The agent always resolves the bottom-most (deepest) open node. Once concluded, the node is trimmed from active state and archived to a permanent Evidence Journal.
-- **ROI:** Slashes context window noise by 90% in complex tasks. Enforces a mathematically perfect Depth-First Search (DFS) while maintaining a high-fidelity historical record.
+- **Logic:** Transform the volatile state file into a physical LIFO (Last-In, First-Out) Call Stack. Treat every node as a **Truthy Proposition** (boolean condition) to enable mathematical verification.
+- **Rule:** Use `tools/state-stack.js` to manage inquiries. Every proposition is pushed to the bottom of the stack.
+- **Epistemic Routing:** If a proposition is falsified, the agent must perform **Horizontal Ablation** (Peer Injection) or **Vertical Ablation** (Assumption Lifting) before popping the stack. Concluded nodes are archived to a permanent Evidence Journal.
+- **ROI:** Slashes context window noise by 90%. Enforces a mathematically perfect Depth-First Search (DFS) with built-in non-monotonic recovery.
