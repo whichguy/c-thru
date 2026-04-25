@@ -19,15 +19,23 @@ function getContext() {
 }
 
 function updateStateMarker(qnId, marker) {
-    if (!fs.existsSync(STATE_FILE)) return;
+    // [v89.1 AUTO-INIT] Create state file if missing or empty
+    if (!fs.existsSync(STATE_FILE) || fs.readFileSync(STATE_FILE, 'utf8').trim() === "") {
+        fs.writeFileSync(STATE_FILE, "# Supervisor State\n\n## Active Backlog\n");
+    }
+    
     let content = fs.readFileSync(STATE_FILE, 'utf8');
     const regex = new RegExp(`- \\[${qnId}\\]: \\[.[^\\]]*\\]`, 'g');
     const replacement = `- [${qnId}]: [${marker}]`;
+    
     if (content.match(regex)) {
         fs.writeFileSync(STATE_FILE, content.replace(regex, replacement));
         return true;
+    } else {
+        // If question doesn't exist, append it to the backlog
+        fs.appendFileSync(STATE_FILE, `- [${qnId}]: [${marker}] Added via Atomic Stream\n`);
+        return true;
     }
-    return false;
 }
 
 function generateId(kind) {

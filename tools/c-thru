@@ -1006,7 +1006,7 @@ ensure_proxy_running() {
     fi
     ensure_proxy_log_parent_dir "$temp_log"
     ready_pipe="$CLAUDE_PROFILE_DIR/proxy.ready.$startup_tag.pipe"
-    ready_timeout="${CLAUDE_PROXY_READY_TIMEOUT_SECONDS:-5}"
+    ready_timeout="${CLAUDE_PROXY_READY_TIMEOUT_SECONDS:-45}"
     rm -f "$ready_pipe"
     mkfifo "$ready_pipe"
     CLAUDE_ROUTER_DEBUG="${CLAUDE_ROUTER_DEBUG:-}" \
@@ -2515,7 +2515,7 @@ cmd_restart() {
     "$proxy_js" >"$ready_pipe" 2>"$temp_log" &
     local new_pid="$!"
     disown "$new_pid" 2>/dev/null || true
-    local ready_timeout="${CLAUDE_PROXY_READY_TIMEOUT_SECONDS:-5}"
+    local ready_timeout="${CLAUDE_PROXY_READY_TIMEOUT_SECONDS:-45}"
     if IFS= read -r -t "$ready_timeout" ready_line <"$ready_pipe" && [[ "$ready_line" =~ ^READY\ ([0-9]+)$ ]]; then
       rm -f "$ready_pipe"
       local new_port="${BASH_REMATCH[1]}"
