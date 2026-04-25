@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * c-thru-step v1: The Process Ledger (Markdown v86)
+ * c-thru-step v2: The Atomic Event Logger
+ * Records discrete operational events on a single line.
  */
 const fs = require('fs');
 const { execSync } = require('child_process');
@@ -19,12 +20,23 @@ function getContext() {
     return context;
 }
 
-const text = process.argv.slice(2).join(' ');
+const args = process.argv.slice(2);
+let type = "STEP";
+let text = "";
+
+if (args[0] && args[0].startsWith('--')) {
+    type = args[0].substring(2).toUpperCase();
+    text = args.slice(1).join(' ');
+} else {
+    text = args.join(' ');
+}
+
 if (!text) {
-    console.error("Usage: node tools/c-thru-step.js \"<Decision text>\"");
+    console.error("Usage: node tools/c-thru-step.js [--type] \"<Event text>\"");
     process.exit(1);
 }
 
-// [v86 MARKDOWN JOURNALING]
-fs.appendFileSync(JOURNAL_FILE, `* [${new Date().toISOString()}] **STEP**: ${text}\n`);
-console.log(`[JOURNAL] Logged decision: ${text.substring(0, 50)}...`);
+// [v88 SINGLE-LINE ATOMIC LOGGING]
+const timestamp = new Date().toISOString();
+fs.appendFileSync(JOURNAL_FILE, `* [${timestamp}] **${type}**: ${text.replace(/\n/g, ' ')}\n`);
+console.log(`[JOURNAL] ${type}: ${text.substring(0, 60)}...`);
