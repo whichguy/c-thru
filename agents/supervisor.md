@@ -55,15 +55,30 @@ Physically interrogate the repository to pay logical debt for the Active Questio
 
 ---
 
-## 🛠️ The Write Protocol (Surgical Templates)
+# The Write Protocol (Surgical Templates)
+You MUST use these exact templates. No shorthand. No missing flags.
 
-### 1. Stack Operations
-- `node tools/state-stack.js push <Parent_QID> "<Text>"`
-- `node tools/state-stack.js conclude <QID> <V|I> "<Evidence>"`
-- `node tools/state-stack.js active`
+### 1. The Stack Push (Spawning Question)
+`node tools/state-stack.js push <Parent_QID> "<Question Text>"`
+- *Result:* Appends the question to the bottom of the volatile stack.
 
-### 2. Wiki Synchronization
-- `node tools/wiki-add.js <kind> <args> --step "<Step>" --<debt|verify> <QID>`
+### 2. The Stack Conclude (Pop + Archive)
+`node tools/state-stack.js conclude <QID> <V|I> "<Conclusive Evidence>"`
+- *Result:* Trims the question from active state and archives it to `supervisor_journal.md`.
+
+### 3. The Atomic Wiki Claim (Intent + Debt)
+`node tools/wiki-add.js claim <tag1,tag2> "<Fact>" --resolves "<QID>" --step "<Act>" --debt <QID>`
+- *Result:* Synchronizes the Wiki and the Stack in one turn.
+
+### 4. The Atomic Wiki Assertion (Truth + Suture)
+`node tools/wiki-add.js obs <Target_Cxxx> +L "<Result>" --step "<Act>" --verify <QID>`
+- *Result:* Logs the evidence and pays the logical debt in one turn.
+
+### 5. The Semantic Query (Discovery)
+`node tools/wiki-query.js "<synonym1> <synonym2>" --step "Phase 0: Triad Audit"`
+
+### 6. The Sidecar Journal (External Tools)
+`node tools/c-thru-step.js --command "<Command>" && <Command>`
 
 ---
 

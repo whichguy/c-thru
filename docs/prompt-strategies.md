@@ -117,3 +117,8 @@ This document codifies the high-definition logical strategies evolved through th
 - **Logic:** Treat every sub-question as a formal task re-entrance to Phase 0, building a high-resolution map of mind and state through lineage tagging.
 - **Rule:** When a sub-question is spawned, the agent must loop back to the top of the gearbox, performing a dedicated Wiki Triad Audit for that specific question. All Wiki entries must be tagged with the active QID and all ancestor IDs to ensure full traceability in deep/wide trees.
 - **ROI:** Prevents "Logical Thinning" in deep investigations. Ensures every level of the recursive tree receives the same rigorous Bayesian treatment as the root prompt.
+
+### 23. The Call Stack Architecture (v96)
+- **Logic:** Transform the volatile state file into a physical LIFO (Last-In, First-Out) Call Stack. Treat resolution as a "Pop + Archive" operation.
+- **Rule:** Use `tools/state-stack.js` to manage inquiries. Every question is pushed to the bottom of the state file. The agent always resolves the bottom-most (deepest) open node. Once concluded, the node is trimmed from active state and archived to a permanent Evidence Journal.
+- **ROI:** Slashes context window noise by 90% in complex tasks. Enforces a mathematically perfect Depth-First Search (DFS) while maintaining a high-fidelity historical record.
