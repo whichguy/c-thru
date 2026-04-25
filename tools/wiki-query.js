@@ -20,67 +20,23 @@ function contextMatches(recordContext, currentContext) {
     return true;
 }
 
-function levenshtein(a, b) {
-    if (a.length === 0) return b.length;
-    if (b.length === 0) return a.length;
-    const matrix = [];
-    for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
-    for (let j = 0; j <= a.length; j++) { matrix[0][j] = j; }
-    for (let i = 1; i <= b.length; i++) {
-        for (let j = 1; j <= a.length; j++) {
-            if (b.charAt(i - 1) === a.charAt(j - 1)) {
-                matrix[i][j] = matrix[i - 1][j - 1];
-            } else {
-                matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1,
-                    Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1)
-                );
-            }
-        }
-    }
-    return matrix[b.length][a.length];
-}
-
-function fuzzyMatch(queryTerms, text) {
-    if (!queryTerms || queryTerms.length === 0) return true;
-    if (!text) return false;
-    const t = text.toLowerCase();
-    
-    // Perform relaxed substring check first
-    for (const q of queryTerms) {
-        if (t.includes(q)) return true;
-    }
-
-    // Perform Levenshtein word-level check
-    const words = t.split(/\W+/);
-    for (const q of queryTerms) {
-        const maxDist = q.length <= 4 ? 1 : 2;
-        for (const word of words) {
-            if (Math.abs(word.length - q.length) > maxDist) continue;
-            if (levenshtein(q, word) <= maxDist) return true;
-        }
-    }
-    return false;
-}
-
 if (!fs.existsSync(WIKI_FILE)) {
     console.log("[BC] WIKI:EMPTY");
     process.exit(0);
 }
 
 const args = process.argv.slice(2);
-const queryTerms = [];
+let targetQuery = null;
 let verbose = false;
 
 for (let i = 0; i < args.length; i++) {
     if (args[i] === '--verbose' || args[i] === '-v') {
         verbose = true;
     } else if (args[i] === '--tag' && i + 1 < args.length) {
-        // Support both --tag "x y z" and positional "x y z"
-        args[i + 1].toLowerCase().split(/\s+/).forEach(t => queryTerms.push(t));
+        args[i + 1].toLowerCase().split(/\s+/).forEach(t => targetQuery = t); // Take last for now
         i++;
     } else if (!args[i].startsWith('--')) {
-        args[i].toLowerCase().split(/\s+/).forEach(t => queryTerms.push(t));
+        targetQuery = args[i].toLowerCase();
     }
 }
 
@@ -94,14 +50,18 @@ lines.forEach(line => {
     try {
         const obj = JSON.parse(line);
         if (!obj.id || !obj.kind) return;
-        if (obj.kind === 'claim') claims[obj.id] = { ...obj, score: 0, evidence: [], text: obj.text || "[[MISSING]]", tags: obj.tags || [], resolves: obj.resolves };
-        else events.push(obj);
+        if (obj.kind === 'claim') {
+            claims[obj.id] = { ...obj, score: 0, evidence: [], children: [] };
+        } else {
+            events.push(obj);
+        }
     } catch (e) {}
 });
 
 const weights = { 'live': 10, 'artifact': 6, 'doc': 3 };
 const SUSPICION_MULTIPLIER = 5.0;
 
+// Pass 1: Primary Evidence
 events.forEach(ev => {
     if (ev.kind === 'link') return;
     (ev.supports || []).forEach(id => {
@@ -114,13 +74,22 @@ events.forEach(ev => {
     });
 });
 
+// Pass 2: Causal Links & Graph Construction
 events.forEach(ev => {
     if (ev.kind !== 'link') return;
-    if (claims[ev.target] && claims[ev.source] && claims[ev.source].score >= 10) {
-        let contrib = 10;
-        if (ev.polarity === '-') contrib *= -1;
-        claims[ev.target].score += contrib;
-        claims[ev.target].evidence.push(ev);
+    const target = claims[ev.target];
+    const source = claims[ev.source];
+    if (target && source) {
+        // Record child relationship for tree rendering
+        source.isChild = true;
+        target.children.push(source.id);
+        
+        if (source.score >= 10) {
+            let contrib = 10;
+            if (ev.polarity === '-') contrib *= -1;
+            target.score += contrib;
+            target.evidence.push(ev);
+        }
     }
 });
 
@@ -133,47 +102,62 @@ function getLabel(score, evidenceCount) {
     return 'C';
 }
 
-const sections = { APPLIES: [], VETOES: [], CONJECTURES: [], OTHER: [] };
 const stats = { S: 0, T: 0, U: 0, D: 0, C: 0, '?': 0 };
 
-Object.values(claims).forEach(c => {
-    // Wide-Net Fuzzy search across tags, text, resolves intent, AND evidence strings
-    if (queryTerms.length > 0) {
-        const matchTags = c.tags.some(t => fuzzyMatch(queryTerms, t));
-        const matchText = fuzzyMatch(queryTerms, c.text);
-        const matchResolves = c.resolves ? fuzzyMatch(queryTerms, c.resolves) : false;
-        const matchEvidence = c.evidence.some(e => fuzzyMatch(queryTerms, e.text));
-        
-        if (!matchTags && !matchText && !matchResolves && !matchEvidence) return;
-    }
-
+function renderClaim(id, depth = 0) {
+    const c = claims[id];
+    if (!c) return "";
+    
     const applies = contextMatches(c.context, currentContext);
     const label = getLabel(c.score, c.evidence.length);
-    if (applies) stats[label]++;
-    
-    let entry = `[${c.id} ${label} ${c.score.toFixed(1)}] ${c.text}` + 
-                  (c.resolves ? `\n  Resolves: ${c.resolves}` : "");
-                  
-    // Evidence Compression logic: hide evidence for S/T claims unless verbose is requested
-    if (verbose || ['D', 'U', '?', 'C'].includes(label)) {
-        const evidenceLines = c.evidence.map(e => {
-            if (e.kind === 'link') return `  ${e.polarity === '+' ? '+' : '-'}link     "From ${e.source}: ${e.text || "No reason"}"`;
-            const type = e.kind === 'obs' ? e.etype : `sus (${(e.confidence * SUSPICION_MULTIPLIER).toFixed(1)})`;
-            return `  ${e.polarity === '+' ? '+' : '-'}${type.padEnd(8)} "${e.text || "No text"}"`;
-        });
-        if (evidenceLines.length > 0) entry += '\n' + evidenceLines.join('\n');
+    if (applies && depth === 0) stats[label]++;
+
+    // Tag/Query Filter
+    if (targetQuery && depth === 0) {
+        const match = c.tags.some(t => t.toLowerCase().includes(targetQuery)) || c.text.toLowerCase().includes(targetQuery);
+        if (!match) return "";
     }
 
-    if (!applies) sections.OTHER.push(entry);
-    else if (label === '?' || (label === 'C' && c.evidence.length === 1 && c.evidence[0].kind === 'sus')) sections.CONJECTURES.push(entry);
-    else if (label === 'D' || label === 'U') sections.VETOES.push(entry);
-    else sections.APPLIES.push(entry);
+    const indent = "  ".repeat(depth);
+    let output = `${indent}[${c.id} ${label} ${c.score.toFixed(1)}] ${c.text}`;
+    if (c.resolves) output += `\n${indent}  Resolves: ${c.resolves}`;
+    
+    if (verbose || ['D', 'U', '?', 'C'].includes(label)) {
+        c.evidence.forEach(e => {
+            const sym = e.polarity;
+            const type = e.kind === 'obs' ? e.etype : `sus (${(e.confidence * SUSPICION_MULTIPLIER).toFixed(1)})`;
+            output += `\n${indent}  ${sym}${type.padEnd(8)} "${e.text || ""}"`;
+        });
+    }
+
+    // Recursively render children
+    c.children.forEach(childId => {
+        const childOutput = renderClaim(childId, depth + 1);
+        if (childOutput) output += "\n" + childOutput;
+    });
+
+    return output;
+}
+
+const rootClaims = Object.keys(claims).filter(id => !claims[id].isChild);
+const outputGroups = { APPLIES: [], VETOES: [], CONJECTURES: [], OTHER: [] };
+
+rootClaims.forEach(id => {
+    const c = claims[id];
+    const applies = contextMatches(c.context, currentContext);
+    const label = getLabel(c.score, c.evidence.length);
+    const rendered = renderClaim(id);
+    if (!rendered) return;
+
+    if (!applies) outputGroups.OTHER.push(rendered);
+    else if (label === 'D' || label === 'U') outputGroups.VETOES.push(rendered);
+    else if (label === '?' || (label === 'C' && c.evidence.length === 1)) outputGroups.CONJECTURES.push(rendered);
+    else outputGroups.APPLIES.push(rendered);
 });
 
-// [SUM] Breadcrumb for the LLM header
-console.log(`[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T} U:${stats.U} D:${stats.D} C:${stats.C}${queryTerms.length > 0 ? `|Query:${queryTerms.join(',')}` : ''}\n`);
+console.log(`[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T} U:${stats.U} D:${stats.D} C:${stats.C}${targetQuery ? `|Q:${targetQuery}` : ''}\n`);
 
-if (sections.APPLIES.length) console.log("APPLIES (this env)\n" + sections.APPLIES.join('\n\n') + '\n');
-if (sections.VETOES.length) console.log("VETOES (disproven)\n" + sections.VETOES.join('\n\n') + '\n');
-if (sections.CONJECTURES.length) console.log("CONJECTURES\n" + sections.CONJECTURES.join('\n\n') + '\n');
-if (sections.OTHER.length) console.log("OTHER CONTEXTS\n" + sections.OTHER.join('\n\n'));
+if (outputGroups.APPLIES.length) console.log("APPLIES (this env)\n" + outputGroups.APPLIES.join('\n\n') + '\n');
+if (outputGroups.VETOES.length) console.log("VETOES (disproven)\n" + outputGroups.VETOES.join('\n\n') + '\n');
+if (outputGroups.CONJECTURES.length) console.log("CONJECTURES\n" + outputGroups.CONJECTURES.join('\n\n') + '\n');
+if (outputGroups.OTHER.length) console.log("OTHER CONTEXTS\n" + outputGroups.OTHER.join('\n\n'));

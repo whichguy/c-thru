@@ -4,6 +4,7 @@ const { execSync } = require('child_process');
 
 const WIKI_FILE = 'supervisor_wiki.jsonl';
 const CONTEXT_FILE = '.wiki-context.json';
+const STATE_FILE = 'supervisor_state.md';
 
 function getContext() {
     let context = {};
@@ -15,6 +16,18 @@ function getContext() {
         context.commit = execSync('git rev-parse --short HEAD').toString().trim();
     } catch (e) {}
     return context;
+}
+
+function updateStateMarker(qnId, marker) {
+    if (!fs.existsSync(STATE_FILE)) return;
+    let content = fs.readFileSync(STATE_FILE, 'utf8');
+    const regex = new RegExp(`- \\[${qnId}\\]: \\[.[^\\]]*\\]`, 'g');
+    const replacement = `- [${qnId}]: [${marker}]`;
+    if (content.match(regex)) {
+        fs.writeFileSync(STATE_FILE, content.replace(regex, replacement));
+        return true;
+    }
+    return false;
 }
 
 function generateId(kind) {
@@ -37,6 +50,9 @@ function generateId(kind) {
 const args = process.argv.slice(2);
 let contextOverride = null;
 let resolvesText = null;
+let verifyQid = null;
+let debtQid = null;
+let killQid = null;
 const cleanArgs = [];
 
 for (let i = 0; i < args.length; i++) {
@@ -44,6 +60,12 @@ for (let i = 0; i < args.length; i++) {
         contextOverride = args[i + 1]; i++;
     } else if (args[i] === '--resolves' && i + 1 < args.length) {
         resolvesText = args[i + 1]; i++;
+    } else if (args[i] === '--verify' && i + 1 < args.length) {
+        verifyQid = args[i + 1]; i++;
+    } else if (args[i] === '--debt' && i + 1 < args.length) {
+        debtQid = args[i + 1]; i++;
+    } else if (args[i] === '--kill' && i + 1 < args.length) {
+        killQid = args[i + 1]; i++;
     } else {
         cleanArgs.push(args[i]);
     }
@@ -87,9 +109,14 @@ try {
 
     fs.appendFileSync(WIKI_FILE, JSON.stringify(record) + '\n');
     
-    // [BREADCRUMB] Instant feedback for the LLM
+    // [ATOMIC SUTURE] Update state file if requested
+    let markerMsg = "";
+    if (verifyQid) { if (updateStateMarker(verifyQid, "V")) markerMsg = `|STATE:${verifyQid}➔V`; }
+    else if (debtQid) { if (updateStateMarker(debtQid, "D")) markerMsg = `|STATE:${debtQid}➔D`; }
+    else if (killQid) { if (updateStateMarker(killQid, "I")) markerMsg = `|STATE:${killQid}➔I`; }
+
     const target = record.supports ? record.supports[0] : record.id;
-    console.log(`[BC] ${target}|ADDED:${record.id}`);
+    console.log(`[BC] ${target}|ADDED:${record.id}${markerMsg}`);
 
 } catch (err) {
     console.error(`[ERR] ${err.message}`);
