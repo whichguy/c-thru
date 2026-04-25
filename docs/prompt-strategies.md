@@ -98,7 +98,12 @@ This document codifies the high-definition logical strategies evolved through th
 - **Rule:** Mandate a 3-step sequence: (1) The Root Shot (Hypothesis), (2) The Ablation (Alternative Theory), and (3) The Burden of Proof (Atomic Questions). Every question asked must be a direct requirement to prove the Shot.
 - **ROI:** 100% intentional discovery. Eliminates "Data Browsing" by forcing every tool call to be a surgical probe for a specific proof obligation.
 
-### 18. YOLO Sub-agent Execution (v79.1)
+### 19. YOLO Sub-agent Execution (v79.1)
 - **Logic:** Maximize research velocity through **Autonomous Process Isolation**.
 - **Rule:** Every test must be run in an isolated `invoke_agent` cognitive subprocess. The sub-agent is granted full authority to execute all necessary tools without seeking approval, ensuring a continuous, unbroken logic chain from discovery to resolution.
 - **ROI:** 8x increase in turn-velocity; eliminates the "Interrupt Tax" on complex investigations.
+
+### 20. The Epistemic Triad (v93)
+- **Logic:** Formulate hypotheses using an iterative, self-correcting loop based on (1) The Prompt, (2) Wiki Facts, and (3) Wiki Tombstones.
+- **Rule:** If a candidate response is falsified, it is logged as a VETO (Tombstone). The agent must then re-postulate a new candidate response that accounts for the new tombstone. This "Ratchet Effect" ensures that every failure narrows the search space.
+- **ROI:** Eliminates "Logic Looping" and redundant guessing. Forces the agent to learn from failure in real-time.
