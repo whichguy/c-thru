@@ -1,44 +1,13 @@
 #!/usr/bin/env node
+/**
+ * wiki-query.js v2: Surgical Read Engine
+ * Uses lib-memory for unified logic.
+ */
 const fs = require('fs');
-const path = require('path');
-
-const WIKI_FILE = process.env.WIKI_FILE || 'supervisor_wiki.jsonl';
-const JOURNAL_FILE = 'supervisor_journal.md';
-const CONTEXT_FILE = '.wiki-context.json';
-
-function getContext() {
-    if (fs.existsSync(CONTEXT_FILE)) {
-        try { return JSON.parse(fs.readFileSync(CONTEXT_FILE, 'utf8')); } catch (e) {}
-    }
-    return {};
-}
-
-function contextMatches(recordContext, currentContext) {
-    if (!recordContext || Object.keys(recordContext).length === 0) return { match: true, exact: true };
-    let exact = true;
-    for (const key in recordContext) {
-        if (currentContext[key] !== recordContext[key]) return { match: false, exact: false };
-    }
-    if (Object.keys(currentContext).length > Object.keys(recordContext).length) exact = false;
-    return { match: true, exact: exact };
-}
-
-function countTokens(text) {
-    if (!text) return 0;
-    const matches = text.match(/[\w]+|[^\s\w]|[\s]+/g);
-    return matches ? matches.length : 0;
-}
-
-function fuzzyMatch(queryTerms, text) {
-    if (!queryTerms || queryTerms.length === 0) return true;
-    if (!text) return false;
-    const t = text.toLowerCase();
-    for (const q of queryTerms) if (t.includes(q)) return true;
-    return false;
-}
+const { WIKI_FILE, JOURNAL_FILE, getContext, contextMatches, countTokens, fuzzyMatch } = require('./lib-memory');
 
 if (!fs.existsSync(WIKI_FILE)) {
-    console.log("[BC] WIKI:EMPTY|File:${WIKI_FILE}|Tokens:0");
+    console.log("[BC] WIKI:EMPTY|Tokens:0");
     process.exit(0);
 }
 
@@ -147,12 +116,11 @@ const outputGroups = { APPLIES: [], VETOES: [], CONJECTURES: [], OTHER: [] };
 rootClaims.forEach(id => {
     const rendered = renderClaim(id);
     if (!rendered) return;
-    const c = claims[id];
-    const label = getLabel(c.score, c.evidence.length);
-    const ctxResult = contextMatches(c.context, currentContext);
+    const ctxResult = contextMatches(claims[id].context, currentContext);
+    const label = getLabel(claims[id].score, claims[id].evidence.length);
     if (!ctxResult.match) outputGroups.OTHER.push(rendered);
     else if (label === 'D' || label === 'U') outputGroups.VETOES.push(rendered);
-    else if (label === '?' || (label === 'C' && c.evidence.length === 1)) outputGroups.CONJECTURES.push(rendered);
+    else if (label === '?' || (label === 'C' && claims[id].evidence.length === 1)) outputGroups.CONJECTURES.push(rendered);
     else outputGroups.APPLIES.push(rendered);
 });
 
@@ -163,7 +131,6 @@ if (outputGroups.VETOES.length) finalOutput += "### 🔴 VETOES\n" + outputGroup
 const tokenWeight = countTokens(finalOutput);
 const breadcrumb = `[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}`;
 
-// [v89 TRIPLE SUTURE JOURNALING]
 const ts = new Date().toISOString();
 if (stepJournal) fs.appendFileSync(JOURNAL_FILE, `* [${ts}] **STEP**: ${stepJournal}\n`);
 fs.appendFileSync(JOURNAL_FILE, `* [${ts}] **WIKI_QUERY**: ${queryTerms.join(',')} | ${breadcrumb}\n`);

@@ -22,7 +22,7 @@ function compilePrompt(filename) {
     prodContent += '\n\n# PRODUCTION CONSTRAINT\nFollow the THINKING_MODE rule strictly. If mode is RAW, emit ONLY the tool/decision result. Otherwise, keep <thinking> under 150 tokens.';
     
     fs.writeFileSync(path.join(distDir, filename), prodContent);
-    console.log(`Successfully compiled v96: ${filename}`);
+    console.log(`Successfully compiled v97: ${filename}`);
 }
 
 fs.readdirSync(srcDir).forEach(file => {

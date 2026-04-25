@@ -1,59 +1,25 @@
 #!/usr/bin/env node
+/**
+ * wiki-add.js v2: Atomic Write Client
+ * Uses lib-memory for unified logic.
+ */
 const fs = require('fs');
-const { execSync } = require('child_process');
-
-const WIKI_FILE = 'supervisor_wiki.jsonl';
-const JOURNAL_FILE = 'supervisor_journal.md';
-const CONTEXT_FILE = '.wiki-context.json';
-const STATE_FILE = 'supervisor_state.md';
-
-function getContext() {
-    let context = {};
-    if (fs.existsSync(CONTEXT_FILE)) {
-        try { context = JSON.parse(fs.readFileSync(CONTEXT_FILE, 'utf8')); } catch (e) {}
-    }
-    try {
-        context.branch = execSync('git rev-parse --abbrev-ref HEAD').toString().trim();
-    } catch (e) {}
-    return context;
-}
+const { getContext, generateId, WIKI_FILE, JOURNAL_FILE, STATE_FILE } = require('./lib-memory');
 
 function updateStateMarker(qnId, marker) {
-    // [v89.1 AUTO-INIT] Create state file if missing or empty
     if (!fs.existsSync(STATE_FILE) || fs.readFileSync(STATE_FILE, 'utf8').trim() === "") {
         fs.writeFileSync(STATE_FILE, "# Supervisor State\n\n## Active Backlog\n");
     }
-    
     let content = fs.readFileSync(STATE_FILE, 'utf8');
     const regex = new RegExp(`- \\[${qnId}\\]: \\[.[^\\]]*\\]`, 'g');
     const replacement = `- [${qnId}]: [${marker}]`;
-    
     if (content.match(regex)) {
         fs.writeFileSync(STATE_FILE, content.replace(regex, replacement));
         return true;
     } else {
-        // If question doesn't exist, append it to the backlog
         fs.appendFileSync(STATE_FILE, `- [${qnId}]: [${marker}] Added via Atomic Stream\n`);
         return true;
     }
-}
-
-function generateId(kind) {
-    const prefix = kind === 'step' ? 'S' : kind.toUpperCase().charAt(0);
-    if (!fs.existsSync(WIKI_FILE)) return `${prefix}001`;
-    const lines = fs.readFileSync(WIKI_FILE, 'utf8').trim().split('\n');
-    let max = 0;
-    lines.forEach(line => {
-        try {
-            if (!line.trim()) return;
-            const obj = JSON.parse(line);
-            if (obj.id && obj.id.startsWith(prefix)) {
-                const num = parseInt(obj.id.substring(1));
-                if (!isNaN(num) && num > max) max = num;
-            }
-        } catch (e) {}
-    });
-    return `${prefix}${String(max + 1).padStart(3, '0')}`;
 }
 
 const args = process.argv.slice(2);
@@ -123,7 +89,6 @@ try {
     const target = record.supports ? record.supports[0] : record.id;
     const breadcrumb = `[BC] ${target}|ADDED:${record.id}${markerMsg}`;
     
-    // [v89 TRIPLE SUTURE JOURNALING]
     const ts = new Date().toISOString();
     if (taskJournal) fs.appendFileSync(JOURNAL_FILE, `* [${ts}] **TASK**: ${taskJournal}\n`);
     if (stepJournal) fs.appendFileSync(JOURNAL_FILE, `* [${ts}] **STEP**: ${stepJournal}\n`);
