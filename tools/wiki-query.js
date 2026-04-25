@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const WIKI_FILE = process.env.WIKI_FILE || 'supervisor_wiki.jsonl';
+const JOURNAL_FILE = 'supervisor_journal.jsonl';
 const CONTEXT_FILE = '.wiki-context.json';
 
 function getContext() {
@@ -37,7 +38,7 @@ function fuzzyMatch(queryTerms, text) {
 }
 
 if (!fs.existsSync(WIKI_FILE)) {
-    console.log("[BC] WIKI:EMPTY|Tokens:0");
+    console.log("[BC] WIKI:EMPTY|File:${WIKI_FILE}|Tokens:0");
     process.exit(0);
 }
 
@@ -55,7 +56,6 @@ const lines = fs.readFileSync(WIKI_FILE, 'utf8').trim().split('\n');
 const currentContext = getContext();
 const claims = {};
 const events = [];
-const steps = [];
 
 lines.forEach(line => {
     if (!line.trim()) return;
@@ -63,7 +63,6 @@ lines.forEach(line => {
         const obj = JSON.parse(line);
         if (!obj.id || !obj.kind) return;
         if (obj.kind === 'claim') claims[obj.id] = { ...obj, score: 0, evidence: [], children: [] };
-        else if (obj.kind === 'step') steps.push(obj);
         else events.push(obj);
     } catch (e) {}
 });
@@ -118,7 +117,7 @@ function renderClaim(id, depth = 0) {
     if (ctxResult.match && depth === 0) stats[label]++;
     
     if (queryTerms.length > 0 && depth === 0) {
-        const match = (c.tags || []).some(t => fuzzyMatch(queryTerms, t)) || fuzzyMatch(queryTerms, c.text);
+        const match = (c.tags || []).some(t => fuzzyMatch(queryTerms, t)) || fuzzyMatch(queryTerms, c.text) || (c.resolves && fuzzyMatch(queryTerms, c.resolves)) || c.evidence.some(e => fuzzyMatch(queryTerms, e.text));
         if (!match) return "";
     }
 
@@ -128,8 +127,9 @@ function renderClaim(id, depth = 0) {
     const showEvidence = verbose || !ctxResult.exact || ['D', 'U', '?', 'C'].includes(label);
     if (showEvidence) {
         c.evidence.forEach(e => {
+            const sym = e.polarity;
             const type = e.kind === 'obs' ? e.etype : `sus (${(e.confidence * SUSPICION_MULTIPLIER).toFixed(1)})`;
-            output += `\n${indent}  ${e.polarity}${type}: ${e.text || ""}`;
+            output += `\n${indent}  ${sym}${type}: ${e.text || ""}`;
         });
     }
     c.children.forEach(childId => {
@@ -145,19 +145,30 @@ const outputGroups = { APPLIES: [], VETOES: [], CONJECTURES: [], OTHER: [] };
 rootClaims.forEach(id => {
     const rendered = renderClaim(id);
     if (!rendered) return;
-    const ctxResult = contextMatches(claims[id].context, currentContext);
-    const label = getLabel(claims[id].score, claims[id].evidence.length);
+    const c = claims[id];
+    const label = getLabel(c.score, c.evidence.length);
+    const ctxResult = contextMatches(c.context, currentContext);
     if (!ctxResult.match) outputGroups.OTHER.push(rendered);
     else if (label === 'D' || label === 'U') outputGroups.VETOES.push(rendered);
-    else if (label === '?' || (label === 'C' && claims[id].evidence.length === 1)) outputGroups.CONJECTURES.push(rendered);
+    else if (label === '?' || (label === 'C' && c.evidence.length === 1)) outputGroups.CONJECTURES.push(rendered);
     else outputGroups.APPLIES.push(rendered);
 });
 
 let finalOutput = "";
-if (steps.length) finalOutput += "### 🕒 COGNITIVE TIMELINE\n" + steps.slice(-5).map(s => `* [${s.timestamp.split('T')[1].split('.')[0]}] ${s.text}`).join('\n') + '\n\n';
 if (outputGroups.APPLIES.length) finalOutput += "### 🟢 APPLIES\n" + outputGroups.APPLIES.join('\n\n') + '\n\n';
 if (outputGroups.VETOES.length) finalOutput += "### 🔴 VETOES\n" + outputGroups.VETOES.join('\n\n') + '\n\n';
+if (outputGroups.CONJECTURES.length) finalOutput += "### 🟡 CONJECTURES\n" + outputGroups.CONJECTURES.join('\n\n') + '\n\n';
+if (outputGroups.OTHER.length) finalOutput += "### ⚪ OTHER CONTEXTS\n" + outputGroups.OTHER.join('\n\n');
 
 const tokenWeight = countTokens(finalOutput);
-process.stdout.write(`[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}\n\n`);
+const breadcrumb = `[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}`;
+
+// [v85.1 FULL-DUPLEX MIRRORING]
+fs.appendFileSync(JOURNAL_FILE, JSON.stringify({
+    timestamp: new Date().toISOString(),
+    context: currentContext,
+    decision: `WIKI_QUERY: ${queryTerms.join(',')} | BREADCRUMB: ${breadcrumb} | RESULT_LEN: ${finalOutput.length}`
+}) + '\n');
+
+process.stdout.write(breadcrumb + '\n\n');
 process.stdout.write(finalOutput);
