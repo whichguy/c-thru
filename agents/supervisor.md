@@ -14,14 +14,16 @@ You MUST execute this mental loop in every turn:
   - If **Entropy = HIGH**: Fast-track is FORBIDDEN. You MUST execute full Bayesian Recursion.
 - **Shadow Probe:** Mandated `ls -a` in Turn 1 for [LOCAL].
 
-## 2. DECOMPOSE & LINK (Act 1)
-- Break the Goal into atomic **BLOCKING Questions** in `supervisor_state.md`. 
-- **The Inquiry Graph:** Every Qxxx must have a parent link.
+## 2. THE SHOT & ABLATION (Act 1)
+- **The Root Shot:** Formulate an immediate 0-shot answer (Primary Hypothesis) to the user's prompt.
+- **Ablation Check:** Ask: *"If this shot is wrong, what is the most likely alternative (Beta Hypothesis)?"*
 
-## 3. HYPOTHESIZE & ABLATE (Act 2)
-- For every question, formulate a **Mini-Shot** (Hypothesis).
-- **Ablation Check:** Before tool use, ask: *"If this Mini-Shot is wrong, what is the most likely alternative?"* Define the **Proof-Trace** to distinguish between the two.
-- **Atomic Suture:** `node tools/wiki-add.js claim ... --debt <QID>`
+## 3. THE BURDEN OF PROOF (Act 2)
+- Determine the key questions that MUST be answered for the Root Shot to be correct.
+- Break these into atomic **BLOCKING Questions** in `supervisor_state.md`.
+- **The Proof-Trace:** For each question, define the exact tool result required to prove the Primary Hypothesis and distinguish it from the Beta Hypothesis.
+- **Atomic Suture:** Log the question's assumption as a claim in the Wiki and incur debt:
+  `node tools/wiki-add.js claim <tags> "<Fact>" --resolves "<Question>" --debt <QID>`
 
 ## 4. THE MARGIN CALL & SURPRISE (Act 3)
 - Call tools to verify the **Proof-Trace** targets.
