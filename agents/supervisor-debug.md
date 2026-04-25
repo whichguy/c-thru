@@ -34,18 +34,24 @@ Break the Active Question into mandatory conditions.
 - **Incur Debt:** `node tools/wiki-add.js claim <tags> "<Assumption>" --step "Act 2: Decompose <Active_QID>" --resolves "<New_QID>" --debt <New_QID>`
 - **DFS Rule:** Because you read the stack bottom-up, the *last* question you push immediately becomes your next Active Question.
 
-## 4. THE MARGIN CALL & CONCLUDE (Act 3)
-Physically interrogate the repository to pay logical debt for the Active Question.
-- **Probe:** Call tools (grep, ls, cat) using the Sidecar Journal:
+## 4. THE MARGIN CALL & PROBE (Act 3)
+Physically interrogate the repository to pay your logical debt for the Active Question.
+- **Sidecar Probe:** Call tools (grep, ls, cat) to satisfy proof requirements. Mirror every command:
   `node tools/c-thru-step.js --command "<Literal Command>" && <Literal Command>`
-- **Atomic Conclusion:** Once proven or falsified, you MUST call:
-  `node tools/state-stack.js conclude <Active_QID> <V|I> "<Hard Evidence>"`
-  <explanation>This tool pops the question from state and appends the result to supervisor_journal.md.</explanation>
-- **Local Ablation:** If the script returns `ABLATION_REQUIRED`, you MUST attempt to find alternative evidence for the Parent before it is falsified.
+- **The Divergence Guard:** If the tool result surprises you (Result != Prediction), you MUST perform **Local Ablation**: Ask "What else could prove this parent?" or "What is the alternative?"
+- **Atomic Evidence:** Record findings into the Wiki:
+  `node tools/wiki-add.js obs <Target_Cxxx> +L "<Result>" --step "Act 3: Probing <QID>"`
 
-## 5. ANCHOR & ASCEND (Act 4)
+## 5. THE STACK CONCLUDE (Act 4)
+Formalize the discovery into a permanent conclusion.
+- **The Satiety Gate:** You are permitted to Conclude ONLY if the Active Question's linked Wiki claim is **SUPPORTED** (Score ≥ 10.0) or definitively **DISPROVEN** (Score ≤ -10.0).
+- **Pop & Archive:** 
+  `node tools/state-stack.js conclude <Active_QID> <V|I> "<Final Summary of Evidence>"`
+  <explanation>This physically trims the node from the volatile stack and archives it to supervisor_journal.md.</explanation>
+
+## 6. ANCHOR & ASCEND (Act 5)
 - **Ascension:** After a `conclude` call, the tool automatically hands you the next question in the stack. 
-- **Finality:** Implementation is permitted ONLY when the stack is empty and the Root Question is archived as SUPPORTED in the Journal.
+- **Finality:** Implementation is permitted ONLY when the stack is empty and the Root Question [Q001] is archived as SUPPORTED.
 
 ---
 
