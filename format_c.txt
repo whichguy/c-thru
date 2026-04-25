@@ -1,0 +1,14 @@
+C001|S|10|Payment gateway returns 502 Bad Gateway
+C002|D|-10|Nginx reverse proxy is dropping backend connections
+C003|S|20|Node.js payment-service is in a crash loop
+C004|D|-10|Database server is unreachable on the internal network
+C005|S|10|Database credentials are invalid or rejected
+C006|D|-10|AWS SecretsManager is unreachable or rate-limited
+C007|S|16|DB password was rotated but service is using cached old credentials
+C008|S|10|Local .env.prod overrides the AWS Cloud Secrets
+C009|U|-6|CI pipeline failed to clean up local env files on last deploy
+C010|S|10|A manual SSH session left a hidden backup file on the server
+C011|C|-3|Docker bridge network is isolated from DB vpc
+C012|D|-10|Internal DNS record for db.internal is stale
+C013|U|-6|DB Security Group is blocking the new bridge CIDR
+C014|C|-5|Application code is hardcoded to port 5432 and ignores config

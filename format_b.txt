@@ -1,0 +1,16 @@
+### APPLIES
+* **C001** (S:10) Payment gateway returns 502 Bad Gateway
+  ? Why is checkout failing for all users?
+* **C003** (S:20) Node.js payment-service is in a crash loop
+  ? Is the backend stable?
+* **C005** (S:10) Database credentials are invalid or rejected
+  ? Are the DB secrets correct?
+* **C007** (S:16) DB password was rotated but service is using cached old credentials
+  ? Why are valid secrets failing?
+* **C008** (S:10) Local .env.prod overrides the AWS Cloud Secrets
+  ? Where are the secrets coming from?
+* **C010** (S:10) A manual SSH session left a hidden backup file on the server
+* **C011** (C:-3) Docker bridge network is isolated from DB vpc
+  -sus: Other containers on same bridge reach DB fine
+* **C014** (C:-5) Application code is hardcoded to port 5432 and ignores config
+  -sus: I checked the code earlier, it definitely uses ConfigManager
