@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const WIKI_FILE = 'supervisor_wiki.jsonl';
+const WIKI_FILE = process.env.WIKI_FILE || 'supervisor_wiki.jsonl';
 const CONTEXT_FILE = '.wiki-context.json';
 
 function getContext() {
@@ -13,55 +13,22 @@ function getContext() {
 }
 
 function contextMatches(recordContext, currentContext) {
-    if (!recordContext || Object.keys(recordContext).length === 0) return true;
+    if (!recordContext || Object.keys(recordContext).length === 0) return { match: true, exact: true };
+    let exact = true;
     for (const key in recordContext) {
-        if (currentContext[key] && recordContext[key] !== currentContext[key]) return false;
+        if (currentContext[key] !== recordContext[key]) {
+            return { match: false, exact: false };
+        }
     }
-    return true;
+    // Check if currentContext has extra specific tags the record doesn't have
+    if (Object.keys(currentContext).length > Object.keys(recordContext).length) exact = false;
+    return { match: true, exact: exact };
 }
 
-// BPE-lite Heuristic for Exact Token Measurement
 function countTokens(text) {
     if (!text) return 0;
     const matches = text.match(/[\w]+|[^\s\w]|[\s]+/g);
     return matches ? matches.length : 0;
-}
-
-function levenshtein(a, b) {
-    if (a.length === 0) return b.length;
-    if (b.length === 0) return a.length;
-    const matrix = [];
-    for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
-    for (let j = 0; j <= a.length; j++) { matrix[0][j] = j; }
-    for (let i = 1; i <= b.length; i++) {
-        for (let j = 1; j <= a.length; j++) {
-            if (b.charAt(i - 1) === a.charAt(j - 1)) {
-                matrix[i][j] = matrix[i - 1][j - 1];
-            } else {
-                matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1,
-                    Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1)
-                );
-            }
-        }
-    }
-    return matrix[b.length][a.length];
-}
-
-function fuzzyMatch(queryTerms, text) {
-    if (!queryTerms || queryTerms.length === 0) return true;
-    if (!text) return false;
-    const t = text.toLowerCase();
-    for (const q of queryTerms) { if (t.includes(q)) return true; }
-    const words = t.split(/\W+/);
-    for (const q of queryTerms) {
-        const maxDist = q.length <= 4 ? 1 : 2;
-        for (const word of words) {
-            if (Math.abs(word.length - q.length) > maxDist) continue;
-            if (levenshtein(q, word) <= maxDist) return true;
-        }
-    }
-    return false;
 }
 
 if (!fs.existsSync(WIKI_FILE)) {
@@ -75,12 +42,8 @@ let verbose = false;
 
 for (let i = 0; i < args.length; i++) {
     if (args[i] === '--verbose' || args[i] === '-v') verbose = true;
-    else if (args[i] === '--tag' && i + 1 < args.length) {
-        args[i + 1].toLowerCase().split(/\s+/).forEach(t => queryTerms.push(t));
-        i++;
-    } else if (!args[i].startsWith('--')) {
-        args[i].toLowerCase().split(/\s+/).forEach(t => queryTerms.push(t));
-    }
+    else if (args[i] === '--tag' && i + 1 < args.length) { queryTerms.push(args[i + 1].toLowerCase()); i++; }
+    else if (!args[i].startsWith('--')) queryTerms.push(args[i].toLowerCase());
 }
 
 const lines = fs.readFileSync(WIKI_FILE, 'utf8').trim().split('\n');
@@ -115,11 +78,17 @@ events.forEach(ev => {
 
 events.forEach(ev => {
     if (ev.kind !== 'link') return;
-    if (claims[ev.target] && claims[ev.source] && claims[ev.source].score >= 10) {
-        let contrib = 10;
-        if (ev.polarity === '-') contrib *= -1;
-        claims[ev.target].score += contrib;
-        claims[ev.target].evidence.push(ev);
+    const target = claims[ev.target];
+    const source = claims[ev.source];
+    if (target && source) {
+        source.isChild = true;
+        target.children.push(source.id);
+        if (source.score >= 10) {
+            let contrib = 10;
+            if (ev.polarity === '-') contrib *= -1;
+            target.score += contrib;
+            target.evidence.push(ev);
+        }
     }
 });
 
@@ -137,28 +106,28 @@ const stats = { S: 0, T: 0, U: 0, D: 0, C: 0, '?': 0 };
 function renderClaim(id, depth = 0) {
     const c = claims[id];
     if (!c) return "";
-    const applies = contextMatches(c.context, currentContext);
+    const ctxResult = contextMatches(c.context, currentContext);
     const label = getLabel(c.score, c.evidence.length);
-    if (applies && depth === 0) stats[label]++;
+    if (ctxResult.match && depth === 0) stats[label]++;
     
-    // Wide-Net Fuzzy search across tags, text, resolves intent, AND evidence strings
     if (queryTerms.length > 0 && depth === 0) {
-        const matchTags = (c.tags || []).some(t => fuzzyMatch(queryTerms, t));
-        const matchText = fuzzyMatch(queryTerms, c.text);
-        const matchResolves = c.resolves ? fuzzyMatch(queryTerms, c.resolves) : false;
-        const matchEvidence = c.evidence.some(e => fuzzyMatch(queryTerms, e.text));
-        if (!matchTags && !matchText && !matchResolves && !matchEvidence) return "";
+        const match = (c.tags || []).some(t => queryTerms.includes(t)) || c.text.toLowerCase().includes(queryTerms[0]);
+        if (!match) return "";
     }
 
     const indent = "  ".repeat(depth);
     let output = `${indent}* **${c.id}** (${label}:${c.score.toFixed(0)}) ${c.text}`;
     if (c.resolves) output += `\n${indent}  ? ${c.resolves}`;
     
-    if (verbose || ['D', 'U', '?', 'C'].includes(label)) {
+    // [v81.3 DYNAMIC VERBOSITY]
+    // Only hide evidence if it's an EXACT context match and Supported.
+    // Show evidence if it's from another context or is a Veto/Grave.
+    const showEvidence = verbose || !ctxResult.exact || ['D', 'U', '?', 'C'].includes(label);
+
+    if (showEvidence) {
         c.evidence.forEach(e => {
-            const sym = e.polarity;
             const type = e.kind === 'obs' ? e.etype : `sus (${(e.confidence * SUSPICION_MULTIPLIER).toFixed(1)})`;
-            output += `\n${indent}  ${sym}${type}: ${e.text || ""}`;
+            output += `\n${indent}  ${e.polarity}${type}: ${e.text || ""}`;
         });
     }
 
@@ -178,8 +147,8 @@ rootClaims.forEach(id => {
     if (!rendered) return;
     const c = claims[id];
     const label = getLabel(c.score, c.evidence.length);
-    const applies = contextMatches(c.context, currentContext);
-    if (!applies) outputGroups.OTHER.push(rendered);
+    const ctxResult = contextMatches(c.context, currentContext);
+    if (!ctxResult.match) outputGroups.OTHER.push(rendered);
     else if (label === 'D' || label === 'U') outputGroups.VETOES.push(rendered);
     else if (label === '?' || (label === 'C' && c.evidence.length === 1)) outputGroups.CONJECTURES.push(rendered);
     else outputGroups.APPLIES.push(rendered);
@@ -192,6 +161,5 @@ if (outputGroups.CONJECTURES.length) finalOutput += "### 🟡 CONJECTURES\n" + o
 if (outputGroups.OTHER.length) finalOutput += "### ⚪ OTHER CONTEXTS\n" + outputGroups.OTHER.join('\n\n');
 
 const tokenWeight = countTokens(finalOutput);
-
-console.log(`[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T} U:${stats.U} D:${stats.D}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}\n`);
-console.log(finalOutput);
+process.stdout.write(`[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T} U:${stats.U} D:${stats.D}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}\n\n`);
+process.stdout.write(finalOutput);
