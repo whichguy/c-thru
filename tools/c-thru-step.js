@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 /**
- * c-thru-step v1: The Process Ledger
- * Records chronological decisions and act-transitions.
+ * c-thru-step v1: The Process Ledger (Markdown v86)
  */
 const fs = require('fs');
 const { execSync } = require('child_process');
 
-const JOURNAL_FILE = 'supervisor_journal.jsonl';
+const JOURNAL_FILE = 'supervisor_journal.md';
 const CONTEXT_FILE = '.wiki-context.json';
 
 function getContext() {
@@ -26,11 +25,6 @@ if (!text) {
     process.exit(1);
 }
 
-const record = {
-    timestamp: new Date().toISOString(),
-    context: getContext(),
-    decision: text
-};
-
-fs.appendFileSync(JOURNAL_FILE, JSON.stringify(record) + '\n');
+// [v86 MARKDOWN JOURNALING]
+fs.appendFileSync(JOURNAL_FILE, `* [${new Date().toISOString()}] **STEP**: ${text}\n`);
 console.log(`[JOURNAL] Logged decision: ${text.substring(0, 50)}...`);

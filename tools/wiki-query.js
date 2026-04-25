@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const WIKI_FILE = process.env.WIKI_FILE || 'supervisor_wiki.jsonl';
-const JOURNAL_FILE = 'supervisor_journal.jsonl';
+const JOURNAL_FILE = 'supervisor_journal.md';
 const CONTEXT_FILE = '.wiki-context.json';
 
 function getContext() {
@@ -157,18 +157,12 @@ rootClaims.forEach(id => {
 let finalOutput = "";
 if (outputGroups.APPLIES.length) finalOutput += "### 🟢 APPLIES\n" + outputGroups.APPLIES.join('\n\n') + '\n\n';
 if (outputGroups.VETOES.length) finalOutput += "### 🔴 VETOES\n" + outputGroups.VETOES.join('\n\n') + '\n\n';
-if (outputGroups.CONJECTURES.length) finalOutput += "### 🟡 CONJECTURES\n" + outputGroups.CONJECTURES.join('\n\n') + '\n\n';
-if (outputGroups.OTHER.length) finalOutput += "### ⚪ OTHER CONTEXTS\n" + outputGroups.OTHER.join('\n\n');
 
 const tokenWeight = countTokens(finalOutput);
-const breadcrumb = `[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}`;
+const breadcrumb = `[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T} U:${stats.U} D:${stats.D}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}`;
 
-// [v85.1 FULL-DUPLEX MIRRORING]
-fs.appendFileSync(JOURNAL_FILE, JSON.stringify({
-    timestamp: new Date().toISOString(),
-    context: currentContext,
-    decision: `WIKI_QUERY: ${queryTerms.join(',')} | BREADCRUMB: ${breadcrumb} | RESULT_LEN: ${finalOutput.length}`
-}) + '\n');
+// [v86 MARKDOWN JOURNALING]
+fs.appendFileSync(JOURNAL_FILE, `* [${new Date().toISOString()}] **WIKI_QUERY**: ${queryTerms.join(',')} | ${breadcrumb}\n`);
 
 process.stdout.write(breadcrumb + '\n\n');
 process.stdout.write(finalOutput);

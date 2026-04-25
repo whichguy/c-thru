@@ -3,7 +3,7 @@ const fs = require('fs');
 const { execSync } = require('child_process');
 
 const WIKI_FILE = 'supervisor_wiki.jsonl';
-const JOURNAL_FILE = 'supervisor_journal.jsonl';
+const JOURNAL_FILE = 'supervisor_journal.md';
 const CONTEXT_FILE = '.wiki-context.json';
 const STATE_FILE = 'supervisor_state.md';
 
@@ -37,6 +37,7 @@ function generateId(kind) {
     let max = 0;
     lines.forEach(line => {
         try {
+            if (!line.trim()) return;
             const obj = JSON.parse(line);
             if (obj.id && obj.id.startsWith(prefix)) {
                 const num = parseInt(obj.id.substring(1));
@@ -110,12 +111,8 @@ try {
     const target = record.supports ? record.supports[0] : record.id;
     const breadcrumb = `[BC] ${target}|ADDED:${record.id}${markerMsg}`;
     
-    // [v85.1 FULL-DUPLEX MIRRORING]
-    fs.appendFileSync(JOURNAL_FILE, JSON.stringify({
-        timestamp: new Date().toISOString(),
-        context: context,
-        decision: `WIKI_ADD: ${kind} | BREADCRUMB: ${breadcrumb} | RAW: ${JSON.stringify(record)}`
-    }) + '\n');
+    // [v86 MARKDOWN JOURNALING]
+    fs.appendFileSync(JOURNAL_FILE, `* [${new Date().toISOString()}] **WIKI_ADD**: ${kind} | ${breadcrumb}\n`);
 
     console.log(breadcrumb);
 

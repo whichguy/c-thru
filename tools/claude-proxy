@@ -697,7 +697,7 @@ const CLOUD_CONNECT_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_CLOUD_CONNECT_TIMEO
 // 5 min allows extended thinking / long tool calls while still detecting a dropped wifi mid-stream.
 const CLOUD_STREAM_INACTIVITY_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_CLOUD_STREAM_INACTIVITY_MS', 5 * 60 * 1000);
 const STARTUP_PROBE_ENABLED = process.env.CLAUDE_PROXY_STARTUP_PROBE !== '0';
-const STARTUP_PROBE_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_STARTUP_PROBE_TIMEOUT_MS', 15000);
+const STARTUP_PROBE_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_STARTUP_PROBE_TIMEOUT_MS', 45000);
 
 const healthMeta = {
   version: 1,
@@ -1083,9 +1083,26 @@ function ollamaPs(backendUrl) {
   });
 }
 
-function pollOllamaWarmup(backendUrl, model, timeoutMs = 300000) {
+async function pollOllamaWarmup(backendUrl, model, timeoutMs = 300000) {
   const start = Date.now();
   const pollInterval = 3000;
+  
+  // Verify it's actually something we can wait for (on disk but not in RAM)
+  try {
+    const [tags, loaded] = await Promise.all([ollamaListTags(backendUrl), ollamaPs(backendUrl)]);
+    if (!tags.includes(model)) {
+      debugLog('ollama.poll.skip', { model, reason: 'not_in_tags' });
+      return false; // Needs pull, don't poll here (pull handles its own waiting)
+    }
+    if (loaded.some(m => m.name === model)) {
+      debugLog('ollama.poll.skip', { model, reason: 'already_loaded' });
+      return true; // Already there
+    }
+  } catch (e) {
+    debugLog('ollama.poll.init_error', { model, error: e.message });
+    return false;
+  }
+
   debugLog('ollama.poll.start', { model, backendUrl, timeoutMs });
   return new Promise((resolve) => {
     const check = async () => {

@@ -36,6 +36,12 @@ async function setup() {
   let chatCallCount = 0;
 
   stubServer = http.createServer((req, res) => {
+    if (req.url === '/api/tags') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ models: [{ name: 'ollama-retry-model' }] }));
+      return;
+    }
+
     if (req.url === '/api/ps') {
       psCallCount++;
       // First 2 calls: model not loaded. 3rd call: model loaded.
