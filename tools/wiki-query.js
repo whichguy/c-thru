@@ -16,11 +16,8 @@ function contextMatches(recordContext, currentContext) {
     if (!recordContext || Object.keys(recordContext).length === 0) return { match: true, exact: true };
     let exact = true;
     for (const key in recordContext) {
-        if (currentContext[key] !== recordContext[key]) {
-            return { match: false, exact: false };
-        }
+        if (currentContext[key] !== recordContext[key]) return { match: false, exact: false };
     }
-    // Check if currentContext has extra specific tags the record doesn't have
     if (Object.keys(currentContext).length > Object.keys(recordContext).length) exact = false;
     return { match: true, exact: exact };
 }
@@ -29,6 +26,14 @@ function countTokens(text) {
     if (!text) return 0;
     const matches = text.match(/[\w]+|[^\s\w]|[\s]+/g);
     return matches ? matches.length : 0;
+}
+
+function fuzzyMatch(queryTerms, text) {
+    if (!queryTerms || queryTerms.length === 0) return true;
+    if (!text) return false;
+    const t = text.toLowerCase();
+    for (const q of queryTerms) if (t.includes(q)) return true;
+    return false;
 }
 
 if (!fs.existsSync(WIKI_FILE)) {
@@ -50,6 +55,7 @@ const lines = fs.readFileSync(WIKI_FILE, 'utf8').trim().split('\n');
 const currentContext = getContext();
 const claims = {};
 const events = [];
+const steps = [];
 
 lines.forEach(line => {
     if (!line.trim()) return;
@@ -57,6 +63,7 @@ lines.forEach(line => {
         const obj = JSON.parse(line);
         if (!obj.id || !obj.kind) return;
         if (obj.kind === 'claim') claims[obj.id] = { ...obj, score: 0, evidence: [], children: [] };
+        else if (obj.kind === 'step') steps.push(obj);
         else events.push(obj);
     } catch (e) {}
 });
@@ -111,31 +118,24 @@ function renderClaim(id, depth = 0) {
     if (ctxResult.match && depth === 0) stats[label]++;
     
     if (queryTerms.length > 0 && depth === 0) {
-        const match = (c.tags || []).some(t => queryTerms.includes(t)) || c.text.toLowerCase().includes(queryTerms[0]);
+        const match = (c.tags || []).some(t => fuzzyMatch(queryTerms, t)) || fuzzyMatch(queryTerms, c.text);
         if (!match) return "";
     }
 
     const indent = "  ".repeat(depth);
     let output = `${indent}* **${c.id}** (${label}:${c.score.toFixed(0)}) ${c.text}`;
     if (c.resolves) output += `\n${indent}  ? ${c.resolves}`;
-    
-    // [v81.3 DYNAMIC VERBOSITY]
-    // Only hide evidence if it's an EXACT context match and Supported.
-    // Show evidence if it's from another context or is a Veto/Grave.
     const showEvidence = verbose || !ctxResult.exact || ['D', 'U', '?', 'C'].includes(label);
-
     if (showEvidence) {
         c.evidence.forEach(e => {
             const type = e.kind === 'obs' ? e.etype : `sus (${(e.confidence * SUSPICION_MULTIPLIER).toFixed(1)})`;
             output += `\n${indent}  ${e.polarity}${type}: ${e.text || ""}`;
         });
     }
-
     c.children.forEach(childId => {
         const childOutput = renderClaim(childId, depth + 1);
         if (childOutput) output += "\n" + childOutput;
     });
-
     return output;
 }
 
@@ -145,21 +145,19 @@ const outputGroups = { APPLIES: [], VETOES: [], CONJECTURES: [], OTHER: [] };
 rootClaims.forEach(id => {
     const rendered = renderClaim(id);
     if (!rendered) return;
-    const c = claims[id];
-    const label = getLabel(c.score, c.evidence.length);
-    const ctxResult = contextMatches(c.context, currentContext);
+    const ctxResult = contextMatches(claims[id].context, currentContext);
+    const label = getLabel(claims[id].score, claims[id].evidence.length);
     if (!ctxResult.match) outputGroups.OTHER.push(rendered);
     else if (label === 'D' || label === 'U') outputGroups.VETOES.push(rendered);
-    else if (label === '?' || (label === 'C' && c.evidence.length === 1)) outputGroups.CONJECTURES.push(rendered);
+    else if (label === '?' || (label === 'C' && claims[id].evidence.length === 1)) outputGroups.CONJECTURES.push(rendered);
     else outputGroups.APPLIES.push(rendered);
 });
 
 let finalOutput = "";
+if (steps.length) finalOutput += "### 🕒 COGNITIVE TIMELINE\n" + steps.slice(-5).map(s => `* [${s.timestamp.split('T')[1].split('.')[0]}] ${s.text}`).join('\n') + '\n\n';
 if (outputGroups.APPLIES.length) finalOutput += "### 🟢 APPLIES\n" + outputGroups.APPLIES.join('\n\n') + '\n\n';
 if (outputGroups.VETOES.length) finalOutput += "### 🔴 VETOES\n" + outputGroups.VETOES.join('\n\n') + '\n\n';
-if (outputGroups.CONJECTURES.length) finalOutput += "### 🟡 CONJECTURES\n" + outputGroups.CONJECTURES.join('\n\n') + '\n\n';
-if (outputGroups.OTHER.length) finalOutput += "### ⚪ OTHER CONTEXTS\n" + outputGroups.OTHER.join('\n\n');
 
 const tokenWeight = countTokens(finalOutput);
-process.stdout.write(`[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T} U:${stats.U} D:${stats.D}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}\n\n`);
+process.stdout.write(`[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}\n\n`);
 process.stdout.write(finalOutput);

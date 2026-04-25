@@ -1697,62 +1697,34 @@ async function ensureOllamaModelLoaded(model, backendUrl, logicalRole = null) {
   if (!isLocalOllamaBackend(model, backendUrl)) return null;
   debugLog('proxy.ollama.prepare.start', { model, backend_url: backendUrl, logical_role: logicalRole });
 
-  // 1) Is the model present?
-  let tags;
-  try { tags = await ollamaListTags(backendUrl); }
-  catch (e) {
-    debugLog('proxy.ollama.prepare.list.error', { model, backend_url: backendUrl, error: e.message });
-    return null; // Ollama unreachable — mirror today's ENOENT branch (skip warm-up, let request surface it)
-  }
-  debugLog('proxy.ollama.prepare.list.result', {
-    model, backend_url: backendUrl, cached: tags.includes(model), cached_count: tags.length,
-  });
-
-  // 2) Pull if missing (dedup concurrent pulls on same model+backend)
-  if (!tags.includes(model)) {
-    const key = backendUrl + '\0' + model;
-    let pending = pullInFlight.get(key);
-    if (!pending) {
-      proxyLog('ollama.pull.start', { model, backend_url: backendUrl });
-      console.error(`c-thru: '${model}' not cached on ${backendUrl} — pulling now...`);
-      pending = ollamaPull(backendUrl, model).finally(() => pullInFlight.delete(key));
-      pullInFlight.set(key, pending);
-    }
-    try { await pending; }
-    catch (e) {
-      const isTimeout = e && e.code === 'ETIMEDOUT';
-      proxyLog('ollama.pull.failure', {
-        model, backend_url: backendUrl, error: e.message, timeout: !!isTimeout,
+  // 1) Trigger async pull if missing
+  ollamaListTags(backendUrl).then(tags => {
+    if (!tags.includes(model)) {
+      const key = backendUrl + '\0' + model;
+      let pending = pullInFlight.get(key);
+      if (!pending) {
+        proxyLog('ollama.pull.start', { model, backend_url: backendUrl });
+        console.error(`c-thru: '${model}' not cached on ${backendUrl} — pulling now...`);
+        pending = ollamaPull(backendUrl, model).finally(() => pullInFlight.delete(key));
+        pullInFlight.set(key, pending);
+      }
+      pending.then(() => {
+        proxyLog('ollama.pull.success', { model, backend_url: backendUrl });
+        recordOllamaPull(model, backendUrl).catch(() => {});
+      }).catch(e => {
+        proxyLog('ollama.pull.failure', { model, backend_url: backendUrl, error: e.message });
       });
-      const msg = isTimeout
-        ? `Pull timed out: ${e.message}`
-        : `Failed to pull '${model}' from ${backendUrl}: ${e.message}`;
-      return { type: 'api_error', message: msg };
     }
-    proxyLog('ollama.pull.success', { model, backend_url: backendUrl });
-    recordOllamaPull(model, backendUrl).catch(() => {});
-  }
+  }).catch(() => {});
 
-  // 3) Enforce role exclusivity — unload previous model for this role if binding changed.
-  //    Runs after pull so M_new is confirmed available before M_old is evicted.
-  if (logicalRole) await enforceRoleExclusivity(logicalRole, model, backendUrl);
-
-  // 4) Already loaded?
-  let loaded = [];
-  try { loaded = await ollamaPs(backendUrl); }
-  catch (e) {
-    debugLog('proxy.ollama.prepare.ps.error', { model, backend_url: backendUrl, error: e.message });
-    return null;
-  }
-  if (loaded.some(m => m.name === model)) {
-    debugLog('proxy.ollama.prepare.loaded', { model, backend_url: backendUrl });
-    return null;
-  }
-
-  // 5) Trigger load (fire-and-forget — the actual request will also load it, this just pre-warms)
+  // 2) Trigger load (fire-and-forget)
   const numCtx = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
   debugLog('proxy.ollama.prepare.warm.start', { model, backend_url: backendUrl, num_ctx: numCtx });
   ollamaLoad(backendUrl, model, { numCtx, keepAlive: OLLAMA_WARM_KEEP_ALIVE }).catch(() => {});
+
+  // 3) Trigger role exclusivity (non-blocking)
+  if (logicalRole) enforceRoleExclusivity(logicalRole, model, backendUrl).catch(() => {});
+
   return null;
 }
 

@@ -31,10 +31,10 @@ function updateStateMarker(qnId, marker) {
 }
 
 function generateId(kind) {
-    if (!fs.existsSync(WIKI_FILE)) return `${kind.toUpperCase().charAt(0)}001`;
+    const prefix = kind === 'step' ? 'S' : kind.toUpperCase().charAt(0);
+    if (!fs.existsSync(WIKI_FILE)) return `${prefix}001`;
     const lines = fs.readFileSync(WIKI_FILE, 'utf8').trim().split('\n');
     let max = 0;
-    const prefix = kind.toUpperCase().charAt(0);
     lines.forEach(line => {
         try {
             const obj = JSON.parse(line);
@@ -56,19 +56,12 @@ let killQid = null;
 const cleanArgs = [];
 
 for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--context' && i + 1 < args.length) {
-        contextOverride = args[i + 1]; i++;
-    } else if (args[i] === '--resolves' && i + 1 < args.length) {
-        resolvesText = args[i + 1]; i++;
-    } else if (args[i] === '--verify' && i + 1 < args.length) {
-        verifyQid = args[i + 1]; i++;
-    } else if (args[i] === '--debt' && i + 1 < args.length) {
-        debtQid = args[i + 1]; i++;
-    } else if (args[i] === '--kill' && i + 1 < args.length) {
-        killQid = args[i + 1]; i++;
-    } else {
-        cleanArgs.push(args[i]);
-    }
+    if (args[i] === '--context' && i + 1 < args.length) { contextOverride = args[i + 1]; i++; }
+    else if (args[i] === '--resolves' && i + 1 < args.length) { resolvesText = args[i + 1]; i++; }
+    else if (args[i] === '--verify' && i + 1 < args.length) { verifyQid = args[i + 1]; i++; }
+    else if (args[i] === '--debt' && i + 1 < args.length) { debtQid = args[i + 1]; i++; }
+    else if (args[i] === '--kill' && i + 1 < args.length) { killQid = args[i + 1]; i++; }
+    else { cleanArgs.push(args[i]); }
 }
 
 const kind = cleanArgs[0];
@@ -105,17 +98,20 @@ try {
         record.polarity = cleanArgs[2];
         record.source = cleanArgs[3];
         record.text = cleanArgs[4];
+    } else if (kind === 'step') {
+        if (cleanArgs.length < 2) throw new Error("Usage: step \"<instruction/transition text>\"");
+        record.id = generateId('step');
+        record.text = cleanArgs[1];
     }
 
     fs.appendFileSync(WIKI_FILE, JSON.stringify(record) + '\n');
     
-    // [ATOMIC SUTURE] Update state file if requested
     let markerMsg = "";
     if (verifyQid) { if (updateStateMarker(verifyQid, "V")) markerMsg = `|STATE:${verifyQid}➔V`; }
     else if (debtQid) { if (updateStateMarker(debtQid, "D")) markerMsg = `|STATE:${debtQid}➔D`; }
     else if (killQid) { if (updateStateMarker(killQid, "I")) markerMsg = `|STATE:${killQid}➔I`; }
 
-    const target = record.supports ? record.supports[0] : record.id;
+    const target = record.supports ? record.supports[0] : (record.kind === 'step' ? 'COGNITION' : record.id);
     console.log(`[BC] ${target}|ADDED:${record.id}${markerMsg}`);
 
 } catch (err) {
