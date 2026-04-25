@@ -1,1 +1,0 @@
-{"model_routes":{"ollama-retry-model":"local-ollama"},"backends":{"local-ollama":{"kind":"ollama","url":"http://localhost:9992"}}}

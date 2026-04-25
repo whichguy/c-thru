@@ -45,9 +45,11 @@ if (!fs.existsSync(WIKI_FILE)) {
 const args = process.argv.slice(2);
 const queryTerms = [];
 let verbose = false;
+let stepJournal = null;
 
 for (let i = 0; i < args.length; i++) {
     if (args[i] === '--verbose' || args[i] === '-v') verbose = true;
+    else if (args[i] === '--step' && i + 1 < args.length) { stepJournal = args[i + 1]; i++; }
     else if (args[i] === '--tag' && i + 1 < args.length) { queryTerms.push(args[i + 1].toLowerCase()); i++; }
     else if (!args[i].startsWith('--')) queryTerms.push(args[i].toLowerCase());
 }
@@ -159,10 +161,12 @@ if (outputGroups.APPLIES.length) finalOutput += "### 🟢 APPLIES\n" + outputGro
 if (outputGroups.VETOES.length) finalOutput += "### 🔴 VETOES\n" + outputGroups.VETOES.join('\n\n') + '\n\n';
 
 const tokenWeight = countTokens(finalOutput);
-const breadcrumb = `[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T} U:${stats.U} D:${stats.D}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}`;
+const breadcrumb = `[BC] ${currentContext.environment || "unknown"}|S:${stats.S} T:${stats.T}|Tokens:${tokenWeight}${queryTerms.length > 0 ? `|Q:${queryTerms.join(',')}` : ''}`;
 
-// [v86 MARKDOWN JOURNALING]
-fs.appendFileSync(JOURNAL_FILE, `* [${new Date().toISOString()}] **WIKI_QUERY**: ${queryTerms.join(',')} | ${breadcrumb}\n`);
+// [v89 TRIPLE SUTURE JOURNALING]
+const ts = new Date().toISOString();
+if (stepJournal) fs.appendFileSync(JOURNAL_FILE, `* [${ts}] **STEP**: ${stepJournal}\n`);
+fs.appendFileSync(JOURNAL_FILE, `* [${ts}] **WIKI_QUERY**: ${queryTerms.join(',')} | ${breadcrumb}\n`);
 
 process.stdout.write(breadcrumb + '\n\n');
 process.stdout.write(finalOutput);

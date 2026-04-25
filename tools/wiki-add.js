@@ -54,6 +54,8 @@ let resolvesText = null;
 let verifyQid = null;
 let debtQid = null;
 let killQid = null;
+let stepJournal = null;
+let taskJournal = null;
 const cleanArgs = [];
 
 for (let i = 0; i < args.length; i++) {
@@ -62,6 +64,8 @@ for (let i = 0; i < args.length; i++) {
     else if (args[i] === '--verify' && i + 1 < args.length) { verifyQid = args[i + 1]; i++; }
     else if (args[i] === '--debt' && i + 1 < args.length) { debtQid = args[i + 1]; i++; }
     else if (args[i] === '--kill' && i + 1 < args.length) { killQid = args[i + 1]; i++; }
+    else if (args[i] === '--step' && i + 1 < args.length) { stepJournal = args[i + 1]; i++; }
+    else if (args[i] === '--task' && i + 1 < args.length) { taskJournal = args[i + 1]; i++; }
     else { cleanArgs.push(args[i]); }
 }
 
@@ -111,8 +115,11 @@ try {
     const target = record.supports ? record.supports[0] : record.id;
     const breadcrumb = `[BC] ${target}|ADDED:${record.id}${markerMsg}`;
     
-    // [v86 MARKDOWN JOURNALING]
-    fs.appendFileSync(JOURNAL_FILE, `* [${new Date().toISOString()}] **WIKI_ADD**: ${kind} | ${breadcrumb}\n`);
+    // [v89 TRIPLE SUTURE JOURNALING]
+    const ts = new Date().toISOString();
+    if (taskJournal) fs.appendFileSync(JOURNAL_FILE, `* [${ts}] **TASK**: ${taskJournal}\n`);
+    if (stepJournal) fs.appendFileSync(JOURNAL_FILE, `* [${ts}] **STEP**: ${stepJournal}\n`);
+    fs.appendFileSync(JOURNAL_FILE, `* [${ts}] **WIKI_ADD**: ${kind} | ${breadcrumb}\n`);
 
     console.log(breadcrumb);
 
