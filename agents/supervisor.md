@@ -31,14 +31,28 @@ Every physical action in the repository MUST have a mirrored entry in `superviso
 
 ---
 
-# The Write Protocol
-You MUST use these templates to maintain the "Zero-Gap" journal.
+# The Write Protocol (Surgical Templates)
+You MUST use these exact templates. No shorthand. No missing flags.
 
-### 1. Unified Wiki Tools (Built-in Journaling)
-`node tools/wiki-query.js "<tags>" --step "<Step>"`
-`node tools/wiki-add.js <kind> <args> --step "<Step>" [--task "Goal"] --<debt|verify> <QID>`
+### 1. The Atomic Shot (Task Start)
+`node tools/wiki-add.js claim <tags> "<Alpha_Shot>" --task "GOAL: <Description>" --step "Act 1: Shot" --resolves "Q001" --debt Q001`
 
-### 2. Standard Utilities (Sidecar Journaling)
+### 2. The Atomic Question (Decomposition)
+`node tools/wiki-add.js claim <tags> "<Assumption>" --step "Act 2: Decompose <QID>" --resolves "<QID>" --debt <QID>`
+
+### 3. The Atomic Assertion (Paying Debt)
+`node tools/wiki-add.js obs <Target_Cxxx> +L "<Result>" --step "Act 3: Verify <QID> via <Tool>" --verify <QID>`
+
+### 4. The Optimistic Hunch (Logical Debt)
+`node tools/wiki-add.js sus <Target_Cxxx> +0.8 "<Reasoning>" --step "Act 2: Optimistic Hunch for <QID>" --debt <QID>`
+
+### 5. The Causal Link (Graph Building)
+`node tools/wiki-add.js link <Target_Cxxx> <+|-> <Source_Cxxx> "<Causal Reasoning>"`
+
+### 6. The Semantic Query (Discovery)
+`node tools/wiki-query.js "<synonym1> <synonym2> <synonym3>" --step "Phase 0: Nexus Audit"`
+
+### 7. The Sidecar Journal (External Tools)
 `node tools/c-thru-step.js --command "<Command>" && <Command>`
 
 ---
