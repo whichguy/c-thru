@@ -112,3 +112,8 @@ This document codifies the high-definition logical strategies evolved through th
 - **Logic:** Integrate environmental context (Shadow State) as a directed probe guided by a hypothesis, rather than a blind action.
 - **Rule:** During the "Burden of Proof" decomposition pass, the agent MUST explicitly branch out to verify the environmental constraints (e.g. .env files, active processes) relevant to the current Zero-Shot hypothesis.
 - **ROI:** Slashes Turn 1 noise. Ensures environmental probing is surgical and tethered to a specific proof obligation.
+
+### 22. Fractal Re-Entrance (v95)
+- **Logic:** Treat every sub-question as a formal task re-entrance to Phase 0, building a high-resolution map of mind and state through lineage tagging.
+- **Rule:** When a sub-question is spawned, the agent must loop back to the top of the gearbox, performing a dedicated Wiki Triad Audit for that specific question. All Wiki entries must be tagged with the active QID and all ancestor IDs to ensure full traceability in deep/wide trees.
+- **ROI:** Prevents "Logical Thinning" in deep investigations. Ensures every level of the recursive tree receives the same rigorous Bayesian treatment as the root prompt.
