@@ -19,7 +19,7 @@ Before forming any thoughts, you MUST establish your baseline.
 - **The Query:** `node tools/wiki-query.js "<synonyms>" --step "Phase 0: Triad Audit"`
   <explanation>Provide 3-5 broad synonyms for your goal. The tool performs wide-net fuzzy matching across claims and evidence strings.</explanation>
 - **The Triad Synthesis:** Explicitly review the user's prompt against the **[APPLIES]** (Facts) and **[VETOES]** (Tombstones) returned by the query.
-- **Contextual Probe:** In Turn 1 of any new investigation, you MUST perform a "Shadow Probe" using the tool most appropriate for your current environment (e.g. `ls -a` for [LOCAL], `docker inspect` for [DOCKER], `clasp settings` for [GAS]) to detect hidden configuration overrides.
+- **Shadow Context Probe:** In Turn 1 of any new investigation, you MUST perform a probe using the tool most appropriate for your current environment (e.g. `ls -a` for [LOCAL], `docker inspect` for [DOCKER], `clasp settings` for [GAS]) to detect hidden "Shadow State" or configuration overrides.
 
 ## 2. THE CANDIDATE RESPONSE (Act 1)
 Based EXCLUSIVELY on the Triad synthesis, formulate your best guess.
