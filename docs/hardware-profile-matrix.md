@@ -1,23 +1,55 @@
 # Hardware Profile Matrix
 
-The agentic plan/wave system maps 5 capability aliases across 6 hardware profiles.
+The agentic plan/wave system maps capability aliases across 5 hardware profiles.
 Hardware tier is auto-detected at proxy startup via `tools/hw-profile.js:tierForGb()`.
-The connected/disconnected split uses the existing `connected_model`/`disconnect_model` fields.
+`connected_model` = cloud available; `disconnect_model` = offline fallback.
 
-| Spec label | c-thru tier | Connectivity | judge | orchestrator | code-analyst | pattern-coder | deep-coder |
-|---|---|---|---|---|---|---|---|
-| A | 128gb | connected | claude-opus-4-6 | qwen3.6:35b | devstral-small:2 | qwen3-coder:30b | devstral-small:2 |
-| B | 128gb | disconnected | qwen3.5:122b | qwen3.5:122b | devstral-small:2 | devstral-small:2 | devstral-small:2 |
-| C | 64gb | connected | claude-opus-4-6 | qwen3.6:35b | devstral-small:2 | qwen3.6:35b | devstral-small:2 |
-| D | 64gb | disconnected | qwen3.5:27b | qwen3.5:27b | devstral-small:2 | devstral-small:2 | devstral-small:2 |
-| E | 48gb | connected | claude-opus-4-6 | qwen3.5:9b | qwen3.5:9b | qwen3.5:9b | devstral-small:2 |
-| F | 48gb | disconnected | qwen3.5:27b | qwen3.5:27b | qwen3.5:27b | qwen3.5:27b | qwen3.5:27b |
-| — | 32gb | any | qwen3.5:1.7b | qwen3.5:1.7b | qwen3.5:1.7b | qwen3.5:1.7b | qwen3.5:1.7b |
-| — | 16gb | any | qwen3.5:1.7b | qwen3.5:1.7b | qwen3.5:1.7b | qwen3.5:1.7b | qwen3.5:1.7b |
+## Connected model by tier
 
-**judge-strict** mirrors `judge` per tier but with `on_failure: hard_fail` (no cascade to a lower model). Used only by `security-reviewer`.
+| Alias | 128gb | 64gb | 48gb | 32gb | 16gb |
+|---|---|---|---|---|---|
+| `judge` | claude-opus-4-6 | claude-opus-4-6 | claude-opus-4-6 | qwen3:1.7b ⚠ | qwen3:1.7b ⚠ |
+| `judge-strict` | claude-opus-4-6 | claude-opus-4-6 | claude-opus-4-6 | qwen3:1.7b ⚠ | qwen3:1.7b ⚠ |
+| `orchestrator` | qwen3.6:35b | qwen3.6:27b-coding-nvfp4 | gpt-oss:20b | gpt-oss:20b | qwen3:1.7b |
+| `local-planner` | qwen3.6:35b | qwen3.6:27b-coding-nvfp4 | qwen3.6:27b-coding-nvfp4 | gpt-oss:20b | qwen3:1.7b |
+| `deep-coder` | qwen3-coder:30b | gpt-oss:20b | gpt-oss:20b | gpt-oss:20b | qwen3:1.7b |
+| `code-analyst` | gpt-oss:20b | gpt-oss:20b | gpt-oss:20b | gpt-oss:20b | qwen3:1.7b |
+| `pattern-coder` | qwen3-coder:30b | qwen3.6:27b-coding-nvfp4 | qwen3.6:27b-coding-nvfp4 | qwen3.5:9b | qwen3:1.7b |
+| `reasoner` † | deepseek-r1:14b | deepseek-r1:14b | deepseek-r1:14b | gpt-oss:20b | qwen3:1.7b |
+| `code-analyst-light` † | gemma4:26b | gpt-oss:20b | gemma4:e2b | gemma4:e2b | qwen3:1.7b |
+| `deep-coder-precise` † | qwen3.6:35b-a3b-coding-bf16 | qwen3.6:35b-a3b-coding-mxfp8 | qwen3.6:35b-a3b-coding-nvfp4 | qwen3:1.7b ⚠ | qwen3:1.7b ⚠ |
+| `fast-scout` † | gemma4:26b | gpt-oss:20b | gemma4:e2b | gemma4:e2b | qwen3:1.7b |
+| `commit-message-generator` | qwen3:1.7b | qwen3:1.7b | qwen3.6:27b-coding-nvfp4 | qwen3:1.7b | qwen3:1.7b |
 
-**16gb/32gb:** All aliases collapse to `qwen3.5:1.7b`. `judge` and `judge-strict` use `on_failure: hard_fail` to surface the capability gap rather than silently returning a degraded result.
+⚠ = `on_failure: hard_fail` (surfaces capability gap instead of silently degrading)  
+† = pending alias — defined in `llm_profiles` but not yet bound in `agent_to_capability`; see `docs/agent-architecture.md#pending-capability-aliases`
+
+## Disconnect model by tier (offline / cloud unavailable)
+
+| Alias | 128gb | 64gb | 48gb | 32gb | 16gb |
+|---|---|---|---|---|---|
+| `judge` | qwen3.6:35b | qwen3.6:35b-a3b-coding-nvfp4 | qwen3.6:35b-a3b-coding-nvfp4 | qwen3:1.7b ⚠ | qwen3:1.7b ⚠ |
+| `orchestrator` | qwen3.6:35b | qwen3.6:35b-a3b-coding-nvfp4 | qwen3.6:35b-a3b-coding-nvfp4 | gpt-oss:20b | qwen3:1.7b |
+| `deep-coder` | qwen3-coder:30b | qwen3.6:27b-coding-nvfp4 | qwen3.6:27b-coding-nvfp4 | gpt-oss:20b | qwen3:1.7b |
+| `deep-coder-precise` † | qwen3.6:35b-a3b-coding-bf16 | qwen3.6:35b-a3b-coding-mxfp8 | qwen3.6:35b-a3b-coding-nvfp4 | qwen3:1.7b ⚠ | qwen3:1.7b ⚠ |
+
+(Other aliases: disconnect_model mirrors connected_model — see `config/model-map.json` for full detail.)
+
+## Agent → capability mapping
+
+| Agent | Capability | Notes |
+|---|---|---|
+| `planner`, `auditor`, `review-plan`, `final-reviewer`, `journal-digester`, `uplift-decider` | `judge` | cloud: claude-opus-4-6; local: qwen3.6:35b |
+| `security-reviewer` | `judge-strict` | hard_fail — no cascade |
+| `plan-orchestrator`, `integrator`, `doc-writer` | `orchestrator` | |
+| `planner-local` | `local-planner` | dep_update signal only |
+| `implementer` | `deep-coder` | |
+| `test-writer`, `wave-reviewer`, `converger` | `code-analyst` | |
+| `wave-synthesizer`, `learnings-consolidator` | `code-analyst` | candidate for `code-analyst-light` once scored |
+| `scaffolder`, `discovery-advisor` | `pattern-coder` | |
+| `explorer` | `pattern-coder` | candidate for `fast-scout` once scored |
+| `evaluator`, `supervisor`, `supervisor-debug` | `judge` | legacy investigation agents |
+| (deterministic path) | `commit-message-generator` | |
 
 ## Tier override
 
@@ -38,7 +70,7 @@ CLAUDE_LLM_MEMORY_GB=48 ~/.claude/tools/c-thru --list
 ```
 implementer
   → agent_to_capability["implementer"] = "deep-coder"
-  → llm_profiles["128gb"]["deep-coder"].connected_model = "devstral-small:2"
+  → llm_profiles["128gb"]["deep-coder"].connected_model = "qwen3-coder:30b"
 ```
 
 Swapping an agent to a different tier: one line in `agent_to_capability`.

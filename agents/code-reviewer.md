@@ -1,1 +1,0 @@
-/Users/jameswiese/claude-craft/agents/code-reviewer.md

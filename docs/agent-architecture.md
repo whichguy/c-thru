@@ -34,6 +34,18 @@ request time.
 | test-writer-cloud | code-analyst-cloud | †Wave-2: cloud-tier test writer; escalation target for test-writer recusals |
 | converger | code-analyst | †Wave-2: aggregates parallel explorer/implementer outputs into unified synthesis |
 
+## Pending capability aliases
+
+These aliases have been added to `config/model-map.json` llm_profiles but are not yet bound in
+`agent_to_capability`. Binding is conditional on eval scoring confirming the target models.
+
+| Alias | Intended agents | 128gb model | Condition to activate |
+|---|---|---|---|
+| `reasoner` | wave-reviewer, test-writer (after split) | deepseek-r1:14b | phi4-reasoning:plus scores ≥3.5 on debugger; deepseek-r1:14b scores confirmed |
+| `code-analyst-light` | wave-synthesizer, learnings-consolidator | gemma4:26b | gemma4:26b scores ≥3.0 on generalist/orchestrator prompts |
+| `deep-coder-precise` | implementer (offline/high-stakes mode) | qwen3.6:35b-a3b-coding-bf16 | bf16 variant scores ≥4.0 on coder/agentic_coder; used in `offline` or `cloud-judge-only` mode only |
+| `fast-scout` | explorer | gemma4:26b | gemma4:26b scores ≥3.0 on generalist; frees pattern-coder (qwen3-coder:30b) for scaffolding only |
+
 ## 4-layer resolution
 
 ```
@@ -90,6 +102,7 @@ verification            zero         bash/node       per wave
 git commit              zero         bash            per wave
 learnings summary       local 7B     learnings-consolidator    per wave
 workers: code           local        devstral-small  N per wave
+workers: debug/reason   local        reasoner (deepseek-r1:14b)  N per wave (debug items only)
 workers: scaffolding    local        qwen3.5:1.7b    N per wave
 workers: tests          local        qwen3.5:9b      N per wave
 workers: docs           local        qwen3.5:9b      N per wave

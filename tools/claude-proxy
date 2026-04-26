@@ -19,7 +19,24 @@ const {
   resolveTerminalTarget,
   LLM_MODE_ENUM,
   LLM_PROFILE_ALIASES,
+  applyModeFilter,
+  pickBenchmarkBest,
 } = require('./model-map-resolve.js');
+
+// ── Benchmark data — loaded once at startup, used by ranking modes ─────────
+// Optional: gracefully degrades if absent or malformed.
+let BENCHMARK = null;
+function loadBenchmark() {
+  try {
+    const benchPath = path.join(path.dirname(process.argv[1] || ''), '..', 'docs', 'benchmark.json');
+    if (fs.existsSync(benchPath)) {
+      BENCHMARK = JSON.parse(fs.readFileSync(benchPath, 'utf8'));
+    }
+  } catch (e) {
+    BENCHMARK = null;
+  }
+}
+loadBenchmark();
 
 // ── Rolling log ───────────────────────────────────────────────────────
 // Fixed path, 10 MB limit, 3 generations. Intercepts process.stderr so
@@ -77,6 +94,7 @@ for (let i = 0; i < _args.length; i++) {
   if (_args[i] === '--hooks-port' && _args[i + 1]) process.env.CLAUDE_PROXY_HOOKS_PORT = _args[++i];
   if (_args[i] === '--config'  && _args[i + 1]) process.env.CLAUDE_MODEL_MAP_PATH = _args[++i];
   if (_args[i] === '--profile' && _args[i + 1]) process.env.CLAUDE_LLM_PROFILE    = _args[++i];
+  if (_args[i] === '--mode'    && _args[i + 1]) process.env.CLAUDE_LLM_MODE       = _args[++i];
 }
 
 const { classifyIntent } = require('./llm-capabilities-shared');
@@ -137,6 +155,188 @@ function debugLog(event, fields = {}) {
 
 function proxyLog(event, fields = {}) {
   console.error(`c-thru [${event}] ${JSON.stringify({ pid: process.pid, ts: nowIso(), ...fields })}`);
+}
+
+// ── Journal Phase A: record-only ───────────────────────────────────────────
+// Opt-in capture of LLM request/response to JSONL. Off by default. Privacy
+// implications documented in docs/journaling.md. Failure must NEVER break the
+// user's request — every write is wrapped in try/catch with proxyLog warning.
+const JOURNAL_ENABLED = process.env.CLAUDE_PROXY_JOURNAL === '1';
+const JOURNAL_DIR = process.env.CLAUDE_PROXY_JOURNAL_DIR ||
+  path.join(process.env.HOME || os.homedir(), '.claude', 'journal');
+const JOURNAL_INCLUDE = (process.env.CLAUDE_PROXY_JOURNAL_INCLUDE || '').split(',').map(s => s.trim()).filter(Boolean);
+const JOURNAL_EXCLUDE = new Set((process.env.CLAUDE_PROXY_JOURNAL_EXCLUDE || '').split(',').map(s => s.trim()).filter(Boolean));
+const JOURNAL_MAX_BYTES = Number(process.env.CLAUDE_PROXY_JOURNAL_MAX_BYTES || 100 * 1024 * 1024);
+const JOURNAL_STREAM_EVENT_CAP = 1000;
+const SCRUB_HEADERS = new Set(['authorization', 'x-api-key', 'cookie']);
+
+function scrubHeaders(headers) {
+  if (!headers) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(headers)) {
+    const lk = k.toLowerCase();
+    if (SCRUB_HEADERS.has(lk) || lk.startsWith('x-api-')) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+function shouldJournal(capability) {
+  if (!JOURNAL_ENABLED) return false;
+  if (!capability) return false;
+  if (JOURNAL_EXCLUDE.has(capability)) return false;
+  if (JOURNAL_INCLUDE.length > 0 && !JOURNAL_INCLUDE.includes(capability)) return false;
+  return true;
+}
+
+function writeJournalEntry(entry) {
+  try {
+    const date = entry.ts_iso.slice(0, 10);
+    const dir  = path.join(JOURNAL_DIR, date);
+    fs.mkdirSync(dir, { recursive: true });
+    // Sanitise capability for filesystem use
+    const safeCap = String(entry.capability).replace(/[^A-Za-z0-9_.-]/g, '_');
+    const file = path.join(dir, `${safeCap}.jsonl`);
+    try {
+      const st = fs.statSync(file);
+      if (st.size >= JOURNAL_MAX_BYTES) fs.renameSync(file, `${file}.1`);
+    } catch {}
+    fs.appendFile(file, JSON.stringify(entry) + '\n', () => {});
+  } catch (e) {
+    proxyLog('journal.write_error', { error: e && e.message });
+  }
+}
+
+// ── Phase A dynamic classifier — observe-only role classification ──────────
+// Opt-in via CLAUDE_PROXY_CLASSIFY=1. When enabled, runs a small classifier model
+// (default gemma4:e2b) on the user prompt to predict the *role* (coder/debugger/
+// generalist/etc.) the request best fits. Output recorded in journal entry +
+// x-c-thru-classified-role / x-c-thru-classifier-confidence response headers.
+//
+// Phase A: observation only — does NOT change routing behavior. Cold-start: skip
+// the first request to allow the model to warm. Cache by prompt SHA-256 to avoid
+// re-classifying the same prompt within a session.
+const CLASSIFY_ENABLED = process.env.CLAUDE_PROXY_CLASSIFY === '1';
+const CLASSIFY_MODEL = process.env.CLAUDE_PROXY_CLASSIFY_MODEL || 'gemma4:e2b';
+const CLASSIFY_OLLAMA_URL = process.env.CLAUDE_PROXY_CLASSIFY_OLLAMA_URL ||
+  process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+const CLASSIFY_TIMEOUT_MS = Number(process.env.CLAUDE_PROXY_CLASSIFY_TIMEOUT_MS || 5000);
+const CLASSIFY_CACHE_MAX = 1000;
+
+const CLASSIFY_ROLES = [
+  'coder', 'debugger', 'logic', 'generalist', 'orchestrator',
+  'reviewer', 'test_writer', 'doc_writer', 'agentic_coder',
+];
+
+const _classifyCache = new Map();   // sha256 → { role, confidence, raw }
+let _classifyFirstRequestSkipped = false;
+
+function _classifyHash(prompt) {
+  const crypto = require('crypto');
+  return crypto.createHash('sha256').update(String(prompt)).digest('hex');
+}
+
+function _classifyExtractPrompt(body) {
+  // Pull the latest user message text for classification. Multi-block content
+  // is concatenated; tool_use/tool_result are skipped.
+  if (!body || !Array.isArray(body.messages)) return '';
+  const userMsgs = body.messages.filter(m => m && m.role === 'user');
+  const last = userMsgs[userMsgs.length - 1];
+  if (!last) return '';
+  if (typeof last.content === 'string') return last.content;
+  if (Array.isArray(last.content)) {
+    return last.content
+      .filter(b => b && b.type === 'text' && typeof b.text === 'string')
+      .map(b => b.text)
+      .join('\n');
+  }
+  return '';
+}
+
+function _classifyParseResponse(text) {
+  // Expect JSON-ish output { "role": "<role>", "confidence": 0.X }
+  // Tolerant to common LLM quirks (markdown fences, extra prose).
+  if (!text) return null;
+  const cleaned = String(text).replace(/```(?:json)?/g, '').trim();
+  // Find the first JSON object
+  const m = cleaned.match(/\{[\s\S]*?\}/);
+  if (!m) return null;
+  try {
+    const obj = JSON.parse(m[0]);
+    const role = typeof obj.role === 'string' ? obj.role.toLowerCase() : null;
+    const confidence = typeof obj.confidence === 'number' ? obj.confidence : null;
+    if (!role || !CLASSIFY_ROLES.includes(role)) return null;
+    if (confidence == null || confidence < 0 || confidence > 1) return null;
+    return { role, confidence };
+  } catch {
+    return null;
+  }
+}
+
+async function classifyRole(prompt) {
+  if (!CLASSIFY_ENABLED) return null;
+  if (!prompt || typeof prompt !== 'string') return null;
+  // Cold-start skip
+  if (!_classifyFirstRequestSkipped) {
+    _classifyFirstRequestSkipped = true;
+    return { skipped: 'cold_start' };
+  }
+  // Cache lookup
+  const hash = _classifyHash(prompt);
+  if (_classifyCache.has(hash)) {
+    return Object.assign({}, _classifyCache.get(hash), { from_cache: true });
+  }
+  // Build classification prompt
+  const sys = `You classify a user prompt into ONE of these roles: ${CLASSIFY_ROLES.join(', ')}. ` +
+    `Reply ONLY with a JSON object: {"role":"<role>","confidence":<0..1>}. No other text.`;
+  const usr = `Prompt to classify:\n\n${prompt.slice(0, 2000)}`;
+
+  return new Promise(resolve => {
+    const url = new URL(CLASSIFY_OLLAMA_URL.replace(/\/$/, '') + '/api/generate');
+    const lib = url.protocol === 'https:' ? require('https') : require('http');
+    const reqBody = JSON.stringify({
+      model: CLASSIFY_MODEL,
+      prompt: `${sys}\n\n${usr}`,
+      stream: false,
+      think: false,
+      format: 'json',
+      options: { temperature: 0, num_predict: 100 },
+    });
+    const req = lib.request({
+      method: 'POST',
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: url.pathname,
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(reqBody) },
+      timeout: CLASSIFY_TIMEOUT_MS,
+    }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          const parsed = _classifyParseResponse(body && body.response);
+          if (parsed) {
+            // Cache (with size cap — drop oldest entry on overflow)
+            if (_classifyCache.size >= CLASSIFY_CACHE_MAX) {
+              const firstKey = _classifyCache.keys().next().value;
+              _classifyCache.delete(firstKey);
+            }
+            _classifyCache.set(hash, parsed);
+            resolve(parsed);
+          } else {
+            resolve({ skipped: 'parse_failed' });
+          }
+        } catch (e) {
+          resolve({ skipped: 'response_invalid' });
+        }
+      });
+    });
+    req.on('error', () => resolve({ skipped: 'network_error' }));
+    req.on('timeout', () => { req.destroy(); resolve({ skipped: 'timeout' }); });
+    req.write(reqBody);
+    req.end();
+  });
 }
 
 function loadConfig() {
@@ -216,6 +416,8 @@ function validateRouteGraph(cfg) {
 // pathToValidate defaults to CONFIG_PATH; pass a temp file to avoid TOCTOU.
 function validateWithNode(pathToValidate) {
   pathToValidate = pathToValidate || CONFIG_PATH;
+  // Test escape hatch: skip strict validation for non-production fixtures.
+  if (process.env.CLAUDE_PROXY_SKIP_VALIDATOR === '1') return true;
   const validator = path.join(path.dirname(process.argv[1] || ''), 'model-map-validate.js');
   if (!fs.existsSync(validator)) return true;
   try {
@@ -913,6 +1115,39 @@ function finalizeTrackedUsage(meta, extra = {}) {
     stream: meta.stream,
     ...extra,
   });
+
+  // Journal Phase A — record-only, opt-in
+  if (shouldJournal(meta.capability)) {
+    const events = meta._journalStreamEvents;
+    const truncated = events && events.length >= JOURNAL_STREAM_EVENT_CAP;
+    const entry = {
+      schema_version: 1,
+      id: `j_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      ts_iso: nowIso(),
+      capability: meta.capability,
+      tier: resolveActiveTier(CONFIG),
+      mode: resolveLlmMode(CONFIG),
+      served_by: meta.effectiveModel || null,
+      backend_id: meta.backend?.id || null,
+      backend_kind: meta.backend?.kind || null,
+      endpoint: meta.endpoint,
+      stream: Boolean(meta.stream),
+      request: meta._journalRequestBody || null,
+      response: meta._journalResponseBody || null,
+      stream_events: events ? events.slice(0, JOURNAL_STREAM_EVENT_CAP) : null,
+      stream_events_truncated: truncated || false,
+      latency_ms: meta.startedAtMs ? (nowMs() - meta.startedAtMs) : null,
+      status_code: extra.status_code || null,
+      input_tokens: extra.input_tokens || null,
+      output_tokens: extra.output_tokens || null,
+      stop_reason: extra.stop_reason || null,
+      // Phase A classifier output (observe-only); null if classifier disabled
+      classified_role: meta.classifier?.role || null,
+      classifier_confidence: typeof meta.classifier?.confidence === 'number' ? meta.classifier.confidence : null,
+      classifier_skipped: meta.classifier?.skipped || null,
+    };
+    writeJournalEntry(entry);
+  }
 }
 
 function recordStats(endpoint, backend, clientModel, effectiveModel, statusCode) {
@@ -1913,9 +2148,11 @@ function resolveBackend(model) {
 
 // Injects x-c-thru-resolved-via for hook observability without log-parsing.
 // Only emits on capability requests (logicalRole alias present); skipped on non-capability paths.
+// latency_ms: time from request receipt to first upstream response byte (time-to-first-byte).
 function addResolvedViaHeader(respHeaders, resolved) {
   const capability = resolved?.capability || resolved?.logicalRole;
   if (!capability) return;
+  const latency_ms = resolved.startedAtMs ? (nowMs() - resolved.startedAtMs) : null;
   respHeaders['x-c-thru-resolved-via'] = JSON.stringify({
     capability,
     profile: resolved.logicalRole || capability,
@@ -1926,7 +2163,19 @@ function addResolvedViaHeader(respHeaders, resolved) {
     tier: resolveActiveTier(CONFIG),
     mode: resolveLlmMode(CONFIG),
     local_terminal_appended: resolved.localTerminalAppended || false,
+    latency_ms,
   });
+  // Phase A classifier headers — observability only; doesn't change routing.
+  // Classifier may have been attached via either resolved._classifier (early
+  // dispatch hook) or resolved.classifier (requestMeta path).
+  const cls = resolved.classifier || resolved._classifier;
+  if (cls && typeof cls === 'object') {
+    if (cls.role) respHeaders['x-c-thru-classified-role'] = cls.role;
+    if (typeof cls.confidence === 'number') {
+      respHeaders['x-c-thru-classifier-confidence'] = String(cls.confidence);
+    }
+    if (cls.skipped) respHeaders['x-c-thru-classifier-skipped'] = cls.skipped;
+  }
 }
 
 function send(res, code, obj) {
@@ -2063,6 +2312,9 @@ function forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta =
       } else if (contentType.includes('application/json')) {
         let parsed = null;
         try { parsed = JSON.parse(Buffer.concat(responseChunks).toString('utf8')); } catch { parsed = null; }
+        if (parsed && shouldJournal(requestMeta.capability)) {
+          requestMeta._journalResponseBody = parsed;
+        }
         const usage = usageFromJsonPayload(parsed);
         finalizeTrackedUsage(requestMeta, {
           status_code: upRes.statusCode,
@@ -2076,6 +2328,14 @@ function forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta =
     });
     const isSse = String(upRes.headers['content-type'] || '').includes('text/event-stream');
     if (isSse) {
+      // Journal: tee the SSE stream into _journalStreamEvents (capped) when journaling enabled
+      if (shouldJournal(requestMeta.capability)) {
+        upRes.on('data', chunk => {
+          if (!Array.isArray(requestMeta._journalStreamEvents)) return;
+          if (requestMeta._journalStreamEvents.length >= JOURNAL_STREAM_EVENT_CAP) return;
+          requestMeta._journalStreamEvents.push(chunk.toString('utf8'));
+        });
+      }
       upRes.pipe(createSsePatcher()).pipe(res);
     } else {
       upRes.pipe(res);
@@ -2524,6 +2784,8 @@ function handleRequestWithFallback(req, res, body, resolved) {
       if (req.headers['anthropic-beta']) cHeaders['anthropic-beta'] = req.headers['anthropic-beta'];
       if (k) cHeaders['x-api-key'] = k;
     }
+    const cLib = cUrl.protocol === 'https:' ? https : http;
+    const cStart = nowMs();
     if (cBackend.kind === 'ollama') {
       warmOllamaModel(cResolved.effectiveModel || candidateModel, cBackend.id, cBackend.url);
       (async () => {
@@ -2545,9 +2807,6 @@ function handleRequestWithFallback(req, res, body, resolved) {
       });
       return;
     }
-    
-    const cLib = cUrl.protocol === 'https:' ? https : http;
-    const cStart = nowMs();
     proxyLog('fallback.attempt', { candidate: candidateModel, backend_id: cBackend.id, index: currentIdx });
 
     const cUp = cLib.request({
@@ -2597,6 +2856,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
           targetId: cResolved.targetId || null,
           requestDefaultSources,
           localTerminalAppended: localTerminalFired,
+          startedAtMs: cStart,
         });
         res.writeHead(upRes.statusCode, respHeaders);
         res.end(cRaw);
@@ -2768,6 +3028,16 @@ function handleRequestWithFallback(req, res, body, resolved) {
           ({ candidates, appendedTerminalIdx } = buildFallbackCandidatesFromChain(chain, terminalModel, _capKey, _hwTier, _isBqMode, _tolerancePct));
         }
         if (candidates.length > 0) {
+          // hard_fail gate: capabilities with on_failure='hard_fail' (e.g. judge-strict)
+          // must error rather than silently degrade to a weaker model. Mirror the
+          // gate that exists in resolveFallbackModel for the legacy path.
+          const _profileEntry = ((CONFIG.llm_profiles || {})[_hwTier] || {})[_capKey];
+          if (_profileEntry?.on_failure === 'hard_fail') {
+            proxyLog('fallback.hard_fail', { capability: _capKey, terminal_model: terminalModel, failure_class: failureClass, candidate_count: candidates.length });
+            if (!res.headersSent) send(res, upRes.statusCode, { error: { type: 'api_error', message: `${_capKey}: on_failure=hard_fail; primary '${terminalModel}' failed (${failureClass}); fallback skipped per capability policy` } });
+            else res.end();
+            return;
+          }
           proxyLog('fallback.chain_start', { terminal_model: terminalModel, failure_class: failureClass, trigger: 'classified_error', candidate_count: candidates.length, source: CONFIG.fallback_strategies?.[terminalModel] ? 'fallback_strategies' : 'fallback_chains', local_terminal_guard: appendedTerminalIdx !== -1 });
           return tryFallbackChain(candidates, failureClass, 0, appendedTerminalIdx);
         }
@@ -2800,6 +3070,7 @@ function handleRequestWithFallback(req, res, body, resolved) {
         backend,
         targetId: resolved.targetId || null,
         requestDefaultSources: primaryForward.requestDefaultSources,
+        startedAtMs: startedAt,
       });
       res.writeHead(upRes.statusCode, respHeaders);
       res.end(raw);
@@ -2876,6 +3147,14 @@ function handleRequestWithFallback(req, res, body, resolved) {
       local_terminal_guard: appendedTerminalIdx !== -1,
     });
     if (candidates.length > 0) {
+      // hard_fail gate: same rule applies on network-failure path as on classified-error path
+      const _profileEntry = ((CONFIG.llm_profiles || {})[_hwTier] || {})[_capKey];
+      if (_profileEntry?.on_failure === 'hard_fail') {
+        proxyLog('fallback.hard_fail', { capability: _capKey, terminal_model: terminalModel, failure_class: failureClass, candidate_count: candidates.length });
+        if (!res.headersSent) send(res, 502, { error: { type: 'api_error', message: `${_capKey}: on_failure=hard_fail; primary '${terminalModel}' unreachable (${failureClass}); fallback skipped per capability policy` } });
+        else res.end();
+        return;
+      }
       return tryFallbackChain(candidates, failureClass, 0, appendedTerminalIdx);
     }
     finalizeTrackedUsage({
@@ -2910,7 +3189,34 @@ const server = http.createServer(async (req, res) => {
       config_path: CONFIG_PATH,
       config_source: CONFIG_SOURCE,
       active_tier: resolveActiveTier(CONFIG),
+      active_mode: resolveLlmMode(CONFIG),
     });
+  }
+
+  // ── /v1/active-models ───────────────────────────────────────────────
+  // Returns the concrete Ollama model tags the proxy will use this session,
+  // resolved for the current tier and mode. Used by c-thru preflight to
+  // detect and pull missing models before launching claude.
+  if (req.method === 'GET' && req.url === '/v1/active-models') {
+    const tier = resolveActiveTier(CONFIG);
+    const mode = resolveLlmMode(CONFIG);
+    const profiles = ((CONFIG || {}).llm_profiles || {})[tier] || {};
+    const modelRoutes = (CONFIG || {}).model_routes || {};
+    const capabilities = [];
+    for (const [alias, entry] of Object.entries(profiles)) {
+      const model = resolveProfileModel(entry, mode);
+      if (!model) continue;
+      // Strip @backend sigil before route lookup — sigils are routing hints, not
+      // part of the model name in model_routes. Mirrors resolveBackend's sigil handling.
+      const bareModel = model.replace(BACKEND_SIGIL_RE, '$1');
+      const route = modelRoutes[bareModel] || lookupPatternValue('model_routes', bareModel) || '';
+      const isLocal = route === 'ollama_local' || route === 'ollama_cloud';
+      capabilities.push({ capability: alias, model: bareModel, local: isLocal });
+    }
+    const local_models = [...new Set(
+      capabilities.filter(e => e.local).map(e => e.model)
+    )];
+    return send(res, 200, { tier, mode, capabilities, local_models });
   }
 
   // ── /debug/stats ────────────────────────────────────────────────────
@@ -3096,12 +3402,114 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify(stubResponse));
   }
 
-  const resolved = resolveBackend(model);
+  let resolved = resolveBackend(model);
   if (resolved.error) {
     const code = resolved.status || 400;
     const payload = { error: resolved.error };
     if (resolved.extra) Object.assign(payload, resolved.extra);
     return send(res, code, payload);
+  }
+
+  // ── Phase A dynamic classifier (observe-only) ──────────────────────────
+  // Sync call to a small role classifier (default gemma4:e2b) on the user
+  // prompt. Result attached to resolved._classifier for header injection;
+  // does NOT change routing in Phase A. Soft-fails on any error.
+  if (CLASSIFY_ENABLED) {
+    try {
+      const _prompt = _classifyExtractPrompt(body);
+      if (_prompt) {
+        resolved._classifier = await classifyRole(_prompt);
+      }
+    } catch (e) {
+      proxyLog('classifier.error', { error: e && e.message });
+    }
+  }
+
+  // ── Phase 2 provider-filter modes ───────────────────────────────────────
+  // For cloud-only / claude-only / opensource-only: validate the resolved model
+  // against the active filter mode. If non-compliant, walk fallback_chains for
+  // a compliant candidate; hard_fail if none. Filter skips don't trigger cooldowns.
+  {
+    const _activeMode = resolveLlmMode(CONFIG);
+    const FILTER_MODES = new Set(['cloud-only', 'claude-only', 'opensource-only']);
+    if (FILTER_MODES.has(_activeMode)) {
+      const _hwTier = resolveActiveTier(CONFIG);
+      const _capKey = resolved.logicalRole ? profileAliasKey(resolved.logicalRole) : null;
+      const _chain  = _capKey ? (CONFIG.fallback_chains?.[_hwTier]?.[_capKey] || []) : [];
+      const _filtered = applyModeFilter(_activeMode, resolved.effectiveModel, _chain, CONFIG.model_routes || {}, CONFIG.backends || {});
+      if (_filtered === null) {
+        proxyLog('mode.filter_hard_fail', { mode: _activeMode, capability: _capKey, primary: resolved.effectiveModel, chain_len: _chain.length });
+        return send(res, 502, {
+          type: 'error',
+          error: {
+            type: 'api_error',
+            message: `${_capKey || 'unknown'}: mode=${_activeMode} has no compliant model (primary '${resolved.effectiveModel}' rejected, ${_chain.length} fallback candidates also rejected)`,
+          },
+        });
+      }
+      if (_filtered !== resolved.effectiveModel) {
+        proxyLog('mode.filter_replaced', { mode: _activeMode, capability: _capKey, original: resolved.effectiveModel, replacement: _filtered });
+        const _replaced = resolveBackend(_filtered);
+        if (_replaced.error) {
+          return send(res, 502, { type: 'error', error: { type: 'api_error', message: `mode=${_activeMode}: replacement '${_filtered}' could not be resolved (${_replaced.error})` } });
+        }
+        // Preserve logical-role metadata from the original resolution so headers,
+        // capability, and tier reporting still reflect the requested capability.
+        // Replace only the concrete routing fields.
+        resolved = Object.assign({}, resolved, {
+          backend: _replaced.backend,
+          effectiveModel: _replaced.effectiveModel || _filtered,
+          routingKey: _replaced.routingKey || _filtered,
+          terminalLabel: _replaced.terminalLabel,
+          targetId: _replaced.targetId,
+          targetBody: _replaced.targetBody,
+          // Keep: logicalRole, capability (from original)
+        });
+      }
+    }
+  }
+
+  // ── Phase 3 benchmark-driven ranking modes ─────────────────────────────
+  // For fastest-possible / smallest-possible / best-opensource: rank all
+  // model_routes candidates by the criterion, swap in the best one. Soft-fails
+  // (falls back to slot default) if benchmark.json is absent or no candidate qualifies.
+  {
+    const _activeMode = resolveLlmMode(CONFIG);
+    const RANK_MODES = { 'fastest-possible': 'fastest', 'smallest-possible': 'smallest', 'best-opensource': 'best-opensource' };
+    const _criterion = RANK_MODES[_activeMode];
+    if (_criterion) {
+      if (!BENCHMARK) {
+        proxyLog('mode.ranking_no_benchmark', { mode: _activeMode });
+      } else {
+        const _capKey = resolved.logicalRole ? profileAliasKey(resolved.logicalRole) : null;
+        const _role = _capKey ? BENCHMARK.capability_to_role?.[_capKey] : null;
+        if (!_role) {
+          proxyLog('mode.ranking_no_role', { mode: _activeMode, capability: _capKey });
+        } else {
+          // Candidate set: every key in model_routes, excluding pattern entries.
+          const _candidates = Object.keys(CONFIG.model_routes || {}).filter(k => !k.startsWith('re:'));
+          const _best = pickBenchmarkBest(_criterion, _candidates, BENCHMARK, _role, CONFIG.model_routes || {}, CONFIG.backends || {});
+          if (_best && _best !== resolved.effectiveModel) {
+            proxyLog('mode.ranking_replaced', { mode: _activeMode, capability: _capKey, role: _role, original: resolved.effectiveModel, replacement: _best });
+            const _replaced = resolveBackend(_best);
+            if (!_replaced.error) {
+              resolved = Object.assign({}, resolved, {
+                backend: _replaced.backend,
+                effectiveModel: _replaced.effectiveModel || _best,
+                routingKey: _replaced.routingKey || _best,
+                terminalLabel: _replaced.terminalLabel,
+                targetId: _replaced.targetId,
+                targetBody: _replaced.targetBody,
+              });
+            } else {
+              proxyLog('mode.ranking_resolve_fail', { mode: _activeMode, replacement: _best, error: _replaced.error });
+            }
+          } else if (!_best) {
+            proxyLog('mode.ranking_no_candidate', { mode: _activeMode, capability: _capKey, role: _role, candidates: _candidates.length });
+          }
+        }
+      }
+    }
   }
 
   const { backend, effectiveModel, logicalRole } = resolved;
@@ -3122,7 +3530,16 @@ const server = http.createServer(async (req, res) => {
     logicalRole,
     targetId: resolved.targetId || null,
     requestDefaultSources: targetBody.requestDefaultSources,
+    classifier: resolved._classifier || null,
   };
+
+  // Journal capture: snapshot the client request body (auth-scrubbed via headers
+  // we never store; the body itself contains user prompts which are the point).
+  // Done eagerly here so the entry is populated even if the upstream fails.
+  if (shouldJournal(logicalRole)) {
+    requestMeta._journalRequestBody = body;
+    requestMeta._journalStreamEvents = requestMeta.stream ? [] : null;
+  }
 
   // Track status via response wrapper; use mutable refs so fallback paths update attribution.
   res._statsBackend = backend;
@@ -3354,7 +3771,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 server.listen(INITIAL_PORT, '127.0.0.1', () => {
   proxyApiPort = server.address().port;
-  if (!EXPLICIT_PORT) process.stdout.write(`READY ${proxyApiPort}\n`);
+  process.stdout.write(`READY ${proxyApiPort}\n`);
   console.error(`c-thru listening on 127.0.0.1:${proxyApiPort} (pid=${process.pid})`);
   try { fs.writeFileSync(PID_FILE, String(process.pid)); } catch {}
   if (STARTUP_PROBE_ENABLED) setImmediate(() => runStartupProbes().catch(() => {}));

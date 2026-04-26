@@ -55,4 +55,17 @@ verify the install worked without running a separate command.
 The Node version warning is intentional on first install but noisy on idempotent re-runs where
 the user already knows about the version. No action needed unless it becomes a pain point —
 noting for awareness.
+
+**[debug] Enhance fatal error detection and debug logging**
+Improve error detection for fatal scenarios like the proxy failing to start or configuration being missing. Add more granular debug logs throughout the startup sequence to aid troubleshooting.
+
+**[proxy] Verify proxy readiness with live check**
+Implement a `curl` test (or equivalent) in `c-thru` immediately after proxy startup to verify that the listener is actually alive and responding before handing control back to the caller.
+
+## UX / Polish
+
+**[ux] Professionalize messaging across all tools**
 - [ ] Refactor `tools/c-thru` and related scripts to use more professional, standardized messaging (consistent prefixes, clearer status updates).
+
+**[ux] Advanced startup feedback (fancier spinner)**
+Implement a more sophisticated spinner and dynamic status updates during the "warming up" phase in `c-thru`. Ensure the user is kept informed of specific progress markers while waiting.

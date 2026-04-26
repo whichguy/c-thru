@@ -150,8 +150,8 @@ async function main() {
 
     // ANNOTATE_MODEL=1 → x-claude-proxy-served-by present
     assert(
-      r.headers['x-claude-proxy-served-by'] === E2E_MODEL,
-      `direct route: x-claude-proxy-served-by === ${E2E_MODEL}`
+      r.headers['x-c-thru-served-by'] === E2E_MODEL,
+      `direct route: x-c-thru-served-by === ${E2E_MODEL}`
     );
   });
 
@@ -176,8 +176,8 @@ async function main() {
       `capability alias: x-c-thru-resolved-via.capability === workhorse (got ${via && via.capability})`);
 
     assert(
-      r.headers['x-claude-proxy-served-by'] === E2E_MODEL,
-      `capability alias: x-claude-proxy-served-by === ${E2E_MODEL}`
+      r.headers['x-c-thru-served-by'] === E2E_MODEL,
+      `capability alias: x-c-thru-served-by === ${E2E_MODEL}`
     );
   });
 

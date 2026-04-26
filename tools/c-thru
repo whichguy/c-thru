@@ -13,7 +13,10 @@
 #        c-thru --model gemma4:26b        — Ollama (auto-detected)
 #        c-thru --model bedrock-opus      — Bedrock (from model-map.json)
 #        c-thru --model opus              — Ollama if not in model-map (name passed through)
+#        c-thru --mode offline            — force LLM mode for this invocation (stripped before forwarding)
+#        c-thru --profile 64gb           — force hardware tier (stripped before forwarding)
 #        c-thru --list                    — show all available models
+#        c-thru --help                    — show usage
 #
 # Escape hatch: CLAUDE_PROXY_BYPASS=1 — skip proxy URL (transparent path only).
 # For Ollama-bound launches, match the direct Claude→Ollama client env as closely as possible:
@@ -24,6 +27,18 @@
 #          CLAUDE_ROUTER_DEBUG=2 — same plus proxy port, OLLAMA_*, placeholder flag, route keys sample.
 #          CLAUDE_PROXY_DEBUG=1/2 — enable proxy-side debug logs (router forwards inherited env when spawning the proxy).
 set -eo pipefail
+
+# ── Color output — respects NO_COLOR and non-tty ────────────────────────────
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  RED='\033[0;31m'
+  GREEN='\033[0;32m'
+  YELLOW='\033[1;33m'
+  GRAY='\033[0;90m'
+  BOLD='\033[1m'
+  NC='\033[0m'
+else
+  RED='' GREEN='' YELLOW='' GRAY='' BOLD='' NC=''
+fi
 
 CONFIG=""
 CONFIG_SOURCE="absent"
@@ -195,6 +210,178 @@ resolve_launch_project_dir() {
   LAUNCH_PROJECT_DIR=""
   return 1
 }
+
+# --- --help / -h subcommand ---
+# Defined here — before the config-sync/startup block — so that
+# 'c-thru --help' works even when model-map.json is absent or invalid.
+cmd_help() {
+  echo -e "${BOLD}c-thru${NC} — route Claude Code to alternative model providers"
+  echo ""
+  echo -e "${BOLD}Usage:${NC}"
+  echo "  c-thru [--route <name>] [--model <name>] [claude args...]"
+  echo "  c-thru <subcommand> [options]"
+  echo ""
+  echo -e "${BOLD}Subcommands${NC} ${GRAY}(operate on c-thru itself):${NC}"
+  echo -e "  ${GRAY}Lifecycle:${NC}"
+  echo "  reload                    send SIGHUP to running proxy; confirm via /ping"
+  echo "  restart [--force]         stop and re-spawn proxy (--force escalates to SIGKILL)"
+  echo -e "  ${GRAY}Audit:${NC}"
+  echo "  check-deps [--fix]        audit system deps; --fix installs missing optional tools via brew"
+  echo -e "  ${GRAY}Introspection:${NC}"
+  echo "  list                      show active hw profile, routes, and local Ollama models"
+  echo "  explain <args>            print resolution chain for a hypothetical request (--help for args)"
+  echo "  help                      show this help (also: --help, -h)"
+  echo ""
+  echo -e "${BOLD}Flags${NC} ${GRAY}(stripped before forwarding to claude):${NC}"
+  echo "  --route <name>            use a named route from model-map.json"
+  echo "  --model <model>           override model for this invocation"
+  echo -e "  --mode <mode>             set LLM connectivity mode for this invocation"
+  echo -e "  ${GRAY}    Connectivity:${NC}      connected | offline | local-only"
+  echo -e "  ${GRAY}    Per-cap mix:${NC}       semi-offload | cloud-judge-only | cloud-thinking | local-review"
+  echo -e "  ${GRAY}    Best-of-tier:${NC}      cloud-best-quality | local-best-quality"
+  echo -e "  ${GRAY}    Provider filter:${NC}   cloud-only | claude-only | opensource-only"
+  echo -e "  ${GRAY}    Benchmark rank:${NC}    fastest-possible | smallest-possible | best-opensource"
+  echo -e "  ${GRAY}    Full reference:${NC}    docs/connectivity-modes.md"
+  echo "  --profile <tier>          force hardware tier (16gb|32gb|48gb|64gb|128gb)"
+  echo "  --memory-gb <n>           override RAM detection (= CLAUDE_LLM_MEMORY_GB)"
+  echo "  --bypass-proxy            skip proxy entirely (= CLAUDE_PROXY_BYPASS=1)"
+  echo "  --journal                 enable per-request journaling (= CLAUDE_PROXY_JOURNAL=1)"
+  echo "  --proxy-debug [N]         proxy verbose logs (= CLAUDE_PROXY_DEBUG=N; default 1)"
+  echo "  --router-debug [N]        router verbose logs (= CLAUDE_ROUTER_DEBUG=N; default 1)"
+  echo "  --no-update               skip git self-update (= CLAUDE_ROUTER_NO_UPDATE=1)"
+  echo ""
+  echo -e "${BOLD}Key environment variables:${NC}"
+  echo "  CLAUDE_PROXY_BYPASS=1         skip proxy entirely (direct Anthropic path)"
+  echo "  CLAUDE_ROUTER_DEBUG=1|2       verbose route resolution to stderr"
+  echo "  CLAUDE_PROXY_DEBUG=1|2        proxy-side verbose logs"
+  echo -e "  CLAUDE_LLM_MODE=<mode>        ${GRAY}connected | offline | local-only | semi-offload |${NC}"
+  echo -e "                                ${GRAY}cloud-judge-only | cloud-thinking | local-review |${NC}"
+  echo -e "                                ${GRAY}cloud-best-quality | local-best-quality |${NC}"
+  echo -e "                                ${GRAY}cloud-only | claude-only | opensource-only |${NC}"
+  echo -e "                                ${GRAY}fastest-possible | smallest-possible | best-opensource${NC}"
+  echo "  CLAUDE_LLM_MEMORY_GB=<n>      override RAM detection for hw tier selection"
+  echo "  CLAUDE_ROUTER_NO_UPDATE=1     disable git self-update at startup"
+  echo "  CLAUDE_PROXY_JOURNAL=1        record every request/response to ~/.claude/journal/"
+  echo "  CLAUDE_PROXY_CLASSIFY=1       run small classifier on prompts (Phase A: observe-only)"
+  echo "  CLAUDE_PROXY_CLASSIFY_MODEL   classifier model tag (default gemma4:e2b)"
+  echo "  NO_COLOR=1                    disable colored output"
+  echo ""
+  echo -e "${BOLD}Config:${NC}"
+  echo "  ~/.claude/model-map.overrides.json   user customizations (never overwritten on upgrade)"
+  echo "  ~/.claude/model-map.json             effective merged config (auto-generated)"
+  echo "  \$PWD/.claude/model-map.json          project-local override (highest precedence)"
+  echo ""
+  echo -e "${BOLD}Logs & troubleshooting:${NC}"
+  echo "  tail ~/.claude/proxy.*.log    proxy startup and request logs"
+  echo "  pkill -f claude-proxy         restart a stuck proxy"
+  echo "  c-thru check-deps             audit system dependencies"
+}
+
+# --- check-deps subcommand ---
+# Defined here — before the config-sync/startup block — so that
+# 'c-thru check-deps' works in broken environments where config validation fails.
+cmd_check_deps() {
+  local fix=0
+  for arg in "$@"; do
+    [[ "$arg" == "--fix" ]] && fix=1
+  done
+
+  local any_required_missing=0
+
+  echo "Dependencies:"
+
+  # node (required, ≥15)
+  if command -v node >/dev/null 2>&1; then
+    local node_ver
+    node_ver="$(node -e "process.stdout.write(process.version)" 2>/dev/null || true)"
+    local node_major="${node_ver#v}"; node_major="${node_major%%.*}"
+    if [[ -n "$node_major" && "$node_major" =~ ^[0-9]+$ && "$node_major" -ge 15 ]]; then
+      echo -e "  ${GREEN}✓  node ${node_ver} (≥15 required)${NC}"
+    else
+      echo -e "  ${YELLOW}⚠️  node ${node_ver:-unknown} — claude-proxy requires ≥ 15 (AbortController)${NC}"
+      echo -e "  ${YELLOW}   Fix: brew install node  (macOS)  |  https://nodejs.org  |  nvm install --lts${NC}"
+      any_required_missing=1
+    fi
+  else
+    echo -e "  ${RED}❌ node — required (claude-proxy will not start)${NC}"
+    if command -v brew >/dev/null 2>&1; then
+      echo -e "  ${RED}   Fix: brew install node${NC}"
+    else
+      echo -e "  ${RED}   Fix: https://nodejs.org  (or: nvm install --lts)${NC}"
+    fi
+    any_required_missing=1
+  fi
+
+  # jq (optional — features degrade but fallback to node works)
+  if command -v jq >/dev/null 2>&1; then
+    local jq_ver
+    jq_ver="$(jq --version 2>/dev/null || true)"
+    echo -e "  ${GREEN}✓  ${jq_ver:-jq}${NC}"
+  else
+    echo -e "  ${YELLOW}⚠️  jq — not found (some install/hook steps fall back to node)${NC}"
+    if [[ "$fix" -eq 1 ]] && command -v brew >/dev/null 2>&1; then
+      echo -e "  ${YELLOW}   Running: brew install jq${NC}"
+      brew install jq >/dev/null 2>&1 && echo -e "  ${GREEN}   ✅ jq installed${NC}" \
+        || echo -e "  ${RED}   ❌ brew install jq failed — install manually${NC}"
+    elif command -v brew >/dev/null 2>&1; then
+      echo -e "  ${YELLOW}   Fix: brew install jq  (or: apt install jq)  [or rerun with --fix]${NC}"
+    else
+      echo -e "  ${YELLOW}   Fix: apt install jq  (or https://stedolan.github.io/jq/)${NC}"
+    fi
+  fi
+
+  # curl (low — fallback to ping; almost always present)
+  if command -v curl >/dev/null 2>&1; then
+    local curl_ver
+    curl_ver="$(curl --version 2>/dev/null | head -1 | awk '{print $2}' || true)"
+    echo -e "  ${GREEN}✓  curl ${curl_ver} (connectivity checks)${NC}"
+  else
+    echo -e "  ${YELLOW}⚠️  curl — not found (connectivity detection falls back to ping)${NC}"
+  fi
+
+  # lsof (low — port discovery for reload/restart)
+  if command -v lsof >/dev/null 2>&1; then
+    echo -e "  ${GRAY}✓  lsof (port discovery)${NC}"
+  else
+    echo -e "  ${YELLOW}⚠️  lsof — not found (c-thru reload port discovery will use env fallback)${NC}"
+  fi
+
+  # git (low — self-update only)
+  if command -v git >/dev/null 2>&1; then
+    echo -e "  ${GRAY}✓  git (self-update)${NC}"
+  else
+    echo -e "  ${YELLOW}⚠️  git — not found (self-update disabled; all other features work)${NC}"
+  fi
+
+  # ollama (optional — local models)
+  if command -v ollama >/dev/null 2>&1; then
+    local model_count
+    model_count="$(ollama list 2>/dev/null | tail -n +2 | wc -l | tr -d ' ' || true)"
+    echo -e "  ${GREEN}✓  ollama — ${model_count:-?} model(s) available${NC}"
+  else
+    echo -e "  ${YELLOW}⚠️  ollama — not found (optional: enables local models)${NC}"
+    if [[ "$fix" -eq 1 ]] && command -v brew >/dev/null 2>&1; then
+      echo -e "  ${YELLOW}   Running: brew install ollama${NC}"
+      brew install ollama >/dev/null 2>&1 && echo -e "  ${GREEN}   ✅ ollama installed${NC}" \
+        || echo -e "  ${RED}   ❌ brew install ollama failed — install manually from https://ollama.com${NC}"
+    elif command -v brew >/dev/null 2>&1; then
+      echo -e "  ${YELLOW}   Fix: brew install ollama  (or https://ollama.com)  [or rerun with --fix]${NC}"
+    else
+      echo -e "  ${YELLOW}   Fix: https://ollama.com${NC}"
+    fi
+  fi
+
+  return "$any_required_missing"
+}
+
+# Early dispatch: handle --help and check-deps before config-sync / validation
+# so they work even when model-map.json is absent, corrupt, or fails validation.
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || "${1:-}" == "help" ]]; then
+  cmd_help; exit 0
+fi
+if [[ "${1:-}" == "check-deps" ]]; then
+  cmd_check_deps "$@"; exit $?
+fi
 
 _self_update_script="$ROUTER_SELF_DIR/c-thru-self-update.sh"
 if [[ -x "$_self_update_script" ]]; then
@@ -1009,6 +1196,7 @@ ensure_proxy_running() {
     ready_timeout="${CLAUDE_PROXY_READY_TIMEOUT_SECONDS:-45}"
     rm -f "$ready_pipe"
     mkfifo "$ready_pipe"
+    echo "c-thru: starting claude-proxy..." >&2
     CLAUDE_ROUTER_DEBUG="${CLAUDE_ROUTER_DEBUG:-}" \
       "$proxy_js" >"$ready_pipe" 2>"$temp_log" &
     ROUTER_STARTED_PROXY_PID="$!"
@@ -1044,9 +1232,10 @@ ensure_proxy_running() {
         fi
       fi
       ROUTER_PROXY_LOG_PATH="$final_log"
-      if ! wait_proxy_ping_ready "$ROUTER_PROXY_PORT" 20; then
+    if ! wait_proxy_ping_ready "$ROUTER_PROXY_PORT" 20; then
         start_ec=1
         echo "c-thru: claude-proxy did not become ready on dynamic port :$ROUTER_PROXY_PORT$(describe_proxy_log_target "$final_log")" >&2
+        echo "c-thru: check for port conflicts or invalid model-map config in $CONFIG" >&2
       fi
     fi
     rm -f "$ready_pipe"
@@ -1221,6 +1410,7 @@ ensure_proxy_running() {
 
   if [[ "$start_ec" -eq 1 ]]; then
     echo "c-thru: claude-proxy did not become ready on :$port$(describe_proxy_log_target "$ROUTER_PROXY_LOG_PATH")" >&2
+    echo "c-thru: check for port conflicts or invalid model-map config in $CONFIG" >&2
   fi
   return 0
 }
@@ -1637,6 +1827,71 @@ run_background_ollama_prep_sweep() {
     claude_router_debug_event "ollama sweep result count=$count"
   ) >/dev/null 2>&1 &
   disown 2>/dev/null || true
+}
+
+# Blocking pre-launch check: pull + warm any Ollama models the proxy says are needed
+# but not yet present locally. Runs after proxy is up, before exec'ing claude.
+# Skip: C_THRU_SKIP_PREFLIGHT=1 | proxy port unknown | curl missing | Ollama unreachable
+preflight_model_readiness() {
+  local port="${1:-}"
+  [[ "${C_THRU_SKIP_PREFLIGHT:-0}" == "1" ]] && return 0
+  [[ -n "$port" ]] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+
+  local response
+  response=$(curl -sf --max-time 3 "http://127.0.0.1:$port/v1/active-models" 2>/dev/null) || return 0
+  [[ -n "$response" ]] || return 0
+
+  local required_models
+  if command -v jq >/dev/null 2>&1; then
+    required_models=$(printf '%s' "$response" | jq -r '.local_models[]' 2>/dev/null) || return 0
+  elif command -v node >/dev/null 2>&1; then
+    required_models=$(node -e "
+      try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+          d.local_models.forEach(m=>console.log(m));}catch{}" <<< "$response" 2>/dev/null) || return 0
+  else
+    return 0
+  fi
+  [[ -n "$required_models" ]] || return 0
+
+  local ollama_base="${OLLAMA_URL:-http://localhost:11434}"
+  local pulled_json pulled_models
+  pulled_json=$(curl -sf --max-time 3 "${ollama_base%/}/api/tags" 2>/dev/null) || return 0
+  if command -v jq >/dev/null 2>&1; then
+    pulled_models=$(printf '%s' "$pulled_json" | jq -r '.models[].name' 2>/dev/null || true)
+  else
+    pulled_models=$(node -e "
+      try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+          d.models.forEach(m=>console.log(m.name));}catch{}" <<< "$pulled_json" 2>/dev/null || true)
+  fi
+
+  local any_missing=0
+  while IFS= read -r model; do
+    [[ -n "$model" ]] || continue
+    local bare_model="${model%%@*}"
+    if ! printf '%s\n' "$pulled_models" | grep -qxF "$bare_model"; then
+      any_missing=1
+      echo "c-thru: model '$bare_model' not found locally — pulling before launch..." >&2
+      curl -s "${ollama_base%/}/api/pull" -d "{\"name\":\"${bare_model}\"}" --no-buffer 2>/dev/null | \
+        while IFS= read -r line; do
+          local st
+          if command -v jq >/dev/null 2>&1; then
+            st=$(printf '%s' "$line" | jq -r '.status // empty' 2>/dev/null)
+          else
+            st=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+                            process.stdout.write(d.status||'');}catch{}" <<< "$line" 2>/dev/null)
+          fi
+          [[ -n "$st" ]] && printf '\r  %-60s' "$st" >&2
+        done
+      printf '\n' >&2
+      echo "c-thru: '$bare_model' pulled — warming into VRAM..." >&2
+      curl -s "${ollama_base%/}/api/generate" \
+        -d "{\"model\":\"${bare_model}\",\"prompt\":\"\",\"keep_alive\":\"5m\"}" \
+        >/dev/null 2>&1 &
+      disown $! 2>/dev/null || true
+    fi
+  done <<< "$required_models"
+  [[ "$any_missing" -eq 0 ]] || printf '\n' >&2
 }
 
 ensure_active_tier_ollama_requirements() {
@@ -2085,7 +2340,7 @@ ensure_ollama_running() {
   if [[ "$mode" == "sweep" && -n "$capabilities" ]]; then
     echo "c-thru: warming '$model' on $cli_host (background; capabilities: $capabilities)..." >&2
   elif [[ "$mode" == "active" ]]; then
-    echo "c-thru: warming '$model' on $cli_host..." >&2
+    printf "c-thru: [%s] initializing on %s..." "$model" "$cli_host" >&2
   else
     echo "c-thru: warming '$model' on $cli_host (background)..." >&2
   fi
@@ -2100,17 +2355,19 @@ ensure_ollama_running() {
   if [[ "$mode" == "active" && "$model_loaded" == "0" ]]; then
     local max_wait_iters=40 # 2 minutes total
     local i=0
+    local spinner=("/" "-" "\\" "|")
     while (( i < max_wait_iters )); do
+      local sp="${spinner[$((i % 4))]}"
+      printf "\rc-thru: [%s] %s warming up (waiting for memory residency)..." "$model" "$sp" >&2
       sleep 3
       i=$((i + 1))
       ps_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama ps 2>/dev/null || echo "")
       if echo "$ps_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
-        echo "c-thru: [$model] ready" >&2
+        printf "\rc-thru: [%s] ready                                          \n" "$model" >&2
         return 0
       fi
-      echo "c-thru: [$model] still warming (waiting for memory residency)..." >&2
     done
-    echo "c-thru: [$model] warming timeout — proceeding anyway" >&2
+    printf "\rc-thru: [%s] warming timeout — proceeding anyway              \n" "$model" >&2
   fi
 }
 
@@ -2227,6 +2484,27 @@ build_forwarded_args() {
         ;;
       --route=*)
         i=$((i + 1))
+        continue
+        ;;
+      --mode | --profile | --memory-gb)
+        i=$((i + 2))
+        continue
+        ;;
+      --mode=* | --profile=* | --memory-gb=* | --proxy-debug=* | --router-debug=*)
+        i=$((i + 1))
+        continue
+        ;;
+      --bypass-proxy | --journal | --no-update)
+        i=$((i + 1))
+        continue
+        ;;
+      --proxy-debug | --router-debug)
+        # Optional numeric arg — peek next; if 1|2, consume both, else just the flag
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} && "${ORIG_ARGS[i+1]}" =~ ^[12]$ ]]; then
+          i=$((i + 2))
+        else
+          i=$((i + 1))
+        fi
         continue
         ;;
       --model)
@@ -2366,10 +2644,17 @@ show_models() {
   fi
 }
 
-# --- --list (before arg normalization) ---
-if [[ "${1:-}" == "--list" ]]; then
+# --- list subcommand (was --list flag pre-rename; pre-GA breaking change) ---
+# Both forms accepted — `c-thru list` is canonical, `c-thru --list` kept as alias.
+if [[ "${1:-}" == "list" || "${1:-}" == "--list" ]]; then
   show_models
   exit 0
+fi
+
+# --- explain subcommand — print resolution chain for a hypothetical request ---
+if [[ "${1:-}" == "explain" ]]; then
+  shift
+  exec node "$(dirname "$0")/c-thru-explain.js" "$@"
 fi
 
 # --- reload / restart management subcommands ---
@@ -2551,7 +2836,12 @@ ensure_active_tier_ollama_requirements
 # Pre-pull active-tier Ollama models in background (stamp-guarded, once per config version).
 ensure_active_tier_prepulled
 
-# --- Parse --model / --route; strip --route from forwarded args ---
+# --- Parse c-thru flags; strip them from args forwarded to claude ---
+# Flags recognized here are router-level: --route, --model, --mode, --profile.
+# All four are consumed here and stripped by build_forwarded_args() so the real
+# claude binary never sees them. --mode and --profile are exported as env vars
+# so the proxy inherits them on fresh spawn; CLAUDE_LLM_MODE already wins over
+# any config value (see resolve_llm_mode()).
 ORIG_ARGS=("$@")
 explicit_model=""
 route_name=""
@@ -2584,6 +2874,85 @@ while [[ $i -lt $n ]]; do
         exit 1
       fi
       explicit_model="${ORIG_ARGS[i]}"
+      i=$((i + 1))
+      ;;
+    --mode=*)
+      export CLAUDE_LLM_MODE="${a#--mode=}"
+      i=$((i + 1))
+      ;;
+    --mode)
+      i=$((i + 1))
+      if [[ $i -ge $n ]]; then
+        echo "c-thru: --mode requires a value (connected|offline|local-only|semi-offload|cloud-judge-only|cloud-thinking|local-review|cloud-best-quality|local-best-quality|cloud-only|claude-only|opensource-only|fastest-possible|smallest-possible|best-opensource)" >&2
+        exit 1
+      fi
+      export CLAUDE_LLM_MODE="${ORIG_ARGS[i]}"
+      i=$((i + 1))
+      ;;
+    --profile=*)
+      export CLAUDE_LLM_PROFILE="${a#--profile=}"
+      i=$((i + 1))
+      ;;
+    --profile)
+      i=$((i + 1))
+      if [[ $i -ge $n ]]; then
+        echo "c-thru: --profile requires a tier (16gb|32gb|48gb|64gb|128gb)" >&2
+        exit 1
+      fi
+      export CLAUDE_LLM_PROFILE="${ORIG_ARGS[i]}"
+      i=$((i + 1))
+      ;;
+    # ── Phase B: env-var-equivalent flags (stripped before forwarding to claude) ──
+    --bypass-proxy)
+      export CLAUDE_PROXY_BYPASS=1
+      i=$((i + 1))
+      ;;
+    --journal)
+      export CLAUDE_PROXY_JOURNAL=1
+      i=$((i + 1))
+      ;;
+    --no-update)
+      export CLAUDE_ROUTER_NO_UPDATE=1
+      i=$((i + 1))
+      ;;
+    --proxy-debug=*)
+      export CLAUDE_PROXY_DEBUG="${a#--proxy-debug=}"
+      i=$((i + 1))
+      ;;
+    --proxy-debug)
+      # Accept --proxy-debug (defaults to 1) or --proxy-debug N
+      i=$((i + 1))
+      if [[ $i -lt $n && "${ORIG_ARGS[i]}" =~ ^[12]$ ]]; then
+        export CLAUDE_PROXY_DEBUG="${ORIG_ARGS[i]}"
+        i=$((i + 1))
+      else
+        export CLAUDE_PROXY_DEBUG=1
+      fi
+      ;;
+    --router-debug=*)
+      export CLAUDE_ROUTER_DEBUG="${a#--router-debug=}"
+      i=$((i + 1))
+      ;;
+    --router-debug)
+      i=$((i + 1))
+      if [[ $i -lt $n && "${ORIG_ARGS[i]}" =~ ^[12]$ ]]; then
+        export CLAUDE_ROUTER_DEBUG="${ORIG_ARGS[i]}"
+        i=$((i + 1))
+      else
+        export CLAUDE_ROUTER_DEBUG=1
+      fi
+      ;;
+    --memory-gb=*)
+      export CLAUDE_LLM_MEMORY_GB="${a#--memory-gb=}"
+      i=$((i + 1))
+      ;;
+    --memory-gb)
+      i=$((i + 1))
+      if [[ $i -ge $n ]] || ! [[ "${ORIG_ARGS[i]}" =~ ^[0-9]+$ ]]; then
+        echo "c-thru: --memory-gb requires a positive integer (got '${ORIG_ARGS[i]:-}')" >&2
+        exit 1
+      fi
+      export CLAUDE_LLM_MEMORY_GB="${ORIG_ARGS[i]}"
       i=$((i + 1))
       ;;
     *)
@@ -2796,5 +3165,6 @@ while IFS= read -r -d '' arg; do
   FINAL_ARGS+=("$arg")
 done < <(build_forwarded_args "$FINAL_MODEL_ARG")
 debug_print_final_claude_command "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
+preflight_model_readiness "${ROUTER_PROXY_PORT:-}"
 run_real_claude "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 exit $?

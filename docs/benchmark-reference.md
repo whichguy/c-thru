@@ -33,7 +33,7 @@ When a new model launches (e.g., Qwen3.7, Opus 4.8), follow this document's Part
 | doc-writer | 1-2 (Pattern + Format) | IFEval | MultiChallenge | — |
 | scaffolder | 1 (Mechanical Pattern) | IFEval | SWE-bench Verified | BFCL V4 |
 | test-writer | 1-2 (Pattern + Edge Cases) | IFEval | SWE-bench Verified | — |
-| reviewer-fix | 3 (Iterative Code Analysis) | BFCL V4 Multi-Turn | MultiChallenge | IFEval |
+| wave-reviewer | 3 (Iterative Code Analysis) | BFCL V4 Multi-Turn | MultiChallenge | IFEval |
 | implementer | 3 (Deep Code) | SWE-bench Pro | SWE-bench Verified | Terminal-Bench 2 |
 | auditor | 4 (Judgment) | Terminal-Bench 2 | τ²-Bench | IFEval |
 | security-reviewer | 4 (Domain Judgment) | SecCodeBench | GPQA Diamond | SWE-bench Pro |
@@ -223,7 +223,7 @@ If you have time to monitor only three benchmarks, these three cover 10 of 12 ag
 
 **What it measures**: Tool/function calling ability. V4 tests single-turn, multi-turn, parallel calls, and abstention (not calling unnecessarily).
 
-**Why it matters**: Directly predicts quality for tool-using agents — reviewer-fix, integrator, auditor, scaffolder.
+**Why it matters**: Directly predicts quality for tool-using agents — wave-reviewer, integrator, auditor, scaffolder.
 
 **Primary source**: https://gorilla.cs.berkeley.edu/leaderboard.html
 
@@ -239,7 +239,7 @@ If you have time to monitor only three benchmarks, these three cover 10 of 12 ag
 | Qwen3.5-397B | 72.9 |
 | GPT-5.2 | 63.1 |
 
-**Important multi-turn observation**: Models that score 90%+ on single-turn can drop to 60-70% on multi-turn. Multi-turn is where reviewer-fix loops live. Check both dimensions separately.
+**Important multi-turn observation**: Models that score 90%+ on single-turn can drop to 60-70% on multi-turn. Multi-turn is where wave-reviewer loops live. Check both dimensions separately.
 
 **Re-check trigger**: BFCL V5 release, new function-calling-focused models.
 
@@ -277,7 +277,7 @@ If you have time to monitor only three benchmarks, these three cover 10 of 12 ag
 
 **What it measures**: Interactive tool invocation with adversarial users across multiple domains (retail, airline, telecom).
 
-**Why it matters**: Validates multi-turn tool use in realistic agentic scenarios. Secondary signal for reviewer-fix and auditor.
+**Why it matters**: Validates multi-turn tool use in realistic agentic scenarios. Secondary signal for wave-reviewer and auditor.
 
 **Primary source**: Qwen3.5 benchmark page (Qwen team maintains comparative data)
 
@@ -301,7 +301,7 @@ If you have time to monitor only three benchmarks, these three cover 10 of 12 ag
 
 **What it measures**: Quality of multi-turn dialog. Tests consistency, memory, instruction adherence across conversation.
 
-**Why it matters**: Directly predicts reviewer-fix quality in iteration loops. Secondary for agents in bounded iteration loops.
+**Why it matters**: Directly predicts wave-reviewer quality in iteration loops. Secondary for agents in bounded iteration loops.
 
 **Primary source**: Qwen3.5 benchmark page
 
@@ -491,7 +491,7 @@ If any fails: revert LiteLLM config. Agent markdown files don't change either wa
 | doc-writer | Qwen3.6:35b | Shared — Level 1-2 pattern work |
 | scaffolder | Qwen3-Coder-30B | Code idioms + IFEval inheritance |
 | test-writer | Qwen3-Coder-30B | Shared code specialist |
-| reviewer-fix | Qwen3-Coder-30B | Multi-turn code review capability |
+| wave-reviewer | Qwen3-Coder-30B | Multi-turn code review capability |
 | implementer | Devstral Small 2 | SWE-bench 68% at 24B — best-in-class size |
 | auditor | Opus 4.6/4.7 | Terminal-Bench 2 leadership + parity |
 | security-reviewer | Opus 4.6/4.7 | Domain-critical, no compromise |
@@ -556,7 +556,7 @@ Areas where prior research was incomplete or where newer benchmarks haven't been
 
 3. **SWE-bench Verified is saturated**; use SWE-bench Pro for honest discrimination.
 
-4. **Top models score 23% on SWE-bench Pro**. Plan for imperfect implementer output; reviewer-fix loop is essential.
+4. **Top models score 23% on SWE-bench Pro**. Plan for imperfect implementer output; wave-reviewer loop is essential.
 
 5. **Public benchmarks are good for shortlisting, insufficient for final selection**. Run empirical tests on your specific work domain.
 
