@@ -52,7 +52,7 @@ console.log('1. connected mode: cloud-capable tiers use cloud models for judge')
     assert(model === expected, `${tier} judge connected → ${expected} (got ${model})`);
   }
   // low-ram tiers stay local
-  for (const tier of ['16gb', '32gb']) {
+  for (const tier of ['16gb']) {
     const entry = profiles[tier] && profiles[tier]['judge'];
     const model = resolveProfileModel(entry, 'connected');
     assert(model && !model.startsWith('claude-'), `${tier} judge connected → local model (got ${model})`);
@@ -129,10 +129,10 @@ console.log('\n6. cloud-judge-only: judge+judge-strict cloud, orchestrator stays
   }
 }
 
-// ── 7. 16gb/32gb: semi-offload/cloud-judge-only degrade gracefully ────
-console.log('\n7. 16gb/32gb: semi-offload degrades to disconnect_model (no cloud)');
+// ── 7. 16gb: semi-offload/cloud-judge-only degrade gracefully ────
+console.log('\n7. 16gb: semi-offload degrades to disconnect_model (no cloud)');
 {
-  for (const tier of ['16gb', '32gb']) {
+  for (const tier of ['16gb']) {
     for (const cap of ['judge', 'orchestrator']) {
       const entry = profiles[tier] && profiles[tier][cap];
       if (!entry) continue;

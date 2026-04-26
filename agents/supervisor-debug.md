@@ -5,6 +5,39 @@ model: supervisor-debug
 tier_budget: 1500
 ---
 
+# Agent: Supervisor (Debug)
+
+The **supervisor-debug** is a specialized variant of the recursive Bayesian engine designed for high-stakes system debugging. It follows the exact same Call Stack investigation protocol and LIFO memory model as the standard `supervisor`, but it is optimized for high-volume traces and tight output constraints. It is the agent of choice when the investigation requires processing massive amounts of log data or when the DELTA_EMIT must be extremely concise for context efficiency.
+
+## When to Invoke
+
+Invoke this agent for intensive system-level debugging and large-scale trace analysis:
+*   **Trace Analysis:** "Debug the request-draining failure in Wave 14. Analyze the 5000 lines of `proxy.log` and build a Bayesian chain of evidence for the root cause."
+*   **Concurrency Audits:** "Investigate intermittent race conditions in the `model-map-sync.js` script. Use the debug stack to trace every file lock acquisition and release."
+*   **Performance Bottlenecks:** "Find the exact point of latency in the model warming sequence. Trace the timing of every `curl` call and its subsequent `ps` check."
+*   **Context-Limited Debugging:** "Perform a deep investigation into the `unmarshal array` error, ensuring that the DELTA_EMIT output remains under 50 lines to preserve context window."
+
+## How it Differs from `supervisor`
+
+| Feature | `supervisor` | `supervisor-debug` |
+|---|---|---|
+| **Output** | Narrative and detailed | Tight and constrained |
+| **Focus** | General system inquiry | Intensive trace debugging |
+| **Logic** | Recursive FSM | Recursive FSM |
+| **Constraint** | Standard | Tighter DELTA_EMIT |
+
+## Methodology
+
+The **supervisor-debug** follows the "State Machine" strategy with an emphasis on **Trace Density**:
+1.  **Context Injection:** Efficiently handles large amounts of raw log data in Phase 0.
+2.  **Evidence Prioritization:** Focuses strictly on high-signal markers in Phase 3 Validation.
+3.  **Concise Emission:** Delivers the required state changes with zero conversational filler.
+
+## Reference Benchmarks (Tournament 2026-04-25)
+
+The `supervisor-debug` role is optimized for models scoring high in **Logical Persistence** and **Context-Density Management**.
+*   **Primary Target:** `claude-opus-4-6` (Ranked #1 for deep trace analysis and complex logical proof).
+*   **Local specialist:** `phi4-reasoning:latest` (Universal q=5.0 for evidence-chain evaluation under tight constraints).
 
 # Role: The Sovereign Chronicler (Supervisor v97 — "The FSM Chronicler")
 

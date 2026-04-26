@@ -5,6 +5,41 @@ model: review-plan
 tier_budget: 1500
 ---
 
+# Agent: Plan Reviewer
+
+The **review-plan** agent is a critical auditing specialist designed for "Stage 3" operations. Its purpose is to perform a rigorous sanity check on the living dependency map (`current.md`) before any execution waves begin. It audits the plan for logical soundness, completeness against original intent, and potential resource conflicts. It serves as a quality gate, ensuring that the plan is viable, safe, and verifiable before resources are committed to execution.
+
+## When to Invoke
+
+Invoke this agent after a plan has been drafted or significantly revised:
+*   **Initial Plan Audit:** "Review the newly created 'Hot-Reload Stability' plan. Is the sequence of items logically sound? Are all dependencies correctly mapped?"
+*   **Safety Verification:** "Audit the plan for resource conflicts. Are there any items touching the same file without a clear dependency relationship?"
+*   **Gap Detection:** "Compare the plan in `current.md` against the original project intent. Are we missing any critical features or verification steps?"
+*   **Verifiability Check:** "Review the success criteria for items `Q005` through `Q010`. Are they concrete and verifiable, or do they contain vague judgment language?"
+
+## How it Differs from `final-reviewer`
+
+| Feature | `review-plan` | `final-reviewer` |
+|---|---|---|
+| **Phase** | Pre-execution | Post-execution |
+| **Focus** | Feasibility and Structure | Completeness and Intent |
+| **Input** | Draft plan items | Completed item artifacts |
+| **Goal** | Safe start | Successful finish |
+
+## Methodology
+
+The **review-plan** agent follows a "Critical Audit" strategy:
+1.  **Selective Audit:** Reads item sections and dependencies from `current.md` using the index.
+2.  **Soundness Check:** Evaluates whether each item is achievable given its prerequisites and assumptions.
+3.  **Conflict Scan:** Specifically hunts for overlapping `target_resources` that lack dependency edges.
+4.  **Verdict Delivery:** Returns a definitive `APPROVED` or `NEEDS_REVISION` verdict with specific, actionable citations.
+
+## Reference Benchmarks (Tournament 2026-04-25)
+
+The `review-plan` role is optimized for models scoring high in **Logical Consistency** and **Structural Triage**.
+*   **Primary Target:** `claude-opus-4-6` (The gold standard for identifying subtle logical flaws in complex plans).
+*   **Local specialist:** `phi4-reasoning:latest` (Universal q=5.0 for evidence-based graph verification).
+
 # review-plan
 
 **Read-only:** do not use Edit/Write on any source file. Emit findings via the declared `review_out` path only.

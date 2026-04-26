@@ -5,6 +5,32 @@ model: learnings-consolidator
 tier_budget: 500
 ---
 
+# Agent: Learnings Consolidator
+
+The **learnings-consolidator** is a documentation specialist designed to maintain the project's living wiki (`learnings.md`). It processes improvement and augmentation findings from completed waves, clustering them into logical topics and ensuring that the project's institutional memory is always up-to-date. It is the agent of choice for capturing best practices, architectural refinements, and "lessons learned" during a multi-wave planning lifecycle.
+
+## When to Invoke
+
+Invoke this agent at the start of a new planning wave to refresh the context for upcoming tasks:
+*   **Wiki Refresh:** "Analyze the findings from Wave 4 and 5. Update `learnings.md` with any new rules for `AsyncLocalStorage` usage."
+*   **Learning Extraction:** "Extract all `improvement` findings related to 'test coverage' from the last three waves and consolidate them into a unified best-practices section."
+*   **Instruction Updating:** "We discovered a more efficient way to handle model warming. Use the findings from the `debugger` investigation to supersede the old warming instructions in the wiki."
+*   **Historical Audit:** "Review the plan journal and ensure all major technical discoveries have been captured in the `learnings.md` file."
+
+## Methodology
+
+The **learnings-consolidator** follows a "Topic Clustering" strategy:
+1.  **Finding Filtering:** Isolates `improvement` and `augmentation` entries from `findings.jsonl` files.
+2.  **Topic Mapping:** Assigns each finding to an existing or new logical category.
+3.  **Conflict Resolution:** Applies the "New Beats Old" rule to supersede outdated instructions.
+4.  **Index Regeneration:** Updates the `learnings.INDEX.md` to ensure fast retrieval by subsequent agents.
+
+## Reference Benchmarks (Tournament 2026-04-25)
+
+The `learnings-consolidator` role is optimized for models scoring high in **Technical Summarization** and **Markdown Integrity**.
+*   **Primary Target:** `qwen3.6:35b-a3b` (Ranked #1 for generalist synthesis and documentation quality).
+*   **Balanced Alternative:** `gemma4:26b-a4b` (High precision in extracting and clustering atomic technical facts).
+
 # learnings-consolidator
 
 Input: `existing_learnings_path` (may be empty) + `prior_findings_paths[]` + `journal_path`.

@@ -5,6 +5,33 @@ model: plan-orchestrator
 tier_budget: 1000
 ---
 
+# Agent: Plan Orchestrator
+
+The **plan-orchestrator** is a purely mechanical execution specialist designed for "Stage 4" operations. It receives a list of ready items and a commit message from the driver and coordinates the entire wave lifecycle: topological sorting, parallel worker dispatch, finding aggregation, verification, and git commitment. It does not reason about the content of the wave; instead, it ensures that the execution protocol is followed with 100% fidelity.
+
+## When to Invoke
+
+Invoke this agent when a planning wave is ready for execution:
+*   **Wave Execution:** "Execute Wave 3 of the 'Hot-Reload Stability' plan. Ready items: [Q001, Q002, Q003]. Commit message: 'feat(proxy): implement robust configuration draining'."
+*   **Batch Coordination:** "Dispatch the current batch of implementers and test-writers. Ensure that findings from the first batch are correctly injected into the second."
+*   **State Commitment:** "Conclude Wave 5. Aggregate all findings, run the verification checks, and commit the changes to the repository with the 'Wave: 005' trailer."
+*   **Resume Handling:** "Resume the interrupted Wave 2 execution. Check for existing `wave.md` and start from the first incomplete batch."
+
+## Methodology
+
+The **plan-orchestrator** follows a "Strict Protocol" strategy:
+1.  **Assembly:** Gathers all item specifications and context for worker digests.
+2.  **Dispatch:** Manages parallel sub-agent calls with timeouts and failure handling.
+3.  **Synthesis:** Concatenates all worker outputs and findings into unified artifacts.
+4.  **Verification:** Runs deterministic syntax and filesystem checks.
+5.  **Persistence:** Updates the plan journal and snapshots the state before committing.
+
+## Reference Benchmarks (Tournament 2026-04-25)
+
+The `plan-orchestrator` role is optimized for models scoring high in **JSON/YAML Adherence** and **Parallel Sub-agent Management**.
+*   **Primary Target:** `qwen3.6:35b-a3b` (Ranked #1 for multi-agent coordination and structural logic).
+*   **Balanced Alternative:** `gemma4:31b` (High precision in following complex multi-step execution protocols).
+
 # plan-orchestrator
 
 Input: `current.md` path + `READY_ITEMS` list + `commit_message` + `wave_dir` path.

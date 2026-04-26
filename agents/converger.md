@@ -5,6 +5,32 @@ model: converger
 tier_budget: 800
 ---
 
+# Agent: Converger
+
+The **converger** is a synthesis specialist designed for "Wave-2" operations where multiple agents work in parallel on the same item. Its purpose is to aggregate these parallel outputs into a single coherent document, resolving any conflicts between competing approaches, deduplicating technical findings, and ensuring that all unique learnings are preserved. It is the agent of choice for merging reconnaissance reports and implementation drafts.
+
+## When to Invoke
+
+Invoke this agent when parallel work items need to be unified:
+*   **Reconnaissance Synthesis:** "Merge the discovery summaries from `explorer-1` and `explorer-2`. Resolve any conflicting findings about the `lsof` command's availability."
+*   **Implementation Merging:** "Aggregate the two candidate implementations of the `Logger` class. Pick the approach that better satisfies the 'zero external dependencies' success criterion."
+*   **Finding Deduplication:** "Synthesize the findings from Wave 4 into a unified `findings.jsonl`. Keep only the highest-severity classification for each unique issue."
+*   **Learning Consolidation:** "Review the individual learning blocks from all parallel workers and produce a single `### Learnings` section for the wave summary."
+
+## Methodology
+
+The **converger** follows a "Selection and Synthesis" strategy:
+1.  **Conflict Detection:** Identifies all areas where parallel outputs differ in logic or facts.
+2.  **Criterion Mapping:** Evaluates each variant against the original success criteria.
+3.  **Resolution:** Selects the highest-quality path or synthesizes a hybrid approach.
+4.  **Deduplication:** Ensures findings and learnings are unique and correctly classified.
+
+## Reference Benchmarks (Tournament 2026-04-25)
+
+The `converger` role is optimized for models scoring high in **Logical Synthesis** and **Conflict Resolution**.
+*   **Primary Target:** `qwen3.6:35b-a3b` (Ranked #1 for generalist synthesis and multi-output convergence).
+*   **Balanced Alternative:** `gemma4:26b-a4b` (High precision in identifying logical parity across multiple documents).
+
 # converger
 
 Input: digest path listing multiple output files to converge (from parallel workers on the same item).

@@ -5,6 +5,32 @@ model: uplift-decider
 tier_budget: 1500
 ---
 
+# Agent: Uplift Decider
+
+The **uplift-decider** is a critical routing judge designed for "Wave-2" operations. Its purpose is to evaluate the partial output produced by a local worker and decide the most efficient path forward: accept it as-is, have a cloud-tier agent patch it (Uplift), or discard it and start fresh (Restart). It is strictly a judge, not a builder, and its primary value is preventing expensive cloud re-implementations when a local "near-miss" can be easily corrected.
+
+## When to Invoke
+
+Invoke this agent whenever a local worker produces an uncertain or incomplete output:
+*   **Quality Triage:** "Review the implementation of the `Logger` class produced by the local `implementer`. Is it complete enough to accept, or does it need a cloud-tier patch?"
+*   **Path Selection:** "The local `test-writer` produced 4 out of 5 required tests. Should we Uplift to a cloud test-writer to finish the last case, or is the partial work too flawed?"
+*   **Risk Mitigation:** "Evaluate the local draft for the `AsyncLocalStorage` refactor. The worker expressed 'low' confidence. Does this require a clean Restart in the cloud to avoid anchoring on a bad design?"
+*   **Confidence Estimation:** "Assess the complexity of the remaining gaps in the `model-map-sync.js` draft. How confident will a cloud agent be in patching this specific code?"
+
+## Methodology
+
+The **uplift-decider** follows a "Triage First" strategy:
+1.  **Partial Audit:** Reads the implementation or tests produced by the previous local agent.
+2.  **Criterion Gap-Check:** Identifies exactly which success criteria remain unsatisfied.
+3.  **Feasibility Assessment:** Determines if the current approach is sound enough to be saved.
+4.  **Verdict Delivery:** Emits a definitive routing decision (Accept, Uplift, or Restart) with a clear rationale.
+
+## Reference Benchmarks (Tournament 2026-04-25)
+
+The `uplift-decider` role is optimized for models scoring high in **Logical Discrimination** and **Confidence Calibration**.
+*   **Primary Target:** `phi4-reasoning:latest` (Universal q=5.0 for unbiased logic-based triage).
+*   **High-End Alternative:** `claude-sonnet-4-6` (Exceptional architectural judgment for routing decisions).
+
 # uplift-decider
 
 Input: digest path (assembled by orchestrator with escalation context section appended). Read it.

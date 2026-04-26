@@ -134,18 +134,18 @@
         "on_failure": "cascade"
       },
       "classifier": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "gemma4:26b-a4b",
+        "disconnect_model": "gemma4:26b-a4b",
         "on_failure": "hard_fail"
       },
       "explorer": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "reviewer": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "workhorse": {
@@ -180,7 +180,8 @@
         "local_best_model": "phi4-reasoning:latest",
         "on_failure": "hard_fail",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "cloud-judge-only": "claude-sonnet-4-6"
         }
       },
       "orchestrator": {
@@ -194,8 +195,8 @@
         }
       },
       "code-analyst": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "pattern-coder": {
@@ -205,14 +206,15 @@
       },
       "deep-coder": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gpt-oss:20b",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
-      "local-planner": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+      "reviewer": {
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
+
       "commit-message-generator": {
         "connected_model": "qwen3:1.7b",
         "disconnect_model": "qwen3:1.7b",
@@ -224,8 +226,10 @@
         "on_failure": "hard_fail"
       },
       "code-analyst-cloud": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "devstral-small:2",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "devstral-small:2",
         "on_failure": "hard_fail"
       },
       "reasoner": {
@@ -239,9 +243,9 @@
         "on_failure": "cascade"
       },
       "deep-coder-precise": {
-        "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b",
-        "on_failure": "hard_fail"
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
+        "on_failure": "cascade"
       },
       "fast-scout": {
         "connected_model": "gemma4:e2b",
@@ -257,39 +261,39 @@
     "48gb": {
       "default": {
         "connected_model": "glm-5.1:cloud",
-        "disconnect_model": "gemma4:26b-mxfp8",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "glm-5.1:cloud",
-        "local_best_model": "gemma4:26b-mxfp8",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "classifier": {
-        "connected_model": "gemma4:26b-mxfp8",
-        "disconnect_model": "gemma4:26b-mxfp8",
+        "connected_model": "gemma4:26b-a4b",
+        "disconnect_model": "gemma4:26b-a4b",
         "on_failure": "hard_fail"
       },
       "explorer": {
-        "connected_model": "gemma4:26b-mxfp8",
-        "disconnect_model": "gemma4:26b-mxfp8",
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "reviewer": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "workhorse": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gemma4:26b-mxfp8",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "gemma4:26b-mxfp8",
-        "on_failure": "cascade"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "coder": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "qwen3-coder:30b",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3-coder:30b",
-        "on_failure": "cascade"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
@@ -309,7 +313,8 @@
         "local_best_model": "phi4-reasoning:latest",
         "on_failure": "hard_fail",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "cloud-judge-only": "claude-sonnet-4-6"
         }
       },
       "orchestrator": {
@@ -323,8 +328,8 @@
         }
       },
       "code-analyst": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "pattern-coder": {
@@ -334,13 +339,16 @@
       },
       "deep-coder": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gpt-oss:20b",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "local-planner": {
         "connected_model": "qwen3.6:27b-coding-nvfp4",
         "disconnect_model": "qwen3.6:27b-coding-nvfp4",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
       },
       "commit-message-generator": {
         "connected_model": "qwen3.6:27b-coding-nvfp4",
@@ -356,9 +364,9 @@
       },
       "code-analyst-cloud": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gpt-oss:20b",
+        "disconnect_model": "devstral-small:2",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "gpt-oss:20b",
+        "local_best_model": "devstral-small:2",
         "on_failure": "hard_fail"
       },
       "reasoner": {
@@ -390,39 +398,39 @@
     "64gb": {
       "default": {
         "connected_model": "glm-5.1:cloud",
-        "disconnect_model": "gemma4:26b-mxfp8",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "glm-5.1:cloud",
-        "local_best_model": "gemma4:26b-mxfp8",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "classifier": {
-        "connected_model": "gemma4:26b-mxfp8",
-        "disconnect_model": "gemma4:26b-mxfp8",
+        "connected_model": "gemma4:26b-a4b",
+        "disconnect_model": "gemma4:26b-a4b",
         "on_failure": "hard_fail"
       },
       "explorer": {
-        "connected_model": "gemma4:26b-mxfp8",
-        "disconnect_model": "gemma4:26b-mxfp8",
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "reviewer": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "workhorse": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gemma4:26b-mxfp8",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "gemma4:26b-mxfp8",
-        "on_failure": "cascade"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "coder": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "qwen3-coder:30b",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3-coder:30b",
-        "on_failure": "cascade"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
@@ -442,7 +450,8 @@
         "local_best_model": "phi4-reasoning:latest",
         "on_failure": "hard_fail",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "cloud-judge-only": "claude-sonnet-4-6"
         }
       },
       "orchestrator": {
@@ -456,8 +465,8 @@
         }
       },
       "code-analyst": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "pattern-coder": {
@@ -467,13 +476,16 @@
       },
       "deep-coder": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gpt-oss:20b",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
       "local-planner": {
         "connected_model": "qwen3.6:27b-coding-nvfp4",
         "disconnect_model": "qwen3.6:27b-coding-nvfp4",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
       },
       "commit-message-generator": {
         "connected_model": "qwen3:1.7b",
@@ -489,9 +501,9 @@
       },
       "code-analyst-cloud": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gpt-oss:20b",
+        "disconnect_model": "devstral-small:2",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "gpt-oss:20b",
+        "local_best_model": "devstral-small:2",
         "on_failure": "hard_fail"
       },
       "reasoner": {
@@ -509,9 +521,9 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-mxfp8",
         "on_failure": "hard_fail"
       },
-      "fast-scout": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+      "reviewer": {
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       }
     },
@@ -534,11 +546,11 @@
         "on_failure": "cascade"
       },
       "reviewer": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "devstral-2",
+        "disconnect_model": "devstral-2",
         "on_failure": "cascade",
         "modes": {
-          "local-review": "gpt-oss:20b"
+          "local-review": "devstral-2"
         }
       },
       "workhorse": {
@@ -567,9 +579,9 @@
       },
       "judge-strict": {
         "connected_model": "claude-opus-4-6",
-        "disconnect_model": "phi4-reasoning:latest",
+        "disconnect_model": "devstral-2",
         "cloud_best_model": "claude-opus-4-6",
-        "local_best_model": "phi4-reasoning:latest",
+        "local_best_model": "devstral-2",
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-opus-4-6",
@@ -588,11 +600,11 @@
         }
       },
       "code-analyst": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
+        "connected_model": "devstral-2",
+        "disconnect_model": "devstral-2",
         "on_failure": "cascade",
         "modes": {
-          "local-review": "gpt-oss:20b"
+          "local-review": "devstral-2"
         }
       },
       "code-analyst-light": {
@@ -601,8 +613,8 @@
         "on_failure": "cascade"
       },
       "deep-coder-precise": {
-        "connected_model": "qwen3.6:35b-a3b-coding-mxfp8",
-        "disconnect_model": "qwen3.6:35b-a3b-coding-mxfp8",
+        "connected_model": "devstral-2",
+        "disconnect_model": "devstral-2",
         "on_failure": "cascade"
       },
       "fast-scout": {
@@ -620,12 +632,12 @@
         "connected_model": "qwen3-coder:30b",
         "disconnect_model": "qwen3-coder:30b",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3-coder-next:q8_0",
+        "local_best_model": "devstral-2",
         "on_failure": "cascade"
       },
       "agentic-coder": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-2",
+        "disconnect_model": "devstral-2",
         "on_failure": "cascade"
       },
       "local-planner": {
@@ -801,7 +813,8 @@
       "name": "claude-opus-4-6",
       "equivalents": [
         "qwen3.6:35b-a3b",
-        "devstral-2"
+        "devstral-2",
+        "phi4-reasoning:latest"
       ]
     },
     {
@@ -996,6 +1009,79 @@
           "quality_score": 55,
           "speed_score": 95
         }
+      ]
+    },
+    "64gb": {
+      "default": [
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
+        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 },
+        { "model": "qwen3.5:9b", "quality_score": 55, "speed_score": 95 }
+      ],
+      "judge": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "phi4-reasoning:latest", "quality_score": 85, "speed_score": 43 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+      ],
+      "orchestrator": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+      ],
+      "deep-coder": [
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
+        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+      ],
+      "local-planner": [
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
+        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+      ],
+      "coder": [
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
+        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+      ],
+      "workhorse": [
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
+        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+      ]
+    },
+    "128gb": {
+      "default": [
+        { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 },
+        { "model": "gemma4:26b", "quality_score": 72, "speed_score": 80 }
+      ],
+      "judge": [
+        { "model": "claude-opus-4-6", "quality_score": 100, "speed_score": 50 },
+        { "model": "phi4-reasoning:latest", "quality_score": 85, "speed_score": 43 },
+        { "model": "devstral-2", "quality_score": 84, "speed_score": 7 }
+      ],
+      "orchestrator": [
+        { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 }
+      ],
+      "deep-coder": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 },
+        { "model": "devstral-2", "quality_score": 84, "speed_score": 7 }
+      ],
+      "local-planner": [
+        { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 }
+      ],
+      "coder": [
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 }
+      ],
+      "workhorse": [
+        { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 }
       ]
     }
   },

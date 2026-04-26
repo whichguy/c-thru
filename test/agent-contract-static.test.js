@@ -92,6 +92,27 @@ const ROSTER = {
   'wave-synthesizer':       { warnOnly: true },
   'learnings-consolidator': { warnOnly: true },
 
+  // ── General roles: warn-only (no STATUS contract defined) ───────────────────
+  'generalist':             { warnOnly: true },
+  'coder':                  { warnOnly: true },
+  'agentic-coder':          { warnOnly: true },
+  'debugger':               { warnOnly: true },
+  'long-context':           { warnOnly: true },
+  'fast-generalist':        { warnOnly: true },
+  'vision':                 { warnOnly: true },
+  'pdf':                    { warnOnly: true },
+  'large-general':          { warnOnly: true },
+  'edge':                   { warnOnly: true },
+  'judge':                  { warnOnly: true },
+  'reviewer':               { warnOnly: true },
+  'refactor':               { warnOnly: true },
+  'context-manager':        { warnOnly: true },
+  'reasoner':               { warnOnly: true },
+  'fast-scout':             { warnOnly: true },
+  'code-analyst-light':     { warnOnly: true },
+  'deep-coder-precise':     { warnOnly: true },
+  'orchestrator':           { warnOnly: true },
+
   // ── Routing-only entries: no agent file; resolve via agent_to_capability only ──
   // routingOnly: true — skip all file checks; only coverage in agent_to_capability is verified.
   'judge-evaluator': { routingOnly: true },
