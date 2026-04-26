@@ -55,7 +55,7 @@ function repoDefaultsPath(baseDir = __dirname) {
 }
 
 function maybeSyncLayeredProfileModelMap(options = {}) {
-  const { baseDir = __dirname, onSyncFailure = null } = options;
+  const { baseDir = __dirname, onSyncFailure = null, cwd = process.env.CLAUDE_MODEL_MAP_LAUNCH_CWD || process.cwd() } = options;
   const claudeDir = profileClaudeDir();
   if (!claudeDir) return;
 
@@ -64,20 +64,24 @@ function maybeSyncLayeredProfileModelMap(options = {}) {
   if (!defaultsPath) return;
 
   const overridesPath = path.join(claudeDir, 'model-map.overrides.json');
-  if (!fs.existsSync(overridesPath)) return;
-
+  const projectPath = findParentModelMap(cwd);
   const effectivePath = path.join(claudeDir, 'model-map.json');
+  
   const syncTool = path.join(baseDir, 'model-map-sync.js');
   if (!fs.existsSync(syncTool)) return;
 
+  // 3-Tier Sync: Defaults -> Global Overrides -> Project Overrides
+  const syncArgs = [syncTool, defaultsPath, overridesPath, projectPath || '', effectivePath];
+  
   try {
-    const result = spawnSync(process.execPath, [syncTool, defaultsPath, overridesPath, effectivePath, effectivePath], {
+    const result = spawnSync(process.execPath, syncArgs, {
       encoding: 'utf8',
       timeout: 5000,
     });
     if (result.status !== 0 && typeof onSyncFailure === 'function') {
       onSyncFailure(result);
     }
+    return result;
   } catch (error) {
     if (typeof onSyncFailure === 'function') onSyncFailure(error);
   }
@@ -86,23 +90,16 @@ function maybeSyncLayeredProfileModelMap(options = {}) {
 function resolveSelectedConfigPath(options = {}) {
   const { baseDir = __dirname, cwd = process.env.CLAUDE_MODEL_MAP_LAUNCH_CWD || process.cwd(), syncProfile = true, onSyncFailure = null } = options;
 
-  if (syncProfile) maybeSyncLayeredProfileModelMap({ baseDir, onSyncFailure });
+  if (syncProfile) maybeSyncLayeredProfileModelMap({ baseDir, onSyncFailure, cwd });
 
   const override = canonicalizeFile(process.env.CLAUDE_MODEL_MAP_PATH || '');
   if (override) return { path: override, source: 'override' };
 
-  const projectDir = process.env.CLAUDE_PROJECT_DIR;
-  if (projectDir) {
-    const project = canonicalizeFile(path.join(projectDir, '.claude', 'model-map.json'));
-    if (project) return { path: project, source: 'project' };
-  }
-
-  const walked = findParentModelMap(cwd);
+  // After 3-tier sync, the effective profile path contains all merged layers.
   const profileDir = profileClaudeDir();
   const profile = profileDir ? canonicalizeFile(path.join(profileDir, 'model-map.json')) : null;
-  const homeProfile = canonicalizeFile(path.join(process.env.HOME || os.homedir(), '.claude', 'model-map.json'));
-  if (walked && walked !== profile && walked !== homeProfile) return { path: walked, source: 'project' };
   if (profile) return { path: profile, source: 'profile' };
+  
   return null;
 }
 
@@ -111,6 +108,57 @@ function loadSelectedConfig(options = {}) {
   if (!resolved) throw new Error('No model-map.json found');
   const config = JSON.parse(fs.readFileSync(resolved.path, 'utf8'));
   return { config, path: resolved.path, source: resolved.source };
+}
+
+function main() {
+  const arg = process.argv[2];
+  const claudeDir = profileClaudeDir();
+  const cwd = process.env.CLAUDE_MODEL_MAP_LAUNCH_CWD || process.cwd();
+  
+  if (arg === '--print-paths' || arg === '--shell-env') {
+    if (!claudeDir) return;
+
+    const defaults = repoDefaultsPath();
+    const global = path.join(claudeDir, 'model-map.overrides.json');
+    let project = findParentModelMap(cwd);
+    const effective = path.join(claudeDir, 'model-map.json');
+
+    // If project config is actually the profile config, ignore it.
+    if (project && (project === effective || project.startsWith(claudeDir))) {
+      project = null;
+    }
+
+    if (arg === '--print-paths') {
+      console.log(`DEFAULTS=${defaults || ''}`);
+      console.log(`GLOBAL=${global || ''}`);
+      console.log(`PROJECT=${project || ''}`);
+      console.log(`EFFECTIVE=${effective || ''}`);
+    } else {
+      // --shell-env: export variables for Bash eval
+      const override = canonicalizeFile(process.env.CLAUDE_MODEL_MAP_PATH || '');
+      const source = override ? 'override' : 'profile';
+      const activePath = override || effective || '';
+
+      console.log(`export MODEL_MAP_DEFAULTS_FILE="${defaults || ''}";`);
+      console.log(`export MODEL_MAP_OVERRIDES_FILE="${global || ''}";`);
+      console.log(`export CLAUDE_MODEL_MAP_PATH="${activePath}";`);
+      console.log(`export CLAUDE_MODEL_MAP_SOURCE="${source}";`);
+      if (project) {
+        console.log(`export CLAUDE_PROJECT_DIR="${path.dirname(path.dirname(project))}";`);
+        console.log(`export _discovered_project_config="${project}";`);
+      } else {
+        console.log(`unset CLAUDE_PROJECT_DIR;`);
+        console.log(`unset _discovered_project_config;`);
+      }
+    }
+  } else if (arg === '--sync') {
+    const result = maybeSyncLayeredProfileModelMap();
+    process.exit(result && result.status === 0 ? 0 : 1);
+  }
+}
+
+if (require.main === module) {
+  main();
 }
 
 module.exports = {

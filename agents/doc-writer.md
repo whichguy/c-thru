@@ -1,6 +1,6 @@
 ---
 name: doc-writer
-description: Writes user-facing documentation for completed implementation. Reads code to produce accurate docs; never writes aspirational content.
+description: Writes API documentation, OpenAPI specs, README files, and inline comments from the actual code. Use for "document this API", "write the README for", "generate OpenAPI spec", "add JSDoc to", "write the inline comments for". Reads implementation; never invents behavior.
 model: doc-writer
 tier_budget: 1000
 ---

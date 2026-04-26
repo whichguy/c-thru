@@ -11,6 +11,13 @@
 #   4.  Agent-count consistency (agents/*.md vs agent_to_capability keys,
 #       excluding routing-only entries that have no agent file)
 #   5.  Phase 0 mkdir coverage for $PLAN_DIR subdirectories
+#   6.  STATUS/VERDICT value coverage in SKILL.md + plan-orchestrator.md
+#   7.  Undeclared prompt keys in Agent() invocations
+#   8.  Restart-mode anchor presence in cloud agent files
+#   9.  Tier-budget frontmatter declarations
+#   10. preflight_model_readiness routing skeleton sync (tools/c-thru vs test wrapper)
+#   11. LLM mode enum sync (model-map-resolve.js LLM_MODE_ENUM vs model-map-validate.js LLM_MODES)
+#   12. benchmark.json schema + model_routes coverage (docs/benchmark.json)
 #
 # Exit 0: no issues. Exit 1: one or more issues found.
 # Run: bash tools/c-thru-contract-check.sh
@@ -42,7 +49,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 1 — Skill("review-plan") regression
 # ---------------------------------------------------------------------------
-echo "1/9  Skill(\"review-plan\") regression..."
+echo "1/12  Skill(\"review-plan\") regression..."
 if grep -qE 'Skill\([[:space:]]*["'"'"']review-plan["'"'"']' "$SKILL" 2>/dev/null; then
     fail 'skills/c-thru-plan/SKILL.md: Skill("review-plan") found — must use Agent(subagent_type: "review-plan") here (Skill() path invokes the interactive human plan-mode tool, not the c-thru wave agent)'
 else
@@ -52,7 +59,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 1b — No hardcoded .c-thru/plans/ paths in agents/*.md
 # ---------------------------------------------------------------------------
-echo "1b/9 Hardcoded .c-thru/plans/ in agents/*.md..."
+echo "1b/12 Hardcoded .c-thru/plans/ in agents/*.md..."
 hardcoded_agents=$(grep -l '\.c-thru/plans/' "$AGENTS_DIR"/*.md 2>/dev/null || true)
 if [ -n "$hardcoded_agents" ]; then
     for f in $hardcoded_agents; do
@@ -65,7 +72,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 2 — Dangling subagent_type references
 # ---------------------------------------------------------------------------
-echo "2/9  Dangling agent reference check..."
+echo "2/12  Dangling agent reference check..."
 
 # Claude Code built-in subagent types — no agents/*.md expected for these
 BUILTIN="general-purpose Explore"
@@ -107,7 +114,7 @@ done < <(grep -oE 'subagent_type:[[:space:]]*"[^"]+"' "$SKILL" \
 # sides. Accepts false negatives on compound names like journal_offset; the
 # check catches obvious structural gaps (missing whole input categories).
 # ---------------------------------------------------------------------------
-echo "3/9  Agent prompt key check..."
+echo "3/12  Agent prompt key check..."
 
 # Returns newline-separated input tokens for an agent file.
 # Strategy:
@@ -330,7 +337,7 @@ done < "$tmpblocks"
 # Routing-only keys: entries in agent_to_capability with no corresponding agent file
 # (e.g. judge-evaluator — resolves via capability alias only, no agents/*.md).
 # ---------------------------------------------------------------------------
-echo "4/9  Agent-count consistency check..."
+echo "4/12  Agent-count consistency check..."
 
 MODEL_MAP="$REPO_DIR/config/model-map.json"
 if [ ! -f "$MODEL_MAP" ]; then
@@ -374,7 +381,7 @@ fi
 # Every $PLAN_DIR/<subdir>/ referenced in SKILL.md must have a corresponding
 # mkdir in Phase 0. Wave-scoped dirs ($wave_dir/...) are excluded.
 # ---------------------------------------------------------------------------
-echo "5/9  Phase 0 mkdir coverage check..."
+echo "5/12  Phase 0 mkdir coverage check..."
 
 # Extract subdirectory names referenced as $PLAN_DIR/<name>/ in SKILL.md
 referenced=$(grep -oE '\$PLAN_DIR/[a-z_-]+/' "$SKILL" 2>/dev/null \
@@ -406,7 +413,7 @@ done
 #     Search SKILL.md + plan-orchestrator.md for the literal string V as a
 #     whole-word match. FAIL if the value is absent from both caller files.
 # ---------------------------------------------------------------------------
-echo "6/9  STATUS/VERDICT value coverage check..."
+echo "6/12  STATUS/VERDICT value coverage check..."
 
 # Extract STATUS/VERDICT values from an agent's Return block.
 # Matches both "**Return:**" (most agents) and "## Step N — Return STATUS"
@@ -469,7 +476,7 @@ done
 # Allowlist: subagent_type, prompt, description, mode
 # (model, run_in_background, timeout are agent-level params, not prompt-body keys)
 # ---------------------------------------------------------------------------
-echo "7/9  Undeclared prompt key check..."
+echo "7/12  Undeclared prompt key check..."
 
 # Built-in prompt keys never in an agent's Input: line
 BUILTIN_PROMPT_KEYS="subagent_type prompt description mode"
@@ -526,7 +533,7 @@ done < "$tmpblocks"
 # (test/c-thru-plan-harness.test.js), not here.
 # Reference: wiki/entities/uplift-cascade-pattern.md
 # ---------------------------------------------------------------------------
-echo "8/9  Restart-mode anchor check in cloud agents..."
+echo "8/12  Restart-mode anchor check in cloud agents..."
 
 CLOUD_AGENTS=("$AGENTS_DIR/implementer-cloud.md" "$AGENTS_DIR/test-writer-cloud.md")
 for cloud_agent in "${CLOUD_AGENTS[@]}"; do
@@ -555,7 +562,7 @@ done
 # WARNs (not FAILs) when estimated tokens (lines * 10) exceed 1.3 * declared budget.
 # Estimation is approximate; per-agent calibration may adjust the 10-tokens/line factor.
 # ---------------------------------------------------------------------------
-echo "9/9  Tier-budget frontmatter check..."
+echo "9/12  Tier-budget frontmatter check..."
 
 BUDGET_WARNS=0
 for agent_file in "$AGENTS_DIR"/*.md; do
@@ -579,6 +586,102 @@ done
 
 if [ "$BUDGET_WARNS" -gt 0 ]; then
     echo -e "${YELLOW}  (${BUDGET_WARNS} over-budget agent(s) — warnings only, not failures)${NC}"
+fi
+
+# ---------------------------------------------------------------------------
+# Check 10 — preflight_model_readiness routing skeleton sync
+# The test wrapper (test/preflight-model-readiness.test.sh) copies the routing
+# skeleton of preflight_model_readiness() from tools/c-thru, replacing only the
+# pull/warm action block. This check diffs the shared skeleton up to the divergence
+# sentinel line so any change to the routing logic is caught immediately.
+# ---------------------------------------------------------------------------
+echo "10/12 preflight_model_readiness routing skeleton sync..."
+
+_canonical_skeleton=$(awk '
+  /^preflight_model_readiness\(\)/ { in_fn=1 }
+  in_fn && /grep -qxF/ { print; exit }
+  in_fn { print }
+' "$REPO_DIR/tools/c-thru")
+
+_wrapper_skeleton=$(awk '
+  /^preflight_model_readiness\(\)/ { in_fn=1 }
+  in_fn && /grep -qxF/ { print; exit }
+  in_fn { print }
+' "$REPO_DIR/test/preflight-model-readiness.test.sh")
+
+if [ -z "$_canonical_skeleton" ]; then
+  fail "preflight_model_readiness not found in tools/c-thru"
+elif [ -z "$_wrapper_skeleton" ]; then
+  fail "preflight_model_readiness wrapper not found in test/preflight-model-readiness.test.sh"
+elif [ "$_canonical_skeleton" != "$_wrapper_skeleton" ]; then
+  fail "preflight_model_readiness routing skeleton has drifted — update wrapper in test/preflight-model-readiness.test.sh to match tools/c-thru"
+else
+  ok "preflight_model_readiness routing skeleton in sync"
+fi
+unset _canonical_skeleton _wrapper_skeleton
+
+# ---------------------------------------------------------------------------
+# Check 11 — LLM_MODE_ENUM / LLM_MODES sync
+# Two files declare the set of valid mode names:
+#   tools/model-map-resolve.js   → LLM_MODE_ENUM (used at request time)
+#   tools/model-map-validate.js  → LLM_MODES   (used at config-validation time)
+# These must stay in sync; an enum drift would cause a config that validates clean
+# to be rejected at runtime (or vice versa).
+# ---------------------------------------------------------------------------
+echo "11/12 LLM mode enum sync (resolve.js vs validate.js)..."
+
+# Extract sorted, deduplicated mode names from each file. Tolerant of either
+# inline-array or multi-line set form.
+_resolve_modes=$(node -e "
+  const m = require('$REPO_DIR/tools/model-map-resolve.js');
+  process.stdout.write([...m.LLM_MODE_ENUM].sort().join('\n'));
+" 2>/dev/null || true)
+_validate_modes=$(node -e "
+  const fs = require('fs');
+  const src = fs.readFileSync('$REPO_DIR/tools/model-map-validate.js', 'utf8');
+  // LLM_MODES is internal — extract it via a regex match on the Set([...]) literal
+  const m = src.match(/const LLM_MODES = new Set\(\[([\s\S]*?)\]\)/);
+  if (!m) { process.exit(2); }
+  const items = [...m[1].matchAll(/'([^']+)'/g)].map(r => r[1]).sort();
+  process.stdout.write(items.join('\n'));
+" 2>/dev/null || true)
+
+if [ -z "$_resolve_modes" ]; then
+  fail "could not extract LLM_MODE_ENUM from tools/model-map-resolve.js"
+elif [ -z "$_validate_modes" ]; then
+  fail "could not extract LLM_MODES from tools/model-map-validate.js"
+elif [ "$_resolve_modes" != "$_validate_modes" ]; then
+  fail "LLM mode enum drift detected — model-map-resolve.js LLM_MODE_ENUM and model-map-validate.js LLM_MODES disagree"
+  echo -e "${YELLOW}  resolve.js: $(echo "$_resolve_modes" | tr '\n' ' ')${NC}"
+  echo -e "${YELLOW}  validate.js: $(echo "$_validate_modes" | tr '\n' ' ')${NC}"
+else
+  ok "LLM mode enum in sync ($(echo "$_resolve_modes" | wc -l | tr -d ' ') modes)"
+fi
+unset _resolve_modes _validate_modes
+
+# ---------------------------------------------------------------------------
+# Check 12 — benchmark.json schema + coverage
+# Runs the benchmark validator to ensure docs/benchmark.json schema is valid
+# and every model entry references a real model_routes key.
+# Coverage warnings (model_routes entries missing from benchmark.json) are
+# advisory and don't fail the contract check; schema errors do.
+# ---------------------------------------------------------------------------
+echo "12/12 benchmark.json schema + coverage..."
+
+if [ ! -f "$REPO_DIR/docs/benchmark.json" ]; then
+  warn "docs/benchmark.json not found — skipping benchmark validation"
+elif [ ! -f "$REPO_DIR/tools/benchmark-validate.js" ]; then
+  warn "tools/benchmark-validate.js not found — skipping benchmark validation"
+else
+  _bench_out=$(node "$REPO_DIR/tools/benchmark-validate.js" "$REPO_DIR/docs/benchmark.json" 2>&1)
+  _bench_rc=$?
+  if [ "$_bench_rc" -eq 0 ]; then
+    ok "benchmark.json schema valid; model_routes coverage ok"
+  else
+    fail "benchmark.json schema validation failed:"
+    echo "$_bench_out" | sed 's/^/        /'
+  fi
+  unset _bench_out _bench_rc
 fi
 
 # ---------------------------------------------------------------------------

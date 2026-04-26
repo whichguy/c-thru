@@ -10,24 +10,28 @@ function fail(message) {
 }
 
 function main() {
-  const [, , defaultsPathArg, overridesPathArg, effectivePathArg, bootstrapPathArg] = process.argv;
-  if (!defaultsPathArg || !overridesPathArg || !effectivePathArg) {
-    fail('usage: model-map-sync.js <defaults-path> <overrides-path> <effective-output-path> [bootstrap-effective-path]');
+  const [, , defaultsPathArg, globalPathArg, projectPathArg, effectivePathArg, bootstrapPathArg] = process.argv;
+  if (!defaultsPathArg || !globalPathArg || !effectivePathArg) {
+    fail('usage: model-map-sync.js <defaults-path> <global-path> <project-path> <effective-output-path> [bootstrap-effective-path]');
   }
 
   const defaultsPath = path.resolve(defaultsPathArg);
-  const overridesPath = path.resolve(overridesPathArg);
+  const globalPath = path.resolve(globalPathArg);
+  const projectPath = projectPathArg ? path.resolve(projectPathArg) : null;
   const effectivePath = path.resolve(effectivePathArg);
   const bootstrapPath = bootstrapPathArg ? path.resolve(bootstrapPathArg) : null;
 
   try {
-    const result = syncLayeredConfig(defaultsPath, overridesPath, effectivePath, bootstrapPath);
+    const result = syncLayeredConfig(defaultsPath, globalPath, projectPath, effectivePath, bootstrapPath);
     process.stdout.write(`${JSON.stringify({
       ok: true,
       defaults_path: defaultsPath,
-      overrides_path: overridesPath,
+      global_path: globalPath,
+      project_path: projectPath,
       effective_path: effectivePath,
-      override_keys: Object.keys(result.overrides).sort(),
+      override_keys: Object.keys(result.projectOverrides).length > 0 
+        ? Object.keys(result.projectOverrides).sort() 
+        : Object.keys(result.globalOverrides).sort(),
     }, null, 2)}\n`);
   } catch (error) {
     fail(error.message);

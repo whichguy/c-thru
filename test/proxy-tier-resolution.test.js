@@ -8,7 +8,7 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
-const { assert, summary, writeConfig, httpJson, withProxy } = require('./helpers');
+const { assert, summary, stubBackend, writeConfig, httpJson, withProxy } = require('./helpers');
 
 console.log('proxy-tier-resolution integration tests\n');
 
@@ -61,6 +61,55 @@ async function main() {
     const r = await httpJson(port, 'GET', '/ping');
     assert(r.json && r.json.active_tier === '16gb', '--profile wins over CLAUDE_LLM_MEMORY_GB');
   });
+
+  // ── Tests 6-11: --mode flag forces LLM mode end-to-end ─────────────────
+  // Fixture has all optional fields so every mode resolves to a distinct model.
+  const stub = await stubBackend();
+  const modeConfig = writeConfig(tmpDir, {
+    backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
+    llm_profiles: {
+      '128gb': { workhorse: {
+        connected_model:  'mode-conn@stub',
+        disconnect_model: 'mode-disc@stub',
+        cloud_best_model: 'mode-cbq@stub',
+        local_best_model: 'mode-lbq@stub',
+        modes: {
+          'semi-offload':    'mode-semi@stub',
+          'cloud-judge-only': 'mode-cjo@stub',
+        },
+      } },
+    },
+  });
+
+  const parseVia = headers => {
+    try { return JSON.parse(headers['x-c-thru-resolved-via']); } catch { return null; }
+  };
+  const MSG = { model: 'workhorse', messages: [{ role: 'user', content: 'hi' }], max_tokens: 5 };
+
+  const modeCases = [
+    { mode: 'offline',            expectedModel: 'mode-disc', label: 'disconnect_model' },
+    { mode: 'connected',          expectedModel: 'mode-conn', label: 'connected_model'  },
+    { mode: 'semi-offload',       expectedModel: 'mode-semi', label: 'modes[semi-offload]' },
+    { mode: 'cloud-judge-only',   expectedModel: 'mode-cjo',  label: 'modes[cloud-judge-only]' },
+    { mode: 'cloud-best-quality', expectedModel: 'mode-cbq',  label: 'cloud_best_model' },
+    { mode: 'local-best-quality', expectedModel: 'mode-lbq',  label: 'local_best_model' },
+  ];
+
+  let testNum = 6;
+  try {
+    for (const { mode, expectedModel, label } of modeCases) {
+      console.log(`\n${testNum++}. --mode ${mode} → ${label}`);
+      await withProxy({ configPath: modeConfig, profile: '128gb', mode }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', MSG);
+        const req = stub.lastRequest();
+        assert(req && req.model_used === expectedModel,
+          `--mode ${mode}: stub receives ${label} (got ${req && req.model_used})`);
+        const via = parseVia(r.headers);
+        assert(via && via.mode === mode,
+          `--mode ${mode}: x-c-thru-resolved-via.mode=${mode} (got ${via && via.mode})`);
+      });
+    }
+  } finally { await stub.close().catch(() => {}); }
 
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 

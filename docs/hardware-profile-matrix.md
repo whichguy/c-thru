@@ -60,7 +60,7 @@ Verify detected tier:
 
 Override for testing (e.g. simulate 48gb machine):
 ```sh
-CLAUDE_LLM_MEMORY_GB=48 ~/.claude/tools/c-thru --list
+CLAUDE_LLM_MEMORY_GB=48 ~/.claude/tools/c-thru list
 ```
 
 ## Resolution path

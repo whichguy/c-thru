@@ -202,11 +202,15 @@ CANDEOF
   local -a processed=()
   while IFS= read -r m; do
     [ -z "$m" ] && continue
-    if ollama rm "$m" >/dev/null 2>&1; then
-      echo "c-thru-ollama-gc: removed $m" >&2
+    if [ "${C_THRU_OLLAMA_ALLOW_RM:-0}" = "1" ]; then
+      if ollama rm "$m" >/dev/null 2>&1; then
+        echo "c-thru-ollama-gc: removed $m" >&2
+      else
+        # Tag already gone — remove orphan from state file regardless
+        echo "c-thru-ollama-gc: $m not found in ollama (removing orphan from state)" >&2
+      fi
     else
-      # Tag already gone — remove orphan from state file regardless
-      echo "c-thru-ollama-gc: $m not found in ollama (removing orphan from state)" >&2
+      echo "c-thru-ollama-gc: [skipped] would remove $m (set C_THRU_OLLAMA_ALLOW_RM=1 to enable)" >&2
     fi
     processed+=("$m")
   done <<< "$candidates"
@@ -249,11 +253,15 @@ LISTEOF
   local removed=0
   while IFS= read -r m; do
     [ -z "$m" ] && continue
-    if ollama rm "$m" >/dev/null 2>&1; then
-      echo "c-thru-ollama-gc: purged $m" >&2
-      removed=$((removed+1))
+    if [ "${C_THRU_OLLAMA_ALLOW_RM:-0}" = "1" ]; then
+      if ollama rm "$m" >/dev/null 2>&1; then
+        echo "c-thru-ollama-gc: purged $m" >&2
+        removed=$((removed+1))
+      else
+        echo "c-thru-ollama-gc: warning — failed to purge $m (may not exist locally)" >&2
+      fi
     else
-      echo "c-thru-ollama-gc: warning — failed to purge $m (may not exist locally)" >&2
+      echo "c-thru-ollama-gc: [skipped] would purge $m (set C_THRU_OLLAMA_ALLOW_RM=1 to enable)" >&2
     fi
   done <<< "$models"
 

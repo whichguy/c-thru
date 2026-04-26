@@ -29,6 +29,12 @@ function assert(condition, message) {
   }
 }
 
+// assertEq(actual, expected, label) — generates "(got actual)" automatically.
+// Use instead of assert(actual === expected, `label (got ${actual})`).
+function assertEq(actual, expected, label) {
+  assert(actual === expected, `${label} (got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)})`);
+}
+
 function summary() {
   const total = _passed + _failed;
   console.log(`\n${_passed}/${total} passed${_failed ? ` — ${_failed} FAILED` : ''}`);
@@ -74,14 +80,15 @@ function getFreePort() {
 // ── Proxy spawn ────────────────────────────────────────────────────────────
 
 // Spawns the proxy with test isolation env and returns { child, port, hooksPort }.
-// opts: { configPath, profile, hooksPort, env, cwd }
+// opts: { configPath, profile, mode, hooksPort, env, cwd }
 // Does NOT pass --port so the proxy prints "READY <port>" on stdout.
 async function spawnProxy(opts = {}) {
-  const { configPath, profile, hooksPort, env: extraEnv = {}, cwd } = opts;
+  const { configPath, profile, mode, hooksPort, env: extraEnv = {}, cwd } = opts;
 
   const args = [];
   if (configPath) args.push('--config', configPath);
   if (profile)    args.push('--profile', profile);
+  if (mode)       args.push('--mode', mode);
 
   const tmpHome = opts.tmpHome || fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-home-'));
 
@@ -261,7 +268,13 @@ function collectStderr(child) {
 //
 // Returns a minimal valid Anthropic non-streaming response for every request.
 // Use kind:"anthropic" in the proxy config backend — no Ollama probe is triggered.
-function stubBackend() {
+//
+// Options:
+//   failWith: <statusCode>  — respond with this HTTP status on every request (e.g. 502)
+//                              instead of 200. Used by fallback/hard_fail tests.
+//   responseBody: <obj>     — override the JSON body returned (200 path only).
+function stubBackend(opts = {}) {
+  const { failWith, responseBody } = opts;
   const requests = [];
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -277,7 +290,13 @@ function stubBackend() {
         model_used:  body ? body.model : null,
         serving_url: `http://127.0.0.1:${server.address().port}${req.url}`,
       });
-      const response = {
+      if (failWith) {
+        const errBody = JSON.stringify({ type: 'error', error: { type: 'api_error', message: `stub forced ${failWith}` } });
+        res.writeHead(failWith, { 'Content-Type': 'application/json' });
+        res.end(errBody);
+        return;
+      }
+      const response = responseBody || {
         id: 'msg_stub',
         type: 'message',
         role: 'assistant',
@@ -303,6 +322,157 @@ function stubBackend() {
       });
     });
     server.on('error', reject);
+  });
+}
+
+// ── Streaming stub backend ─────────────────────────────────────────────────
+// Returns a backend that responds with a Server-Sent Events stream built from
+// the given event list. Each entry is `{ event: <name>, data: <obj> }` and
+// gets emitted as `event: <name>\ndata: <json>\n\n`.
+//
+// Captures every request body to `.requests` like stubBackend does.
+function streamingStubBackend(events) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      let body = null;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+      requests.push({ method: req.method, path: req.url, body, model_used: body?.model || null });
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      });
+      for (const ev of events) {
+        res.write(`event: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`);
+      }
+      res.end();
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        server,
+        port: server.address().port,
+        requests,
+        lastRequest: () => requests[requests.length - 1] || null,
+        close: () => new Promise(r => server.close(r)),
+      });
+    });
+    server.on('error', reject);
+  });
+}
+
+// ── Classifier stub (Phase A dynamic classifier) ──────────────────────────
+// Mimics Ollama's /api/generate endpoint, returning a JSON response object
+// shaped as {response: '<json string>', done: true}. The classifier in
+// claude-proxy parses `response` for {role, confidence}.
+//
+// Options:
+//   role:       which role to "classify" prompts as (default 'coder')
+//   confidence: confidence to return (default 0.85)
+//   responses:  array of {role, confidence} to return in sequence — once
+//               exhausted, falls back to default. Useful for asserting cache
+//               (subsequent calls return same role even after stub flips).
+//   delay_ms:   artificial latency before responding
+//   broken:     if true, return malformed JSON (tests parse-failed soft-fail)
+function classifierStub(opts = {}) {
+  const { role = 'coder', confidence = 0.85, responses, delay_ms, broken } = opts;
+  const requests = [];
+  let respIdx = 0;
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      let body = null;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+      requests.push({ method: req.method, path: req.url, body });
+
+      const respond = () => {
+        if (broken) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end('{not valid json');
+          return;
+        }
+        let pick;
+        if (Array.isArray(responses) && respIdx < responses.length) {
+          pick = responses[respIdx++];
+        } else {
+          pick = { role, confidence };
+        }
+        // Ollama /api/generate response shape: {response, done, ...}
+        const ollamaResp = {
+          model: body?.model || 'stub',
+          response: JSON.stringify({ role: pick.role, confidence: pick.confidence }),
+          done: true,
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(ollamaResp));
+      };
+      if (delay_ms) setTimeout(respond, delay_ms); else respond();
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        server,
+        port: server.address().port,
+        requests,
+        lastRequest: () => requests[requests.length - 1] || null,
+        close: () => new Promise(r => server.close(r)),
+      });
+    });
+    server.on('error', reject);
+  });
+}
+
+// ── HTTP streaming consumer ────────────────────────────────────────────────
+// Issues a request and reads the full response body, parsing SSE events.
+// Returns { status, headers, events: [{event, data}], rawBody }.
+// `data` is parsed as JSON when possible; otherwise the raw string is kept.
+function httpStream(port, method, urlPath, body, extraHeaders = {}, timeout = 10000) {
+  return new Promise((resolve, reject) => {
+    const bodyStr = body ? JSON.stringify(body) : null;
+    const headers = Object.assign(
+      { 'Content-Type': 'application/json' },
+      bodyStr ? { 'Content-Length': Buffer.byteLength(bodyStr) } : {},
+      extraHeaders,
+    );
+    const req = http.request(
+      { hostname: '127.0.0.1', port, path: urlPath, method, headers },
+      res => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8');
+          // Parse SSE: split on blank line between events
+          const events = [];
+          for (const block of raw.split(/\r?\n\r?\n/)) {
+            const trimmed = block.trim();
+            if (!trimmed) continue;
+            const ev = { event: null, data: null };
+            for (const line of trimmed.split(/\r?\n/)) {
+              if (line.startsWith('event:')) ev.event = line.slice(6).trim();
+              else if (line.startsWith('data:')) {
+                const raw = line.slice(5).trim();
+                try { ev.data = JSON.parse(raw); } catch { ev.data = raw; }
+              }
+            }
+            events.push(ev);
+          }
+          resolve({ status: res.statusCode, headers: res.headers, events, rawBody: raw });
+        });
+      }
+    );
+    req.setTimeout(timeout, () => {
+      req.destroy();
+      reject(new Error(`httpStream: request to ${urlPath} timed out after ${timeout}ms`));
+    });
+    req.on('error', reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
   });
 }
 
@@ -390,6 +560,7 @@ process.on('unhandledRejection', err => {
 
 module.exports = {
   assert,
+  assertEq,
   summary,
   withTmpDir,
   writeConfig,
@@ -401,6 +572,9 @@ module.exports = {
   assertLogContains,
   collectStderr,
   stubBackend,
+  streamingStubBackend,
+  classifierStub,
+  httpStream,
   parseStatusBlock,
   tierTimeout,
   registerTmpDir,

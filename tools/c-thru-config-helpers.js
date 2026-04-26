@@ -179,7 +179,13 @@ function cmdResolve(args) {
  * @param {string[]} _args
  */
 function cmdModeRead(_args) {
-  const LLM_MODE_ENUM = new Set(['connected','semi-offload','cloud-judge-only','offline','cloud-best-quality','local-best-quality']);
+  const LLM_MODE_ENUM = new Set([
+    'connected', 'semi-offload', 'cloud-judge-only', 'offline',
+    'cloud-best-quality', 'local-best-quality',
+    'local-only', 'cloud-thinking', 'local-review',
+    'cloud-only', 'claude-only', 'opensource-only',
+    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud'
+  ]);
   let config = {}, overrides = {};
   try { config    = JSON.parse(fs.readFileSync(MAP_PATH,       'utf8')); } catch {}
   try { overrides = JSON.parse(fs.readFileSync(OVERRIDES_PATH, 'utf8')); } catch {}
@@ -204,7 +210,13 @@ function cmdModeRead(_args) {
  * @param {string[]} args - [<mode>] [--reload]
  */
 function cmdModeWrite(args) {
-  const VALID = new Set(['connected','semi-offload','cloud-judge-only','offline','cloud-best-quality','local-best-quality']);
+  const VALID = new Set([
+    'connected', 'semi-offload', 'cloud-judge-only', 'offline',
+    'cloud-best-quality', 'local-best-quality',
+    'local-only', 'cloud-thinking', 'local-review',
+    'cloud-only', 'claude-only', 'opensource-only',
+    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud'
+  ]);
   const mode = args[0];
   if (!mode || !VALID.has(mode)) {
     die(`invalid mode '${mode}' — valid: ${[...VALID].join(', ')}`);

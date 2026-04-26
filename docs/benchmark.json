@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "source": "docs/tournament_2026-04-25.md",
+  "generated_at": "2026-04-26",
+  "notes": "Hand-curated from the 2026-04-25 tournament. ram_gb and tokens_per_sec are tournament-machine-specific and will drift on other hardware. quality_per_role is sparse — only roles where data exists are populated. Missing role = no data, treat as informational.",
+
+  "models": {
+    "qwen3.6:35b-a3b": {
+      "display_name": "Qwen3.6-35B-A3B",
+      "provider": "ollama_local",
+      "ram_gb": 22,
+      "tokens_per_sec": 60,
+      "quality_per_role": { "generalist": 5.0, "debugger": 5.0 },
+      "notes": "MoE, 3B active params. Best generalist at this size. Cross-role debugger q=5.0."
+    },
+    "qwen3.6:27b": {
+      "display_name": "Qwen3.6-27B",
+      "provider": "ollama_local",
+      "ram_gb": 17,
+      "tokens_per_sec": 19,
+      "quality_per_role": { "generalist": 5.0, "debugger": 5.0 },
+      "notes": "Dense. Smaller and slower than 35B-A3B but same quality."
+    },
+    "qwen3.6:35b": {
+      "display_name": "Qwen3.6-35B (dense)",
+      "provider": "ollama_local",
+      "ram_gb": 22,
+      "tokens_per_sec": 24,
+      "quality_per_role": { "generalist": 3.5, "coder": 1.0 },
+      "notes": "Dense 35B. Underperforms 35B-A3B (MoE) and 27B (dense). Avoid; use qwen3.6:35b-a3b instead."
+    },
+    "qwen3.6:27b-coding-nvfp4": {
+      "display_name": "Qwen3.6-27B-Coding-NVfp4",
+      "provider": "ollama_local",
+      "ram_gb": 22,
+      "tokens_per_sec": 124,
+      "quality_per_role": { "coder": 4.5 },
+      "notes": "NVfp4 quantized. Good coder at this RAM."
+    },
+    "qwen3.6:35b-a3b-coding-nvfp4": {
+      "display_name": "Qwen3.6-35B-A3B-Coding-NVfp4",
+      "provider": "ollama_local",
+      "ram_gb": 22,
+      "tokens_per_sec": 124,
+      "quality_per_role": { "coder": 4.5, "generalist": 5.0, "debugger": 5.0 },
+      "notes": "Top primary-role coder. Cross-role generalist + debugger both q=5.0. Multi-role champion at 22GB."
+    },
+    "qwen3.6:27b-coding-mxfp8": {
+      "display_name": "Qwen3.6-27B-Coding-MXfp8",
+      "provider": "ollama_local",
+      "ram_gb": 28,
+      "tokens_per_sec": 97,
+      "quality_per_role": { "coder": 4.5 },
+      "notes": "MXfp8 quantization of 27B coding variant."
+    },
+    "qwen3.6:35b-a3b-coding-mxfp8": {
+      "display_name": "Qwen3.6-35B-A3B-Coding-MXfp8",
+      "provider": "ollama_local",
+      "ram_gb": 38,
+      "tokens_per_sec": 97,
+      "quality_per_role": { "coder": 4.5, "generalist": 5.0 },
+      "notes": "Higher precision than NVfp4 variant; uses ~70% more RAM for similar coder quality."
+    },
+    "qwen3.6:35b-a3b-coding-bf16": {
+      "display_name": "Qwen3.6-35B-A3B-Coding-BF16",
+      "provider": "ollama_local",
+      "ram_gb": 70,
+      "tokens_per_sec": 70,
+      "quality_per_role": { "coder": 3.5, "generalist": 5.0, "debugger": 5.0 },
+      "notes": "Full precision. Surprisingly fails C2 binary search (q=1) where NVfp4/MXfp8 pass. Avoid for coder."
+    },
+    "qwen3.5:35b-a3b-coding-nvfp4": {
+      "display_name": "Qwen3.5-35B-A3B-Coding-NVfp4",
+      "provider": "ollama_local",
+      "ram_gb": 22,
+      "tokens_per_sec": 100,
+      "quality_per_role": {},
+      "notes": "Older qwen3.5 family. Use qwen3.6 variants where possible."
+    },
+    "qwen3-coder:30b": {
+      "display_name": "Qwen3-Coder-30B",
+      "provider": "ollama_local",
+      "ram_gb": 18,
+      "tokens_per_sec": 124,
+      "quality_per_role": { "coder": 4.5, "generalist": 5.0, "debugger": 5.0 },
+      "notes": "Strong primary coder. Multi-role coverage at 18GB. Note: scored q=2 on D2 (Go errgroup)."
+    },
+    "qwen3-coder-next:q8_0": {
+      "display_name": "Qwen3-Coder-Next-Q8",
+      "provider": "ollama_local",
+      "ram_gb": 50,
+      "tokens_per_sec": 44,
+      "quality_per_role": { "coder": 4.5, "generalist": 5.0, "debugger": 5.0 },
+      "notes": "Best coder when RAM permits. Use at 64gb+ as local_best for deep-coder."
+    },
+    "qwen3-coder-next:cloud": {
+      "display_name": "Qwen3-Coder-Next-Cloud",
+      "provider": "ollama_cloud",
+      "ram_gb": null,
+      "tokens_per_sec": null,
+      "quality_per_role": { "coder": 4.5 },
+      "notes": "Cloud-relayed Coder-Next. Used as background route fallback."
+    },
+
+    "deepseek-r1:14b": {
+      "display_name": "DeepSeek-R1-14B",
+      "provider": "ollama_local",
+      "ram_gb": 9,
+      "tokens_per_sec": 51,
+      "quality_per_role": { "debugger": 3.5 },
+      "notes": "Surprisingly good for debugger at 9GB. Required think:false + /no_think prefix."
+    },
+    "deepseek-r1:32b": {
+      "display_name": "DeepSeek-R1-32B",
+      "provider": "ollama_local",
+      "ram_gb": 20,
+      "tokens_per_sec": 25,
+      "quality_per_role": { "debugger": 4.5 },
+      "notes": "Top primary-role debugger. Required thinking-mode fix."
+    },
+    "deepseek/deepseek-v3": {
+      "display_name": "DeepSeek-V3 (OpenRouter)",
+      "provider": "openrouter",
+      "ram_gb": null,
+      "tokens_per_sec": null,
+      "quality_per_role": { "coder": 4.0, "agentic_coder": 3.5 },
+      "notes": "Cloud-only via OpenRouter. DSV4-Flash variant."
+    },
+
+    "gemma4:26b": {
+      "display_name": "Gemma-4-26B (dense)",
+      "provider": "ollama_local",
+      "ram_gb": 16,
+      "tokens_per_sec": 24,
+      "quality_per_role": {},
+      "notes": "Dense 26B. Use 26b-a4b (MoE) instead."
+    },
+    "gemma4:26b-mxfp8": {
+      "display_name": "Gemma-4-26B-MXfp8",
+      "provider": "ollama_local",
+      "ram_gb": 17,
+      "tokens_per_sec": 102,
+      "quality_per_role": { "fast_generalist": 5.0, "generalist": 5.0, "coder": 4.5, "debugger": 4.5 },
+      "notes": "MXfp8 quantization of 26B. Best fast generalist."
+    },
+    "gemma4:26b-a4b": {
+      "display_name": "Gemma-4-26B-MoE (A4B)",
+      "provider": "ollama_local",
+      "ram_gb": 17,
+      "tokens_per_sec": 102,
+      "quality_per_role": { "fast_generalist": 5.0, "generalist": 5.0, "coder": 4.5, "debugger": 4.5 },
+      "notes": "MoE with 4B active. Multi-role champion: covers 4 roles."
+    },
+    "gemma4:31b": {
+      "display_name": "Gemma-4-31B",
+      "provider": "ollama_local",
+      "ram_gb": 19,
+      "tokens_per_sec": 24,
+      "quality_per_role": { "fast_generalist": 5.0, "generalist": 5.0, "debugger": 5.0 },
+      "notes": "Dense 31B. Quality matches 26B-MoE but 4x slower."
+    },
+
+    "gpt-oss:20b": {
+      "display_name": "GPT-OSS-20B",
+      "provider": "ollama_local",
+      "ram_gb": 13,
+      "tokens_per_sec": 112,
+      "quality_per_role": { "edge": 3.8, "debugger": 3.5, "generalist": 3.5 },
+      "notes": "Covers 3 roles. Required thinking-mode fix."
+    },
+
+    "glm-5.1:cloud": {
+      "display_name": "GLM-5.1 (Ollama cloud relay)",
+      "provider": "ollama_cloud",
+      "ram_gb": null,
+      "tokens_per_sec": null,
+      "quality_per_role": { "orchestrator": 4.2, "generalist": 5.0 },
+      "notes": "Cloud-relayed via Ollama."
+    },
+
+    "phi4-reasoning:latest": {
+      "display_name": "Phi-4-Reasoning",
+      "provider": "ollama_local",
+      "ram_gb": 9,
+      "tokens_per_sec": 43,
+      "quality_per_role": { "logic": 3.7, "judge": 5.0 },
+      "notes": "Best cross-role judge (q=5.0 on all four judge prompts)."
+    },
+
+    "claude-opus-4-6": {
+      "display_name": "Claude Opus 4.6",
+      "provider": "claude",
+      "ram_gb": null,
+      "tokens_per_sec": null,
+      "quality_per_role": { "judge": 5.0, "generalist": 5.0 },
+      "notes": "Highest cloud judge tier."
+    },
+    "claude-sonnet-4-6": {
+      "display_name": "Claude Sonnet 4.6",
+      "provider": "claude",
+      "ram_gb": null,
+      "tokens_per_sec": null,
+      "quality_per_role": { "generalist": 5.0, "coder": 4.5, "orchestrator": 4.5 },
+      "notes": "Mid-tier cloud default."
+    }
+  },
+
+  "role_minimums": {
+    "judge":           4.0,
+    "generalist":      4.0,
+    "workhorse":       4.0,
+    "deep-coder":      4.0,
+    "coder":           4.0,
+    "debugger":        3.5,
+    "reasoner":        3.5,
+    "logic":           3.5,
+    "orchestrator":    3.5,
+    "reviewer":        3.5,
+    "code-analyst":    3.0,
+    "fast_generalist": 3.0,
+    "pattern-coder":   3.0,
+    "classifier":      3.0,
+    "explorer":        3.0,
+    "fast-scout":      3.0,
+    "edge":            3.0,
+    "agentic_coder":   3.0,
+    "large_general":   4.0,
+    "long_context":    3.0,
+    "vision":          3.0,
+    "pdf":             3.0,
+    "cloud_frontier":  3.5
+  },
+
+  "capability_to_role": {
+    "judge":             "generalist",
+    "judge-strict":      "generalist",
+    "workhorse":         "generalist",
+    "coder":             "coder",
+    "deep-coder":        "coder",
+    "deep-coder-precise": "coder",
+    "deep-coder-cloud":  "coder",
+    "orchestrator":      "orchestrator",
+    "reviewer":          "reviewer",
+    "code-analyst":      "code-analyst",
+    "code-analyst-light": "code-analyst",
+    "code-analyst-cloud": "code-analyst",
+    "pattern-coder":     "pattern-coder",
+    "classifier":        "fast_generalist",
+    "explorer":          "explorer",
+    "fast-scout":        "fast_generalist",
+    "reasoner":          "debugger",
+    "local-planner":     "orchestrator",
+    "commit-message-generator": "fast_generalist",
+    "default":           "generalist"
+  }
+}

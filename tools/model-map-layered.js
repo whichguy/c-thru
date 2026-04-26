@@ -26,7 +26,16 @@ function readJsonOrEmpty(filePath) {
   return parsed;
 }
 
-function mergeConfigLayers(base, override) {
+function mergeConfigLayers(base, ...overrides) {
+  let effective = deepClone(base);
+  for (const override of overrides) {
+    if (override === undefined || override === null) continue;
+    effective = mergeTwoLayers(effective, override);
+  }
+  return effective;
+}
+
+function mergeTwoLayers(base, override) {
   if (override === undefined) return deepClone(base);
   if (override === null) return undefined;
   if (Array.isArray(base) || Array.isArray(override)) return deepClone(override);
@@ -34,7 +43,7 @@ function mergeConfigLayers(base, override) {
     const merged = {};
     const keys = new Set([...Object.keys(base), ...Object.keys(override)]);
     for (const key of keys) {
-      const nextValue = mergeConfigLayers(base[key], override[key]);
+      const nextValue = mergeTwoLayers(base[key], override[key]);
       if (nextValue !== undefined) merged[key] = nextValue;
     }
     return merged;
@@ -143,53 +152,52 @@ function maybeSynthesizeV12Keys(effective) {
   return Object.assign({}, effective, v12);
 }
 
-function loadLayeredConfig(defaultsPath, overridesPath) {
+function loadLayeredConfig(defaultsPath, globalOverridesPath, projectOverridesPath = null) {
   const defaults = readJson(defaultsPath);
-  const overrides = readJsonOrEmpty(overridesPath);
-  let effective = mergeConfigLayers(defaults, overrides);
+  const globalOverrides = readJsonOrEmpty(globalOverridesPath);
+  const projectOverrides = readJsonOrEmpty(projectOverridesPath);
+  let effective = mergeConfigLayers(defaults, globalOverrides, projectOverrides);
   effective = maybeSynthesizeV12Keys(effective);
   validateConfig(effective);
-  return { defaults, overrides, effective };
+  return { defaults, globalOverrides, projectOverrides, effective };
 }
 
-function syncLayeredConfig(defaultsPath, overridesPath, effectivePath, bootstrapEffectivePath = null) {
+function syncLayeredConfig(defaultsPath, globalOverridesPath, projectOverridesPath, effectivePath, bootstrapEffectivePath = null) {
   const defaults = readJson(defaultsPath);
-  let overrides;
+  let globalOverrides = readJsonOrEmpty(globalOverridesPath);
+  let projectOverrides = readJsonOrEmpty(projectOverridesPath);
 
-  if (overridesPath && fs.existsSync(overridesPath)) {
-    overrides = readJsonOrEmpty(overridesPath);
-  } else if (bootstrapEffectivePath && fs.existsSync(bootstrapEffectivePath)) {
+  if (bootstrapEffectivePath && fs.existsSync(bootstrapEffectivePath)) {
     const bootstrapEffective = readJson(bootstrapEffectivePath);
     validateConfig(bootstrapEffective);
-    overrides = computeOverrideDiff(defaults, bootstrapEffective) || {};
-  } else {
-    overrides = {};
+    if (projectOverridesPath) {
+      // Diff against (defaults + global) and save to project
+      const base = mergeConfigLayers(defaults, globalOverrides);
+      projectOverrides = computeOverrideDiff(base, bootstrapEffective) || {};
+    } else {
+      // Diff against defaults and save to global
+      globalOverrides = computeOverrideDiff(defaults, bootstrapEffective) || {};
+    }
   }
 
-  const effective = mergeConfigLayers(defaults, overrides);
+  const effective = mergeConfigLayers(defaults, globalOverrides, projectOverrides);
   validateConfig(effective);
-  const normalizedOverrides = computeOverrideDiff(defaults, effective) || {};
 
-  if (overridesPath) {
-    fs.mkdirSync(path.dirname(overridesPath), { recursive: true });
-    const content = `${JSON.stringify(normalizedOverrides, null, 2)}\n`;
-    let current = '';
-    try { current = fs.readFileSync(overridesPath, 'utf8'); } catch {}
-    if (content !== current) {
-      fs.writeFileSync(overridesPath, content);
-    }
-  }
-  if (effectivePath) {
-    fs.mkdirSync(path.dirname(effectivePath), { recursive: true });
-    const content = `${JSON.stringify(effective, null, 2)}\n`;
-    let current = '';
-    try { current = fs.readFileSync(effectivePath, 'utf8'); } catch {}
-    if (content !== current) {
-      fs.writeFileSync(effectivePath, content);
-    }
+  function writeIfChanged(filePath, content) {
+    if (!filePath) return;
+    try {
+      const current = fs.readFileSync(filePath, 'utf8');
+      if (current === content) return;
+    } catch {}
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content);
   }
 
-  return { defaults, overrides: normalizedOverrides, effective };
+  writeIfChanged(globalOverridesPath, `${JSON.stringify(globalOverrides, null, 2)}\n`);
+  writeIfChanged(projectOverridesPath, `${JSON.stringify(projectOverrides, null, 2)}\n`);
+  writeIfChanged(effectivePath, `${JSON.stringify(effective, null, 2)}\n`);
+
+  return { defaults, globalOverrides, projectOverrides, effective };
 }
 
 module.exports = {

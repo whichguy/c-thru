@@ -1,0 +1,24 @@
+#!/bin/bash
+# c-thru Control Channel CLI
+# Wrapper for tools/c-thru-control.js
+
+set -e
+
+# Find repo root
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+ROUTER_REPO_ROOT="$( cd -P "$( dirname "$SOURCE" )/.." >/dev/null 2>&1 && pwd )"
+
+# Resolve environment via Node helper
+eval "$(CLAUDE_MODEL_MAP_LAUNCH_CWD="$PWD" node "$ROUTER_REPO_ROOT/tools/model-map-config.js" --shell-env 2>/dev/null || true)"
+
+# Default port if not set
+: "${CLAUDE_PROXY_PORT:=9997}"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:$CLAUDE_PROXY_PORT"
+
+# Run the controller
+exec node "$ROUTER_REPO_ROOT/tools/c-thru-control.js" "$@"

@@ -1,6 +1,6 @@
 ---
 name: test-writer
-description: Writes tests for implemented code. Reads the implementation first; writes tests that catch subtle bugs, not format-matching templates.
+description: Generates unit tests and fills coverage gaps by reading the implementation first. Use for "write tests for X", "add unit tests to", "generate test cases for", "cover this function with tests", "add regression tests for this bug". Writes tests that catch behavioral bugs, not boilerplate templates.
 model: test-writer
 tier_budget: 800
 ---

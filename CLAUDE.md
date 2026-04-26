@@ -26,7 +26,7 @@ node --check tools/claude-proxy         # node syntax check
 node --check tools/model-map-*.js tools/llm-capabilities-mcp.js
 node tools/model-map-validate.js config/model-map.json   # validate shipped config
 node test/model-map-v12-adapter.test.js                  # adapter regression test
-~/.claude/tools/c-thru --list    # runtime smoke-test (requires install)
+~/.claude/tools/c-thru list      # runtime smoke-test (requires install; --list also accepted)
 ```
 
 ## Directory Layout and Path Invariants
@@ -77,7 +77,12 @@ c-thru (bash)
   ├─ resolves route → backend → env vars
   ├─ for Ollama backends: spawns/reuses claude-proxy (HTTP server on a free port)
   │    claude-proxy translates Anthropic Messages API → Ollama/OpenRouter/LiteLLM
-  └─ exec's the real claude binary with modified env (ANTHROPIC_BASE_URL, keys, --model)
+  └─ exec's the real claude binary with ephemeral session injection:
+       - ANTHROPIC_BASE_URL=http://127.0.0.1:<proxy_port>
+       - ANTHROPIC_AUTH_TOKEN="ollama" (for local/spoofed backends)
+       - --settings <temp_json> (injects hooks & llm-capabilities MCP)
+       - --agents <json> (injects all agents from agents/*.md)
+       - --append-system-prompt "..." (injects fleet awareness)
 ```
 
 ### model-map.json schema
@@ -98,7 +103,7 @@ Only the profile graph is layered: `model-map.system.json` + `model-map.override
 
 ### llm-capabilities-mcp.js
 
-MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including all `llm_capabilities` entries plus `ask_model` and `list_models`). Called by Claude Code as a local MCP server — registered in `~/.claude.json` by `install.sh`.
+MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including all `llm_capabilities` entries plus `ask_model` and `list_models`). Called by Claude Code as a local MCP server — injected ephemerally via `--settings` by `c-thru` at startup.
 
 ## Proxy CLI Flags
 
@@ -110,6 +115,22 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 | `--profile <tier>` | Force hardware tier (sets `CLAUDE_LLM_PROFILE`). `/ping` reports `active_tier`. |
 | `--port <n>` | Bind to fixed port (suppresses `READY <port>` stdout line). |
 | `--hooks-port <n>` | Bind hooks listener to fixed port (default 9998). |
+| `--mode <m>` | Set connectivity / routing mode (sets `CLAUDE_LLM_MODE`). |
+
+## c-thru Router Flags (env-var equivalents)
+
+`tools/c-thru` accepts these flags; each is stripped before forwarding to the real claude binary and exports the equivalent env var. Flag wins over env var.
+
+| Flag | Sets env | Effect |
+|---|---|---|
+| `--mode <m>` | `CLAUDE_LLM_MODE` | Connectivity / routing mode (15 values; see docs/connectivity-modes.md) |
+| `--profile <t>` | `CLAUDE_LLM_PROFILE` | Force hardware tier |
+| `--memory-gb <n>` | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection |
+| `--bypass-proxy` | `CLAUDE_PROXY_BYPASS=1` | Skip proxy entirely |
+| `--journal` | `CLAUDE_PROXY_JOURNAL=1` | Enable per-request journaling |
+| `--proxy-debug [N]` | `CLAUDE_PROXY_DEBUG=N` | Proxy verbose logs (default 1, accepts 1\|2) |
+| `--router-debug [N]` | `CLAUDE_ROUTER_DEBUG=N` | Router verbose logs |
+| `--no-update` | `CLAUDE_ROUTER_NO_UPDATE=1` | Skip git self-update |
 
 ## Key Environment Variables
 
@@ -123,8 +144,18 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 | `CLAUDE_MODEL_MAP_DEFAULTS_PATH` | Override shipped `config/model-map.json` path |
 | `CLAUDE_MODEL_MAP_OVERRIDES_PATH` | Override `~/.claude/model-map.overrides.json` path |
 | `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for Phase 2 HTTP hooks listener (default `9998`) |
+| `CLAUDE_PROXY_JOURNAL=1` | Enable per-request JSONL journaling to `~/.claude/journal/YYYY-MM-DD/<capability>.jsonl`. Off by default. Captures full request + response bodies (auth headers scrubbed). Privacy-sensitive — see `docs/journaling.md`. |
+| `CLAUDE_PROXY_JOURNAL_DIR` | Override default journal directory |
+| `CLAUDE_PROXY_JOURNAL_INCLUDE` | Comma-separated capabilities to journal (default: all) |
+| `CLAUDE_PROXY_JOURNAL_EXCLUDE` | Comma-separated capabilities to skip even when journaling is on |
+| `CLAUDE_PROXY_JOURNAL_MAX_BYTES` | Per-file size cap before rotation (default 100 MB) |
+| `CLAUDE_PROXY_CLASSIFY=1` | Phase A dynamic classifier (observe-only): runs a small classifier on each prompt, surfaces predicted role in `x-c-thru-classified-role` header + journal. See `docs/dynamic-classification-phase-a.md`. |
+| `CLAUDE_PROXY_CLASSIFY_MODEL` | Classifier model tag (default `gemma4:e2b`) |
+| `CLAUDE_PROXY_CLASSIFY_OLLAMA_URL` | Where to send classifier requests (default `OLLAMA_BASE_URL` or `localhost:11434`) |
+| `CLAUDE_PROXY_CLASSIFY_TIMEOUT_MS` | Classifier hard timeout (default 5000) |
 | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection (positive integer GB). Malformed values fall through to `os.totalmem()`. |
-| `CLAUDE_LLM_MODE` | Override connectivity mode: `connected` \| `semi-offload` \| `cloud-judge-only` \| `offline` \| `cloud-best-quality` \| `local-best-quality`. Replaces `CLAUDE_CONNECTIVITY_MODE` (legacy alias still accepted). |
+| `CLAUDE_LLM_MODE` | Override connectivity / routing mode (16 modes): `connected` | `offline` | `local-only` | `semi-offload` | `cloud-judge-only` | `cloud-thinking` | `local-review` | `cloud-best-quality` | `local-best-quality` | `cloud-only` | `claude-only` | `opensource-only` | `fastest-possible` | `smallest-possible` | `best-opensource` | `best-opensource-cloud`. See `docs/connectivity-modes.md` for full reference. Replaces `CLAUDE_CONNECTIVITY_MODE` (legacy alias still accepted). |
+
 | `CLAUDE_ROUTER_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). Also settable via `/map-model update off` (writes `self_update: false` to model-map.overrides.json). |
 | `CLAUDE_ROUTER_UPDATE_INTERVAL` | Seconds between self-update fetches (default `3600`). Debounced via `.git/FETCH_HEAD` mtime. |
 | `C_THRU_BEHAVIORAL_TESTS=1` | Enable behavioral contract tests (`agent-contract-behavioral.test.js`). Requires a running proxy. |
@@ -154,6 +185,9 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 |---|---|
 | `c-thru reload` | Sends SIGHUP to the running proxy, derives the actual listening port from `lsof`, waits up to 2s for `/ping` to confirm it's alive, prints new tier. Exits non-zero if proxy is not running or crashes. |
 | `c-thru restart` | SIGTERM + waits for listener to vanish, then re-spawns (port inherited from `CLAUDE_PROXY_PORT` env or auto-assigned). `--force` escalates to SIGKILL after timeout. |
+| `c-thru list` | Show active hw profile, configured routes, and local Ollama models. (Renamed from `--list`; both forms still accepted.) |
+| `c-thru explain --capability X --mode M [--tier T]` | Print resolution chain for a hypothetical request without sending one. Useful for "why did it pick that?" debugging. Pure JS — no proxy spawn. Also accepts `--agent <name>` to resolve through `agent_to_capability` first. |
+| `c-thru check-deps [--fix]` | Audit system dependencies (node, jq, curl, ollama, etc.); `--fix` runs `brew install` for missing optional tools on macOS. |
 | `/c-thru-config reload` | Skill equivalent of `c-thru reload` — usable from a Claude session. |
 | `/c-thru-status fix` | Apply recommended mappings, reload proxy, show current status. |
 | `/c-thru-config planning [...]` | Toggle the `EnterPlanMode` advisory hint suggesting `/c-thru-plan`. On by default; fires in all Claude Code sessions on the machine. Natural-language args — e.g. "turn off", "disable", "what's the status". Opt-out env: `CLAUDE_ROUTER_PLANNER_HINT=0`. |
@@ -178,18 +212,32 @@ Catches dangling `subagent_type` references, missing prompt keys vs. declared `I
 Invoke with `/c-thru-plan <intent>`. State in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/`. Completed plans archived to `~/.claude/c-thru-archive/`.
 Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`.
 
-### Capability aliases (new — agentic system)
+### Capability aliases
 
-| Alias | Cognitive tier | Agents |
-|---|---|---|
-| `judge` | 4–5 | planner (intent + outcome_risk signals only), auditor, review-plan, final-reviewer, journal-digester |
-| `judge-strict` | 4–5, hard_fail | security-reviewer |
-| `orchestrator` | 2 | plan-orchestrator, integrator, doc-writer |
-| `local-planner` | 2–3 local | planner-local (dep_update signal only — local 27B+, never cloud) |
-| `commit-message-generator` | 1 local | generated by deterministic pre-processor (local 7B, clean-wave path) |
-| `code-analyst` | 2–3 | test-writer, wave-reviewer, wave-synthesizer |
-| `pattern-coder` | 1 | scaffolder, discovery-advisor, learnings-consolidator |
-| `deep-coder` | 3 | implementer |
+Wave-system internal agents and user-facing role agents both route through the same
+capability aliases.
+
+| Alias | Cognitive tier | Wave-system agents | User-facing role agents |
+|---|---|---|---|
+| `judge` | 4–5 | planner, auditor, review-plan, final-reviewer, journal-digester, evaluator, supervisor | judge, large-general, debugger, planner |
+| `judge-strict` | 4–5, hard_fail | security-reviewer | — |
+| `orchestrator` | 2 | plan-orchestrator, integrator, doc-writer | orchestrator, long-context, doc-writer, context-manager |
+| `local-planner` | 2–3 local | planner-local (dep_update signal only) | — |
+| `code-analyst` | 2–3 | test-writer, wave-reviewer, wave-synthesizer, converger | test-writer |
+| `code-analyst-light` | 1–2 (light) | — | code-analyst-light |
+| `code-analyst-cloud` | 4 cloud | test-writer-cloud | — |
+| `pattern-coder` | 1 | scaffolder, discovery-advisor, learnings-consolidator | edge |
+| `deep-coder` | 3 | implementer | agentic-coder, refactor |
+| `deep-coder-cloud` | 4 cloud | implementer-cloud | — |
+| `deep-coder-precise` | 3 (mxfp8/BF16) | — | deep-coder-precise |
+| `coder` | 2 | — | coder |
+| `workhorse` | 2 (general) | — | generalist, vision, pdf |
+| `classifier` | 1 (fast) | — | fast-generalist |
+| `reviewer` | 2 (review) | — | reviewer |
+| `reasoner` | 3 (reasoning) | — | reasoner |
+| `explorer` | 1 (discovery) | — | explorer |
+| `fast-scout` | 1 (latency-optimised) | — | fast-scout |
+| `commit-message-generator` | 1 local | (deterministic pre-processor — clean-wave path) | — |
 
 ### agent_to_capability resolution
 

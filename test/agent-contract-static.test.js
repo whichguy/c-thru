@@ -83,6 +83,9 @@ const ROSTER = {
   'review-plan':        { warnOnly: true },
   'planner':            { warnOnly: true },
   'journal-digester':   { warnOnly: true },
+  'evaluator':          { warnOnly: true },
+  'supervisor':         { warnOnly: true },
+  'supervisor-debug':   { warnOnly: true },
 
   // ── Orchestrator / utility tiers: warn-only ───────────────────────────────────
   'plan-orchestrator':      { warnOnly: true, extraFields: ['TEST_FRAMEWORKS', 'COMPLEXITY', 'MIGRATION_REQUIRED'] },

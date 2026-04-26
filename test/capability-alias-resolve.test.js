@@ -40,8 +40,8 @@ console.log('1. All production agents → non-null capability alias (at each dec
 {
   const a2c = PROD_CONFIG.agent_to_capability || {};
   const tiers = Object.keys(PROD_CONFIG.llm_profiles || {});
-  assert(Object.keys(a2c).length > 0, 'agent_to_capability is non-empty in production config');
-  assert(tiers.length > 0, 'llm_profiles declares at least one tier');
+  assert(Object.keys(a2c).length > 0, `agent_to_capability is non-empty in production config (got ${Object.keys(a2c).length})`);
+  assert(tiers.length > 0, `llm_profiles declares at least one tier (got ${tiers.length})`);
   let allResolved = true;
   for (const [agent, expectedAlias] of Object.entries(a2c)) {
     for (const tier of tiers) {
@@ -103,8 +103,8 @@ console.log('\n3. Unknown agent → resolveCapabilityAlias returns null');
 console.log('\n4. Direct capability alias used as model name → identity');
 {
   const fixtureCfg = { llm_profiles: { '64gb': { judge: { connected_model: 'j', disconnect_model: 'j' } } } };
-  assert(resolveCapabilityAlias('judge', fixtureCfg, '64gb') === 'judge', 'judge → judge (identity)');
-  assert(resolveCapabilityAlias('workhorse', fixtureCfg, '64gb') === 'workhorse', 'workhorse → workhorse (static set)');
+  assert(resolveCapabilityAlias('judge', fixtureCfg, '64gb') === 'judge', `judge → judge (identity) (got ${resolveCapabilityAlias('judge', fixtureCfg, '64gb')})`);
+  assert(resolveCapabilityAlias('workhorse', fixtureCfg, '64gb') === 'workhorse', `workhorse → workhorse (static set) (got ${resolveCapabilityAlias('workhorse', fixtureCfg, '64gb')})`);
 }
 
 // ── 5. model_overrides field declared in production config ────────────────────
@@ -149,16 +149,16 @@ console.log('\n6. on_failure field values are well-formed in production config')
       }
     }
   }
-  assert(badCount === 0, `all ${checked} on_failure values are cascade or hard_fail`);
+  assert(badCount === 0, `all ${checked} on_failure values are cascade or hard_fail (got ${badCount} bad)`);
 }
 
 // ── 7. @backend sigil stripping ───────────────────────────────────────────────
 console.log('\n7. @backend sigil stripping from model names');
 {
-  assert(stripSigil('mymodel@ollama_local') === 'mymodel', '@ollama_local stripped');
-  assert(stripSigil('qwen3:1.7b@cloud_backend') === 'qwen3:1.7b', '@cloud_backend stripped');
-  assert(stripSigil('plain-model') === 'plain-model', 'no sigil unchanged');
-  assert(stripSigil('model@') === 'model@', 'trailing @ alone not stripped (invalid sigil)');
+  assert(stripSigil('mymodel@ollama_local') === 'mymodel', `@ollama_local stripped (got ${stripSigil('mymodel@ollama_local')})`);
+  assert(stripSigil('qwen3:1.7b@cloud_backend') === 'qwen3:1.7b', `@cloud_backend stripped (got ${stripSigil('qwen3:1.7b@cloud_backend')})`);
+  assert(stripSigil('plain-model') === 'plain-model', `no sigil unchanged (got ${stripSigil('plain-model')})`);
+  assert(stripSigil('model@') === 'model@', `trailing @ alone not stripped (invalid sigil) (got ${stripSigil('model@')})`);
 }
 
 // ── 8. Synthetic: agent_to_capability → missing tier gracefully handled ────────
@@ -169,10 +169,10 @@ console.log('\n8. Agent on tier where alias has no profile entry → resolveProf
     agent_to_capability: { 'my-agent': 'deep-coder' },
   };
   const alias = resolveCapabilityAlias('my-agent', cfg, '16gb');
-  assert(alias === 'deep-coder', 'alias resolves even when tier lacks the profile entry');
+  assert(alias === 'deep-coder', `alias resolves even when tier lacks the profile entry (got ${alias})`);
   const entry = (cfg.llm_profiles['16gb'] || {})['deep-coder']; // undefined
   const model = resolveProfileModel(entry, 'connected');
-  assert(model === null, 'resolveProfileModel(undefined, mode) → null (no crash)');
+  assert(model === null, `resolveProfileModel(undefined, mode) → null (no crash) (got ${model})`);
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────

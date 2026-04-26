@@ -1,0 +1,9 @@
+c-thru listening on 127.0.0.1:9997 (pid=65112)
+c-thru [network.watcher_init] {"pid":65112,"ts":"2026-04-26T15:33:39.601Z","interface_count":8,"interval_ms":3000}
+c-thru: hooks listener bound on :9998
+c-thru [request] {"pid":65112,"ts":"2026-04-26T15:33:41.506Z","method":"GET","url":"/ping"}
+c-thru: config reloaded via SIGHUP
+>>> SHUTDOWN START: signal=SIGTERM
+>>> SHUTDOWN: Flushing usage
+>>> SHUTDOWN: Waiting for closers
+>>> SHUTDOWN: End exit 0

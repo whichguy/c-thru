@@ -23,26 +23,26 @@ function assert(condition, message) {
 // Boundaries (from hw-profile.js): <24→16gb, <40→32gb, <56→48gb, <96→64gb, ≥96→128gb
 console.log('1. tierForGb — boundary conditions');
 {
-  assert(tierForGb(1)   === '16gb', '1 GB → 16gb');
-  assert(tierForGb(8)   === '16gb', '8 GB → 16gb');
-  assert(tierForGb(23)  === '16gb', '23 GB → 16gb (below 24 boundary)');
-  assert(tierForGb(24)  === '32gb', '24 GB → 32gb (at boundary)');
-  assert(tierForGb(25)  === '32gb', '25 GB → 32gb');
-  assert(tierForGb(39)  === '32gb', '39 GB → 32gb (below 40 boundary)');
-  assert(tierForGb(40)  === '48gb', '40 GB → 48gb (at boundary)');
-  assert(tierForGb(55)  === '48gb', '55 GB → 48gb (below 56 boundary)');
-  assert(tierForGb(56)  === '64gb', '56 GB → 64gb (at boundary)');
-  assert(tierForGb(95)  === '64gb', '95 GB → 64gb (below 96 boundary)');
-  assert(tierForGb(96)  === '128gb', '96 GB → 128gb (at boundary)');
-  assert(tierForGb(128) === '128gb', '128 GB → 128gb');
+  assert(tierForGb(1)   === '16gb', `1 GB → 16gb (got ${tierForGb(1)})`);
+  assert(tierForGb(8)   === '16gb', `8 GB → 16gb (got ${tierForGb(8)})`);
+  assert(tierForGb(23)  === '16gb', `23 GB → 16gb (below 24 boundary) (got ${tierForGb(23)})`);
+  assert(tierForGb(24)  === '32gb', `24 GB → 32gb (at boundary) (got ${tierForGb(24)})`);
+  assert(tierForGb(25)  === '32gb', `25 GB → 32gb (got ${tierForGb(25)})`);
+  assert(tierForGb(39)  === '32gb', `39 GB → 32gb (below 40 boundary) (got ${tierForGb(39)})`);
+  assert(tierForGb(40)  === '48gb', `40 GB → 48gb (at boundary) (got ${tierForGb(40)})`);
+  assert(tierForGb(55)  === '48gb', `55 GB → 48gb (below 56 boundary) (got ${tierForGb(55)})`);
+  assert(tierForGb(56)  === '64gb', `56 GB → 64gb (at boundary) (got ${tierForGb(56)})`);
+  assert(tierForGb(95)  === '64gb', `95 GB → 64gb (below 96 boundary) (got ${tierForGb(95)})`);
+  assert(tierForGb(96)  === '128gb', `96 GB → 128gb (at boundary) (got ${tierForGb(96)})`);
+  assert(tierForGb(128) === '128gb', `128 GB → 128gb (got ${tierForGb(128)})`);
 }
 
 // ── 2. tierForGb — extreme / edge inputs ─────────────────────────────────────
 console.log('\n2. tierForGb — extreme values');
 {
-  assert(tierForGb(0)   === '16gb',  '0 GB → 16gb (below minimum tier)');
-  assert(tierForGb(512) === '128gb', '512 GB → 128gb (well above ceiling)');
-  assert(typeof tierForGb(1024) === 'string', 'very large → returns a string, no crash');
+  assert(tierForGb(0)   === '16gb',  `0 GB → 16gb (below minimum tier) (got ${tierForGb(0)})`);
+  assert(tierForGb(512) === '128gb', `512 GB → 128gb (well above ceiling) (got ${tierForGb(512)})`);
+  assert(typeof tierForGb(1024) === 'string', `very large → returns a string, no crash (got ${tierForGb(1024)})`);
 }
 
 // ── 3. resolveActiveTier — CLAUDE_LLM_MEMORY_GB env override ─────────────────
@@ -52,13 +52,13 @@ console.log('\n3. resolveActiveTier — CLAUDE_LLM_MEMORY_GB env override');
   delete process.env.CLAUDE_LLM_PROFILE;
 
   process.env.CLAUDE_LLM_MEMORY_GB = '8';
-  assert(resolveActiveTier({ llm_active_profile: 'auto' }) === '16gb', 'CLAUDE_LLM_MEMORY_GB=8 → 16gb');
+  assert(resolveActiveTier({ llm_active_profile: 'auto' }) === '16gb', `CLAUDE_LLM_MEMORY_GB=8 → 16gb (got ${resolveActiveTier({ llm_active_profile: 'auto' })})`);
 
   process.env.CLAUDE_LLM_MEMORY_GB = '64';
-  assert(resolveActiveTier({}) === '64gb', 'CLAUDE_LLM_MEMORY_GB=64 → 64gb');
+  assert(resolveActiveTier({}) === '64gb', `CLAUDE_LLM_MEMORY_GB=64 → 64gb (got ${resolveActiveTier({})})`);
 
   process.env.CLAUDE_LLM_MEMORY_GB = '96';
-  assert(resolveActiveTier({}) === '128gb', 'CLAUDE_LLM_MEMORY_GB=96 → 128gb');
+  assert(resolveActiveTier({}) === '128gb', `CLAUDE_LLM_MEMORY_GB=96 → 128gb (got ${resolveActiveTier({})})`);
 
   Object.assign(process.env, saved);
 }
@@ -86,7 +86,7 @@ console.log('\n5. resolveActiveTier — CLAUDE_LLM_PROFILE wins over config.llm_
   const saved = { ...process.env };
   process.env.CLAUDE_LLM_PROFILE = '32gb';
   assert(resolveActiveTier({ llm_active_profile: '128gb' }) === '32gb',
-    'CLAUDE_LLM_PROFILE=32gb wins over config 128gb');
+    `CLAUDE_LLM_PROFILE=32gb wins over config 128gb (got ${resolveActiveTier({ llm_active_profile: '128gb' })})`);
   Object.assign(process.env, saved);
 }
 
@@ -97,7 +97,7 @@ console.log('\n6. resolveActiveTier — config.llm_active_profile respected');
   delete process.env.CLAUDE_LLM_PROFILE;
   delete process.env.CLAUDE_LLM_MEMORY_GB;
   assert(resolveActiveTier({ llm_active_profile: '48gb' }) === '48gb',
-    'config.llm_active_profile=48gb used when env absent');
+    `config.llm_active_profile=48gb used when env absent (got ${resolveActiveTier({ llm_active_profile: '48gb' })})`);
   Object.assign(process.env, saved);
 }
 
@@ -111,7 +111,7 @@ console.log('\n7. tierForGb — each boundary ±1 to confirm no off-by-one');
     [95, '64gb'], [96, '128gb'],
   ];
   for (const [gb, expected] of boundaries) {
-    assert(tierForGb(gb) === expected, `tierForGb(${gb}) === '${expected}'`);
+    assert(tierForGb(gb) === expected, `tierForGb(${gb}) === '${expected}' (got ${tierForGb(gb)})`);
   }
 }
 

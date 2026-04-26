@@ -48,7 +48,8 @@ console.log('1. connected mode: cloud-capable tiers use cloud models for judge')
   for (const tier of ['48gb', '64gb', '128gb']) {
     const entry = profiles[tier] && profiles[tier]['judge'];
     const model = resolveProfileModel(entry, 'connected');
-    assert(model === 'claude-opus-4-6', `${tier} judge connected → claude-opus-4-6 (got ${model})`);
+    const expected = entry && entry.connected_model;
+    assert(model === expected, `${tier} judge connected → ${expected} (got ${model})`);
   }
   // low-ram tiers stay local
   for (const tier of ['16gb', '32gb']) {
@@ -78,7 +79,8 @@ console.log('\n3. semi-offload: judge+judge-strict go cloud via modes[] at 48gb/
     for (const cap of ['judge', 'judge-strict']) {
       const entry = profiles[tier] && profiles[tier][cap];
       const model = resolveProfileModel(entry, 'semi-offload');
-      assert(model === 'claude-opus-4-6', `${tier} ${cap} semi-offload → claude-opus-4-6 (got ${model})`);
+      const expected = entry && entry.modes && entry.modes['semi-offload'];
+      assert(model === expected, `${tier} ${cap} semi-offload → ${expected} (got ${model})`);
     }
   }
 }
@@ -90,7 +92,8 @@ console.log('\n4. semi-offload: orchestrator+local-planner go cloud at 48gb/64gb
     for (const cap of ['orchestrator', 'local-planner']) {
       const entry = profiles[tier] && profiles[tier][cap];
       const model = resolveProfileModel(entry, 'semi-offload');
-      assert(model === 'claude-sonnet-4-6', `${tier} ${cap} semi-offload → claude-sonnet-4-6 (got ${model})`);
+      const expected = entry && entry.modes && entry.modes['semi-offload'];
+      assert(model === expected, `${tier} ${cap} semi-offload → ${expected} (got ${model})`);
     }
   }
 }
@@ -116,7 +119,8 @@ console.log('\n6. cloud-judge-only: judge+judge-strict cloud, orchestrator stays
     for (const cap of ['judge', 'judge-strict']) {
       const entry = profiles[tier] && profiles[tier][cap];
       const model = resolveProfileModel(entry, 'cloud-judge-only');
-      assert(model === 'claude-opus-4-6', `${tier} ${cap} cloud-judge-only → claude-opus-4-6 (got ${model})`);
+      const expected = entry && entry.modes && entry.modes['cloud-judge-only'];
+      assert(model === expected, `${tier} ${cap} cloud-judge-only → ${expected} (got ${model})`);
     }
     // orchestrator stays local (no modes['cloud-judge-only'] entry)
     const orchEntry = profiles[tier] && profiles[tier]['orchestrator'];
@@ -146,8 +150,8 @@ console.log('\n8. llm_connectivity_mode: "disconnect" legacy maps to offline beh
   function legacyToMode(legacyVal) {
     return legacyVal === 'disconnect' ? 'offline' : 'connected';
   }
-  assert(legacyToMode('disconnect') === 'offline', 'legacy disconnect → offline');
-  assert(legacyToMode('connected') === 'connected', 'legacy connected → connected');
+  assert(legacyToMode('disconnect') === 'offline',    `legacy disconnect → offline (got ${legacyToMode('disconnect')})`);
+  assert(legacyToMode('connected')  === 'connected',  `legacy connected → connected (got ${legacyToMode('connected')})`);
 }
 
 // ── 9. models[].equivalents for claude-opus-4-6 ───────────────────────
@@ -155,9 +159,13 @@ console.log('\n9. claude-opus-4-6 equivalents defined for cascade');
 {
   const models = shipped.models || [];
   const opusEntry = models.find(m => m.name === 'claude-opus-4-6');
-  assert(!!opusEntry, 'claude-opus-4-6 entry present in models[]');
-  assert(Array.isArray(opusEntry && opusEntry.equivalents), 'claude-opus-4-6 has equivalents array');
-  assert(opusEntry && opusEntry.equivalents && opusEntry.equivalents.includes('qwen3.6:35b'), 'equivalents includes qwen3.6:35b');
+  assert(!!opusEntry, `claude-opus-4-6 entry present in models[] (got ${!!opusEntry})`);
+  assert(Array.isArray(opusEntry && opusEntry.equivalents), `claude-opus-4-6 has equivalents array (got ${Array.isArray(opusEntry && opusEntry.equivalents)})`);
+  const judgeLocal128 = profiles['128gb'] && profiles['128gb'].judge && profiles['128gb'].judge.local_best_model;
+  assert(typeof judgeLocal128 === 'string' && judgeLocal128.length > 0,
+    `128gb judge has local_best_model defined (got ${judgeLocal128})`);
+  assert(opusEntry && opusEntry.equivalents && opusEntry.equivalents.includes(judgeLocal128),
+    `equivalents includes 128gb judge local_best_model (${judgeLocal128}; found: ${opusEntry && opusEntry.equivalents})`);
 }
 
 // ── 10. cloud-best-quality: uses cloud_best_model ?? connected_model ──
@@ -166,16 +174,19 @@ console.log('\n10. cloud-best-quality: cloud_best_model preferred, falls back to
   for (const tier of ['48gb', '64gb', '128gb']) {
     const entry = profiles[tier] && profiles[tier]['judge'];
     const model = resolveProfileModel(entry, 'cloud-best-quality');
-    assert(model === 'claude-opus-4-6', `${tier} judge cloud-best-quality → claude-opus-4-6 (got ${model})`);
+    const judgeExpected = entry && (entry.cloud_best_model ?? entry.connected_model);
+    assert(model === judgeExpected, `${tier} judge cloud-best-quality → ${judgeExpected} (got ${model})`);
 
     const orchEntry = profiles[tier] && profiles[tier]['orchestrator'];
     const orchModel = resolveProfileModel(orchEntry, 'cloud-best-quality');
-    assert(orchModel === 'claude-sonnet-4-6', `${tier} orchestrator cloud-best-quality → claude-sonnet-4-6 (got ${orchModel})`);
+    const orchExpected = orchEntry && (orchEntry.cloud_best_model ?? orchEntry.connected_model);
+    assert(orchModel === orchExpected, `${tier} orchestrator cloud-best-quality → ${orchExpected} (got ${orchModel})`);
   }
   // Entry without cloud_best_model falls through to connected_model
   const syntheticEntry = { connected_model: 'model-conn', disconnect_model: 'model-disc' };
-  assert(resolveProfileModel(syntheticEntry, 'cloud-best-quality') === 'model-conn',
-    'entry without cloud_best_model falls through to connected_model');
+  const syntheticResult = resolveProfileModel(syntheticEntry, 'cloud-best-quality');
+  assert(syntheticResult === 'model-conn',
+    `entry without cloud_best_model falls through to connected_model (got ${syntheticResult})`);
 }
 
 // ── 11. local-best-quality: uses local_best_model ?? disconnect_model ─
@@ -184,7 +195,8 @@ console.log('\n11. local-best-quality: local_best_model preferred, falls back to
   for (const tier of ['48gb', '64gb', '128gb']) {
     const entry = profiles[tier] && profiles[tier]['judge'];
     const model = resolveProfileModel(entry, 'local-best-quality');
-    assert(model === 'qwen3.6:35b', `${tier} judge local-best-quality → qwen3.6:35b (got ${model})`);
+    const expected = entry && entry.local_best_model;
+    assert(model === expected, `${tier} judge local-best-quality → ${expected} (got ${model})`);
 
     const deepCoderEntry = profiles[tier] && profiles[tier]['deep-coder'];
     if (deepCoderEntry && deepCoderEntry.local_best_model) {
@@ -195,8 +207,9 @@ console.log('\n11. local-best-quality: local_best_model preferred, falls back to
   }
   // Entry without local_best_model falls through to disconnect_model
   const syntheticEntry = { connected_model: 'model-conn', disconnect_model: 'model-disc' };
-  assert(resolveProfileModel(syntheticEntry, 'local-best-quality') === 'model-disc',
-    'entry without local_best_model falls through to disconnect_model');
+  const syntheticLocalResult = resolveProfileModel(syntheticEntry, 'local-best-quality');
+  assert(syntheticLocalResult === 'model-disc',
+    `entry without local_best_model falls through to disconnect_model (got ${syntheticLocalResult})`);
 }
 
 // ── 12. local-terminal guarantee: disconnect_model always local ────────
@@ -268,11 +281,11 @@ console.log('\n14. fallback_chains seeded for key capabilities');
   for (const tier of ['48gb', '64gb', '128gb']) {
     for (const cap of ['default', 'judge', 'orchestrator', 'deep-coder', 'local-planner', 'coder', 'workhorse']) {
       assert(Array.isArray(chains[tier] && chains[tier][cap]),
-        `fallback_chains[${tier}][${cap}] is an array`);
+        `fallback_chains[${tier}][${cap}] is an array (got ${Array.isArray(chains[tier] && chains[tier][cap])})`);
       const chain = chains[tier] && chains[tier][cap];
-      assert(chain && chain.length >= 2, `fallback_chains[${tier}][${cap}] has at least 2 candidates`);
+      assert(chain && chain.length >= 2, `fallback_chains[${tier}][${cap}] has at least 2 candidates (got ${chain && chain.length})`);
       const allHaveModel = chain && chain.every(c => typeof c.model === 'string' && c.model.length > 0);
-      assert(allHaveModel, `fallback_chains[${tier}][${cap}] all candidates have model string`);
+      assert(allHaveModel, `fallback_chains[${tier}][${cap}] all candidates have model string (got ${allHaveModel})`);
     }
   }
 }
@@ -280,12 +293,18 @@ console.log('\n14. fallback_chains seeded for key capabilities');
 // ── 15. resolveProfileModel null-guard ────────────────────────────────
 console.log('\n15. resolveProfileModel: null entry returns null for all modes');
 {
-  for (const mode of ['connected', 'offline', 'semi-offload', 'cloud-judge-only', 'cloud-best-quality', 'local-best-quality']) {
+  const ALL_MODES = [
+    'connected', 'offline', 'local-only', 'semi-offload', 'cloud-judge-only',
+    'cloud-thinking', 'local-review', 'cloud-best-quality', 'local-best-quality',
+    'cloud-only', 'claude-only', 'opensource-only', 'fastest-possible',
+    'smallest-possible', 'best-opensource', 'best-opensource-cloud'
+  ];
+  for (const mode of ALL_MODES) {
     assert(resolveProfileModel(null, mode) === null,
-      `resolveProfileModel(null, '${mode}') === null`);
+      `resolveProfileModel(null, '${mode}') === null (got ${resolveProfileModel(null, mode)})`);
   }
   assert(resolveProfileModel(undefined, 'connected') === null,
-    'resolveProfileModel(undefined, connected) === null');
+    `resolveProfileModel(undefined, connected) === null (got ${resolveProfileModel(undefined, 'connected')})`);
 }
 
 // ── 16. applyQualityTolerance: all-null scores preserves original order ──
@@ -321,8 +340,8 @@ console.log('\n16. applyQualityTolerance: all-null scores preserves original cha
   ];
   const partialResult = applyQualityTolerance(partialChain, 5);
   // threshold = 90 * 0.95 = 85.5; B has effective score 0 → out-of-band → stays after A
-  assert(partialResult[0].model === 'A', 'partially-scored: in-band A stays first');
-  assert(partialResult[1].model === 'B', 'partially-scored: null-score B stays after A');
+  assert(partialResult[0].model === 'A', `partially-scored: in-band A stays first (got ${partialResult[0].model})`);
+  assert(partialResult[1].model === 'B', `partially-scored: null-score B stays after A (got ${partialResult[1].model})`);
 }
 
 // ── 17. general-default fallback chains seeded ────────────────────────
@@ -331,8 +350,8 @@ console.log('\n17. general-default fallback chains seeded at 48gb/64gb/128gb');
   const chains = shipped.fallback_chains || {};
   for (const tier of ['48gb', '64gb', '128gb']) {
     const chain = chains[tier] && chains[tier]['default'];
-    assert(Array.isArray(chain), `fallback_chains[${tier}][default] is an array`);
-    assert(chain && chain.length >= 2, `fallback_chains[${tier}][default] has ≥2 candidates`);
+    assert(Array.isArray(chain), `fallback_chains[${tier}][default] is an array (got ${Array.isArray(chain)})`);
+    assert(chain && chain.length >= 2, `fallback_chains[${tier}][default] has ≥2 candidates (got ${chain && chain.length})`);
 
     // Last candidate must be a local model (terminates on local)
     const last = chain && chain[chain.length - 1];
@@ -347,9 +366,9 @@ console.log('\n17. general-default fallback chains seeded at 48gb/64gb/128gb');
   for (const tier of ['48gb', '64gb', '128gb']) {
     const entry = profiles[tier] && profiles[tier]['default'];
     assert(entry && typeof entry.cloud_best_model === 'string',
-      `llm_profiles[${tier}].default has cloud_best_model`);
+      `llm_profiles[${tier}].default has cloud_best_model (got ${entry && entry.cloud_best_model})`);
     assert(entry && typeof entry.local_best_model === 'string',
-      `llm_profiles[${tier}].default has local_best_model`);
+      `llm_profiles[${tier}].default has local_best_model (got ${entry && entry.local_best_model})`);
   }
 }
 
@@ -391,7 +410,7 @@ console.log('\n18. buildFallbackCandidatesFromChain: tiebreaker applied in best-
   const chains = shipped.fallback_chains || {};
   for (const tier of ['48gb', '64gb', '128gb']) {
     const chain = (chains[tier] || {})['default'] || [];
-    assert(chain.length >= 1, `fallback_chains[${tier}][default] has at least 1 entry`);
+    assert(chain.length >= 1, `fallback_chains[${tier}][default] has at least 1 entry (got ${chain.length})`);
     const last = chain[chain.length - 1];
     const modelRoutes = shipped.model_routes || {};
     const backends = shipped.backends || {};

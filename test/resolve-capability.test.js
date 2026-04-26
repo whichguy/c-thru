@@ -63,17 +63,17 @@ const CAPABILITIES = ['deep-coder', 'judge', 'orchestrator', 'workhorse'];
 console.log('1. resolveProfileModel — 4 modes × entries with and without modes sub-map');
 {
   const entryWithModes = FIXTURE_CONFIG.llm_profiles['64gb']['judge'];
-  assert(resolveProfileModel(entryWithModes, 'connected')       === 'j-cloud', 'judge connected');
-  assert(resolveProfileModel(entryWithModes, 'offline')         === 'j-local', 'judge offline');
-  assert(resolveProfileModel(entryWithModes, 'semi-offload')    === 'j-mid',   'judge semi-offload (modes[])');
-  assert(resolveProfileModel(entryWithModes, 'cloud-judge-only')=== 'j-cloud', 'judge cloud-judge-only (modes[])');
+  assert(resolveProfileModel(entryWithModes, 'connected')       === 'j-cloud', `judge connected (got ${resolveProfileModel(entryWithModes, 'connected')})`);
+  assert(resolveProfileModel(entryWithModes, 'offline')         === 'j-local', `judge offline (got ${resolveProfileModel(entryWithModes, 'offline')})`);
+  assert(resolveProfileModel(entryWithModes, 'semi-offload')    === 'j-mid',   `judge semi-offload (modes[]) (got ${resolveProfileModel(entryWithModes, 'semi-offload')})`);
+  assert(resolveProfileModel(entryWithModes, 'cloud-judge-only')=== 'j-cloud', `judge cloud-judge-only (modes[]) (got ${resolveProfileModel(entryWithModes, 'cloud-judge-only')})`);
 
   const plainEntry = FIXTURE_CONFIG.llm_profiles['64gb']['deep-coder'];
-  assert(resolveProfileModel(plainEntry, 'connected')       === 'dc-cloud', 'dc connected');
-  assert(resolveProfileModel(plainEntry, 'offline')         === 'dc-local', 'dc offline');
-  assert(resolveProfileModel(plainEntry, 'semi-offload')    === 'dc-local', 'dc semi-offload (no modes[])');
-  assert(resolveProfileModel(plainEntry, 'cloud-judge-only')=== 'dc-local', 'dc cloud-judge-only (no modes[])');
-  assert(resolveProfileModel(plainEntry, 'unknown-mode')    === 'dc-cloud', 'dc unknown mode → conservative default');
+  assert(resolveProfileModel(plainEntry, 'connected')       === 'dc-cloud', `dc connected (got ${resolveProfileModel(plainEntry, 'connected')})`);
+  assert(resolveProfileModel(plainEntry, 'offline')         === 'dc-local', `dc offline (got ${resolveProfileModel(plainEntry, 'offline')})`);
+  assert(resolveProfileModel(plainEntry, 'semi-offload')    === 'dc-local', `dc semi-offload (no modes[]) (got ${resolveProfileModel(plainEntry, 'semi-offload')})`);
+  assert(resolveProfileModel(plainEntry, 'cloud-judge-only')=== 'dc-local', `dc cloud-judge-only (no modes[]) (got ${resolveProfileModel(plainEntry, 'cloud-judge-only')})`);
+  assert(resolveProfileModel(plainEntry, 'unknown-mode')    === 'dc-cloud', `dc unknown mode → conservative default (got ${resolveProfileModel(plainEntry, 'unknown-mode')})`);
 }
 
 // ── 2. resolveLlmMode — config + env precedence ───────────────────────────────
@@ -85,24 +85,24 @@ console.log('\n2. resolveLlmMode — env overrides config; legacy env aliases');
   delete process.env.CLAUDE_LLM_MODE;
   delete process.env.CLAUDE_CONNECTIVITY_MODE;
   delete process.env.CLAUDE_LLM_CONNECTIVITY_MODE;
-  assert(resolveLlmMode({ llm_mode: 'offline' }) === 'offline', 'config.llm_mode respected');
-  assert(resolveLlmMode({}) === 'connected', 'built-in default when config absent');
+  assert(resolveLlmMode({ llm_mode: 'offline' }) === 'offline', `config.llm_mode respected (got ${resolveLlmMode({ llm_mode: 'offline' })})`);
+  assert(resolveLlmMode({}) === 'connected', `built-in default when config absent (got ${resolveLlmMode({})})`);
 
   // Env wins over config
   process.env.CLAUDE_LLM_MODE = 'semi-offload';
-  assert(resolveLlmMode({ llm_mode: 'offline' }) === 'semi-offload', 'CLAUDE_LLM_MODE wins over config');
+  assert(resolveLlmMode({ llm_mode: 'offline' }) === 'semi-offload', `CLAUDE_LLM_MODE wins over config (got ${resolveLlmMode({ llm_mode: 'offline' })})`);
   delete process.env.CLAUDE_LLM_MODE;
 
   // Legacy env
   process.env.CLAUDE_CONNECTIVITY_MODE = 'disconnect';
-  assert(resolveLlmMode({}) === 'offline', 'legacy disconnect → offline');
+  assert(resolveLlmMode({}) === 'offline', `legacy disconnect → offline (got ${resolveLlmMode({})})`);
   process.env.CLAUDE_CONNECTIVITY_MODE = 'connected';
-  assert(resolveLlmMode({}) === 'connected', 'legacy connected → connected');
+  assert(resolveLlmMode({}) === 'connected', `legacy connected → connected (got ${resolveLlmMode({})})`);
   delete process.env.CLAUDE_CONNECTIVITY_MODE;
 
   // Invalid env is ignored
   process.env.CLAUDE_LLM_MODE = 'bogus';
-  assert(resolveLlmMode({ llm_mode: 'offline' }) === 'offline', 'invalid CLAUDE_LLM_MODE ignored, falls back');
+  assert(resolveLlmMode({ llm_mode: 'offline' }) === 'offline', `invalid CLAUDE_LLM_MODE ignored, falls back (got ${resolveLlmMode({ llm_mode: 'offline' })})`);
   delete process.env.CLAUDE_LLM_MODE;
 
   Object.assign(process.env, savedEnv);
@@ -115,17 +115,17 @@ console.log('\n3. resolveActiveTier — CLAUDE_LLM_PROFILE → config.llm_active
   delete process.env.CLAUDE_LLM_PROFILE;
   delete process.env.CLAUDE_LLM_MEMORY_GB;
 
-  assert(resolveActiveTier({ llm_active_profile: '32gb' }) === '32gb', 'config.llm_active_profile used');
-  assert(resolveActiveTier({ llm_active_profile: 'auto', }) !== '', 'auto → hw detection returns non-empty string');
+  assert(resolveActiveTier({ llm_active_profile: '32gb' }) === '32gb', `config.llm_active_profile used (got ${resolveActiveTier({ llm_active_profile: '32gb' })})`);
+  assert(resolveActiveTier({ llm_active_profile: 'auto', }) !== '', `auto → hw detection returns non-empty string (got ${resolveActiveTier({ llm_active_profile: 'auto' })})`);
 
   process.env.CLAUDE_LLM_PROFILE = '16gb';
-  assert(resolveActiveTier({ llm_active_profile: '64gb' }) === '16gb', 'CLAUDE_LLM_PROFILE wins over config');
+  assert(resolveActiveTier({ llm_active_profile: '64gb' }) === '16gb', `CLAUDE_LLM_PROFILE wins over config (got ${resolveActiveTier({ llm_active_profile: '64gb' })})`);
   delete process.env.CLAUDE_LLM_PROFILE;
 
   process.env.CLAUDE_LLM_MEMORY_GB = '8';
-  assert(resolveActiveTier({}) === '16gb', 'CLAUDE_LLM_MEMORY_GB=8 → 16gb tier');
+  assert(resolveActiveTier({}) === '16gb', `CLAUDE_LLM_MEMORY_GB=8 → 16gb tier (got ${resolveActiveTier({})})`);
   process.env.CLAUDE_LLM_MEMORY_GB = '48';
-  assert(resolveActiveTier({}) === '48gb', 'CLAUDE_LLM_MEMORY_GB=48 → 48gb tier');
+  assert(resolveActiveTier({}) === '48gb', `CLAUDE_LLM_MEMORY_GB=48 → 48gb tier (got ${resolveActiveTier({})})`);
   delete process.env.CLAUDE_LLM_MEMORY_GB;
 
   Object.assign(process.env, savedEnv);
@@ -138,23 +138,23 @@ console.log('\n4. resolveCapabilityAlias — static aliases, agent map, profile 
   const cfg  = FIXTURE_CONFIG;
 
   // Static LLM_PROFILE_ALIASES
-  assert(resolveCapabilityAlias('workhorse', cfg, tier) === 'workhorse', 'static alias identity');
-  assert(resolveCapabilityAlias('coder', cfg, tier)     === 'coder',     'static alias identity (coder)');
+  assert(resolveCapabilityAlias('workhorse', cfg, tier) === 'workhorse', `static alias identity (got ${resolveCapabilityAlias('workhorse', cfg, tier)})`);
+  assert(resolveCapabilityAlias('coder', cfg, tier)     === 'coder',     `static alias identity (coder) (got ${resolveCapabilityAlias('coder', cfg, tier)})`);
 
   // agent_to_capability
-  assert(resolveCapabilityAlias('implementer', cfg, tier) === 'deep-coder',   'agent → deep-coder');
-  assert(resolveCapabilityAlias('scaffolder',  cfg, tier) === 'pattern-coder', 'agent → pattern-coder');
-  assert(resolveCapabilityAlias('planner',     cfg, tier) === 'judge',         'agent → judge');
+  assert(resolveCapabilityAlias('implementer', cfg, tier) === 'deep-coder',   `agent → deep-coder (got ${resolveCapabilityAlias('implementer', cfg, tier)})`);
+  assert(resolveCapabilityAlias('scaffolder',  cfg, tier) === 'pattern-coder', `agent → pattern-coder (got ${resolveCapabilityAlias('scaffolder', cfg, tier)})`);
+  assert(resolveCapabilityAlias('planner',     cfg, tier) === 'judge',         `agent → judge (got ${resolveCapabilityAlias('planner', cfg, tier)})`);
 
   // Direct profile key (not in static set, not in a2c)
-  assert(resolveCapabilityAlias('deep-coder',   cfg, tier) === 'deep-coder',   'profile key → identity');
-  assert(resolveCapabilityAlias('orchestrator', cfg, tier) === 'orchestrator', 'profile key → identity');
+  assert(resolveCapabilityAlias('deep-coder',   cfg, tier) === 'deep-coder',   `profile key → identity (got ${resolveCapabilityAlias('deep-coder', cfg, tier)})`);
+  assert(resolveCapabilityAlias('orchestrator', cfg, tier) === 'orchestrator', `profile key → identity (got ${resolveCapabilityAlias('orchestrator', cfg, tier)})`);
 
   // Unknown
-  assert(resolveCapabilityAlias('unknown-thing', cfg, tier) === null, 'unknown → null');
+  assert(resolveCapabilityAlias('unknown-thing', cfg, tier) === null, `unknown → null (got ${resolveCapabilityAlias('unknown-thing', cfg, tier)})`);
 
   // Wrong tier: capability exists in 64gb but not 16gb, and not in static set or a2c
-  assert(resolveCapabilityAlias('pattern-coder', cfg, '16gb') === null, 'profile key miss on wrong tier → null');
+  assert(resolveCapabilityAlias('pattern-coder', cfg, '16gb') === null, `profile key miss on wrong tier → null (got ${resolveCapabilityAlias('pattern-coder', cfg, '16gb')})`);
 }
 
 // ── 5. Cartesian product — modes × tiers × capabilities ──────────────────────

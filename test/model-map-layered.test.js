@@ -53,9 +53,9 @@ console.log('1. mergeConfigLayers — deepest value wins for scalars');
   const base     = { a: 1, b: { x: 10, y: 20 } };
   const override = { b: { x: 99 } };
   const result   = mergeConfigLayers(base, override);
-  assert(result.a === 1,   'unoverridden scalar preserved');
-  assert(result.b.x === 99, 'nested scalar override wins');
-  assert(result.b.y === 20, 'sibling key preserved');
+  assert(result.a === 1,   `unoverridden scalar preserved (got ${result.a})`);
+  assert(result.b.x === 99, `nested scalar override wins (got ${result.b.x})`);
+  assert(result.b.y === 20, `sibling key preserved (got ${result.b.y})`);
 }
 
 // ── 2. mergeConfigLayers — array replace semantics ────────────────────────────
@@ -64,8 +64,8 @@ console.log('\n2. mergeConfigLayers — array override replaces entire array');
   const base     = { list: [1, 2, 3] };
   const override = { list: [99] };
   const result   = mergeConfigLayers(base, override);
-  assert(Array.isArray(result.list), 'result is array');
-  assert(result.list.length === 1 && result.list[0] === 99, 'array replaced, not merged');
+  assert(Array.isArray(result.list), `result is array (got ${typeof result.list})`);
+  assert(result.list.length === 1 && result.list[0] === 99, `array replaced, not merged (got ${JSON.stringify(result.list)})`);
 }
 
 // ── 3. mergeConfigLayers — missing override is a no-op ────────────────────────
@@ -73,9 +73,9 @@ console.log('\n3. mergeConfigLayers — undefined override → clone of base');
 {
   const base   = { x: 42, nested: { y: 7 } };
   const result = mergeConfigLayers(base, undefined);
-  assert(result.x === 42,         'scalar preserved when override undefined');
-  assert(result.nested.y === 7,   'nested preserved when override undefined');
-  assert(result !== base,          'returns a clone, not same reference');
+  assert(result.x === 42,         `scalar preserved when override undefined (got ${result.x})`);
+  assert(result.nested.y === 7,   `nested preserved when override undefined (got ${result.nested.y})`);
+  assert(result !== base,          `returns a clone, not same reference (got ${result === base ? 'same reference' : 'different reference'})`);
 }
 
 // ── 4. loadLayeredConfig — user override of llm_mode ─────────────────────────
@@ -87,7 +87,7 @@ console.log('\n4. loadLayeredConfig — user override wins for scalar field');
     assert(effective.llm_mode === 'offline', `override llm_mode wins (got ${effective.llm_mode})`);
     // base model_routes should still be there
     assert(effective.model_routes && effective.model_routes['base-model'] === 'local',
-      'base model_routes preserved after scalar override');
+      `base model_routes preserved after scalar override (got ${effective.model_routes && effective.model_routes['base-model']})`);
   });
 }
 
@@ -103,8 +103,8 @@ console.log('\n5. loadLayeredConfig — missing overrides path → defaults only
     } catch (e) {
       threw = true;
     }
-    assert(!threw, 'missing overrides file does not throw');
-    assert(effective && effective.llm_mode === 'connected', 'effective comes from base defaults');
+    assert(!threw, `missing overrides file does not throw (got threw=${threw})`);
+    assert(effective && effective.llm_mode === 'connected', `effective comes from base defaults (got ${effective && effective.llm_mode})`);
   });
 }
 
@@ -120,7 +120,7 @@ console.log('\n6. loadLayeredConfig — malformed override JSON throws');
       threw = true;
       errMsg = e.message;
     }
-    assert(threw, 'malformed override JSON throws');
+    assert(threw, `malformed override JSON throws (got threw=${threw})`);
     // SyntaxError or our own message — either way it mentions the problem
     assert(errMsg.length > 0, `error message is non-empty (got: "${errMsg.slice(0, 80)}")`);
   });
@@ -132,8 +132,8 @@ console.log('\n7. mergeConfigLayers — null in override removes the key');
   const base     = { keep: 'yes', remove: 'old' };
   const override = { remove: null };
   const result   = mergeConfigLayers(base, override);
-  assert(result.keep === 'yes', 'unaffected key preserved');
-  assert(!Object.prototype.hasOwnProperty.call(result, 'remove'), 'null override removes key');
+  assert(result.keep === 'yes', `unaffected key preserved (got ${result.keep})`);
+  assert(!Object.prototype.hasOwnProperty.call(result, 'remove'), `null override removes key (got hasOwnProperty('remove')=${Object.prototype.hasOwnProperty.call(result, 'remove')})`);
 }
 
 // ── 8. loadLayeredConfig — deep merge of llm_profiles ────────────────────────
@@ -147,12 +147,12 @@ console.log('\n8. loadLayeredConfig — deep merge: override adds new tier witho
   };
   withTmpFiles({ 'defaults.json': BASE, 'overrides.json': override }, ({ 'defaults.json': d, 'overrides.json': o }) => {
     const { effective } = loadLayeredConfig(d, o);
-    assert(effective.llm_profiles['16gb'] !== undefined, '16gb tier preserved from base');
-    assert(effective.llm_profiles['32gb'] !== undefined, '32gb tier added from override');
+    assert(effective.llm_profiles['16gb'] !== undefined, `16gb tier preserved from base (got ${effective.llm_profiles['16gb']})`);
+    assert(effective.llm_profiles['32gb'] !== undefined, `32gb tier added from override (got ${effective.llm_profiles['32gb']})`);
     assert(effective.llm_profiles['32gb'].workhorse.connected_model === 'override-model',
-      'override tier value correct');
+      `override tier value correct (got ${effective.llm_profiles['32gb'].workhorse.connected_model})`);
     assert(effective.llm_profiles['16gb'].workhorse.connected_model === 'base-model',
-      'base tier value unchanged');
+      `base tier value unchanged (got ${effective.llm_profiles['16gb'].workhorse.connected_model})`);
   });
 }
 
@@ -164,8 +164,20 @@ console.log('\n9. CLAUDE_MODEL_MAP_DEFAULTS_PATH env var honored by model-map-la
   const altBase = Object.assign({}, BASE, { llm_mode: 'offline' });
   withTmpFiles({ 'alt-defaults.json': altBase }, ({ 'alt-defaults.json': d }) => {
     const { effective } = loadLayeredConfig(d, null);
-    assert(effective.llm_mode === 'offline', 'loadLayeredConfig respects alt defaults path arg');
+    assert(effective.llm_mode === 'offline', `loadLayeredConfig respects alt defaults path arg (got ${effective.llm_mode})`);
   });
+}
+
+// ── 10. 3-tier merge — project overrides global overrides defaults ──────────
+console.log('\n10. 3-tier merge — project > global > defaults');
+{
+  const defaults = { a: 1, b: 1, c: 1 };
+  const global   = { b: 2, c: 2 };
+  const project  = { c: 3 };
+  const result   = mergeConfigLayers(defaults, global, project);
+  assert(result.a === 1, `defaults preserved when unoverridden (got ${result.a})`);
+  assert(result.b === 2, `global overrides defaults (got ${result.b})`);
+  assert(result.c === 3, `project overrides global and defaults (got ${result.c})`);
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────

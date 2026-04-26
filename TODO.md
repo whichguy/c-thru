@@ -65,6 +65,9 @@ Implement a `curl` test (or equivalent) in `c-thru` immediately after proxy star
 ## UX / Polish
 
 **[ux] Professionalize messaging across all tools**
+- [x] Consolidate path discovery into `tools/model-map-config.js --shell-env`.
+- [x] Create standalone `tools/c-thru-control` utility for agentic and CLI control.
+- [x] Implement `/c-thru-control` interceptor in `tools/c-thru`.
 - [ ] Refactor `tools/c-thru` and related scripts to use more professional, standardized messaging (consistent prefixes, clearer status updates).
 
 **[ux] Advanced startup feedback (fancier spinner)**

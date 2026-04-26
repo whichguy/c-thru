@@ -7,7 +7,8 @@ const path = require('path');
 const PROFILE_KEYS = ['default', 'classifier', 'explorer', 'reviewer', 'workhorse', 'coder',
   'judge', 'judge-strict', 'orchestrator', 'code-analyst', 'pattern-coder', 'deep-coder',
   'local-planner', 'commit-message-generator',
-  'deep-coder-cloud', 'code-analyst-cloud'];
+  'deep-coder-cloud', 'code-analyst-cloud',
+  'reasoner', 'fast-scout', 'code-analyst-light', 'deep-coder-precise', 'agentic-coder'];
 const CAPABILITY_KEYS = new Set([
   'default',
   'classify_intent',
@@ -29,7 +30,16 @@ const CAPABILITY_KEYS = new Set([
 ]);
 const CONNECTIVITY_MODES = new Set(['connected', 'disconnect']);
 const BACKEND_SIGIL_RE = /^(.+)@([A-Za-z0-9_-]+)$/;
-const LLM_MODES = new Set(['connected', 'semi-offload', 'cloud-judge-only', 'offline', 'cloud-best-quality', 'local-best-quality']);
+const LLM_MODES = new Set([
+  'connected', 'semi-offload', 'cloud-judge-only', 'offline',
+  'cloud-best-quality', 'local-best-quality',
+  // Phase 1 additions — keep in sync with LLM_MODE_ENUM in model-map-resolve.js (Check 11).
+  'local-only', 'cloud-thinking', 'local-review',
+  // Phase 2 additions — provider-filter modes
+  'cloud-only', 'claude-only', 'opensource-only',
+  // Phase 3 additions — benchmark-driven ranking modes
+  'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local',
+]);
 const ON_FAILURE_VALUES = new Set(['cascade', 'hard_fail']);
 const JS_WRAPPER_FLAG = 'C_THRU_ENABLE_TARGET_JS';
 const TRUSTED_JS_FLAG = 'C_THRU_MODEL_MAP_TRUSTED_JS';
@@ -223,7 +233,7 @@ function validateQualityScore(value, context) {
   }
 }
 
-function validateFallbackChains(chains, report, modelRoutes) {
+function validateFallbackChains(chains, report, modelRoutes, backends) {
   if (!isObject(chains)) { report("'fallback_chains' must be an object when present"); return; }
   for (const [tier, capMap] of Object.entries(chains)) {
     if (!isObject(capMap)) { report(`'fallback_chains.${tier}' must be an object`); continue; }
@@ -255,6 +265,35 @@ function validateFallbackChains(chains, report, modelRoutes) {
         }
         try { validateQualityScore(c.quality_score, `${ctx}.quality_score`); } catch (e) { report(e.message); }
         try { validateQualityScore(c.speed_score, `${ctx}.speed_score`); } catch (e) { report(e.message); }
+      }
+      // Quality must be monotonically non-increasing (+1 tolerance for speed-for-quality trades)
+      for (let i = 0; i < candidates.length - 1; i++) {
+        const curr = candidates[i], next = candidates[i + 1];
+        if (curr.quality_score != null && next.quality_score != null) {
+          if (next.quality_score > curr.quality_score + 1) {
+            report(
+              `fallback_chains.${tier}.${cap}[${i}→${i+1}]: quality inversion — ` +
+              `'${curr.model}'(q=${curr.quality_score}) followed by ` +
+              `'${next.model}'(q=${next.quality_score})`
+            );
+          }
+        }
+      }
+      // Last entry must be a local (ollama) model — chains must terminate locally
+      if (candidates.length > 0 && isObject(modelRoutes) && isObject(backends)) {
+        const last = candidates[candidates.length - 1];
+        if (typeof last.model === 'string') {
+          const sigil = last.model.match(BACKEND_SIGIL_RE);
+          const backendId = sigil ? sigil[1] : modelRoutes[last.model];
+          const backend = backendId && backends[backendId];
+          const isLocal = backend && backend.kind === 'ollama' && !last.model.endsWith(':cloud');
+          if (!isLocal) {
+            report(
+              `fallback_chains.${tier}.${cap}: terminal entry '${last.model}' must be a local ` +
+              `(ollama) model — chains must not terminate on a cloud endpoint`
+            );
+          }
+        }
       }
     }
   }
@@ -488,7 +527,7 @@ function validateConfig(config, _errors, options) {
   }
 
   if (config.fallback_chains != null) {
-    validateFallbackChains(config.fallback_chains, report, config.model_routes);
+    validateFallbackChains(config.fallback_chains, report, config.model_routes, config.backends);
   }
 
   if (config.targets != null) {

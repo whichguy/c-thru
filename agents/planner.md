@@ -1,6 +1,6 @@
 ---
 name: planner
-description: Unified signal-based planner. Reads outcome + findings + pending items; updates living dep map; returns READY_ITEMS[].
+description: Formal reasoning, structured planning, and logical decomposition. Use for "plan this step by step", "break this problem down logically", "design the sequence of steps for", "prove this is correct", "find the edge case in this algorithm", "verify this invariant holds". Also drives the wave-system dep map: writes Outcome + items on first call, updates deps and returns READY_ITEMS[] on each wave.
 model: planner
 tier_budget: 1500
 ---

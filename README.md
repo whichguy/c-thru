@@ -4,6 +4,62 @@
 
 ---
 
+## Getting Started: Redirecting Claude Code
+
+To start Claude Code with a different model, you must redirect its API requests to the c-thru proxy using environment variables. This allows you to use models from providers like OpenRouter, LM Studio, or Ollama while keeping the Claude Code interface.
+
+### Method 1: Quick Redirect (CLI)
+
+You can point Claude Code to a different model by setting two primary environment variables in your terminal before launching the tool:
+
+1.  **Set the Base URL:** Redirect requests to the c-thru proxy.
+2.  **Set the Auth Token:** Use the token `"ollama"` (required for local/spoofed backends).
+3.  **Launch with Model Flag:** Specify the model name.
+
+**Example using `c-thru` wrapper (automates steps 1 & 2):**
+```sh
+c-thru --model qwen3.5:27b
+```
+
+**Example for manual redirection:**
+```sh
+export ANTHROPIC_BASE_URL=http://localhost:9997
+export ANTHROPIC_AUTH_TOKEN=ollama
+claude --model qwen3.5:27b
+```
+
+### Method 2: Use Local Models (Ollama or LM Studio)
+
+To use local models, ensure you have a local server running that the c-thru proxy can communicate with.
+
+*   **Ollama:** Install Ollama and pull your model (e.g., `qwen3.5:27b`). `c-thru` automatically handles `ollama serve` and pre-warming.
+*   **LM Studio:** Start the LM Studio local server (typically on port `1234`), then add it as a backend in `model-map.json`.
+
+### Method 3: Simplified Shell Functions
+
+For frequent use, add functions to your shell configuration file (e.g., `.zshrc` or `.bashrc`) to switch with one command:
+
+```sh
+# Add to ~/.zshrc or ~/.bashrc
+function claude-qwen() {
+  c-thru --model qwen3.6:35b "$@"
+}
+
+function claude-gpt4() {
+  c-thru --model openrouter/openai/gpt-4o "$@"
+}
+```
+
+After adding this, simply run `claude-qwen` or `claude-gpt4` in your terminal to start a session with the respective model.
+
+### Key Commands for Session Control
+
+*   **`/model`**: Within an active session, use this command to see a picker and switch between available models immediately.
+*   **`--model <name>`**: Use this flag when starting Claude Code to force a specific model for that session.
+*   **`/status`**: Use this to verify which model and backend provider are currently active.
+
+---
+
 ## The problem
 
 Claude Code is locked to one vendor and one billing model. Local LLMs via Ollama are capable enough for most tasks — but there's no transparent bridge. You can't route different agents to different models. And when you go offline, your entire workflow stops.
@@ -84,25 +140,70 @@ RAM is auto-detected at proxy startup via `hw-profile.js`. The same agent routes
 | 48 GB | offline | qwen3.5:27b | qwen3.5:27b | qwen3.5:27b |
 | ≤32 GB | any | qwen3.5:1.7b | qwen3.5:1.7b | qwen3.5:1.7b |
 
-Verify detected tier: `c-thru --list`
+Verify detected tier: `c-thru list`
 
-Override for testing: `CLAUDE_LLM_MEMORY_GB=48 c-thru --list`
+Override for testing: `c-thru --memory-gb 48 list` (or `CLAUDE_LLM_MEMORY_GB=48 c-thru list`)
 
 ---
 
-## Connected vs disconnected
+## Connectivity modes
 
-Every capability alias has two model slots and a failure policy:
+### I want to…
+
+| Goal | Use |
+|---|---|
+| **Save money** — minimise cloud calls | `--mode local-best-quality` (or `local-only` if no internet) |
+| **Best quality regardless of cost** | `--mode cloud-best-quality` |
+| **Cloud only for high-stakes decisions** (planner, auditor) | `--mode cloud-judge-only` |
+| **Cloud for thinking-class tasks**, local for workers | `--mode cloud-thinking` |
+| **Local for review/security**, cloud for everything else | `--mode local-review` |
+| **Use only Claude** (no GLM, no openrouter, no local) | `--mode claude-only` |
+| **Avoid Claude** — open-source models only | `--mode opensource-only` |
+| **Must be cloud** — hard-fail if no cloud option | `--mode cloud-only` |
+| **Fastest model that's still good** | `--mode fastest-possible` |
+| **Smallest model that fits the role** | `--mode smallest-possible` |
+| **Best open-source model** for the task | `--mode best-opensource` |
+| **Audit my agent's outputs** | `CLAUDE_PROXY_JOURNAL=1` (see [docs/journaling.md](docs/journaling.md)) |
+| **Force a specific model** for one invocation | `--model <model-name>` |
+| **Force a specific hardware tier** (testing) | `--profile 16gb`/`32gb`/`48gb`/`64gb`/`128gb` |
+
+Every capability alias has model slots for each mode and a failure policy:
 
 ```json
 "judge": {
-  "connected_model": "claude-opus-4-6",
+  "connected_model":  "claude-opus-4-6",
   "disconnect_model": "qwen3.5:27b",
+  "cloud_best_model": "claude-opus-4-6",
+  "local_best_model": "qwen3.5:27b",
+  "modes": {
+    "semi-offload":    "qwen3.6:35b",
+    "cloud-judge-only": "claude-opus-4-6"
+  },
   "on_failure": "cascade"
 }
 ```
 
-The proxy detects connectivity at startup and selects the right slot automatically. Unplug your internet — it switches. No config change, no restart. `on_failure: cascade` walks the fallback chain to the next available local model if the primary fails. `on_failure: hard_fail` (used by `judge-strict`) returns an explicit error instead of silently substituting a weaker model.
+The proxy selects the right slot based on the active mode. Switch mode with `--mode` or `CLAUDE_LLM_MODE`. Full reference: [docs/connectivity-modes.md](docs/connectivity-modes.md).
+
+| Mode | Slot used | When to use |
+|---|---|---|
+| `connected` | `connected_model` | Normal operation with cloud access |
+| `offline` | `disconnect_model` | No internet; local models only |
+| `local-only` | `disconnect_model` (alias of `offline`) | Force local even when online (e.g. cost or privacy) |
+| `semi-offload` | `modes.semi-offload` → `disconnect_model` | Local workers, cloud for high-stakes decisions |
+| `cloud-judge-only` | `modes.cloud-judge-only` → `disconnect_model` | Cloud for judge/audit only; everything else local |
+| `cloud-thinking` | `modes.cloud-thinking` → `disconnect_model` | Cloud for thinking-class capabilities (judge, planner, reasoner); workers stay local |
+| `local-review` | `modes.local-review` → `connected_model` | INVERSE: review/security/code-analysis stays local; logic + orchestration go cloud |
+| `cloud-best-quality` | `cloud_best_model` → `connected_model` | Force best cloud model regardless of tier |
+| `local-best-quality` | `local_best_model` → `disconnect_model` | Force best local model; no cloud calls |
+
+> **6 more modes** (`cloud-only`, `claude-only`, `opensource-only`, `fastest-possible`,
+> `smallest-possible`, `best-opensource`) are *not* slot-based — they apply post-resolution
+> filters or benchmark-driven ranking against `model_routes`. See
+> [`docs/connectivity-modes.md`](docs/connectivity-modes.md) for the full reference and
+> [`docs/benchmark.json`](docs/benchmark.json) for the data the ranking modes consult.
+
+`on_failure: cascade` walks the fallback chain to the next available model if the primary fails. `on_failure: hard_fail` (used by `judge-strict`) returns an explicit error instead of silently substituting a weaker model.
 
 ---
 
@@ -400,20 +501,68 @@ Verify:
 bash -n tools/c-thru-classify.sh          # shell syntax check
 node --check tools/claude-proxy           # node syntax check
 node tools/model-map-validate.js config/model-map.json
-c-thru --list                      # runtime smoke-test
+c-thru check-deps                         # audit system dependencies
+c-thru list                               # runtime smoke-test (active profile + routes)
+c-thru explain --capability workhorse --mode best-opensource   # show resolution chain
+c-thru --help                             # show all flags and subcommands
 ```
+
+If any optional dependencies (jq, ollama) are missing, run `c-thru check-deps --fix` to install them via brew on macOS.
 
 ---
 
 ## Usage
 
+### Subcommands (operate on c-thru itself)
+
 ```sh
-c-thru                             # routes.default, or transparent Anthropic fallback
-c-thru --route background          # named route from model-map
-c-thru --model devstral-small:2   # explicit Ollama model
-c-thru --list                      # show resolved profile + all routes
-/c-thru-plan <intent>                     # launch wave-based task orchestrator
+c-thru list                           # show active hw profile, routes, local Ollama models
+c-thru explain --capability X         # print routing resolution chain for a hypothetical request
+c-thru reload                         # SIGHUP running proxy; confirm via /ping
+c-thru restart [--force]              # stop + respawn proxy
+c-thru check-deps [--fix]             # audit system deps; --fix installs missing optional tools
+c-thru help                           # show full reference (also: --help, -h)
 ```
+
+### Launch flags (modify how the next claude invocation is routed)
+
+```sh
+c-thru                                # routes.default, or transparent Anthropic fallback
+c-thru --route background             # named route from model-map
+c-thru --model devstral-small:2       # explicit Ollama model (highest precedence)
+c-thru --mode offline                 # set connectivity / routing mode (15 modes; see below)
+c-thru --profile 64gb                 # force hardware tier (16gb/32gb/48gb/64gb/128gb)
+c-thru --memory-gb 48                 # override RAM detection (= CLAUDE_LLM_MEMORY_GB)
+c-thru --bypass-proxy                 # skip proxy (= CLAUDE_PROXY_BYPASS=1)
+c-thru --journal                      # enable per-request journaling (= CLAUDE_PROXY_JOURNAL=1)
+c-thru --proxy-debug [N]              # proxy verbose logs N=1|2 (= CLAUDE_PROXY_DEBUG)
+c-thru --router-debug [N]             # router verbose logs (= CLAUDE_ROUTER_DEBUG)
+c-thru --no-update                    # skip git self-update (= CLAUDE_ROUTER_NO_UPDATE=1)
+/c-thru-plan <intent>                 # (Claude skill) launch wave-based task orchestrator
+```
+
+The router strips all its own flags (`--route`, `--model`, `--mode`, `--profile`,
+`--memory-gb`, `--bypass-proxy`, `--journal`, `--proxy-debug`, `--router-debug`,
+`--no-update`) before forwarding to the real `claude` binary — they never reach
+Claude Code's own argument parser.
+
+Each `--<flag>` listed above sets the equivalent `CLAUDE_*` env var; flag wins over env var.
+
+### Flag precedence
+
+When multiple selection flags are passed:
+
+```
+--model <X>      → forces concrete model X for this invocation (highest precedence on selection)
+--route <name>   → uses the named route from model-map.json (used when --model not given)
+--mode <M>       → orthogonal: picks WHICH SLOT of the resolved capability is used
+                   (connected/disconnect/cloud-best/etc.)
+--profile <T>    → orthogonal: forces hardware tier (overrides RAM auto-detection)
+```
+
+The first two are about **which model**; the second two are about **which slot of that
+model's capability**. They compose. `c-thru --route deep-coder --mode cloud-best-quality
+--profile 128gb` is well-defined.
 
 ---
 
@@ -446,15 +595,20 @@ See [`docs/model-map.md`](docs/model-map.md) for full schema.
 | Variable | Effect |
 |---|---|
 | `CLAUDE_PROXY_BYPASS=1` | Skip proxy entirely — transparent Anthropic path |
-| `CLAUDE_ROUTER_DEBUG=1` | Verbose router logging |
+| `CLAUDE_LLM_MODE` | Connectivity / routing mode (see [docs/connectivity-modes.md](docs/connectivity-modes.md)). 16 modes: `connected` | `offline` | `local-only` | `semi-offload` | `cloud-judge-only` | `cloud-thinking` | `local-review` | `cloud-best-quality` | `local-best-quality` | `cloud-only` | `claude-only` | `opensource-only` | `fastest-possible` | `smallest-possible` | `best-opensource` | `best-opensource-cloud` |
+| `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection |
+| `CLAUDE_ROUTER_DEBUG=1` | Verbose router logging to stderr |
 | `CLAUDE_ROUTER_DEBUG=2` | + proxy port, Ollama vars, route keys |
 | `CLAUDE_PROXY_DEBUG=1` | Verbose proxy logging |
 | `CLAUDE_PROXY_DEBUG=2` | + full request/response tracing |
 | `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for HTTP hooks listener (default `9998`) |
-| `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection |
+| `CLAUDE_ROUTER_NO_UPDATE=1` | Disable git self-update at startup |
 | `CLAUDE_PROXY_OLLAMA_PULL_TIMEOUT_MS` | Timeout for model pull via HTTP API (default 1 800 000 ms) |
 | `CLAUDE_PROXY_OLLAMA_WARM_TIMEOUT_MS` | Timeout for model warm-up (default 60 000 ms) |
 | `CLAUDE_PROXY_OLLAMA_KEEP_ALIVE` | Keep-alive duration passed to Ollama on warm requests |
+| `CLAUDE_PROXY_JOURNAL=1` | Record every request/response to `~/.claude/journal/YYYY-MM-DD/<capability>.jsonl` (see [docs/journaling.md](docs/journaling.md)) |
+| `CLAUDE_PROXY_CLASSIFY=1` | Phase A dynamic classifier — observe-only role classification on every prompt; output in `x-c-thru-classified-role` header + journal (see [docs/dynamic-classification-phase-a.md](docs/dynamic-classification-phase-a.md)) |
+| `NO_COLOR` | Disable colored output in c-thru CLI (follows [no-color.org](https://no-color.org/)) |
 
 Proxy logs: `~/.claude/proxy.*.log`. Kill a stuck proxy: `pkill -f claude-proxy`.
 
