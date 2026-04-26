@@ -150,16 +150,16 @@
       },
       "workhorse": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gpt-oss:20b",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "gpt-oss:20b",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "coder": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "qwen3-coder:30b",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3-coder:30b",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "judge": {
@@ -185,9 +185,9 @@
       },
       "orchestrator": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "gpt-oss:20b",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "gpt-oss:20b",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6"
