@@ -2742,7 +2742,11 @@ debug_print_final_claude_command() {
   local rendered=""
   local part quoted
   for part in "$@"; do
-    printf -v quoted '%q' "$part"
+    if [[ "$part" =~ [[:space:]] || -z "$part" ]]; then
+      quoted="\"$part\""
+    else
+      quoted="$part"
+    fi
     if [[ -n "$rendered" ]]; then
       rendered+=" "
     fi
@@ -2757,21 +2761,35 @@ run_real_claude() {
   local tok="${ANTHROPIC_AUTH_TOKEN:-}"
   
   # Harassment prevention
-  local quiet_env="CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CODE_COLOR=1"
+  local quiet_env_survey="1"
+  local quiet_env_color="1"
 
+  # We use env to set variables safely without eval for the array
   if [[ -z "${ROUTER_STARTED_PROXY_PID:-}" ]]; then
     if [[ -n "$url" && -n "$tok" ]]; then
-      eval "ANTHROPIC_BASE_URL=\"$url\" ANTHROPIC_AUTH_TOKEN=\"$tok\" $quiet_env exec \"\${cmd[@]}\""
+      exec env ANTHROPIC_BASE_URL="$url" \
+               ANTHROPIC_AUTH_TOKEN="$tok" \
+               CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
+               CLAUDE_CODE_COLOR="$quiet_env_color" \
+               "${cmd[@]}"
     else
-      eval "$quiet_env exec \"\${cmd[@]}\""
+      exec env CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
+               CLAUDE_CODE_COLOR="$quiet_env_color" \
+               "${cmd[@]}"
     fi
   fi
 
   arm_router_child_cleanup
   if [[ -n "$url" && -n "$tok" ]]; then
-    eval "ANTHROPIC_BASE_URL=\"$url\" ANTHROPIC_AUTH_TOKEN=\"$tok\" $quiet_env \"\${cmd[@]}\" &"
+    env ANTHROPIC_BASE_URL="$url" \
+        ANTHROPIC_AUTH_TOKEN="$tok" \
+        CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
+        CLAUDE_CODE_COLOR="$quiet_env_color" \
+        "${cmd[@]}" &
   else
-    eval "$quiet_env \"\${cmd[@]}\" &"
+    env CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
+        CLAUDE_CODE_COLOR="$quiet_env_color" \
+        "${cmd[@]}" &
   fi
   CLAUDE_CHILD_PID="$!"
   wait "$CLAUDE_CHILD_PID"
