@@ -579,6 +579,18 @@ const server = http.createServer((req, res) => {
         return send(res, 200, { ok: true, message: 'Reloaded' });
       }
 
+      if (req.method === 'POST' && req.url === '/hooks/context') {
+        const tier = resolveActiveTier(CONFIG);
+        const mode = resolveLlmMode(CONFIG);
+        proxyLog('hook_injection', { tier, mode });
+        return send(res, 200, { 
+          hookSpecificOutput: { 
+            hookEventName: "SessionStart", 
+            additionalContext: `(c-thru) routing active. Profile: ${tier}, Mode: ${mode}.` 
+          }
+        });
+      }
+
       if (req.method === 'POST' && req.url.startsWith('/v1/messages')) {
         const buf = await readBody(req);
         const body = JSON.parse(buf.toString());
