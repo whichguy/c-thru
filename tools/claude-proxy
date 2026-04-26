@@ -380,6 +380,22 @@ async function forwardAnthropic(req, res, body, backend, effectiveModel, request
   up.end();
 }
 
+function flattenMessagesForOllama(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages.map(msg => {
+    let content = '';
+    if (typeof msg.content === 'string') {
+      content = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      content = msg.content
+        .filter(c => c.type === 'text')
+        .map(c => c.text)
+        .join('\n');
+    }
+    return { role: msg.role, content };
+  });
+}
+
 async function forwardOllama(req, res, body, backend, effectiveModel, requestMeta) {
   const url = backend.url.replace(/\/$/, '') + '/api/chat';
   const options = {
@@ -394,7 +410,7 @@ async function forwardOllama(req, res, body, backend, effectiveModel, requestMet
   up.on('error', e => send(res, 502, { error: `backend ollama at ${backend.url} error: ${e.message}` }));
   up.write(JSON.stringify({
     model: effectiveModel,
-    messages: body.messages,
+    messages: flattenMessagesForOllama(body.messages),
     stream: !!body.stream,
     options: { temperature: body.temperature || 0, num_ctx: body.num_ctx || 65536 }
   }));
