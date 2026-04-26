@@ -2886,7 +2886,6 @@ build_forwarded_args() {
   # ── Per-Process Ephemeral Injection ──────────────────────────────────────
   if [[ -n "$EPHEMERAL_SETTINGS_FILE" ]]; then
     forwarded+=("--settings" "$EPHEMERAL_SETTINGS_FILE")
-    forwarded+=("--setting-sources" "user,project,local")
   fi
   if [[ -n "$EPHEMERAL_AGENTS_JSON" && "$EPHEMERAL_AGENTS_JSON" != "{}" ]]; then
     forwarded+=("--agents" "$EPHEMERAL_AGENTS_JSON")
@@ -3191,13 +3190,13 @@ while [[ $i -lt $n ]]; do
   a="${ORIG_ARGS[i]}"
   case "$a" in
     --route=*)          route_name="${a#--route=}"; i=$((i + 1)) ;;
-    --route)            route_name="${ORIG_ARGS[i+1]}"; i=$((i + 2)) ;;
+    --route)            if [[ $((i+1)) -lt $n ]]; then route_name="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
     --model=*)          explicit_model="${a#--model=}"; i=$((i + 1)) ;;
-    --model)            explicit_model="${ORIG_ARGS[i+1]}"; i=$((i + 2)) ;;
+    --model)            if [[ $((i+1)) -lt $n ]]; then explicit_model="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
     --mode=*)           export CLAUDE_LLM_MODE="${a#--mode=}"; i=$((i + 1)) ;;
-    --mode)             export CLAUDE_LLM_MODE="${ORIG_ARGS[i+1]}"; i=$((i + 2)) ;;
+    --mode)             if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_MODE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
     --profile=*)        export CLAUDE_LLM_PROFILE="${a#--profile=}"; i=$((i + 1)) ;;
-    --profile)          export CLAUDE_LLM_PROFILE="${ORIG_ARGS[i+1]}"; i=$((i + 2)) ;;
+    --profile)          if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_PROFILE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;
     --no-update)        export CLAUDE_ROUTER_NO_UPDATE=1; i=$((i + 1)) ;;
@@ -3220,7 +3219,7 @@ while [[ $i -lt $n ]]; do
       fi
       ;;
     --memory-gb=*)      export CLAUDE_LLM_MEMORY_GB="${a#--memory-gb=}"; i=$((i + 1)) ;;
-    --memory-gb)        export CLAUDE_LLM_MEMORY_GB="${ORIG_ARGS[i+1]}"; i=$((i + 2)) ;;
+    --memory-gb)        if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_MEMORY_GB="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
     *) i=$((i + 1)) ;;
   esac
 done
