@@ -244,6 +244,7 @@ setup_ephemeral_session() {
 
   # 3. Additive Agents: link c-thru agents (namespaced)
   # Linking is more reliable than --agents flag for preserving frontmatter (like "model:")
+  # But we also populate --agents JSON for agents that Claude Code might not find via filesystem
   mkdir -p "$EPHEMERAL_SESSION_DIR/agents"
   # Link user's existing agents first
   if [[ -d "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" ]]; then
@@ -253,13 +254,38 @@ setup_ephemeral_session() {
     done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" 2>/dev/null)
   fi
   # Link c-thru agents
-  mkdir -p "$EPHEMERAL_SESSION_DIR/agents"
   if [[ -d "$ROUTER_REPO_ROOT/agents" ]]; then
     for item in "$ROUTER_REPO_ROOT/agents"/*.md; do
       [ -f "$item" ] || continue
       ln -s "$item" "$EPHEMERAL_SESSION_DIR/agents/$(basename "$item")" 2>/dev/null || true
     done
   fi
+
+  # Generate --agents JSON for robust discovery
+  EPHEMERAL_AGENTS_JSON=$(node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const agentsDir = process.argv[1];
+    const agents = {};
+    if (fs.existsSync(agentsDir)) {
+      fs.readdirSync(agentsDir).forEach(file => {
+        if (!file.endsWith(".md")) return;
+        const name = file.replace(".md", "");
+        const content = fs.readFileSync(path.join(agentsDir, file), "utf8");
+        const m = content.match(/^---\r?\n([\s\S]*?)\n---\r?\n/);
+        let description = "";
+        let prompt = content;
+        if (m) {
+          const frontmatter = m[1];
+          const descMatch = frontmatter.match(/^description:\s*(.*)$/m);
+          if (descMatch) description = descMatch[1].trim();
+          prompt = content.slice(m[0].length).trim();
+        }
+        agents[name] = { description, prompt };
+      });
+    }
+    console.log(JSON.stringify(agents));
+  ' "$EPHEMERAL_SESSION_DIR/agents")
 
   # 4. Export the ephemeral config dir for the child process
   export CLAUDE_CONFIG_DIR="$EPHEMERAL_SESSION_DIR"
@@ -2690,7 +2716,7 @@ debug_print_final_claude_command() {
 
   local url="${ANTHROPIC_BASE_URL:-}"
   local tok="${ANTHROPIC_AUTH_TOKEN:-}"
-  local quiet_env="CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1"
+  local quiet_env="CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CODE_COLOR=1"
   local prefix=""
   if [[ -n "$url" && -n "$tok" ]]; then
     prefix="ANTHROPIC_BASE_URL=$url ANTHROPIC_AUTH_TOKEN=$tok $quiet_env "
@@ -2716,7 +2742,7 @@ run_real_claude() {
   local tok="${ANTHROPIC_AUTH_TOKEN:-}"
   
   # Harassment prevention
-  local quiet_env="CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1"
+  local quiet_env="CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CODE_COLOR=1"
 
   if [[ -z "${ROUTER_STARTED_PROXY_PID:-}" ]]; then
     if [[ -n "$url" && -n "$tok" ]]; then
@@ -2816,7 +2842,9 @@ build_forwarded_args() {
 
   # Inject system info summary if not bypassed
   if [[ "${CLAUDE_PROXY_BYPASS:-0}" != "1" && "${C_THRU_SKIP_INFO_INJECTION:-0}" != "1" ]]; then
-    forwarded+=("--append-system-prompt" "$(get_system_info_summary "$model")")
+    local info_summary
+    info_summary="$(get_system_info_summary "$model")"
+    forwarded+=("--append-system-prompt" "$info_summary")
   fi
 
   # ── Per-Process Ephemeral Injection ──────────────────────────────────────
