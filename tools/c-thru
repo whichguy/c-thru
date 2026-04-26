@@ -2381,22 +2381,33 @@ ensure_ollama_running() {
   if [[ "$mode" == "active" && "$model_loaded" == "0" ]]; then
     local max_wait_iters=200 # 0.6s * 200 = 120s (2 minutes total)
     local i=0
+    local start_loop_time=$SECONDS
     local spinner=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
     while (( i < max_wait_iters )); do
+      local elapsed=$(( SECONDS - start_loop_time ))
+      local mins=$(( elapsed / 60 ))
+      local secs=$(( elapsed % 60 ))
+      local time_str=""
+      if (( mins > 0 )); then
+        time_str="${mins}m ${secs}s"
+      else
+        time_str="${secs}s"
+      fi
+
       local sp="${spinner[$((i % 10))]}"
-      printf "\rC-thru: [%s] %s Warming up (waiting for memory residency)..." "$model" "$sp" >&2
+      printf "\r%s Initializing %s... (esc to cancel, %s)            " "$sp" "$model" "$time_str" >&2
       sleep 0.6
       i=$((i + 1))
       # Probe less frequently to avoid flooding Ollama
       if (( i % 5 == 0 )); then
         ps_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama ps 2>/dev/null || echo "")
         if echo "$ps_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
-          printf "\rC-thru: [%s] Ready                                          \n" "$model" >&2
+          printf "\r%s Ready %s                                          \n" "✅" "$model" >&2
           return 0
         fi
       fi
     done
-    printf "\rC-thru: [%s] Warming timeout — proceeding anyway              \n" "$model" >&2
+    printf "\r⚠️  Warming timeout %s — proceeding anyway              \n" "$model" >&2
   fi
 }
 
