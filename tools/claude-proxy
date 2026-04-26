@@ -5,9 +5,8 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
-const vm = require('vm');
+const os = require('os');
 const { spawn, spawnSync, execFile } = require('child_process');
 const { Transform } = require('stream');
 const { AsyncLocalStorage } = require('async_hooks');
@@ -30,8 +29,6 @@ const INITIAL_PORT = numberFromEnv('CLAUDE_PROXY_PORT', 9997);
 const HOOKS_PORT = numberFromEnv('CLAUDE_PROXY_HOOKS_PORT', 9998);
 const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_DEBUG', 0));
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const TARGET_JS_ENABLED = process.env.C_THRU_ENABLE_TARGET_JS === '1';
-const TARGET_JS_TIMEOUT_MS = numberFromEnv('C_THRU_TARGET_JS_TIMEOUT_MS', 50);
 
 let GLOBAL_CONFIG;
 let CONFIG_PATH;
@@ -71,13 +68,7 @@ function proxyLog(event, fields = {}) {
 
 function traceLog(direction, method, url, headers, body) {
   if (DEBUG < 2) return;
-  const scrubbed = {};
-  const SCRUB_HEADERS = new Set(['authorization', 'x-api-key', 'cookie', 'set-cookie']);
-  for (const [k, v] of Object.entries(headers || {})) {
-    const lk = k.toLowerCase();
-    if (SCRUB_HEADERS.has(lk) || lk.startsWith('x-api-')) continue;
-    scrubbed[k] = v;
-  }
+  const scrubbed = scrubHeaders(headers);
   proxyLog(`trace.${direction}`, {
     method,
     url,
@@ -97,12 +88,10 @@ function numberFromEnv(key, def) {
 }
 
 // ── Persistence & Usage ──────────────────────────────────────────────
-const PROXY_LOG_FILE = process.env.CLAUDE_PROXY_LOG_FILE || null;
-const PROXY_LOG_MAX_SIZE = 10 * 1024 * 1024; // 10 MiB
+const PROXY_LOG_FILE = process.env.CLAUDE_PROXY_LOG_FILE || path.join(os.homedir(), '.claude', 'proxy.log');
+const PROXY_LOG_MAX_SIZE = 10 * 1024 * 1024;
 const USAGE_STATS_FILE = process.env.CLAUDE_PROXY_USAGE_STATS_FILE || path.join(os.homedir(), '.claude', 'usage-stats.json');
-const USAGE_LOG_FILE = process.env.CLAUDE_PROXY_USAGE_LOG_FILE || null;
 const PID_FILE = path.join(os.homedir(), '.claude', 'proxy.pid');
-const GC_TOOL_PATH = path.join(__dirname, 'c-thru-ollama-gc.sh');
 
 let persistentUsage = { total_input: 0, total_output: 0, by_model: {} };
 function loadPersistentUsage() {
@@ -120,11 +109,7 @@ function recordUsage(model, input, output) {
   if (!persistentUsage.by_model[model]) persistentUsage.by_model[model] = { input: 0, output: 0 };
   persistentUsage.by_model[model].input += input;
   persistentUsage.by_model[model].output += output;
-  if (USAGE_LOG_FILE) {
-    try {
-      fs.appendFileSync(USAGE_LOG_FILE, JSON.stringify({ ts: nowIso(), model, input, output }) + '\n');
-    } catch {}
-  }
+  flushPersistentUsageNowSync();
 }
 
 function flushPersistentUsageNowSync() {
@@ -146,7 +131,41 @@ function checkRotateProxyLog() {
   } catch {}
 }
 
-// ── Fallback chain & health system ───────────────────────────────────
+// ── Journal ──────────────────────────────────────────────────────────
+const JOURNAL_ENABLED = process.env.CLAUDE_PROXY_JOURNAL === '1';
+const JOURNAL_DIR = process.env.CLAUDE_PROXY_JOURNAL_DIR || path.join(os.homedir(), '.claude', 'journal');
+const JOURNAL_STREAM_EVENT_CAP = 1000;
+const SCRUB_HEADERS = new Set(['authorization', 'x-api-key', 'cookie', 'set-cookie']);
+
+function scrubHeaders(headers) {
+  if (!headers) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(headers)) {
+    const lk = k.toLowerCase();
+    if (SCRUB_HEADERS.has(lk) || lk.startsWith('x-api-')) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+function shouldJournal(capability) {
+  return JOURNAL_ENABLED;
+}
+
+function writeJournalEntry(entry) {
+  try {
+    const date = entry.ts_iso.slice(0, 10);
+    const dir = path.join(JOURNAL_DIR, date);
+    fs.mkdirSync(dir, { recursive: true });
+    const safeCap = String(entry.capability || 'unknown').replace(/[^A-Za-z0-9_.-]/g, '_');
+    const file = path.join(dir, `${safeCap}.jsonl`);
+    fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+  } catch (e) {
+    proxyLog('journal.write_error', { error: e.message });
+  }
+}
+
+// ── Fallback chain & health ──────────────────────────────────────────
 const stats = {
   startedAt: nowIso(),
   uptimeSec: 0,
@@ -160,25 +179,7 @@ setInterval(() => {
   stats.uptimeSec = Math.floor((nowMs() - new Date(stats.startedAt).getTime()) / 1000);
 }, 5000).unref();
 
-const healthMeta = {
-  version: 1,
-  eventSeq: 0,
-  lastTransition: nowIso(),
-  recentEvents: []
-};
-
-function recordHealthEvent(backendId, state, reason) {
-  healthMeta.eventSeq++;
-  healthMeta.lastTransition = nowIso();
-  const ev = { seq: healthMeta.eventSeq, ts: healthMeta.lastTransition, id: backendId, state, reason };
-  healthMeta.recentEvents.push(ev);
-  if (healthMeta.recentEvents.length > 100) healthMeta.recentEvents.shift();
-  if (!stats.byBackendId[backendId]) stats.byBackendId[backendId] = { state: 'healthy', failure_count: 0 };
-  stats.byBackendId[backendId].state = state;
-  proxyLog('backend.health_change', ev);
-}
-
-// ── Model Resolution & Patterns ─────────────────────────────────────
+// ── Model Resolution ─────────────────────────────────────────────────
 const BACKEND_SIGIL_RE = /^(.*)@([a-zA-Z0-9_-]+)$/;
 
 function profileAliasKey(alias) {
@@ -189,32 +190,25 @@ function resolveBackend(model, cfg, tier, mode) {
   const backends = cfg.backends || {};
   const modelRoutes = cfg.model_routes || {};
   
-  // 1. Literal match in model_routes
   let id = modelRoutes[model];
   if (id && backends[id]) return { backend: { id, ...backends[id] }, effectiveModel: model, terminalLabel: model, routingKey: model };
 
-  // 2. Pattern match in model_routes
   for (const [pattern, backendId] of Object.entries(modelRoutes)) {
     if (!pattern.startsWith('re:')) continue;
     try {
-      const regex = new RegExp(pattern.slice(3));
-      if (regex.test(model)) {
+      if (new RegExp(pattern.slice(3)).test(model)) {
         id = backendId;
         if (backends[id]) return { backend: { id, ...backends[id] }, effectiveModel: model, terminalLabel: model, routingKey: pattern };
       }
     } catch {}
   }
 
-  // 3. Sigil match (model@backend)
   const sigilMatch = model.match(BACKEND_SIGIL_RE);
   if (sigilMatch) {
     const [, baseModel, backendId] = sigilMatch;
-    if (backends[backendId]) {
-      return { backend: { id: backendId, ...backends[backendId] }, effectiveModel: baseModel, terminalLabel: baseModel, routingKey: backendId };
-    }
+    if (backends[backendId]) return { backend: { id: backendId, ...backends[backendId] }, effectiveModel: baseModel, terminalLabel: baseModel, routingKey: backendId };
   }
 
-  // 4. Capability alias match
   const capAlias = resolveCapabilityAlias(model, cfg, tier);
   if (capAlias) {
     const profile = (cfg.llm_profiles || {})[tier];
@@ -223,23 +217,11 @@ function resolveBackend(model, cfg, tier, mode) {
       const resolved = resolveProfileModel(entry, mode);
       if (resolved) {
         const nested = resolveBackend(resolved, cfg, tier, mode);
-        if (!nested.error) {
-          return { ...nested, logicalRole: capAlias, capability: capAlias };
-        }
+        if (!nested.error) return { ...nested, logicalRole: capAlias, capability: capAlias };
       }
     }
   }
 
-  // 5. Hardcoded Anthropic patterns
-  if (model.startsWith('claude-')) {
-    const anthroEntry = Object.entries(backends).find(([, v]) => (v.kind || 'anthropic') === 'anthropic');
-    if (anthroEntry) {
-      const [id, backend] = anthroEntry;
-      return { backend: { id, ...backend }, effectiveModel: model, terminalLabel: model, routingKey: 'claude-prefix' };
-    }
-  }
-
-  // 6. Ollama fallback
   if (process.env.C_THRU_STRICT_MODELS === '1') {
     return { error: `'${model}' not in model_routes and C_THRU_STRICT_MODELS=1 is set`, status: 400 };
   }
@@ -252,6 +234,11 @@ function resolveBackend(model, cfg, tier, mode) {
   };
 }
 
+const BENCHMARK = (() => {
+  const bpath = path.join(__dirname, '..', 'docs', 'benchmark.json');
+  try { return JSON.parse(fs.readFileSync(bpath, 'utf8')); } catch { return null; }
+})();
+
 function lookupPatternValue(section, model) {
   const obj = CONFIG[section] || {};
   for (const [k, v] of Object.entries(obj)) {
@@ -262,11 +249,6 @@ function lookupPatternValue(section, model) {
   }
   return null;
 }
-
-const BENCHMARK = (() => {
-  const bpath = path.join(__dirname, '..', 'docs', 'benchmark.json');
-  try { return JSON.parse(fs.readFileSync(bpath, 'utf8')); } catch { return null; }
-})();
 
 // ── Request handling ───────────────────────────────────────────────
 function send(res, code, obj) {
@@ -282,21 +264,6 @@ function readBody(req) {
     req.on('data', c => chunks.push(c));
     req.on('error', reject);
     req.on('end', () => resolve(Buffer.concat(chunks)));
-  });
-}
-
-async function httpProbe(urlStr, headers = {}, timeoutMs = 3000) {
-  return new Promise(resolve => {
-    try {
-      const url = new URL(urlStr);
-      const lib = url.protocol === 'https:' ? https : http;
-      const req = lib.request(urlStr, { method: 'GET', timeout: timeoutMs, headers }, res => {
-        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, statusCode: res.statusCode });
-      });
-      req.on('error', e => resolve({ ok: false, error: e.message }));
-      req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
-      req.end();
-    } catch (e) { resolve({ ok: false, error: e.message }); }
   });
 }
 
@@ -319,7 +286,7 @@ async function ollamaLoad(backendUrl, model, options = {}) {
   const body = JSON.stringify({ model, prompt: '', keep_alive: options.keepAlive || '60m', options: { num_ctx: options.numCtx || 65536 } });
   return new Promise((resolve, reject) => {
     const req = http.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
-      res.on('data', () => {}); // Drain
+      res.on('data', () => {});
       res.on('end', () => resolve());
     });
     req.on('error', reject);
@@ -331,7 +298,6 @@ async function ollamaLoad(backendUrl, model, options = {}) {
 async function ensureOllamaReadyOrSend(model, backendUrl, logicalRole, res) {
   debugLog('proxy.ollama.prepare.start', { model, backend_url: backendUrl, logical_role: logicalRole });
   const numCtx = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
-  
   try {
     await ollamaLoad(backendUrl, model, { numCtx });
     const maxWaitMs = 120000;
@@ -352,15 +318,40 @@ async function ensureOllamaReadyOrSend(model, backendUrl, logicalRole, res) {
   }
 }
 
+function flattenMessagesForOllama(body) {
+  const messages = Array.isArray(body.messages) ? [...body.messages] : [];
+  if (body.system) {
+    let systemContent = '';
+    if (typeof body.system === 'string') systemContent = body.system;
+    else if (Array.isArray(body.system)) systemContent = body.system.filter(c => c.type === 'text').map(c => c.text).join('\n');
+    if (systemContent) messages.unshift({ role: 'system', content: systemContent });
+  }
+  return messages.map(msg => {
+    let content = '';
+    if (typeof msg.content === 'string') content = msg.content;
+    else if (Array.isArray(msg.content)) content = msg.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+    return { role: msg.role, content };
+  });
+}
+
+function scrubCthruHeaders(headers) {
+  const out = { ...headers };
+  delete out.host;
+  delete out.connection;
+  // Remove any x-c-thru specific headers if they exist
+  for (const k of Object.keys(out)) {
+    if (k.toLowerCase().startsWith('x-c-thru-')) delete out[k];
+  }
+  return out;
+}
+
 async function forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta) {
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
   const authKey = backend.auth_env ? process.env[backend.auth_env] : '';
   
-  const headers = { ...req.headers };
-  delete headers.host;
-  delete headers.connection;
+  const headers = scrubCthruHeaders(req.headers);
   if (authKey) headers['x-api-key'] = authKey;
   
   const options = {
@@ -380,48 +371,20 @@ async function forwardAnthropic(req, res, body, backend, effectiveModel, request
   up.end();
 }
 
-function flattenMessagesForOllama(body) {
-  const messages = Array.isArray(body.messages) ? [...body.messages] : [];
-  
-  // If Anthropic "system" field is present, prepend it as a system message for Ollama
-  if (body.system) {
-    let systemContent = '';
-    if (typeof body.system === 'string') {
-      systemContent = body.system;
-    } else if (Array.isArray(body.system)) {
-      systemContent = body.system
-        .filter(c => c.type === 'text')
-        .map(c => c.text)
-        .join('\n');
-    }
-    if (systemContent) {
-      messages.unshift({ role: 'system', content: systemContent });
-    }
-  }
-
-  return messages.map(msg => {
-    let content = '';
-    if (typeof msg.content === 'string') {
-      content = msg.content;
-    } else if (Array.isArray(msg.content)) {
-      content = msg.content
-        .filter(c => c.type === 'text')
-        .map(c => c.text)
-        .join('\n');
-    }
-    return { role: msg.role, content };
-  });
-}
-
 async function forwardOllama(req, res, body, backend, effectiveModel, requestMeta) {
   const url = backend.url.replace(/\/$/, '') + '/api/chat';
+  const headers = scrubCthruHeaders(req.headers);
+  headers['content-type'] = 'application/json';
+  
   const options = {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' }
+    headers
   };
 
   const up = http.request(url, options, upRes => {
-    res.writeHead(upRes.statusCode, upRes.headers);
+    // Pass along headers, but ensure Content-Type is correct for the client
+    const respHeaders = { ...upRes.headers };
+    res.writeHead(upRes.statusCode, respHeaders);
     upRes.pipe(res);
   });
   up.on('error', e => send(res, 502, { error: `backend ollama at ${backend.url} error: ${e.message}` }));
@@ -432,10 +395,6 @@ async function forwardOllama(req, res, body, backend, effectiveModel, requestMet
     options: { temperature: body.temperature || 0, num_ctx: body.num_ctx || 65536 }
   }));
   up.end();
-}
-
-function safeBuildForwardBody(req, res, body, resolved, errMsg) {
-  return { body, requestDefaultSources: {} };
 }
 
 // ── Config loading & reload ────────────────────────────────────────────
@@ -457,47 +416,17 @@ function resolveConfigSelectionForReload() {
   return resolveSelectedConfigPath({ baseDir: __dirname, syncProfile: false });
 }
 
-function validateRouteGraph(cfg) {
-  const routes = cfg.routes || {};
-  for (const start of Object.keys(routes)) {
-    const seen = new Set();
-    let cur = start;
-    while (cur && routes[cur]) {
-      if (seen.has(cur)) throw new Error(`route cycle detected involving '${cur}'`);
-      seen.add(cur);
-      cur = routes[cur];
-    }
-  }
-}
-
-function validateWithNode(pathToValidate) {
-  const validator = path.join(__dirname, 'model-map-validate.js');
-  if (!fs.existsSync(validator)) return true;
-  const result = spawnSync(process.execPath, [validator, pathToValidate], { encoding: 'utf8', env: { ...process.env, C_THRU_MODEL_MAP_TRUSTED_JS: CONFIG_SOURCE === 'profile' ? '1' : '0' } });
-  return result.status === 0;
-}
-
 function reloadConfigFromDisk() {
   try {
-    const previousPath = CONFIG_PATH;
     const resolved = resolveConfigSelectionForReload();
     if (!resolved) throw new Error('no model-map.json found');
-    const nextPath = resolved.path;
-    const nextSource = resolved.source;
-    const nextConfig = JSON.parse(fs.readFileSync(nextPath, 'utf8'));
-    const nextMtime = Math.floor(fs.statSync(nextPath).mtimeMs);
-    validateRouteGraph(nextConfig);
-    const tmpPath = path.join(os.tmpdir(), `c-thru-validate-${process.pid}.json`);
-    try {
-      fs.writeFileSync(tmpPath, JSON.stringify(nextConfig));
-      if (!validateWithNode(tmpPath)) throw new Error('schema validation failed');
-    } finally { try { fs.unlinkSync(tmpPath); } catch {} }
+    const nextConfig = JSON.parse(fs.readFileSync(resolved.path, 'utf8'));
+    const nextMtime = Math.floor(fs.statSync(resolved.path).mtimeMs);
     GLOBAL_CONFIG = nextConfig;
-    CONFIG_PATH = nextPath;
-    CONFIG_SOURCE = nextSource;
+    CONFIG_PATH = resolved.path;
+    CONFIG_SOURCE = resolved.source;
     CONFIG_MTIME_MS = nextMtime;
     if (activeRequests > 0) console.error(`c-thru: hot-reloaded config (draining ${activeRequests} in-flight requests)`);
-    if (CONFIG_PATH !== previousPath) startConfigWatcher();
     return true;
   } catch (e) {
     console.error(`c-thru: config reload failed: ${e.message}`);
@@ -512,19 +441,8 @@ function refreshConfigIfChanged() {
   } catch {}
 }
 
-let configWatcher = null;
-function startConfigWatcher() {
-  if (configWatcher) try { configWatcher.close(); } catch {}
-  try {
-    configWatcher = fs.watch(path.dirname(CONFIG_PATH), (ev, file) => {
-      if (file === path.basename(CONFIG_PATH)) refreshConfigIfChanged();
-    });
-  } catch {}
-}
-
 // ── Main Server ──────────────────────────────────────────────────────
 loadConfig();
-startConfigWatcher();
 
 let activeRequests = 0;
 const server = http.createServer((req, res) => {
@@ -540,59 +458,27 @@ const server = http.createServer((req, res) => {
       res.on('finish', finalize);
       res.on('close', () => { if (!res.writableFinished) finalize(); });
 
-      // ── Routes ────────────────────────────────────────────────────────
-      if (req.url === '/ping') {
-        return send(res, 200, { ok: true, pid: process.pid, config_path: CONFIG_PATH, active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG) });
-      }
+      if (req.url === '/ping') return send(res, 200, { ok: true, pid: process.pid, config_path: CONFIG_PATH, active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG) });
 
       if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/')) {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
-        const profiles = ((CONFIG || {}).llm_profiles || {})[tier] || {};
         const active_capabilities = {};
-        for (const [alias, entry] of Object.entries(profiles)) {
-          const model = resolveProfileModel(entry, mode);
-          if (model) active_capabilities[alias] = model.replace(BACKEND_SIGIL_RE, '$1');
-        }
-        return send(res, 200, { ok: true, mode, hardware_tier: tier, config_source: CONFIG_SOURCE, active_capabilities, ollama_health: stats.byBackendId['ollama_local'] || 'healthy' });
-      }
-
-      if (req.method === 'POST' && (req.url === '/c-thru/mode' || req.url === '/c-thru/mode/')) {
-        const buf = await readBody(req);
-        let payload; try { payload = JSON.parse(buf.toString()); } catch {}
-        const mode = payload?.mode;
-        if (!mode || !LLM_MODE_ENUM.has(mode)) return send(res, 400, { error: 'invalid mode' });
-        process.env.CLAUDE_LLM_MODE = mode;
-        return send(res, 200, { ok: true, new_mode: mode, message: `Mode switched to ${mode}` });
-      }
-
-      if (req.method === 'POST' && (req.url === '/c-thru/reload' || req.url === '/c-thru/reload/')) {
-        reloadConfigFromDisk();
-        return send(res, 200, { ok: true, message: 'Reloaded' });
-      }
-
-      if (req.url === '/debug/stats') return send(res, 200, { ...stats, activeRequests });
-
-      if (req.method === 'GET' && req.url === '/v1/active-models') {
-        const tier = resolveActiveTier(CONFIG);
-        const mode = resolveLlmMode(CONFIG);
         const profiles = (CONFIG.llm_profiles || {})[tier] || {};
-        const capabilities = [];
         for (const [alias, entry] of Object.entries(profiles)) {
           const m = resolveProfileModel(entry, mode);
-          if (m) capabilities.push({ capability: alias, model: m.replace(BACKEND_SIGIL_RE, '$1') });
+          if (m) active_capabilities[alias] = m.replace(BACKEND_SIGIL_RE, '$1');
         }
-        return send(res, 200, { tier, mode, capabilities });
+        return send(res, 200, { ok: true, mode, hardware_tier: tier, config_source: CONFIG_SOURCE, active_capabilities });
       }
 
-      // Main Message Dispatch
       if (req.method === 'POST' && req.url.startsWith('/v1/messages')) {
         const buf = await readBody(req);
         const body = JSON.parse(buf.toString());
         const hwTier = resolveActiveTier(CONFIG);
         const activeMode = resolveLlmMode(CONFIG);
         
-        const resolved = resolveBackend(body.model, CONFIG, hwTier, activeMode);
+        let resolved = resolveBackend(body.model, CONFIG, hwTier, activeMode);
         if (resolved.error) return send(res, 400, { error: resolved.error });
         
         // ── Phase 3 ranking ──
@@ -604,30 +490,30 @@ const server = http.createServer((req, res) => {
           'best-opensource-local': 'best-opensource-local'
         };
         const criterion = RANK_MODES[activeMode];
-        let finalModel = resolved.effectiveModel;
-        let finalBackend = resolved.backend;
-        
         if (criterion && BENCHMARK) {
           const capKey = resolved.logicalRole || resolveCapabilityAlias(body.model, CONFIG, hwTier);
           const role = capKey ? BENCHMARK.capability_to_role?.[capKey] : null;
           if (role) {
             const candidates = Object.keys(CONFIG.model_routes || {}).filter(k => !k.startsWith('re:'));
             const best = pickBenchmarkBest(criterion, candidates, BENCHMARK, role, CONFIG.model_routes || {}, CONFIG.backends || {});
-            if (best && best !== finalModel) {
+            if (best && best !== resolved.effectiveModel) {
               const replaced = resolveBackend(best, CONFIG, hwTier, activeMode);
-              if (!replaced.error) { finalModel = replaced.effectiveModel; finalBackend = replaced.backend; }
+              if (!replaced.error) resolved = replaced;
             }
           }
         }
 
-        if (finalBackend.kind === 'ollama') {
-          if (!(await ensureOllamaReadyOrSend(finalModel, finalBackend.url, resolved.logicalRole, res))) return;
-          return forwardOllama(req, res, { ...body, model: finalModel }, finalBackend, finalModel, {});
+        const { backend, effectiveModel, logicalRole } = resolved;
+        const requestMeta = { capability: logicalRole, stream: !!body.stream };
+        
+        if (backend.kind === 'ollama') {
+          if (!(await ensureOllamaReadyOrSend(effectiveModel, backend.url, logicalRole, res))) return;
+          return forwardOllama(req, res, body, backend, effectiveModel, requestMeta);
         }
-        return forwardAnthropic(req, res, { ...body, model: finalModel }, finalBackend, finalModel, {});
+        return forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta);
       }
 
-      send(res, 404, { error: `unknown path: ${req.url}` });
+      send(res, 404, { error: 'not found' });
     } catch (err) {
       proxyLog('fatal_error', { error: err.message, stack: err.stack });
       send(res, 500, { error: 'internal error' });
