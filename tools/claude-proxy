@@ -472,6 +472,22 @@ const server = http.createServer((req, res) => {
         return send(res, 200, { ok: true, mode, hardware_tier: tier, config_source: CONFIG_SOURCE, active_capabilities });
       }
 
+      if (req.method === 'POST' && (req.url === '/c-thru/mode' || req.url === '/c-thru/mode/')) {
+        const buf = await readBody(req);
+        let payload; try { payload = JSON.parse(buf.toString()); } catch {}
+        const mode = payload?.mode;
+        if (!mode || !LLM_MODE_ENUM.has(mode)) return send(res, 400, { error: 'invalid mode' });
+        process.env.CLAUDE_LLM_MODE = mode;
+        proxyLog('mode-switch', { new_mode: mode, source: 'control-channel' });
+        return send(res, 200, { ok: true, new_mode: mode, message: `Mode switched to ${mode}` });
+      }
+
+      if (req.method === 'POST' && (req.url === '/c-thru/reload' || req.url === '/c-thru/reload/')) {
+        reloadConfigFromDisk();
+        proxyLog('config-reload', { source: 'control-channel' });
+        return send(res, 200, { ok: true, message: 'Reloaded' });
+      }
+
       if (req.method === 'POST' && req.url.startsWith('/v1/messages')) {
         const buf = await readBody(req);
         const body = JSON.parse(buf.toString());
