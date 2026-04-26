@@ -245,62 +245,64 @@ setup_ephemeral_session() {
   # 3. Additive Agents: link c-thru agents (namespaced)
   # Linking is more reliable than --agents flag for preserving frontmatter (like "model:")
   # But we also populate --agents JSON for agents that Claude Code might not find via filesystem
-  mkdir -p "$EPHEMERAL_SESSION_DIR/agents"
-  # Link user's existing agents first
-  if [[ -d "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" ]]; then
-    while IFS= read -r name; do
-      [[ -z "$name" ]] && continue
-      ln -s "$ORIGINAL_CLAUDE_PROFILE_DIR/agents/$name" "$EPHEMERAL_SESSION_DIR/agents/$name" 2>/dev/null || true
-    done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" 2>/dev/null)
-  fi
-  # Link c-thru agents
-  if [[ -d "$ROUTER_REPO_ROOT/agents" ]]; then
-    for item in "$ROUTER_REPO_ROOT/agents"/*.md; do
-      [ -f "$item" ] || continue
-      ln -s "$item" "$EPHEMERAL_SESSION_DIR/agents/$(basename "$item")" 2>/dev/null || true
-    done
-  fi
+  if [[ "${NO_AGENTS:-0}" != "1" ]]; then
+    mkdir -p "$EPHEMERAL_SESSION_DIR/agents"
+    # Link user's existing agents first
+    if [[ -d "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" ]]; then
+      while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        ln -s "$ORIGINAL_CLAUDE_PROFILE_DIR/agents/$name" "$EPHEMERAL_SESSION_DIR/agents/$name" 2>/dev/null || true
+      done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" 2>/dev/null)
+    fi
+    # Link c-thru agents
+    if [[ -d "$ROUTER_REPO_ROOT/agents" ]]; then
+      for item in "$ROUTER_REPO_ROOT/agents"/*.md; do
+        [ -f "$item" ] || continue
+        ln -s "$item" "$EPHEMERAL_SESSION_DIR/agents/$(basename "$item")" 2>/dev/null || true
+      done
+    fi
 
-  # Generate --agents JSON for robust discovery
-  EPHEMERAL_AGENTS_JSON=$(node -e '
-    const fs = require("fs");
-    const path = require("path");
-    const agentsDir = process.argv[1];
-    const agents = {};
-    if (fs.existsSync(agentsDir)) {
-      fs.readdirSync(agentsDir).forEach(file => {
-        if (!file.endsWith(".md")) return;
-        const name = file.replace(".md", "");
-        const content = fs.readFileSync(path.join(agentsDir, file), "utf8");
-        const m = content.match(/^---\r?\n([\s\S]*?)\n---\r?\n/);
-        let description = "";
-        let prompt = content;
-        let model = name;
-        let tier_budget = 999999;
-        
-        if (m) {
-          const frontmatter = m[1];
-          const descMatch = frontmatter.match(/^description:\s*(.*)$/m);
-          if (descMatch) description = descMatch[1].trim();
+    # Generate --agents JSON for robust discovery
+    EPHEMERAL_AGENTS_JSON=$(node -e '
+      const fs = require("fs");
+      const path = require("path");
+      const agentsDir = process.argv[1];
+      const agents = {};
+      if (fs.existsSync(agentsDir)) {
+        fs.readdirSync(agentsDir).forEach(file => {
+          if (!file.endsWith(".md")) return;
+          const name = file.replace(".md", "");
+          const content = fs.readFileSync(path.join(agentsDir, file), "utf8");
+          const m = content.match(/^---\r?\n([\s\S]*?)\n---\r?\n/);
+          let description = "";
+          let prompt = content;
+          let model = name;
+          let tier_budget = 999999;
           
-          const modelMatch = frontmatter.match(/^model:\s*(.*)$/m);
-          if (modelMatch) model = modelMatch[1].trim();
+          if (m) {
+            const frontmatter = m[1];
+            const descMatch = frontmatter.match(/^description:\s*(.*)$/m);
+            if (descMatch) description = descMatch[1].trim();
+            
+            const modelMatch = frontmatter.match(/^model:\s*(.*)$/m);
+            if (modelMatch) model = modelMatch[1].trim();
 
-          const budgetMatch = frontmatter.match(/^tier_budget:\s*(.*)$/m);
-          if (budgetMatch) tier_budget = parseInt(budgetMatch[1].trim(), 10);
+            const budgetMatch = frontmatter.match(/^tier_budget:\s*(.*)$/m);
+            if (budgetMatch) tier_budget = parseInt(budgetMatch[1].trim(), 10);
 
-          prompt = content.slice(m[0].length).trim();
-        }
-        agents[name] = { 
-          description, 
-          prompt,
-          model,
-          tier_budget
-        };
-      });
-    }
-    console.log(JSON.stringify(agents));
-  ' "$EPHEMERAL_SESSION_DIR/agents")
+            prompt = content.slice(m[0].length).trim();
+          }
+          agents[name] = { 
+            description, 
+            prompt,
+            model,
+            tier_budget
+          };
+        });
+      }
+      console.log(JSON.stringify(agents));
+    ' "$EPHEMERAL_SESSION_DIR/agents")
+  fi
 
   # 4. Export the ephemeral config dir for the child process
   export CLAUDE_CONFIG_DIR="$EPHEMERAL_SESSION_DIR"
@@ -428,6 +430,7 @@ cmd_help() {
   echo "  --proxy-debug [N]         proxy verbose logs (= CLAUDE_PROXY_DEBUG=N; default 1)"
   echo "  --router-debug [N]        router verbose logs (= CLAUDE_ROUTER_DEBUG=N; default 1)"
   echo "  --no-update               skip git self-update (= CLAUDE_ROUTER_NO_UPDATE=1)"
+  echo "  --no-agents               skip agent injection (= NO_AGENTS=1)"
   echo ""
   echo -e "${BOLD}Key environment variables:${NC}"
   echo "  CLAUDE_PROXY_BYPASS=1         skip proxy entirely (direct Anthropic path)"
@@ -3282,7 +3285,12 @@ while [[ $i -lt $n ]]; do
       export CLAUDE_ROUTER_NO_UPDATE=1
       i=$((i + 1))
       ;;
-    --proxy-debug=*)
+    --no-agents)
+      export NO_AGENTS=1
+      i=$((i + 1))
+      ;;
+    --debug)
+
       export CLAUDE_PROXY_DEBUG="${a#--proxy-debug=}"
       i=$((i + 1))
       ;;
