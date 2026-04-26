@@ -703,6 +703,7 @@
     "qwen3.5:35b-a3b-coding-nvfp4": "ollama_local",
     "gpt-oss:20b": "ollama_local",
     "devstral-small:2": "ollama_local",
+    "devstral-2": "ollama_local",
     "qwen3.6:27b-coding-mxfp8": "ollama_local",
     "qwen3.6:35b-a3b-coding-nvfp4": "ollama_local",
     "qwen3.6:35b-a3b-coding-mxfp8": "ollama_local",
@@ -1013,7 +1014,7 @@
     },
     "64gb": {
       "default": [
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
         { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
         { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 },
         { "model": "qwen3.5:9b", "quality_score": 55, "speed_score": 95 }
@@ -1021,31 +1022,31 @@
       "judge": [
         { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
         { "model": "phi4-reasoning:latest", "quality_score": 85, "speed_score": 43 },
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
         { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
       ],
       "orchestrator": [
         { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
         { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
       ],
       "deep-coder": [
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
         { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
         { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
       ],
       "local-planner": [
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
         { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
         { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
       ],
       "coder": [
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
         { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
         { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
       ],
       "workhorse": [
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
         { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
         { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
       ]
@@ -1053,7 +1054,7 @@
     "128gb": {
       "default": [
         { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 },
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 },
         { "model": "gemma4:26b", "quality_score": 72, "speed_score": 80 }
       ],
       "judge": [
@@ -1064,24 +1065,24 @@
       "orchestrator": [
         { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
         { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 }
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 }
       ],
       "deep-coder": [
         { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 },
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 },
         { "model": "devstral-2", "quality_score": 84, "speed_score": 7 }
       ],
       "local-planner": [
         { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 }
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 }
       ],
       "coder": [
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 },
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 124 }
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 }
       ],
       "workhorse": [
         { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 124 }
+        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 }
       ]
     }
   },
