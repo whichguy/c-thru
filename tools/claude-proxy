@@ -437,12 +437,15 @@ async function forwardOllama(req, res, body, backend, effectiveModel, requestMet
               res.write(`data: ${JSON.stringify(anthropicEvent)}\n\n`);
             }
           } catch (e) {
-            debugLog('ollama.stream.parse_error', { line, error: e.message });
+            proxyLog('ollama.stream.parse_error', { line, error: e.message });
           }
         }
       });
       upRes.on('end', () => { if (res.writable) res.end(); });
-      upRes.on('error', e => { if (res.writable) res.end(); });
+      upRes.on('error', e => {
+        proxyLog('ollama.stream.backend_error', { error: e.message });
+        if (res.writable) res.end();
+      });
     } else {
       let fullBody = '';
       upRes.on('data', chunk => fullBody += chunk.toString());
@@ -649,11 +652,11 @@ server.listen(INITIAL_PORT, '127.0.0.1', () => {
 process.on('SIGHUP', () => reloadConfigFromDisk());
 process.on('SIGTERM', () => process.exit(0));
 process.on('SIGINT', () => process.exit(0));
-process.on('SIGPIPE', () => debugLog('process.sigpipe', { message: 'ignored SIGPIPE' }));
+process.on('SIGPIPE', () => proxyLog('process.sigpipe', { message: 'ignored SIGPIPE' }));
 
 process.on('uncaughtException', err => {
   if (err.code === 'EIO' || err.code === 'ECONNRESET' || err.code === 'EPIPE') {
-    debugLog('proxy.error.ignored', { code: err.code, message: err.message });
+    proxyLog('proxy.error.ignored', { code: err.code, message: err.message });
     return;
   }
   proxyLog('fatal_error_uncaught', { error: err.message, stack: err.stack });
