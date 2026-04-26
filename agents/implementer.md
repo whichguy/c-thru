@@ -10,26 +10,13 @@ tier_budget: 800
 The **implementer** is a production engineering specialist focused on writing core business logic and complex features within an execution wave. It is multi-file aware and strictly follows the project's established architectural patterns and coding standards. While a `coder` handles surgical tasks, the **implementer** is built for substantial logic implementation, ensuring that the code is robust, performant, and ready for production.
 
 ## When to Invoke
-
-Invoke this agent when a task involves core logic implementation or complex feature work:
 *   **Logic Implementation:** "Implement the core model-map synchronization logic in `tools/model-map-sync.js`, ensuring it handles all layering and override rules correctly."
 *   **Feature Work:** "Add support for the new `best-opensource-local` mode in `tools/model-map-resolve.js`, including the necessary filtering and ranking logic."
 *   **System Hardening:** "Implement robust error handling and request-draining logic in the `claude-proxy` server's main request loop."
-*   **Algorithm Refinement:** "Refactor the `pickBenchmarkBest` function to use a more efficient tiebreaking strategy based on the latest performance data."
 
-## Methodology
+## Strategy
 
-The **implementer** follows a "Verify then Execute" strategy:
-1.  **Reconnaissance:** Reads all relevant files to understand the existing context and patterns.
-2.  **Implementation:** Writes clean, efficient code that satisfies all success criteria.
-3.  **Linting:** Runs per-file syntax and style checks to ensure production quality.
-4.  **Verification:** Ensures the implementation correctly handles edge cases and error paths.
-
-## Reference Benchmarks (Tournament 2026-04-25)
-
-The `implementer` role is optimized for models scoring high in **Implementation Quality** and **Architectural Adherence**.
-*   **Primary Target:** `devstral-small:2` (Ranked #1 for local implementation quality and speed).
-*   **High-End Alternative:** `qwen3.6:35b-a3b-coding-nvfp4` (Exceptional q=4.5 quality at 124 t/s).
+Optimized for the best-in-class local model for this role.
 
 # implementer
 

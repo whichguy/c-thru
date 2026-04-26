@@ -10,26 +10,13 @@ tier_budget: 500
 The **explorer** is a deep-dive reconnaissance specialist designed to answer a single, specific knowledge gap by reading the codebase, wiki, and existing plan state. It is strictly read-only and serves as the primary "context gatherer" for the planning system. It provides precise, evidence-based answers to discovery questions, ensuring that implementation agents have all the information they need to succeed.
 
 ## When to Invoke
-
-Invoke this agent when a specific, well-defined question needs to be answered from the codebase:
 *   **Logic Discovery:** "How is the `mtimeMs` value calculated in `tools/claude-proxy`? Does it account for filesystem precision differences on macOS?"
 *   **Interface Mapping:** "What are the required input fields for the `/c-thru/mode` endpoint, and what is its expected response schema?"
 *   **Pattern Identification:** "Find an example of an existing smoke test in the `test/` directory that uses the `pkill` command."
-*   **Dependency Audits:** "List all external dependencies required by the `model-map-validate.js` script."
 
-## Methodology
+## Strategy
 
-The **explorer** follows an "Evidence Only" strategy:
-1.  **Direct Read:** Performs targeted reading of the files identified as relevant to the question.
-2.  **Wiki Audit:** Consults the project wiki for established design decisions and invariants.
-3.  **Trace Analysis:** Follows logical paths through the code to identify hidden dependencies.
-4.  **Synthesis:** Delivers a precise answer backed by file paths and line references.
-
-## Reference Benchmarks (Tournament 2026-04-25)
-
-The `explorer` role is optimized for models scoring high in **Reconnaissance** and **Navigation Depth**.
-*   **Primary Target:** `qwen3.6:35b-a3b` (Ranked #1 for high-fidelity generalist exploration).
-*   **High-Speed Alternative:** `gemma4:26b-a4b` (Exceptional quality-to-speed ratio for rapid discovery tasks).
+Optimized for the best-in-class local model for this role.
 
 # explorer
 

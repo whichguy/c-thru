@@ -10,36 +10,13 @@ tier_budget: 1500
 The **planner** is the primary strategic specialist designed for "Stage 2" and "Stage 5" operations. It handles formal reasoning, logical decomposition, and the maintenance of the living dependency map (`current.md`). It receives high-level intent or wave summaries and transforms them into a structured sequence of executable items. It is the agent of choice for designing complex systems, verifying logical invariants, and ensuring that the project outcome remains achievable through changing technical conditions.
 
 ## When to Invoke
-
-Invoke this agent when a task requires global strategic design or a major logical re-evaluation:
 *   **Initial Project Planning:** "Plan the implementation of the new `competitive-evolution` skill. Break it down into discovery, implementation, and verification waves."
 *   **Strategic Re-planning:** "A major `outcome_risk` was identified in Wave 3. Re-evaluate the entire dependency graph and propose a revised strategy for achieving the 'Hot-Reload' goal."
 *   **Final Review Integration:** "The `final-reviewer` identified three remaining gaps in the implementation. Append the necessary gap-fill items to the plan and select the next ready wave."
-*   **Logical Decomposition:** "Design a step-by-step sequence for migrating the `claude-proxy` to use a multi-backend strategy pattern. Ensure each step is atomic and verifiable."
 
-## How it Differs from `planner-local`
+## Strategy
 
-| Feature | `planner` | `planner-local` |
-|---|---|---|
-| **Tier** | Cloud (Judge) | Local (27B+) |
-| **Authority** | Strategic (Can add items) | Tactical (Updates only) |
-| **Logic** | Global outcome focus | Local dependency focus |
-| **Goal** | Correctness of plan | Readiness of items |
-
-## Methodology
-
-The **planner** follows a "Signal-Driven" strategy:
-1.  **Outcome Alignment:** Always starts by re-reading the immutable `## Outcome` section.
-2.  **Signal Processing:** Analyzes `intent`, `wave_summary`, or `final_review` data.
-3.  **Graph Update:** Modifies items, dependencies, and resources to reflect the new state.
-4.  **Cycle Detection:** Formally verifies the logical integrity of the dependency graph.
-5.  **Wave Selection:** Identifies and returns the optimal set of READY_ITEMS for execution.
-
-## Reference Benchmarks (Tournament 2026-04-25)
-
-The `planner` role is optimized for models scoring at the top of the **Bayesian Planning** and **Logical Consistent** categories.
-*   **Primary Target:** `claude-opus-4-6` (Ranked #1 for global project planning and outcome integrity).
-*   **High-End Alternative:** `phi4-reasoning:latest` (Excellent for logic-based graph verification and dependency updates).
+Optimized for the best-in-class local model for this role.
 
 # planner
 

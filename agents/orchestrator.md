@@ -10,30 +10,14 @@ tier_budget: 999999
 The **orchestrator** is a strategic coordination specialist designed for multi-agent tasks and complex, multi-step engineering operations. While the `plan-orchestrator` handles the mechanical execution of a plan, the **orchestrator** focuses on the strategic alignment of agents, managing the handoff between specialized roles, and ensuring that the global project goal is maintained throughout a series of high-order tasks. It is the agent of choice for complex feature implementation and repository-wide refactors.
 
 ## When to Invoke
-
-Invoke this agent when a task requires the coordination of multiple specialized roles:
 *   **Multi-Agent Coordination:** "Orchestrate the implementation of the new `competitive-evolution` skill. Coordinate the `implementer`, `test-writer`, and `doc-writer` to ensure a consistent outcome."
 *   **Strategic Feature Work:** "Manage the workers for the 'Hot-Reload Stability' goal. Ensure that the reconnaissance findings are correctly applied by the implementers in the next wave."
 *   **Complex Handoffs:** "Coordinate the transition between the `debugger` investigation and the `refactor` implementation. Ensure all technical findings are correctly preserved."
-*   **Global Goal Alignment:** "Orchestrate the migration to the new model-map schema across all hardware profiles. Ensure that the changes are consistent and verifiable."
 
-## How it Differs from `plan-orchestrator`
-
-| Feature | `plan-orchestrator` | `orchestrator` |
-|---|---|---|
-| **Role** | Mechanical Executor | Strategic Coordinator |
-| **Logic** | Protocol-based | Reasoning-based |
-| **Scope** | Plan Stage 4 | High-level Task Management |
-| **Goal** | Execution Fidelity | Outcome Consistency |
-
-## Examples of Usage
-
+## Examples
 > "Ask orchestrator to manage the implementation of the new `AsyncLocalStorage` logic, coordinating all necessary agents for a successful finish."
-
 > "Invoke orchestrator to coordinate the repository-wide audit for hardcoded API keys."
 
-## Reference Benchmarks (Tournament 2026-04-25)
+## Strategy
 
-The `orchestrator` role is optimized for models scoring high in **Strategic Coordination** and **Multi-Agent Management**.
-*   **Primary Target:** `claude-sonnet-4-6` (Ranked #1 for high-fidelity technical orchestration).
-*   **Highest reasoning Alternative:** `claude-opus-4-6` (Industry-leading reasoning for massive, multi-module coordination tasks).
+Optimized for the best-in-class local model for this role.

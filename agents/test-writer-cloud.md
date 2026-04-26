@@ -10,26 +10,13 @@ tier_budget: 800
 The **test-writer-cloud** is a high-stakes verification specialist designed for tasks requiring maximum logical fidelity and subtle bug detection. It serves as the primary escalation target for local `test-writer` recusals. It utilizes cloud-tier models to analyze complex implementations and generate high-fidelity unit tests that capture edge cases and error paths that might elude a local model. It is the agent of choice for verifying core infrastructure, security logic, and mission-critical algorithms.
 
 ## When to Invoke
-
-Invoke this agent when local test generation fails or when the complexity of the code requires extreme precision:
 *   **Infrastructure Verification:** "Escalated from local: Write unit tests for the per-request `AsyncLocalStorage` logic. Ensure the tests specifically exercise the concurrent configuration reload race condition."
 *   **High-Stakes Verification:** "Audit the `resolveBackend` implementation and generate a high-fidelity test suite covering all 6 resolution layers, including edge cases for pattern matching."
 *   **Logical Refinement:** "We refactored the `pickBenchmarkBest` function. Generate a set of tests that verify the correct application of multi-stage tiebreakers across both local and cloud models."
-*   **Deep Bug Hunting:** "A subtle regression was found in the `scrubCthruHeaders` function. Write a regression test that verifies correct header sanitization for a wide range of malformed inputs."
 
-## Methodology
+## Strategy
 
-The **test-writer-cloud** follows an "Exhaustive Analysis" strategy:
-1.  **Code Deconstruction:** Traces every logical path and data flow in the target implementation.
-2.  **Boundary Probing:** Identifies and targets the specific edge cases where the logic is most likely to fail.
-3.  **Fidelity Validation:** Writes precise, narrative tests that explicitly state the behavioral expectation for every assertion.
-4.  **Recusal Guard:** If even the cloud-tier model cannot verify the outcome, it returns a STOP signal to the orchestrator.
-
-## Reference Benchmarks (Tournament 2026-04-25)
-
-The `test-writer-cloud` role is optimized for models scoring at the top of the **Execution-Tested Bug Detection** category.
-*   **Primary Target:** `claude-sonnet-4-6` (Ranked #1 for technical verification and test fidelity).
-*   **Deep Logic Alternative:** `claude-opus-4-6` (Highest-order reasoning for complex, multi-module verification tasks).
+Optimized for the best-in-class local model for this role.
 
 # test-writer-cloud
 

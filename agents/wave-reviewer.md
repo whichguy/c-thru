@@ -10,26 +10,13 @@ tier_budget: 800
 The **wave-reviewer** is an iterative quality-assurance specialist designed for the "Review + Fix" loop of code units within an execution wave. Unlike a standard `reviewer` (which only provides feedback), the **wave-reviewer** actively applies fixes to logic errors, security vulnerabilities, and convention violations. It iterates up to 5 times per item, rechecking its own fixes until the code is clean or a plan-material escalation is required.
 
 ## When to Invoke
-
-Invoke this agent when an implemented item needs verification and immediate remediation:
 *   **Correctness Audits:** "Review the new `flattenMessagesForOllama` function. If you find any off-by-one errors in the array slicing, fix them immediately."
 *   **Security Hardening:** "Audit the `scrubCthruHeaders` implementation for potential header-injection vulnerabilities. Apply any necessary sanitization fixes."
 *   **Convention Alignment:** "Check the recent additions to the `128gb` profile in `model-map.json`. Ensure they exactly match the project's JSON indentation and naming conventions."
-*   **Logic Verification:** "Review the `AsyncLocalStorage` integration. If there is a risk of a memory leak due to unclosed stores, implement the necessary `finalize()` logic."
 
-## Methodology
+## Strategy
 
-The **wave-reviewer** follows a "Verify then Remediate" strategy:
-1.  **Logical Audit:** Traces all inputs, outputs, and side effects of the code unit.
-2.  **Vulnerability Detection:** Specifically checks for security, logic, and convention flaws.
-3.  **Surgical Fixes:** Applies minimal, targeted changes to resolve identified issues.
-4.  **Iterative Recheck:** Runs the audit again on the modified code, up to 5 times.
-
-## Reference Benchmarks (Tournament 2026-04-25)
-
-The `wave-reviewer` role is optimized for models scoring high in **Logical Reasoning** and **Surgical Editing**.
-*   **Primary Target:** `qwen3.6:35b-a3b-coding-nvfp4` (Ranked #1 for logic-fix quality and speed).
-*   **Balanced Alternative:** `devstral-small:2` (Excellent for iterative instruction-following and safety).
+Optimized for the best-in-class local model for this role.
 
 # wave-reviewer
 

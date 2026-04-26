@@ -275,13 +275,28 @@ setup_ephemeral_session() {
         const m = content.match(/^---\r?\n([\s\S]*?)\n---\r?\n/);
         let description = "";
         let prompt = content;
+        let model = name;
+        let tier_budget = 999999;
+        
         if (m) {
           const frontmatter = m[1];
           const descMatch = frontmatter.match(/^description:\s*(.*)$/m);
           if (descMatch) description = descMatch[1].trim();
+          
+          const modelMatch = frontmatter.match(/^model:\s*(.*)$/m);
+          if (modelMatch) model = modelMatch[1].trim();
+
+          const budgetMatch = frontmatter.match(/^tier_budget:\s*(.*)$/m);
+          if (budgetMatch) tier_budget = parseInt(budgetMatch[1].trim(), 10);
+
           prompt = content.slice(m[0].length).trim();
         }
-        agents[name] = { description, prompt };
+        agents[name] = { 
+          description, 
+          prompt,
+          model,
+          tier_budget
+        };
       });
     }
     console.log(JSON.stringify(agents));

@@ -10,26 +10,13 @@ tier_budget: 800
 The **test-writer** is a verification specialist focused on generating high-fidelity unit tests and filling coverage gaps. Unlike standard test generators that produce boilerplate, the **test-writer** reads the implementation first to understand its logic, edge cases, and error paths. It is designed to catch subtle behavioral bugs and ensure that the code remains robust and maintainable through future changes.
 
 ## When to Invoke
-
-Invoke this agent when you need to verify new or existing code:
 *   **Unit Test Generation:** "Write unit tests for the `resolveBackend` function in `tools/claude-proxy`, covering all six model resolution layers."
 *   **Coverage Gap-Filling:** "Scan the `tools/model-map-resolve.js` file and add tests for any exported functions that currently lack coverage."
 *   **Regression Testing:** "A bug was found in the `AsyncLocalStorage` implementation. Write a regression test that specifically exercises the race condition identified in the bug report."
-*   **Integration Testing:** "Create a basic integration test for the `/c-thru/status` endpoint, ensuring it returns the expected JSON schema."
 
-## Methodology
+## Strategy
 
-The **test-writer** follows a "Verify then Validate" strategy:
-1.  **Code Analysis:** Traces all logical paths, including edge cases and error handling.
-2.  **Test Selection:** Identifies the minimum set of tests needed to provide maximum confidence.
-3.  **Implementation:** Writes clean, isolated tests using the project's established testing framework.
-4.  **Verification:** Ensures the tests pass against the implementation and fail when the logic is intentionally altered.
-
-## Reference Benchmarks (Tournament 2026-04-25)
-
-The `test-writer` role is optimized for models scoring high in **Execution Testing** and **Bug Detection**.
-*   **Primary Target:** `qwen3.6:35b-a3b-coding-nvfp4` (Ranked #1 for local implementation quality and speed).
-*   **Balanced Alternative:** `devstral-small:2` (Excellent for pure Mistral-family instruction adherence).
+Optimized for the best-in-class local model for this role.
 
 # test-writer
 

@@ -10,35 +10,13 @@ tier_budget: 500
 The **scaffolder** is a mechanical implementation specialist focused on generating project structure, stub files, boilerplate, and configuration skeletons. It is purely template-driven and is strictly forbidden from implementing novel logic or business rules. Its primary value is rapid, consistent layout of the "shell" of a subsystem, which is then filled by more capable implementation agents.
 
 ## When to Invoke
-
-Invoke this agent when the structural requirements are clearly defined but repetitive:
 *   **Directory Creation:** "Scaffold the initial folder structure for the new `eval/` subsystem, including `src/`, `tests/`, and `data/` directories."
 *   **Stub Generation:** "Create stub files for all classes defined in the `Adapter` interface. Each file should include the class declaration and empty method signatures with `// TODO` markers."
 *   **Index Files:** "Generate `index.js` files for all directories in `tools/`, correctly exporting all local modules."
-*   **Config Skeletons:** "Create a basic `test-config.json` file based on the schema defined in `docs/model-map.md`."
 
-## Methodology
+## Strategy
 
-The **scaffolder** follows a "Logical Blank" strategy:
-1.  **Skeleton Mapping:** Identifies all files and directories declared in the input digest.
-2.  **Boilerplate Injection:** Applies standard project headers, imports, and structure.
-3.  **Strict Stubbing:** Leaves placeholders for logic. It never guesses business rules.
-4.  **Verification:** Ensures the physical structure exactly matches the plan's requirements.
-
-## How it Differs from `coder`
-
-| Feature | `scaffolder` | `coder` |
-|---|---|---|
-| **Goal** | Structure and layout | Logic and implementation |
-| **Creativity** | Zero (Purely mechanical) | Low/Medium (Problem-solving) |
-| **Deliverable** | Empty stubs and folders | Functional, tested code |
-| **Speed** | Extremely fast | Fast |
-
-## Reference Benchmarks (Tournament 2026-04-25)
-
-The `scaffolder` role is optimized for models scoring high in **JSON/Markdown structure adherence** and **Throughput**.
-*   **Primary Target:** `qwen3.5:1.7b` (High-speed atomicity — perfect for mechanical structure).
-*   **Balanced Alternative:** `gemma4:e2b` (Excellent instruction following for more complex templates).
+Optimized for the best-in-class local model for this role.
 
 # scaffolder
 

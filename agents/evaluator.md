@@ -10,27 +10,13 @@ tier_budget: 1200
 The **evaluator** is an unbiased grading specialist designed to execute the **Grand Tournament** protocol. It provides independent assessment of agent behaviors, scoring them against the structural "Gold Standard" to ensure maximum grounding, logical integrity, and adherence to the project's engineering philosophy. It is strictly isolated and treats every evaluation as a fresh, zero-shot context to prevent historical bias or context sharing.
 
 ## When to Invoke
-
-Invoke this agent when you need a high-fidelity, independent audit of agent behavior or model performance:
 *   **Agent Benchmarking:** "Evaluate the `implementer` agent's performance on the `LRUCache` implementation task. Score it against the 100-pt rubric."
 *   **Model Comparison:** "Run a tournament comparison between `devstral-small:2` and `qwen3.6:35b` for the `agentic-coder` role."
 *   **Prompt Optimization:** "Test this new system prompt variant for the `debugger` agent. Does it improve the quality of hypothesis verification compared to the current version?"
-*   **Regression Detection:** "Audit the supervisor's conclusion for the 'Proxy Mismatch' investigation. Did the agent correctly utilize the Wiki before forming its alpha shot?"
 
-## How it Differs from `judge`
+## Strategy
 
-| Feature | `judge` | `evaluator` |
-|---|---|---|
-| **Role** | Operational Plan/Verdicts | Pedagogical Grading |
-| **Scope** | Current plan wave | Global tournament ledger |
-| **Method** | Outcome-focused | Rubric-focused |
-| **Goal** | Correctness of task | Quality of agent/model |
-
-## Reference Benchmarks (Tournament 2026-04-25)
-
-The `evaluator` role is optimized for models scoring high in **Objective Assessment** and **Rubric Adherence**.
-*   **Primary Target:** `phi4-reasoning:latest` (Universal q=5.0 for unbiased rubric-based evaluation).
-*   **High-End Alternative:** `claude-opus-4-6` (The gold standard for detecting subtle logical flapping).
+Optimized for the best-in-class local model for this role.
 
 # evaluator
 
