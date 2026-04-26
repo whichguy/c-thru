@@ -380,8 +380,25 @@ async function forwardAnthropic(req, res, body, backend, effectiveModel, request
   up.end();
 }
 
-function flattenMessagesForOllama(messages) {
-  if (!Array.isArray(messages)) return [];
+function flattenMessagesForOllama(body) {
+  const messages = Array.isArray(body.messages) ? [...body.messages] : [];
+  
+  // If Anthropic "system" field is present, prepend it as a system message for Ollama
+  if (body.system) {
+    let systemContent = '';
+    if (typeof body.system === 'string') {
+      systemContent = body.system;
+    } else if (Array.isArray(body.system)) {
+      systemContent = body.system
+        .filter(c => c.type === 'text')
+        .map(c => c.text)
+        .join('\n');
+    }
+    if (systemContent) {
+      messages.unshift({ role: 'system', content: systemContent });
+    }
+  }
+
   return messages.map(msg => {
     let content = '';
     if (typeof msg.content === 'string') {
@@ -410,7 +427,7 @@ async function forwardOllama(req, res, body, backend, effectiveModel, requestMet
   up.on('error', e => send(res, 502, { error: `backend ollama at ${backend.url} error: ${e.message}` }));
   up.write(JSON.stringify({
     model: effectiveModel,
-    messages: flattenMessagesForOllama(body.messages),
+    messages: flattenMessagesForOllama(body),
     stream: !!body.stream,
     options: { temperature: body.temperature || 0, num_ctx: body.num_ctx || 65536 }
   }));
