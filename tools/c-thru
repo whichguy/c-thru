@@ -2827,7 +2827,7 @@ build_forwarded_args() {
         i=$((i + 1))
         continue
         ;;
-      --bypass-proxy | --journal | --no-update)
+      --bypass-proxy | --journal | --no-update | --no-agents | --debug)
         i=$((i + 1))
         continue
         ;;
@@ -2886,6 +2886,7 @@ build_forwarded_args() {
   # ── Per-Process Ephemeral Injection ──────────────────────────────────────
   if [[ -n "$EPHEMERAL_SETTINGS_FILE" ]]; then
     forwarded+=("--settings" "$EPHEMERAL_SETTINGS_FILE")
+    forwarded+=("--setting-sources" "user,project,local")
   fi
   if [[ -n "$EPHEMERAL_AGENTS_JSON" && "$EPHEMERAL_AGENTS_JSON" != "{}" ]]; then
     forwarded+=("--agents" "$EPHEMERAL_AGENTS_JSON")
