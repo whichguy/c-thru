@@ -3275,7 +3275,6 @@ if [[ -z "$MODEL" ]]; then
   if transparent_proxy_can_match_ollama_env; then
     # In this query, we are supposed to have the env variables for ollama as specifically "ollama" for the pwd
     export ANTHROPIC_AUTH_TOKEN="ollama"
-    unset ANTHROPIC_API_KEY
   else
     ensure_proxy_client_api_key
   fi
@@ -3313,8 +3312,6 @@ apply_provider_block() {
 
   if [[ -n "$api_key" ]]; then
     export ANTHROPIC_API_KEY="$api_key"
-  else
-    unset ANTHROPIC_API_KEY
   fi
 
   [[ -n "$config_dir" ]] && export CLAUDE_CONFIG_DIR="${config_dir//\$HOME/$HOME}"
@@ -3328,8 +3325,7 @@ apply_provider_block() {
 
 apply_ollama_client_block() {
   local client_base_url="$1" config_dir="$2" env_json="$3"
-  # In this query, we are supposed to have the env variables for ollama as specifically "ollama" for the pwd
-  # We MUST unset ANTHROPIC_API_KEY to avoid auth conflicts in Claude Code.
+  # Use "ollama" auth token for the proxy.
   apply_provider_block "$client_base_url" "ollama" "" "$config_dir" "$env_json"
 }
 
