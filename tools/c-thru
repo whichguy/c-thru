@@ -2686,8 +2686,6 @@ claude_router_debug_dump() {
   fi
   if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     echo "  ANTHROPIC_API_KEY=<set:${#ANTHROPIC_API_KEY} chars>" >&2
-  else
-    echo "  ANTHROPIC_API_KEY=<unset>" >&2
   fi
   echo "  CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-<unset>}" >&2
   echo "  CONFIG=$CONFIG" >&2

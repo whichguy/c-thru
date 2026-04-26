@@ -191,7 +191,10 @@ function resolveBackend(model, cfg, tier, mode) {
   const modelRoutes = cfg.model_routes || {};
   
   let id = modelRoutes[model];
-  if (id && backends[id]) return { backend: { id, ...backends[id] }, effectiveModel: model, terminalLabel: model, routingKey: model };
+  if (id) {
+    if (backends[id]) return { backend: { id, ...backends[id] }, effectiveModel: model, terminalLabel: model, routingKey: model };
+    return { error: `backend '${id}' defined for model '${model}' not found in 'backends' config`, status: 400 };
+  }
 
   for (const [pattern, backendId] of Object.entries(modelRoutes)) {
     if (!pattern.startsWith('re:')) continue;
@@ -199,6 +202,7 @@ function resolveBackend(model, cfg, tier, mode) {
       if (new RegExp(pattern.slice(3)).test(model)) {
         id = backendId;
         if (backends[id]) return { backend: { id, ...backends[id] }, effectiveModel: model, terminalLabel: model, routingKey: pattern };
+        return { error: `backend '${id}' defined for pattern '${pattern}' not found in 'backends' config`, status: 400 };
       }
     } catch {}
   }
@@ -217,7 +221,8 @@ function resolveBackend(model, cfg, tier, mode) {
       const resolved = resolveProfileModel(entry, mode);
       if (resolved) {
         const nested = resolveBackend(resolved, cfg, tier, mode);
-        if (!nested.error) return { ...nested, logicalRole: capAlias, capability: capAlias };
+        if (nested.error) return nested; // Propagate the error
+        return { ...nested, logicalRole: capAlias, capability: capAlias };
       }
     }
   }
@@ -254,6 +259,9 @@ function lookupPatternValue(section, model) {
 function send(res, code, obj) {
   if (res.headersSent) return;
   const body = JSON.stringify(obj);
+  if (code >= 400) {
+    proxyLog('error_response', { statusCode: code, payload: obj });
+  }
   res.writeHead(code, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
   res.end(body);
 }
@@ -363,10 +371,14 @@ async function forwardAnthropic(req, res, body, backend, effectiveModel, request
   };
 
   const up = lib.request(options, upRes => {
+    proxyLog('backend_response', { backend: backend.id, statusCode: upRes.statusCode });
     res.writeHead(upRes.statusCode, upRes.headers);
     upRes.pipe(res);
   });
-  up.on('error', e => send(res, 502, { error: `backend anthropic at ${targetUrl.origin} error: ${e.message}` }));
+  up.on('error', e => {
+    proxyLog('backend_error', { backend: backend.id, kind: 'anthropic', error: e.message });
+    send(res, 502, { error: `backend anthropic at ${targetUrl.origin} error: ${e.message}` });
+  });
   if (body) up.write(JSON.stringify(body));
   up.end();
 }
@@ -384,6 +396,7 @@ async function forwardOllama(req, res, body, backend, effectiveModel, requestMet
   const isStream = !!body.stream;
 
   const up = http.request(url, options, upRes => {
+    proxyLog('backend_response', { backend: backend.id, statusCode: upRes.statusCode });
     if (upRes.statusCode !== 200) {
       res.writeHead(upRes.statusCode, upRes.headers);
       return upRes.pipe(res);
@@ -459,7 +472,10 @@ async function forwardOllama(req, res, body, backend, effectiveModel, requestMet
     }
   });
 
-  up.on('error', e => send(res, 502, { error: `backend ollama at ${backend.url} error: ${e.message}` }));
+  up.on('error', e => {
+    proxyLog('backend_error', { backend: backend.id, kind: 'ollama', error: e.message });
+    send(res, 502, { error: `backend ollama at ${backend.url} error: ${e.message}` });
+  });
   up.write(JSON.stringify({
     model: effectiveModel,
     messages: flattenMessagesForOllama(body),
@@ -567,7 +583,10 @@ const server = http.createServer((req, res) => {
         const activeMode = resolveLlmMode(CONFIG);
         
         let resolved = resolveBackend(body.model, CONFIG, hwTier, activeMode);
-        if (resolved.error) return send(res, 400, { error: resolved.error });
+        if (resolved.error) {
+          proxyLog('routing_error', { incoming_model: body.model, error: resolved.error });
+          return send(res, 400, { error: resolved.error });
+        }
         
         // ── Phase 3 ranking ──
         const RANK_MODES = { 
@@ -586,7 +605,10 @@ const server = http.createServer((req, res) => {
             const best = pickBenchmarkBest(criterion, candidates, BENCHMARK, role, CONFIG.model_routes || {}, CONFIG.backends || {});
             if (best && best !== resolved.effectiveModel) {
               const replaced = resolveBackend(best, CONFIG, hwTier, activeMode);
-              if (!replaced.error) resolved = replaced;
+              if (!replaced.error) {
+                proxyLog('ranking_promotion', { criterion, role, old_model: resolved.effectiveModel, new_model: replaced.effectiveModel });
+                resolved = replaced;
+              }
             }
           }
         }
@@ -594,6 +616,16 @@ const server = http.createServer((req, res) => {
         const { backend, effectiveModel, logicalRole } = resolved;
         const requestMeta = { capability: logicalRole, stream: !!body.stream };
         
+        proxyLog('dispatch', {
+          incoming_model: body.model,
+          resolved_model: effectiveModel,
+          backend_id: backend.id,
+          backend_kind: backend.kind,
+          logical_role: logicalRole || 'none',
+          tier: hwTier,
+          mode: activeMode
+        });
+
         if (backend.kind === 'ollama') {
           if (!(await ensureOllamaReadyOrSend(effectiveModel, backend.url, logicalRole, res))) return;
           return forwardOllama(req, res, body, backend, effectiveModel, requestMeta);
