@@ -1494,7 +1494,7 @@ async function enforceRoleExclusivity(logicalRole, newModel, backendUrl) {
     const current = roleBindings.get(logicalRole);
     if (!current || current.model === newModel) return; // a concurrent req already swapped
     proxyLog('role_exclusivity.swap', { role: logicalRole, old: prev.model, new: newModel });
-    await ollamaUnloadModel(prev.backendUrl || backendUrl, prev.model);
+    // await ollamaUnloadModel(prev.backendUrl || backendUrl, prev.model);
   }).finally(() => {
     if (roleSwapLocks.get(logicalRole) === next) roleSwapLocks.delete(logicalRole);
   });
@@ -3740,6 +3740,19 @@ function startNetworkInterfaceWatcher() {
 }
 
 async function runStartupProbes() {
+  // Probe distinct Ollama backend URLs
+  const ollamaUrls = new Set();
+  for (const b of Object.values(CONFIG.backends || {})) {
+    if (b.kind === 'ollama' && b.url) ollamaUrls.add(b.url);
+  }
+  for (const url of ollamaUrls) {
+    const tagsUrl = url.replace(/\/$/, '') + '/api/tags';
+    const result = await httpProbe(tagsUrl, {}, STARTUP_PROBE_TIMEOUT_MS);
+    if (!result.ok) {
+      console.error(`C-thru: Ollama unreachable at ${url} (status=${result.statusCode || 'no-response'})`);
+    }
+  }
+
   const strategies = CONFIG.fallback_strategies || {};
   const primaryModels = Object.keys(strategies);
   if (primaryModels.length === 0) return;

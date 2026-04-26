@@ -150,7 +150,7 @@ resolve_model_map_config() {
       CONFIG_SOURCE="override"
       return 0
     fi
-    echo "c-thru: ignoring CLAUDE_MODEL_MAP_PATH because it is not an absolute readable file: $override" >&2
+    echo "C-thru: ignoring CLAUDE_MODEL_MAP_PATH because it is not an absolute readable file: $override" >&2
   fi
 
   local git_root=""
@@ -177,6 +177,16 @@ resolve_model_map_config() {
   if [[ -n "$profile_real" ]]; then
     CONFIG="$profile_real"
     CONFIG_SOURCE="profile"
+    return 0
+  fi
+
+  # Repo root fallback (for running directly from source)
+  local repo_config="$ROUTER_REPO_ROOT/config/model-map.json"
+  local repo_real
+  repo_real="$(canonicalize_file "$repo_config" 2>/dev/null || true)"
+  if [[ -n "$repo_real" ]]; then
+    CONFIG="$repo_real"
+    CONFIG_SOURCE="repo"
     return 0
   fi
 
@@ -358,6 +368,12 @@ cmd_check_deps() {
     local model_count
     model_count="$(ollama list 2>/dev/null | tail -n +2 | wc -l | tr -d ' ' || true)"
     echo -e "  ${GREEN}✓  ollama — ${model_count:-?} model(s) available${NC}"
+    # Verify REST API connectivity
+    if curl -sf --max-time 2 "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
+      echo -e "  ${GREEN}✓  ollama REST API — reachable at ${OLLAMA_URL}${NC}"
+    else
+      echo -e "  ${YELLOW}⚠️  ollama REST API — unreachable at ${OLLAMA_URL} (daemon down?)${NC}"
+    fi
   else
     echo -e "  ${YELLOW}⚠️  ollama — not found (optional: enables local models)${NC}"
     if [[ "$fix" -eq 1 ]] && command -v brew >/dev/null 2>&1; then
@@ -390,11 +406,11 @@ else
   maybe_refresh_model_map_defaults_from_git || true
 fi
 sync_layered_profile_model_map || {
-  echo "c-thru: failed to build effective layered model-map config" >&2
+  echo "C-thru: failed to build effective layered model-map config" >&2
   exit 1
 }
-resolve_model_map_config || true
 resolve_launch_project_dir || true
+resolve_model_map_config || true
 export CLAUDE_MODEL_MAP_LAUNCH_CWD="$LAUNCH_CWD"
 export CLAUDE_MODEL_MAP_SOURCE="$CONFIG_SOURCE"
 if [[ -n "$LAUNCH_PROJECT_DIR" ]]; then
@@ -416,7 +432,7 @@ validate_model_map_config() {
     return 0
   fi
   if ! node "$validator" "$CONFIG" >/dev/null; then
-    echo "c-thru: invalid model-map config: $CONFIG" >&2
+    echo "C-thru: invalid model-map config: $CONFIG" >&2
     return 1
   fi
 }
@@ -465,7 +481,7 @@ detect_total_memory_gb() {
       printf '%s' "$CLAUDE_LLM_MEMORY_GB"
       return 0
     fi
-    echo "c-thru: CLAUDE_LLM_MEMORY_GB must be a positive integer when set" >&2
+    echo "C-thru: CLAUDE_LLM_MEMORY_GB must be a positive integer when set" >&2
     return 1
   fi
 
@@ -525,12 +541,12 @@ ensure_llm_profile_context() {
     configured="$(jq -r '.llm_active_profile // "auto"' "$CONFIG" 2>/dev/null)"
     if [[ -z "$configured" || "$configured" == "null" || "$configured" == "auto" ]]; then
       memory_gb="$(detect_total_memory_gb)" || {
-        echo "c-thru: unable to determine machine memory for llm_active_profile=auto" >&2
-        echo "c-thru: install required system tools or set CLAUDE_LLM_PROFILE explicitly" >&2
+        echo "C-thru: unable to determine machine memory for llm_active_profile=auto" >&2
+        echo "C-thru: install required system tools or set CLAUDE_LLM_PROFILE explicitly" >&2
         return 1
       }
       selected="$(memory_gb_to_profile "$memory_gb")" || {
-        echo "c-thru: unable to map detected machine memory to an llm profile" >&2
+        echo "C-thru: unable to map detected machine memory to an llm profile" >&2
         return 1
       }
       source="auto"
@@ -543,12 +559,12 @@ ensure_llm_profile_context() {
   fi
 
   [[ -n "$selected" ]] || {
-    echo "c-thru: unable to resolve llm profile name" >&2
+    echo "C-thru: unable to resolve llm profile name" >&2
     return 1
   }
 
   if [[ -f "$CONFIG" ]] && ! llm_profile_exists "$selected"; then
-    echo "c-thru: resolved llm profile '$selected' is not defined in $CONFIG" >&2
+    echo "C-thru: resolved llm profile '$selected' is not defined in $CONFIG" >&2
     return 1
   fi
 
@@ -561,11 +577,11 @@ ensure_llm_profile_context() {
 
 resolve_llm_profile_name() {
   ensure_llm_profile_context || {
-    echo "c-thru: unable to resolve llm profile name" >&2
+    echo "C-thru: unable to resolve llm profile name" >&2
     return 1
   }
   [[ -n "$LLM_PROFILE_CACHE_NAME" ]] || {
-    echo "c-thru: unable to resolve llm profile name" >&2
+    echo "C-thru: unable to resolve llm profile name" >&2
     return 1
   }
   printf '%s' "$LLM_PROFILE_CACHE_NAME"
@@ -645,7 +661,7 @@ log_llm_profile_selection() {
       ;;
   esac
 
-  echo "c-thru: form factor profile '$profile' ($summary_context, mode=$llm_mode)" >&2
+  echo "C-thru: form factor profile '$profile' ($summary_context, mode=$llm_mode)" >&2
 
   local plan_parts=()
   local slot model _rec
@@ -658,11 +674,11 @@ log_llm_profile_selection() {
     local joined_plan=""
     printf -v joined_plan '%s, ' "${plan_parts[@]}"
     joined_plan="${joined_plan%, }"
-    echo "c-thru: capability plan $joined_plan" >&2
+    echo "C-thru: capability plan $joined_plan" >&2
   fi
 
   if [[ -n "$launch_model" ]]; then
-    echo "c-thru: launch request '${REQUESTED_MODEL:-$MODEL}' resolved to '$launch_model'" >&2
+    echo "C-thru: launch request '${REQUESTED_MODEL:-$MODEL}' resolved to '$launch_model'" >&2
   fi
 
   ROUTER_PROFILE_SUMMARY_LOGGED=1
@@ -954,7 +970,7 @@ resolve_routes_graph() {
     local p
     for p in "${path_entries[@]}"; do
       if [[ "$p" == "$cur" ]]; then
-        echo "c-thru: route cycle involving '$cur' in $CONFIG" >&2
+        echo "C-thru: route cycle involving '$cur' in $CONFIG" >&2
         return 1
       fi
     done
@@ -963,14 +979,14 @@ resolve_routes_graph() {
     local nxt
     nxt=$(jq -r --arg k "$cur" '(.routes // {})[$k] // empty' "$CONFIG" 2>/dev/null)
     if [[ -z "$nxt" || "$nxt" == "null" ]]; then
-      echo "c-thru: routes['$cur'] is empty or null in $CONFIG" >&2
+      echo "C-thru: routes['$cur'] is empty or null in $CONFIG" >&2
       return 1
     fi
 
     cur="$nxt"
     depth=$((depth + 1))
     if (( depth > max )); then
-      echo "c-thru: route chain exceeded ROUTES_MAX_DEPTH ($max) — check for cycles or raise ROUTES_MAX_DEPTH" >&2
+      echo "C-thru: route chain exceeded ROUTES_MAX_DEPTH ($max) — check for cycles or raise ROUTES_MAX_DEPTH" >&2
       return 1
     fi
   done
@@ -994,7 +1010,7 @@ find_real_claude() {
     fi
   done
   if [[ -z "$first_hit" ]]; then
-    echo "c-thru: real claude binary not found in PATH (after $ROUTER_SELF_REAL)" >&2
+    echo "C-thru: real claude binary not found in PATH (after $ROUTER_SELF_REAL)" >&2
     exit 127
   fi
   printf '%s' "$first_hit"
@@ -1073,7 +1089,7 @@ cleanup_router_children() {
   if [[ -n "${ROUTER_STARTED_PROXY_PID:-}" ]]; then
     if [[ "${C_THRU_KEEP_PROXY:-0}" == "1" ]]; then
       if [[ -n "${CLAUDE_ROUTER_DEBUG:-}" && "$CLAUDE_ROUTER_DEBUG" != "0" ]]; then
-        echo "c-thru: leaving claude-proxy (pid $ROUTER_STARTED_PROXY_PID) running due to C_THRU_KEEP_PROXY=1" >&2
+        echo "C-thru: leaving claude-proxy (pid $ROUTER_STARTED_PROXY_PID) running due to C_THRU_KEEP_PROXY=1" >&2
       fi
     elif router_pid_looks_like_proxy "$ROUTER_STARTED_PROXY_PID"; then
       kill "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
@@ -1173,7 +1189,10 @@ ensure_proxy_running() {
   if ! proxy_port_is_explicit; then
     local proxy_js="$CLAUDE_PROFILE_DIR/tools/claude-proxy"
     if [[ ! -f "$proxy_js" ]]; then
-      echo "c-thru: claude-proxy missing at $proxy_js — run install.sh or start the proxy" >&2
+      proxy_js="$ROUTER_REPO_ROOT/tools/claude-proxy"
+    fi
+    if [[ ! -f "$proxy_js" ]]; then
+      echo "C-thru: claude-proxy missing at both $CLAUDE_PROFILE_DIR/tools/claude-proxy and $ROUTER_REPO_ROOT/tools/claude-proxy — run install.sh or start the proxy" >&2
       return 1
     fi
 
@@ -1196,24 +1215,25 @@ ensure_proxy_running() {
     ready_timeout="${CLAUDE_PROXY_READY_TIMEOUT_SECONDS:-45}"
     rm -f "$ready_pipe"
     mkfifo "$ready_pipe"
-    echo "c-thru: starting claude-proxy..." >&2
+    echo "C-thru: starting claude-proxy..." >&2
     CLAUDE_ROUTER_DEBUG="${CLAUDE_ROUTER_DEBUG:-}" \
+    CLAUDE_MODEL_MAP_PATH="$CONFIG" \
       "$proxy_js" >"$ready_pipe" 2>"$temp_log" &
     ROUTER_STARTED_PROXY_PID="$!"
     arm_router_child_cleanup
     local start_ec=0
     if ! IFS= read -r -t "$ready_timeout" ready_line <"$ready_pipe"; then
       start_ec=1
-      echo "c-thru: timed out waiting for claude-proxy readiness line$(describe_proxy_log_target "$temp_log")" >&2
+      echo "C-thru: timed out waiting for claude-proxy readiness line$(describe_proxy_log_target "$temp_log")" >&2
       if [[ -s "$temp_log" ]]; then
-        echo "c-thru: last proxy log lines:" >&2
+        echo "C-thru: last proxy log lines:" >&2
         tail -n 5 "$temp_log" | sed 's/^/  /' >&2
       fi
     elif [[ ! "$ready_line" =~ ^READY\ ([0-9]+)$ ]]; then
       start_ec=1
-      echo "c-thru: malformed claude-proxy readiness line '$ready_line'$(describe_proxy_log_target "$temp_log")" >&2
+      echo "C-thru: malformed claude-proxy readiness line '$ready_line'$(describe_proxy_log_target "$temp_log")" >&2
       if [[ -s "$temp_log" ]]; then
-        echo "c-thru: last proxy log lines:" >&2
+        echo "C-thru: last proxy log lines:" >&2
         tail -n 5 "$temp_log" | sed 's/^/  /' >&2
       fi
     else
@@ -1234,8 +1254,8 @@ ensure_proxy_running() {
       ROUTER_PROXY_LOG_PATH="$final_log"
     if ! wait_proxy_ping_ready "$ROUTER_PROXY_PORT" 20; then
         start_ec=1
-        echo "c-thru: claude-proxy did not become ready on dynamic port :$ROUTER_PROXY_PORT$(describe_proxy_log_target "$final_log")" >&2
-        echo "c-thru: check for port conflicts or invalid model-map config in $CONFIG" >&2
+        echo "C-thru: claude-proxy did not become ready on dynamic port :$ROUTER_PROXY_PORT$(describe_proxy_log_target "$final_log")" >&2
+        echo "C-thru: check for port conflicts or invalid model-map config in $CONFIG" >&2
       fi
     fi
     rm -f "$ready_pipe"
@@ -1267,7 +1287,7 @@ ensure_proxy_running() {
     existing_pid="$(printf '%s' "$ping_json" | jq -r '.pid // empty' 2>/dev/null || true)"
     if [[ "$ping_ok" == "true" && "$existing_config" == "${CONFIG:-}" ]]; then
       if [[ -n "${CLAUDE_ROUTER_DEBUG:-}" && "$CLAUDE_ROUTER_DEBUG" != "0" && "$CLAUDE_ROUTER_DEBUG" != "false" ]]; then
-        echo "c-thru: reusing existing claude-proxy on :$port with matching config ${CONFIG:-<unset>}" >&2
+        echo "C-thru: reusing existing claude-proxy on :$port with matching config ${CONFIG:-<unset>}" >&2
       fi
       return 0
     fi
@@ -1276,12 +1296,12 @@ ensure_proxy_running() {
       kill_pid="$(proxy_listener_pid "$port" || true)"
     fi
     if [[ -n "$kill_pid" ]]; then
-      echo "c-thru: restarting claude-proxy on :$port due to config mismatch (${existing_config:-<unknown>} != ${CONFIG:-<unset>})" >&2
+      echo "C-thru: restarting claude-proxy on :$port due to config mismatch (${existing_config:-<unknown>} != ${CONFIG:-<unset>})" >&2
       kill "$kill_pid" >/dev/null 2>&1 || true
       wait_proxy_listener_gone "$port" 30 || true
       ping_json=""
     else
-      echo "c-thru: existing claude-proxy on :$port did not report a matching config path and could not be restarted safely" >&2
+      echo "C-thru: existing claude-proxy on :$port did not report a matching config path and could not be restarted safely" >&2
       return 0
     fi
   fi
@@ -1292,17 +1312,20 @@ ensure_proxy_running() {
     if wait_proxy_ping_ready "$port" 20; then
       return 0
     fi
-    echo "c-thru: port :$port already has a listener (pid=$existing_listener_pid) but claude-proxy /ping did not answer — not launching another proxy" >&2
+    echo "C-thru: port :$port already has a listener (pid=$existing_listener_pid) but claude-proxy /ping did not answer — not launching another proxy" >&2
     return 0
   fi
 
   local proxy_js="$CLAUDE_PROFILE_DIR/tools/claude-proxy"
   if [[ ! -f "$proxy_js" ]]; then
+    proxy_js="$ROUTER_REPO_ROOT/tools/claude-proxy"
+  fi
+  if [[ ! -f "$proxy_js" ]]; then
     # No local script — maybe you started claude-proxy manually from elsewhere.
     if wait_proxy_ping_ready "$port" 50; then
       return 0
     fi
-    echo "c-thru: claude-proxy not reachable on :$port and missing $proxy_js — run install.sh or start the proxy" >&2
+    echo "C-thru: claude-proxy not reachable on :$port and missing at both $CLAUDE_PROFILE_DIR/tools/claude-proxy and $ROUTER_REPO_ROOT/tools/claude-proxy — run install.sh or start the proxy" >&2
     return 0
   fi
 
@@ -1321,7 +1344,7 @@ ensure_proxy_running() {
         eval "exec ${lock_fd}>&-"
         return 0
       fi
-      echo "c-thru: prior claude-proxy launch on :$port appears to have failed — retrying under blocking lock" >&2
+      echo "C-thru: prior claude-proxy launch on :$port appears to have failed — retrying under blocking lock" >&2
       flock "$lock_fd"
       # Double-check: the previous holder may have finally succeeded while
       # we were blocked. If /ping answers now, we're done.
@@ -1349,15 +1372,15 @@ ensure_proxy_running() {
         if wait_proxy_ping_ready "$port" 50; then
           return 0
         fi
-        echo "c-thru: prior claude-proxy launch on :$port appears to have failed — retrying" >&2
+        echo "C-thru: prior claude-proxy launch on :$port appears to have failed — retrying" >&2
         # Take over the stale lockdir and fall through.
         rmdir "$lock_dir" 2>/dev/null || true
         if ! mkdir "$lock_dir" 2>/dev/null; then
-          echo "c-thru: unable to acquire proxy lockdir on :$port after takeover attempt" >&2
+          echo "C-thru: unable to acquire proxy lockdir on :$port after takeover attempt" >&2
           return 1
         fi
       else
-        echo "c-thru: cannot create proxy lockdir ($lock_dir): ${mkdir_err:-unknown error}" >&2
+        echo "C-thru: cannot create proxy lockdir ($lock_dir): ${mkdir_err:-unknown error}" >&2
         return 1
       fi
     else
@@ -1376,12 +1399,14 @@ ensure_proxy_running() {
     if [[ -n "$explicit_log" ]]; then
       ensure_proxy_log_parent_dir "$explicit_log"
       CLAUDE_PROXY_PORT="$port" CLAUDE_ROUTER_DEBUG="${CLAUDE_ROUTER_DEBUG:-}" \
+      CLAUDE_MODEL_MAP_PATH="$CONFIG" \
         node "$proxy_js" >>"$explicit_log" 2>&1 &
       ROUTER_PROXY_LOG_PATH="$explicit_log"
     else
       temp_log="$(proxy_ephemeral_stderr_path "${$}.$port.$RANDOM")"
       ensure_proxy_log_parent_dir "$temp_log"
       CLAUDE_PROXY_PORT="$port" CLAUDE_ROUTER_DEBUG="${CLAUDE_ROUTER_DEBUG:-}" \
+      CLAUDE_MODEL_MAP_PATH="$CONFIG" \
         node "$proxy_js" >/dev/null 2>"$temp_log" &
       ROUTER_PROXY_LOG_PATH=""
     fi
@@ -1409,8 +1434,9 @@ ensure_proxy_running() {
   fi
 
   if [[ "$start_ec" -eq 1 ]]; then
-    echo "c-thru: claude-proxy did not become ready on :$port$(describe_proxy_log_target "$ROUTER_PROXY_LOG_PATH")" >&2
-    echo "c-thru: check for port conflicts or invalid model-map config in $CONFIG" >&2
+    echo "C-thru: claude-proxy did not become ready on :$port$(describe_proxy_log_target "$ROUTER_PROXY_LOG_PATH")" >&2
+    echo "C-thru: check for port conflicts or invalid model-map config in $CONFIG" >&2
+    return 1
   fi
   return 0
 }
@@ -1419,10 +1445,10 @@ ensure_proxy_http_base() {
   if proxy_port_is_explicit; then
     local explicit_base=""
     explicit_base="$(claude_proxy_http_base)" || {
-      echo "c-thru: failed to resolve explicit claude-proxy base URL" >&2
+      echo "C-thru: failed to resolve explicit claude-proxy base URL" >&2
       return 1
     }
-    ensure_proxy_running "$explicit_base"
+    ensure_proxy_running "$explicit_base" || return 1
     ENSURED_PROXY_HTTP_BASE="$explicit_base"
     return 0
   fi
@@ -1608,17 +1634,17 @@ ensure_ollama_cli_available() {
 
   claude_router_debug_event "ollama requirements result mode=$mode cli=missing"
   if ! command -v brew >/dev/null 2>&1; then
-    echo "c-thru: 'ollama' CLI not found — install Ollama or Homebrew to enable local model prep" >&2
+    echo "C-thru: 'ollama' CLI not found — install Ollama or Homebrew to enable local model prep" >&2
     return 1
   fi
 
   if ! ollama_prep_retry_allowed "requirements" "ollama_cli" "last_install_attempt_at" "$OLLAMA_INSTALL_MIN_RETRY_SECONDS"; then
-    echo "c-thru: 'ollama' CLI not found — skipping repeated Homebrew install attempt for now" >&2
+    echo "C-thru: 'ollama' CLI not found — skipping repeated Homebrew install attempt for now" >&2
     return 1
   fi
 
   ollama_prep_state_update "requirements" "ollama_cli" "install_attempt" "installing"
-  echo "c-thru: 'ollama' CLI not found — attempting 'brew install ollama' in background..." >&2
+  echo "C-thru: 'ollama' CLI not found — attempting 'brew install ollama' in background..." >&2
   local install_log=""
   install_log="$(mktemp "${TMPDIR:-/tmp}/c-thru-ollama-install.XXXXXX.log" 2>/dev/null || true)"
   [[ -n "$install_log" ]] || install_log="/dev/null"
@@ -1630,9 +1656,9 @@ ensure_ollama_cli_available() {
       ollama_prep_state_update "requirements" "ollama_cli" "install_failure" "install_failed"
       claude_router_debug_event "ollama requirements result mode=$mode install=failure"
       if [[ -s "$install_log" ]]; then
-        echo "c-thru: failed to install 'ollama' via Homebrew — continuing without local model prep (see $install_log)" >&2
+        echo "C-thru: failed to install 'ollama' via Homebrew — continuing without local model prep (see $install_log)" >&2
       else
-        echo "c-thru: failed to install 'ollama' via Homebrew — continuing without local model prep" >&2
+        echo "C-thru: failed to install 'ollama' via Homebrew — continuing without local model prep" >&2
       fi
     fi
   ) &
@@ -1649,7 +1675,7 @@ ensure_ollama_cli_available() {
   else
     wait "$install_pid" >/dev/null 2>&1 || true
     if command -v ollama >/dev/null 2>&1; then
-      echo "c-thru: installed 'ollama' via Homebrew — continuing local model prep" >&2
+      echo "C-thru: installed 'ollama' via Homebrew — continuing local model prep" >&2
       claude_router_debug_event "ollama requirements result mode=$mode install=success continue=true"
       return 0
     fi
@@ -1815,7 +1841,7 @@ run_background_ollama_prep_sweep() {
   printf -v joined_sweep '%s; ' "${sweep_descriptions[@]}"
   joined_sweep="${joined_sweep%; }"
 
-  echo "c-thru: background Ollama prep for $count profile model(s): $joined_sweep" >&2
+  echo "C-thru: background Ollama prep for $count profile model(s): $joined_sweep" >&2
   claude_router_debug_event "ollama sweep start count=$count models=$(printf '%s' "$grouped_sweep" | cut -f1 | paste -sd ',' -)"
   (
     local entry model cli_host cli_key backend_id capabilities
@@ -1871,7 +1897,7 @@ preflight_model_readiness() {
     local bare_model="${model%%@*}"
     if ! printf '%s\n' "$pulled_models" | grep -qxF "$bare_model"; then
       any_missing=1
-      echo "c-thru: model '$bare_model' not found locally — pulling before launch..." >&2
+      echo "C-thru: model '$bare_model' not found locally — pulling before launch..." >&2
       curl -s "${ollama_base%/}/api/pull" -d "{\"name\":\"${bare_model}\"}" --no-buffer 2>/dev/null | \
         while IFS= read -r line; do
           local st
@@ -1884,7 +1910,7 @@ preflight_model_readiness() {
           [[ -n "$st" ]] && printf '\r  %-60s' "$st" >&2
         done
       printf '\n' >&2
-      echo "c-thru: '$bare_model' pulled — warming into VRAM..." >&2
+      echo "C-thru: '$bare_model' pulled — warming into VRAM..." >&2
       curl -s "${ollama_base%/}/api/generate" \
         -d "{\"model\":\"${bare_model}\",\"prompt\":\"\",\"keep_alive\":\"5m\"}" \
         >/dev/null 2>&1 &
@@ -2065,32 +2091,32 @@ ensure_ollama_cloud_login() {
   fi
 
   if ! command -v ollama >/dev/null 2>&1; then
-    echo "c-thru: Ollama cloud model '$model' requires authentication, but the 'ollama' CLI is not available." >&2
+    echo "C-thru: Ollama cloud model '$model' requires authentication, but the 'ollama' CLI is not available." >&2
     return 1
   fi
 
   if ! ollama_router_is_interactive; then
-    echo "c-thru: Ollama cloud models are configured but authentication is not validated." >&2
-    echo "c-thru: Run 'ollama signin' and retry." >&2
+    echo "C-thru: Ollama cloud models are configured but authentication is not validated." >&2
+    echo "C-thru: Run 'ollama signin' and retry." >&2
     return 1
   fi
 
   if [[ "$OLLAMA_CLOUD_SIGNIN_ATTEMPTED" != "1" ]]; then
-    echo "c-thru: Ollama cloud model access requires ollama.com sign-in." >&2
+    echo "C-thru: Ollama cloud model access requires ollama.com sign-in." >&2
     if ! ollama_router_prompt_yes_no "Run 'ollama signin' now? [Y/n] "; then
-      echo "c-thru: Ollama cloud authentication declined — aborting launch." >&2
+      echo "C-thru: Ollama cloud authentication declined — aborting launch." >&2
       return 1
     fi
 
     OLLAMA_CLOUD_SIGNIN_ATTEMPTED=1
     if [[ "${CLAUDE_ROUTER_FORCE_INTERACTIVE:-0}" == "1" ]]; then
       ollama signin || {
-        echo "c-thru: 'ollama signin' failed — aborting launch." >&2
+        echo "C-thru: 'ollama signin' failed — aborting launch." >&2
         return 1
       }
     else
       ollama signin </dev/tty >/dev/tty 2>&1 || {
-        echo "c-thru: 'ollama signin' failed — aborting launch." >&2
+        echo "C-thru: 'ollama signin' failed — aborting launch." >&2
         return 1
       }
     fi
@@ -2105,9 +2131,9 @@ ensure_ollama_cloud_login() {
   fi
 
   if [[ -n "$post_message" ]]; then
-    echo "c-thru: Ollama cloud authentication is still not validated for '$model' (${post_message})." >&2
+    echo "C-thru: Ollama cloud authentication is still not validated for '$model' (${post_message})." >&2
   else
-    echo "c-thru: Ollama cloud authentication is still not validated for '$model'." >&2
+    echo "C-thru: Ollama cloud authentication is still not validated for '$model'." >&2
   fi
   return 1
 }
@@ -2176,17 +2202,17 @@ validate_ollama_cloud_auth_for_launch() {
         ;;
       transport_error)
         if [[ -n "$probe_message" ]]; then
-          echo "c-thru: unable to validate Ollama cloud authentication for '$model' (${probe_message})." >&2
+          echo "C-thru: unable to validate Ollama cloud authentication for '$model' (${probe_message})." >&2
         else
-          echo "c-thru: unable to validate Ollama cloud authentication for '$model' due to an Ollama transport error." >&2
+          echo "C-thru: unable to validate Ollama cloud authentication for '$model' due to an Ollama transport error." >&2
         fi
         return 1
         ;;
       *)
         if [[ -n "$probe_message" ]]; then
-          echo "c-thru: unable to validate Ollama cloud authentication for '$model' (${probe_message})." >&2
+          echo "C-thru: unable to validate Ollama cloud authentication for '$model' (${probe_message})." >&2
         else
-          echo "c-thru: unable to validate Ollama cloud authentication for '$model'." >&2
+          echo "C-thru: unable to validate Ollama cloud authentication for '$model'." >&2
         fi
         return 1
         ;;
@@ -2258,12 +2284,12 @@ ensure_ollama_running() {
       disown 2>/dev/null || true
       sleep 0.3
       ps_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama ps 2>/dev/null) || {
-        echo "c-thru: cannot reach Ollama on $cli_host — is 'ollama serve' running there? Skipping warm-up." >&2
+        echo "C-thru: cannot reach Ollama on $cli_host — is 'ollama serve' running there? Skipping warm-up." >&2
         claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host reachable=false"
         return 0
       }
     else
-      echo "c-thru: cannot reach Ollama on $cli_host — is 'ollama serve' running there? Skipping warm-up." >&2
+      echo "C-thru: cannot reach Ollama on $cli_host — is 'ollama serve' running there? Skipping warm-up." >&2
       claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host reachable=false"
       return 0
     fi
@@ -2293,11 +2319,11 @@ ensure_ollama_running() {
   age_text="$(ollama_extract_age_text "$model" "$list_output" || true)"
 
   if ! echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
-    echo "c-thru: '$model' not cached on $cli_host — pulling now..." >&2
+    echo "C-thru: '$model' not cached on $cli_host — pulling now..." >&2
     ollama_prep_state_update "models" "$state_key" "pull_attempt" "pulling"
     claude_router_debug_event "ollama prep pull start mode=$mode model=$model host=$cli_host reason=missing"
     if ! "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
-      echo "c-thru: failed to pull '$model' from $cli_host" >&2
+      echo "C-thru: failed to pull '$model' from $cli_host" >&2
       ollama_prep_state_update "models" "$state_key" "pull_failure" "pull_failed"
       claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=false"
       return 0
@@ -2307,7 +2333,7 @@ ensure_ollama_running() {
     claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true"
     list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null) || return 0
     if ! echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
-      echo "c-thru: '$model' is still unavailable on $cli_host after pull" >&2
+      echo "C-thru: '$model' is still unavailable on $cli_host after pull" >&2
       claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host cached=false after_pull=true"
       return 0
     fi
@@ -2338,11 +2364,11 @@ ensure_ollama_running() {
 
   # --- Cached + not loaded + reachable → fire background warm-up ---
   if [[ "$mode" == "sweep" && -n "$capabilities" ]]; then
-    echo "c-thru: warming '$model' on $cli_host (background; capabilities: $capabilities)..." >&2
+    echo "C-thru: warming '$model' on $cli_host (background; capabilities: $capabilities)..." >&2
   elif [[ "$mode" == "active" ]]; then
-    printf "c-thru: [%s] initializing on %s..." "$model" "$cli_host" >&2
+    printf "C-thru: [%s] initializing on %s..." "$model" "$cli_host" >&2
   else
-    echo "c-thru: warming '$model' on $cli_host (background)..." >&2
+    echo "C-thru: warming '$model' on $cli_host (background)..." >&2
   fi
   claude_router_debug_event "ollama prep warm start mode=$mode model=$model host=$cli_host"
   # `ollama run <model> ""` loads the model and exits quickly on empty prompt.
@@ -2353,21 +2379,24 @@ ensure_ollama_running() {
 
   # --- If active, loop and inform user until resident ---
   if [[ "$mode" == "active" && "$model_loaded" == "0" ]]; then
-    local max_wait_iters=40 # 2 minutes total
+    local max_wait_iters=200 # 0.6s * 200 = 120s (2 minutes total)
     local i=0
-    local spinner=("/" "-" "\\" "|")
+    local spinner=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
     while (( i < max_wait_iters )); do
-      local sp="${spinner[$((i % 4))]}"
-      printf "\rc-thru: [%s] %s warming up (waiting for memory residency)..." "$model" "$sp" >&2
-      sleep 3
+      local sp="${spinner[$((i % 10))]}"
+      printf "\rC-thru: [%s] %s Warming up (waiting for memory residency)..." "$model" "$sp" >&2
+      sleep 0.6
       i=$((i + 1))
-      ps_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama ps 2>/dev/null || echo "")
-      if echo "$ps_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
-        printf "\rc-thru: [%s] ready                                          \n" "$model" >&2
-        return 0
+      # Probe less frequently to avoid flooding Ollama
+      if (( i % 5 == 0 )); then
+        ps_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama ps 2>/dev/null || echo "")
+        if echo "$ps_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
+          printf "\rC-thru: [%s] Ready                                          \n" "$model" >&2
+          return 0
+        fi
       fi
     done
-    printf "\rc-thru: [%s] warming timeout — proceeding anyway              \n" "$model" >&2
+    printf "\rC-thru: [%s] Warming timeout — proceeding anyway              \n" "$model" >&2
   fi
 }
 
@@ -2857,7 +2886,7 @@ while [[ $i -lt $n ]]; do
     --route)
       i=$((i + 1))
       if [[ $i -ge $n ]]; then
-        echo "c-thru: --route requires a route name" >&2
+        echo "C-thru: --route requires a route name" >&2
         exit 1
       fi
       route_name="${ORIG_ARGS[i]}"
@@ -2870,7 +2899,7 @@ while [[ $i -lt $n ]]; do
     --model)
       i=$((i + 1))
       if [[ $i -ge $n ]]; then
-        echo "c-thru: --model requires a value" >&2
+        echo "C-thru: --model requires a value" >&2
         exit 1
       fi
       explicit_model="${ORIG_ARGS[i]}"
@@ -2883,7 +2912,7 @@ while [[ $i -lt $n ]]; do
     --mode)
       i=$((i + 1))
       if [[ $i -ge $n ]]; then
-        echo "c-thru: --mode requires a value (connected|offline|local-only|semi-offload|cloud-judge-only|cloud-thinking|local-review|cloud-best-quality|local-best-quality|cloud-only|claude-only|opensource-only|fastest-possible|smallest-possible|best-opensource)" >&2
+        echo "C-thru: --mode requires a value (connected|offline|local-only|semi-offload|cloud-judge-only|cloud-thinking|local-review|cloud-best-quality|local-best-quality|cloud-only|claude-only|opensource-only|fastest-possible|smallest-possible|best-opensource)" >&2
         exit 1
       fi
       export CLAUDE_LLM_MODE="${ORIG_ARGS[i]}"
@@ -2896,7 +2925,7 @@ while [[ $i -lt $n ]]; do
     --profile)
       i=$((i + 1))
       if [[ $i -ge $n ]]; then
-        echo "c-thru: --profile requires a tier (16gb|32gb|48gb|64gb|128gb)" >&2
+        echo "C-thru: --profile requires a tier (16gb|32gb|48gb|64gb|128gb)" >&2
         exit 1
       fi
       export CLAUDE_LLM_PROFILE="${ORIG_ARGS[i]}"
@@ -2949,7 +2978,7 @@ while [[ $i -lt $n ]]; do
     --memory-gb)
       i=$((i + 1))
       if [[ $i -ge $n ]] || ! [[ "${ORIG_ARGS[i]}" =~ ^[0-9]+$ ]]; then
-        echo "c-thru: --memory-gb requires a positive integer (got '${ORIG_ARGS[i]:-}')" >&2
+        echo "C-thru: --memory-gb requires a positive integer (got '${ORIG_ARGS[i]:-}')" >&2
         exit 1
       fi
       export CLAUDE_LLM_MEMORY_GB="${ORIG_ARGS[i]}"
@@ -2971,16 +3000,16 @@ if [[ -n "$explicit_model" ]]; then
   MODEL="$explicit_model"
 elif [[ -n "$route_name" ]]; then
   if [[ ! -f "$CONFIG" ]]; then
-    echo "c-thru: $CONFIG not found (required for --route)" >&2
+    echo "C-thru: $CONFIG not found (required for --route)" >&2
     exit 1
   fi
   if ! jq -e '.routes | type == "object"' "$CONFIG" >/dev/null 2>&1; then
-    echo "c-thru: model-map.json requires a 'routes' block for --route" >&2
+    echo "C-thru: model-map.json requires a 'routes' block for --route" >&2
     exit 1
   fi
   if ! jq -e --arg k "$route_name" '.routes | has($k)' "$CONFIG" >/dev/null 2>&1; then
-    echo "c-thru: route '$route_name' not found or invalid in $CONFIG" >&2
-    echo "c-thru: available routes: $(jq -r '.routes // {} | keys[]' "$CONFIG" 2>/dev/null | tr '\n' ' ')" >&2
+    echo "C-thru: route '$route_name' not found or invalid in $CONFIG" >&2
+    echo "C-thru: available routes: $(jq -r '.routes // {} | keys[]' "$CONFIG" 2>/dev/null | tr '\n' ' ')" >&2
     exit 1
   fi
   _resolved="$(resolve_routes_graph "$route_name")" || exit 1
@@ -3100,7 +3129,7 @@ if [[ -n "$TARGET_BACKEND_ID" ]]; then
   BACKEND_ID="$TARGET_BACKEND_ID"
   BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
-    echo "c-thru: backend '$BACKEND_ID' not defined for target '$EFFECTIVE_MODEL' in $CONFIG" >&2
+    echo "C-thru: backend '$BACKEND_ID' not defined for target '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
   fi
   if [[ "$TARGET_FORCE_PROXY" == "1" ]]; then
@@ -3117,7 +3146,7 @@ elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE
   # 1b) New schema: .model_routes[$EFFECTIVE_MODEL] → .backends[$id]
   BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
-    echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
+    echo "C-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
   fi
   apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
@@ -3125,7 +3154,7 @@ elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE
 elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID="$(lookup_model_pattern_value "model_routes" "$EFFECTIVE_MODEL")" && [[ -n "$BACKEND_ID" ]]; then
   BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
-    echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
+    echo "C-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
   fi
   apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
@@ -3133,7 +3162,7 @@ elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID="$(lookup_model_pattern_val
 elif [[ "$EFFECTIVE_MODEL" == claude-* ]] && [[ -f "$CONFIG" ]] && BACKEND_ID="$(pick_anthropic_backend_id)" && [[ -n "$BACKEND_ID" ]]; then
   BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
-    echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
+    echo "C-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
   fi
   apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
@@ -3146,7 +3175,7 @@ elif curl -sf --max-time 3 "$OLLAMA_HTTP_BASE/api/tags" 2>/dev/null | jq -e --ar
   [[ "$OLLAMA_PREP_SWEEP_STARTED" != "1" ]] && run_background_ollama_prep_sweep "$EFFECTIVE_MODEL" "$(ollama_cli_host "$OLLAMA_HTTP_BASE")" "${OLLAMA_API_KEY:-}"
 else
   # 3) Unknown to model-map and not in tag list — still assume Ollama; pass model name through
-  echo "c-thru: '$EFFECTIVE_MODEL' not in model-map or local Ollama tags — assuming Ollama at $OLLAMA_HTTP_BASE" >&2
+  echo "C-thru: '$EFFECTIVE_MODEL' not in model-map or local Ollama tags — assuming Ollama at $OLLAMA_HTTP_BASE" >&2
   ensure_proxy_http_base || exit 1
   apply_ollama_client_block "$ENSURED_PROXY_HTTP_BASE" "" "{}"
   ensure_ollama_running "$EFFECTIVE_MODEL" "$OLLAMA_HTTP_BASE" "${OLLAMA_API_KEY:-}"

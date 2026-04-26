@@ -69,3 +69,4 @@ Implement a `curl` test (or equivalent) in `c-thru` immediately after proxy star
 
 **[ux] Advanced startup feedback (fancier spinner)**
 Implement a more sophisticated spinner and dynamic status updates during the "warming up" phase in `c-thru`. Ensure the user is kept informed of specific progress markers while waiting.
+- [x] Use fancy Braille spinner `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` for Ollama warming.
