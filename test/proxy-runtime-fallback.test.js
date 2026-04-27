@@ -297,6 +297,169 @@ async function main() {
       }
     }
 
+    // ── Test 10: cooldown skip — second request transparently bypasses recently-failed intermediate ─
+    console.log('\n10. cooldown: 2nd request skips a recently-failed intermediate node');
+    {
+      // Chain A→B→C. B will fail on FIRST request; cooldown marks B.
+      // Second request should walk A→(B-skipped)→C without hitting B at all.
+      const A = await stubBackend({ failWith: 500 });
+      const B = await stubBackend({ failWith: 500 });
+      const C = await ollamaStubBackend(HEALTHY_OLLAMA_NDJSON);
+      try {
+        const cfg = {
+          backends: {
+            A_be: { kind: 'anthropic', url: `http://127.0.0.1:${A.port}`, fallback_to: 'B-target' },
+            B_be: { kind: 'anthropic', url: `http://127.0.0.1:${B.port}`, fallback_to: 'C-target' },
+            C_be: { kind: 'ollama', url: `http://127.0.0.1:${C.port}` },
+          },
+          model_routes: { 'A-model': 'A_be', 'B-target': 'B_be', 'C-target': 'C_be' },
+          llm_profiles: { '128gb': { workhorse: { connected_model: 'A-model', disconnect_model: 'A-model' } } },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          // First request: walks A → B (fails, cooldown marked) → C (serves)
+          const r1 = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'A-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r1.status, 200, 'first request: chain works (200)');
+          assertEq(A.requests.length, 1, 'first req: A tried 1x');
+          assertEq(B.requests.length, 1, 'first req: B tried 1x');
+          assertEq(C.requests.length, 1, 'first req: C served 1x');
+
+          // Second request: B should be in cooldown, walked-around.
+          // Counts after: A=2, B=1 (NOT 2 — skipped), C=2.
+          const r2 = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'A-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r2.status, 200, 'second request: chain still serves (200)');
+          assertEq(A.requests.length, 2, 'second req: A tried 1x more (still in chain)');
+          assertEq(B.requests.length, 1, 'second req: B SKIPPED via cooldown (still 1, not 2)');
+          assertEq(C.requests.length, 2, 'second req: C served 1x more');
+        });
+      } finally {
+        await A.close().catch(() => {});
+        await B.close().catch(() => {});
+        await C.close().catch(() => {});
+      }
+    }
+
+    // ── Test 11: terminal exemption — terminal in chain never enters cooldown ─
+    console.log('\n11. terminal node never cooldowns even when it just failed');
+    {
+      // A→B (terminal, no fallback_to). A fails, B fails. Terminal B must
+      // be retried on subsequent requests despite failing — otherwise we'd
+      // be stuck with no targets to serve.
+      const A = await stubBackend({ failWith: 500 });
+      const B = await stubBackend({ failWith: 500 });
+      try {
+        const cfg = {
+          backends: {
+            A_be: { kind: 'anthropic', url: `http://127.0.0.1:${A.port}`, fallback_to: 'B-target' },
+            B_be: { kind: 'anthropic', url: `http://127.0.0.1:${B.port}` },  // no fallback_to
+          },
+          model_routes: { 'A-model': 'A_be', 'B-target': 'B_be' },
+          llm_profiles: { '128gb': { workhorse: { connected_model: 'A-model', disconnect_model: 'A-model' } } },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          // First request: A fails → B fails → no more targets, original error surfaces.
+          await httpJson(port, 'POST', '/v1/messages', {
+            model: 'A-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(B.requests.length, 1, 'first req: B (terminal) hit 1x');
+
+          // Second request: even though B just failed, since it's terminal it
+          // MUST be retried. If we cooldowned B, the second req would have
+          // nowhere to route and would fail without ever trying B.
+          await httpJson(port, 'POST', '/v1/messages', {
+            model: 'A-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(B.requests.length, 2, 'second req: B (terminal) RETRIED despite recent failure');
+        });
+      } finally {
+        await A.close().catch(() => {});
+        await B.close().catch(() => {});
+      }
+    }
+
+    // ── Test 12: global default — request with NO fallback_to still gets retry ─
+    console.log('\n12. routes.default catches requests with no per-backend fallback chain');
+    {
+      // Primary has no fallback_to. routes.default points at a healthy backend.
+      // Verifies the tier-3 global-default last-resort fires when tier-1
+      // (per-backend) chain is empty.
+      const primary = await stubBackend({ failWith: 500 });
+      const defaultBackend = await ollamaStubBackend(HEALTHY_OLLAMA_NDJSON);
+      try {
+        const cfg = {
+          backends: {
+            primary_be: { kind: 'anthropic', url: `http://127.0.0.1:${primary.port}` },  // no fallback_to
+            default_be: { kind: 'ollama', url: `http://127.0.0.1:${defaultBackend.port}` },
+          },
+          routes: { default: 'default-target' },
+          model_routes: { 'primary-model': 'primary_be', 'default-target': 'default_be' },
+          llm_profiles: { '128gb': { workhorse: { connected_model: 'primary-model', disconnect_model: 'primary-model' } } },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'primary-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r.status, 200, 'global-default fired, served via routes.default backend');
+          assertEq(primary.requests.length, 1, 'primary tried');
+          assertEq(defaultBackend.requests.length, 1, 'global default served');
+          assert(r.json.content && r.json.content.some(b => b.text === 'fallback-served'),
+            `served by default backend (got: ${JSON.stringify(r.json.content)})`);
+        });
+      } finally {
+        await primary.close().catch(() => {});
+        await defaultBackend.close().catch(() => {});
+      }
+    }
+
+    // ── Test 13: /c-thru/status surfaces cooldown_backends + default_route ──
+    console.log('\n13. /c-thru/status reports cooldown state and default_route');
+    {
+      const A = await stubBackend({ failWith: 500 });
+      const C = await ollamaStubBackend(HEALTHY_OLLAMA_NDJSON);
+      try {
+        const cfg = {
+          backends: {
+            A_be: { kind: 'anthropic', url: `http://127.0.0.1:${A.port}`, fallback_to: 'C-target' },
+            C_be: { kind: 'ollama', url: `http://127.0.0.1:${C.port}` },
+          },
+          routes: { default: 'C-target' },
+          model_routes: { 'A-model': 'A_be', 'C-target': 'C_be' },
+          llm_profiles: { '128gb': { workhorse: { connected_model: 'A-model', disconnect_model: 'A-model' } } },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          // Trigger A's failure so it enters cooldown
+          await httpJson(port, 'POST', '/v1/messages', {
+            model: 'A-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          // Now check /c-thru/status
+          const status = await httpJson(port, 'GET', '/c-thru/status', null);
+          assertEq(status.status, 200, 'status endpoint OK');
+          assertEq(status.json.default_route, 'C-target', 'default_route surfaced');
+          assert(Array.isArray(status.json.cooldown_backends), 'cooldown_backends is an array');
+          const aCooldown = status.json.cooldown_backends.find(c => c.backend === 'A_be');
+          assert(aCooldown, `A_be in cooldown list (got: ${JSON.stringify(status.json.cooldown_backends)})`);
+          assert(aCooldown.expires_in_ms > 0 && aCooldown.expires_in_ms <= 60000,
+            `cooldown expires within 60s (got ${aCooldown.expires_in_ms}ms)`);
+        });
+      } finally {
+        await A.close().catch(() => {});
+        await C.close().catch(() => {});
+      }
+    }
+
     // ── Test 6: fallback_to with self-loop is broken by cycle detection ─────
     // resolveBackend has an `_seen` Set that detects cycles in route chains.
     // Construct: model_routes points at a "cloud" backend that fallback_to's

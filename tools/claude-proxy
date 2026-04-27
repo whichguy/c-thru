@@ -95,13 +95,53 @@ const OLLAMA_KEEP_ALIVE = process.env.CLAUDE_PROXY_OLLAMA_KEEP_ALIVE || '60m';
 // stall watchdog (STREAM_STALL_HARDFAIL_MS) takes over for mid-stream
 // idleness.
 const OLLAMA_TTFT_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_TTFT_MS', 11000);
-// Maximum fallback chain depth. A → B → C → D is the default (3 hops);
-// beyond that we assume the chain is malformed or the user has built a
-// graph too deep to be useful. Tunable for power users with longer chains.
+// Maximum fallback chain depth. Default 20 — long chains are legitimate
+// when users compose redundancy across many providers (anthropic →
+// openrouter → bedrock → glm-cloud → local-large → local-small → ...).
 // Acts in concert with the per-backend cycle detection (visited Set) —
 // the depth cap is a belt-and-suspenders safety net, the cycle Set is
 // the primary loop-prevention mechanism.
-const MAX_FALLBACK_HOPS = numberFromEnv('CLAUDE_PROXY_MAX_FALLBACK_HOPS', 3);
+const MAX_FALLBACK_HOPS = numberFromEnv('CLAUDE_PROXY_MAX_FALLBACK_HOPS', 20);
+
+// Backend-failure cooldown cache. When a backend fails AND has a
+// `fallback_to`, we record it here with a TTL so subsequent requests
+// transparently skip past it instead of paying the TTFT × 20 cost again.
+// CRITICAL invariants:
+//  1. Terminal nodes (no `fallback_to`) NEVER enter cooldown. Otherwise
+//     a chain whose terminal cooldowns has nowhere left to route, which
+//     is worse than no fallback at all.
+//  2. The global default (`routes.default`) is a system-wide last-resort
+//     and also never enters cooldown.
+//  3. On a successful request through a backend, its cooldown entry is
+//     cleared (it's healthy again).
+//  4. Map size is bounded — capped at 100 entries with FIFO eviction
+//     so a misbehaving config can't grow it unbounded.
+const FAILED_BACKEND_TTL_MS = numberFromEnv('CLAUDE_PROXY_FAILED_BACKEND_TTL_MS', 60000);
+const FAILED_BACKEND_CACHE_MAX = 100;
+const failedBackendUntil = new Map();  // backend.id → timestamp_ms_to_skip_until
+function isInCooldown(backendId) {
+  if (!failedBackendUntil.has(backendId)) return false;
+  const until = failedBackendUntil.get(backendId);
+  if (Date.now() >= until) {
+    failedBackendUntil.delete(backendId);
+    return false;
+  }
+  return true;
+}
+function markBackendFailed(backendId, hasFallback) {
+  // Don't cooldown terminals — they're the last resort within a chain.
+  if (!hasFallback) return;
+  // FIFO cap: when full, evict the oldest entry so new failures still
+  // get tracked. Realistic configs have <10 backends so 100 is way headroom.
+  if (failedBackendUntil.size >= FAILED_BACKEND_CACHE_MAX) {
+    const oldest = failedBackendUntil.keys().next().value;
+    if (oldest !== undefined) failedBackendUntil.delete(oldest);
+  }
+  failedBackendUntil.set(backendId, Date.now() + FAILED_BACKEND_TTL_MS);
+}
+function clearBackendCooldown(backendId) {
+  failedBackendUntil.delete(backendId);
+}
 
 let GLOBAL_CONFIG;
 let CONFIG_PATH;
@@ -524,61 +564,108 @@ function scrubCthruHeaders(headers) {
 // routing logic (sigil parse, mode-conditional routes, capability aliases)
 // applies. Cycle detection comes from resolveBackend's _seen Set.
 async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, failure) {
-  const fallback = backend.fallback_to;
-  if (!fallback || res.headersSent) return false;
+  if (res.headersSent) return false;
 
-  // Cycle detection across fallback hops. resolveBackend has its own _seen
-  // Set for route-chain cycles, but that's a fresh Set per call. Fallback
-  // hops are SEPARATE invocations of the dispatch chain and need their own
-  // visited tracker. Without this, a config like
-  //   backend A → fallback_to: model-routed-to-A
-  // would loop forever.
+  // Cycle / depth tracking across fallback hops. resolveBackend has its own
+  // _seen Set for route-chain cycles within a single resolution; this Set
+  // tracks across DISPATCH hops (separate invocations of forwardOllama /
+  // forwardAnthropic).
   const chain = requestMeta._fallbackChain || (requestMeta._fallbackChain = new Set());
   if (chain.has(backend.id)) {
     ctxLog(ctx, 'fallback.cycle_detected', { from_backend: backend.id, chain: [...chain] });
-    return false;
+    return tryGlobalDefaultFallback(ctx, req, res, body, requestMeta);
   }
-  // Belt-and-suspenders depth cap. Default 3 hops; tunable via
-  // CLAUDE_PROXY_MAX_FALLBACK_HOPS. The cycle-detection Set (above) is
-  // the primary loop-prevention mechanism; this cap catches malformed
-  // chains that aren't strictly cyclic but go pathologically deep.
   if (chain.size >= MAX_FALLBACK_HOPS) {
     ctxLog(ctx, 'fallback.depth_exceeded', { chain: [...chain], cap: MAX_FALLBACK_HOPS });
-    return false;
+    return tryGlobalDefaultFallback(ctx, req, res, body, requestMeta);
   }
   chain.add(backend.id);
 
-  ctxLog(ctx, 'fallback.triggered', {
-    from_backend: backend.id,
-    to: fallback,
-    reason: failure.reason,
-    upstream_status: failure.statusCode,
-    upstream_error: failure.error,
-    chain_depth: chain.size,
-  });
-  const cfg = CONFIG;
-  const resolved = resolveBackend(fallback, cfg, requestMeta.hwTier, requestMeta.activeMode);
+  // Walk the per-backend chain, transparently skipping cooldowned
+  // intermediate nodes. Terminal nodes (no fallback_to) always get tried,
+  // even if recently failed.
+  let cursor = backend;
+  let hopsWalked = 0;
+  while (cursor.fallback_to && hopsWalked < MAX_FALLBACK_HOPS) {
+    const resolved = resolveBackend(cursor.fallback_to, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
+    if (resolved.error) {
+      ctxLog(ctx, 'fallback.resolve_failed', { fallback: cursor.fallback_to, error: resolved.error });
+      break;
+    }
+    // Cycle protection: don't loop back into anything in the chain.
+    if (chain.has(resolved.backend.id)) {
+      ctxLog(ctx, 'fallback.cycle_detected', { resolved_backend: resolved.backend.id, chain: [...chain] });
+      break;
+    }
+    // Cooldown: if this candidate is in cooldown AND has its own fallback_to,
+    // skip it transparently — descend into ITS fallback. Terminal nodes
+    // (no fallback_to) get tried even when in cooldown.
+    if (resolved.backend.fallback_to && isInCooldown(resolved.backend.id)) {
+      ctxLog(ctx, 'fallback.skip_cooldown', {
+        backend: resolved.backend.id,
+        descend_to: resolved.backend.fallback_to,
+      });
+      chain.add(resolved.backend.id);
+      cursor = resolved.backend;
+      hopsWalked++;
+      continue;
+    }
+    // We've found a candidate to dispatch. Do NOT add resolved.backend.id
+    // to the chain here — the dispatched target's own re-entry into
+    // tryFallbackOrFail (when it fails) will add itself via the entry
+    // chain.add(backend.id) at the top of this function. Adding here
+    // would make the dispatched backend appear as already-cycled when
+    // its own failure handler runs, short-circuiting its legitimate
+    // fallback chain.
+    ctxLog(ctx, 'fallback.triggered', {
+      from_backend: backend.id,
+      to: resolved.backend.id,
+      effective_model: resolved.effectiveModel,
+      reason: failure.reason,
+      upstream_status: failure.statusCode,
+      upstream_error: failure.error,
+      chain_depth: chain.size + 1,
+      hops_skipped_cooldown: hopsWalked,
+    });
+    body.model = resolved.effectiveModel;
+    if (resolved.backend.kind === 'ollama') {
+      forwardOllama(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
+    } else {
+      forwardAnthropic(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
+    }
+    return true;
+  }
+
+  // Per-backend chain exhausted. Fall through to the global default.
+  return tryGlobalDefaultFallback(ctx, req, res, body, requestMeta);
+}
+
+// Tier-3 last-resort: when every per-backend fallback chain has been
+// exhausted (depth, cycle, all cooldown'd terminals failed), try
+// routes.default. Distinct from the per-backend chain because it applies
+// even when the request had no fallback_to declared anywhere — it's the
+// system-wide safety net. Never enters cooldown itself.
+function tryGlobalDefaultFallback(ctx, req, res, body, requestMeta) {
+  if (res.headersSent) return false;
+  const defaultModel = CONFIG.routes && CONFIG.routes.default;
+  if (!defaultModel) return false;
+  const chain = requestMeta._fallbackChain || (requestMeta._fallbackChain = new Set());
+  const resolved = resolveBackend(defaultModel, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
   if (resolved.error) {
-    ctxLog(ctx, 'fallback.resolve_failed', { fallback, error: resolved.error });
+    ctxLog(ctx, 'fallback.global_default_resolve_failed', { default_model: defaultModel, error: resolved.error });
     return false;
   }
-  // Don't loop into the same backend we just came from, even if route
-  // resolution lands there (e.g. fallback_to is a model name that happens
-  // to map to the same backend through model_routes).
   if (chain.has(resolved.backend.id)) {
-    ctxLog(ctx, 'fallback.cycle_detected', { resolved_backend: resolved.backend.id, chain: [...chain] });
+    ctxLog(ctx, 'fallback.global_default_already_tried', { default_model: defaultModel, backend: resolved.backend.id });
     return false;
   }
-  // Mark the body so the recursive call sees the rewritten target. The body
-  // flows into forwardOllama/forwardAnthropic where `body.model` gets
-  // substituted into the upstream request.
+  ctxLog(ctx, 'fallback.global_default', {
+    default_model: defaultModel,
+    resolved_backend: resolved.backend.id,
+    effective_model: resolved.effectiveModel,
+  });
+  chain.add(resolved.backend.id);
   body.model = resolved.effectiveModel;
-  // Dispatch the fallback. forwardOllama/forwardAnthropic register async
-  // handlers and resolve their own promise immediately after setup — the
-  // actual response delivery is event-driven. We must return TRUE here
-  // (not the function's resolved value, which is undefined), otherwise the
-  // caller's `if (!handled)` fallthrough fires while the dispatched forward
-  // is still in flight, racing two writes to the same `res`.
   if (resolved.backend.kind === 'ollama') {
     forwardOllama(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
   } else {
@@ -622,13 +709,14 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
 
   const up = lib.request(options, upRes => {
     ctxLog(ctx, 'backend_response', { backend: backend.id, statusCode: upRes.statusCode });
-    if (shouldFallbackOnStatus(upRes.statusCode) && backend.fallback_to && !res.headersSent) {
+    if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
       // Buffer the upstream error body for the log, then attempt fallback. If
       // fallback isn't configured or fails to resolve, we fall through to
       // piping the original error to the client.
       let errBody = '';
       upRes.on('data', c => errBody += c.toString());
       upRes.on('end', async () => {
+        markBackendFailed(backend.id, !!backend.fallback_to);
         const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
           reason: `upstream returned ${upRes.statusCode}`,
           statusCode: upRes.statusCode,
@@ -679,6 +767,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
           outputTokens = obj.usage?.output_tokens || 0;
         }
         recordUsage(effectiveModel, backend.id, inputTokens, outputTokens);
+        clearBackendCooldown(backend.id);
       } catch { /* malformed body — skip stats */ }
     });
     upRes.pipe(res);
@@ -689,6 +778,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   });
   up.on('error', async e => {
     ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'anthropic', error: e.message });
+    markBackendFailed(backend.id, !!backend.fallback_to);
     const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
       reason: 'connection error',
       error: e.message,
@@ -765,7 +855,8 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
             message = typeof parsed.error === 'string' ? parsed.error : (parsed.error.message || JSON.stringify(parsed.error));
           }
         } catch {}
-        if (shouldFallbackOnStatus(upRes.statusCode) && backend.fallback_to && !res.headersSent) {
+        if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
+          markBackendFailed(backend.id, !!backend.fallback_to);
           const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
             reason: `upstream returned ${upRes.statusCode}`,
             statusCode: upRes.statusCode,
@@ -988,6 +1079,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
           stop_reason: stopReason,
         });
         recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
+        clearBackendCooldown(backend.id);
         if (res.writable) res.end();
       });
       upRes.on('error', e => {
@@ -1049,6 +1141,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
             stop_reason: stopReason,
           });
           recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
+          clearBackendCooldown(backend.id);
         } catch (e) {
           sendAnthropicError(res, 502, `failed to parse Ollama response: ${e.message}`);
         }
@@ -1091,6 +1184,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
     // forwardAnthropic — re-resolves through the route graph and dispatches
     // through forwardOllama or forwardAnthropic depending on the fallback
     // target's backend kind.
+    markBackendFailed(backend.id, !!backend.fallback_to);
     const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
       reason: 'connection error',
       error: e.message,
@@ -1224,6 +1318,14 @@ const server = http.createServer((req, res) => {
           config_source: CONFIG_SOURCE,
           active_capabilities,
           usage: persistentUsage,
+          // Cooldown state — backends the proxy is currently routing around.
+          // Empty array when all configured backends are healthy.
+          cooldown_backends: [...failedBackendUntil.entries()].map(([id, until]) => ({
+            backend: id,
+            expires_in_ms: Math.max(0, until - Date.now()),
+          })),
+          // Global default-route resolution — ultimate last-resort target.
+          default_route: CONFIG.routes && CONFIG.routes.default ? CONFIG.routes.default : null,
         });
       }
 
