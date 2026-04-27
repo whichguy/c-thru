@@ -218,24 +218,6 @@ strictly as a child of `c-thru`. Verify and document:
 Document the boundary in CLAUDE.md so future contributors don't conflate
 the two.
 
-## Minor / awareness
-
-**[node-guard] Node version warning fires on every re-install**
-Intentional on first install but noisy on idempotent re-runs. No action
-needed unless it becomes a pain point — noting for awareness.
-
-**[debug] Enhance fatal error detection and debug logging**
-Improve error detection for fatal scenarios like the proxy failing to
-start or configuration being missing. Add more granular debug logs
-throughout the startup sequence to aid troubleshooting. (Persistent
-logging shipped in 452a50a but does not cover every startup branch.)
-
-**[proxy] Verify proxy readiness with live check**
-Implement a `curl` test (or equivalent) in `c-thru` immediately after
-proxy startup to verify the listener is actually alive and responding
-before handing control back to the caller. (Adjacent to install e2e
-work in db915b7 but not implemented in the runtime spawn path.)
-
 ## UX / Polish
 
 **[ux] Professionalize messaging across all tools**
