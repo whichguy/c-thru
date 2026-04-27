@@ -459,6 +459,85 @@ cmd_help() {
   echo "  c-thru check-deps             audit system dependencies"
 }
 
+# --- brew_install_sync ---
+# Synchronous, deduplicated `brew install <pkg>` for the check-deps --fix path.
+# - Detects an in-flight `brew install <pkg>` from another c-thru session via
+#   pgrep and waits (capped at 600s) for it to finish instead of racing.
+# - Always runs in the foreground (no `&` / `nohup`) so the caller blocks
+#   through post-install scripts and `brew link`.
+# - Refreshes the bash hash table (`hash -r`) so `command -v <tool>` in the
+#   same shell sees the freshly-installed binary.
+# - Re-verifies via `command -v <verify_cmd>` (defaults to <pkg>) and returns
+#   non-zero with a clear message if anything failed. Soft-fail only — never
+#   trips `set -e` cascades in the caller.
+#
+# Usage: brew_install_sync <pkg> [verify_cmd]
+brew_install_sync() {
+  local pkg="${1:-}"
+  local verify_cmd="${2:-$pkg}"
+
+  if [[ -z "$pkg" ]]; then
+    echo -e "  ${RED}   ❌ brew_install_sync: missing package name${NC}" >&2
+    return 2
+  fi
+
+  if ! command -v brew >/dev/null 2>&1; then
+    echo -e "  ${RED}   ❌ brew not found — cannot install '$pkg'${NC}" >&2
+    return 2
+  fi
+
+  # Concurrent-pull dedup: if another c-thru session already has a
+  # `brew install <pkg>` in flight (cmdline ends with " brew install <pkg>"),
+  # wait for it instead of starting a duplicate. Cap the wait at 600s so a
+  # genuinely stuck brew can't pin us forever.
+  local waited=0
+  local cap=600
+  while pgrep -af "brew install " 2>/dev/null \
+        | awk '{$1=""; sub(/^ /,""); print}' \
+        | grep -Fxq "brew install $pkg"; do
+    if (( waited == 0 )); then
+      echo -e "  ${YELLOW}   Detected in-flight 'brew install $pkg' from another session — waiting...${NC}"
+    fi
+    sleep 1
+    waited=$((waited + 1))
+    if (( waited >= cap )); then
+      echo -e "  ${RED}   ❌ Timed out after ${cap}s waiting for concurrent 'brew install $pkg'${NC}" >&2
+      return 1
+    fi
+  done
+
+  # If the concurrent install just finished and the binary is now present,
+  # short-circuit — no need to re-install.
+  hash -r 2>/dev/null || true
+  if command -v "$verify_cmd" >/dev/null 2>&1; then
+    if (( waited > 0 )); then
+      echo -e "  ${GREEN}   ✅ '$pkg' became available after concurrent install (${waited}s)${NC}"
+    fi
+    return 0
+  fi
+
+  # Foreground, single-package install. No `&`, no `nohup` — caller blocks
+  # through post-install scripts and any `brew link` step.
+  if brew install "$pkg" >/dev/null 2>&1; then
+    # Refresh the shell's PATH cache so command -v sees the new binary in
+    # the same process. `hash -r` failures are non-fatal — fall through to
+    # the verify step which is what actually gates success.
+    hash -r 2>/dev/null || true
+    if command -v "$verify_cmd" >/dev/null 2>&1; then
+      echo -e "  ${GREEN}   ✅ $pkg installed${NC}"
+      return 0
+    fi
+    echo -e "  ${RED}   ❌ brew install $pkg reported success but '$verify_cmd' is still not on PATH${NC}" >&2
+    echo -e "  ${YELLOW}      Try opening a new shell, or run: hash -r; command -v $verify_cmd${NC}" >&2
+    return 1
+  fi
+
+  echo -e "  ${RED}   ❌ brew install $pkg failed${NC}" >&2
+  echo -e "  ${YELLOW}      Suggestion: check 'brew doctor', verify network/permissions, then retry manually:${NC}" >&2
+  echo -e "  ${YELLOW}      brew install $pkg${NC}" >&2
+  return 1
+}
+
 # --- check-deps subcommand ---
 # Defined here — before the config-sync/startup block — so that
 # 'c-thru check-deps' works in broken environments where config validation fails.
@@ -503,8 +582,7 @@ cmd_check_deps() {
     echo -e "  ${YELLOW}⚠️  jq — not found (some install/hook steps fall back to node)${NC}"
     if [[ "$fix" -eq 1 ]] && command -v brew >/dev/null 2>&1; then
       echo -e "  ${YELLOW}   Running: brew install jq${NC}"
-      brew install jq >/dev/null 2>&1 && echo -e "  ${GREEN}   ✅ jq installed${NC}" \
-        || echo -e "  ${RED}   ❌ brew install jq failed — install manually${NC}"
+      brew_install_sync "jq" "jq" || true
     elif command -v brew >/dev/null 2>&1; then
       echo -e "  ${YELLOW}   Fix: brew install jq  (or: apt install jq)  [or rerun with --fix]${NC}"
     else
@@ -550,8 +628,7 @@ cmd_check_deps() {
     echo -e "  ${YELLOW}⚠️  ollama — not found (optional: enables local models)${NC}"
     if [[ "$fix" -eq 1 ]] && command -v brew >/dev/null 2>&1; then
       echo -e "  ${YELLOW}   Running: brew install ollama${NC}"
-      brew install ollama >/dev/null 2>&1 && echo -e "  ${GREEN}   ✅ ollama installed${NC}" \
-        || echo -e "  ${RED}   ❌ brew install ollama failed — install manually from https://ollama.com${NC}"
+      brew_install_sync "ollama" "ollama" || true
     elif command -v brew >/dev/null 2>&1; then
       echo -e "  ${YELLOW}   Fix: brew install ollama  (or https://ollama.com)  [or rerun with --fix]${NC}"
     else
@@ -2505,6 +2582,54 @@ validate_ollama_cloud_auth_for_launch() {
   done <<< "$deduped_lines"
 }
 
+# Wait for a concurrent `ollama pull <model>` (from another c-thru session) to complete.
+# Closes the dedup gap: rather than exiting early when another session is pulling, this
+# blocks until that pull finishes (or times out), then verifies the model is cached.
+# Sets global CONCURRENT_PULL_CACHED=1 if the model is now cached (caller can skip its
+# own pull); =0 if still missing (caller should attempt its own pull) or on timeout.
+# Always returns 0 (best-effort; never blocks routing). Uses `SECONDS` for elapsed time
+# so no external command is needed.
+# Args: $1 = model, $2 = cli_host (logging only), $3 = mode label (logging),
+#       $4 = nameref to ollama_cli_env array, $5 = nameref to timeout_cmd array,
+#       $6 = optional max_wait_seconds (default 600 = 10 min for large models)
+wait_for_concurrent_pull() {
+  local model="$1"
+  local cli_host="$2"
+  local mode="$3"
+  local -n _wait_env_ref="$4"
+  local -n _wait_to_ref="$5"
+  local max_wait="${6:-600}"
+  CONCURRENT_PULL_CACHED=0
+
+  claude_router_debug_event "ollama prep pull wait mode=$mode model=$model host=$cli_host reason=concurrent_pull"
+  local wait_start=$SECONDS
+  while pgrep -af 'ollama pull ' 2>/dev/null | awk '{$1=""; sub(/^ /,""); print}' | grep -Fxq "ollama pull $model"; do
+    sleep 2
+    if (( SECONDS - wait_start > max_wait )); then
+      echo "c-thru: timed out waiting (${max_wait}s) for concurrent pull of '$model' — proceeding best-effort" >&2
+      claude_router_debug_event "ollama prep pull wait_timeout mode=$mode model=$model host=$cli_host elapsed=$((SECONDS - wait_start))"
+      return 0
+    fi
+  done
+
+  # Concurrent pull finished; verify the model is now cached. The other session may have
+  # failed (network/disk), in which case we leave CONCURRENT_PULL_CACHED=0 and let the
+  # caller retry with its own pull.
+  local _post_list
+  _post_list=$("${_wait_env_ref[@]}" "${_wait_to_ref[@]}" ollama list 2>/dev/null) || {
+    claude_router_debug_event "ollama prep pull wait_done mode=$mode model=$model host=$cli_host list_failed=true"
+    return 0
+  }
+  if echo "$_post_list" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
+    CONCURRENT_PULL_CACHED=1
+    claude_router_debug_event "ollama prep pull wait_done mode=$mode model=$model host=$cli_host concurrent_pull_succeeded=true elapsed=$((SECONDS - wait_start))"
+    return 0
+  fi
+  echo "c-thru: concurrent pull of '$model' did not result in cached model — retrying" >&2
+  claude_router_debug_event "ollama prep pull wait_done mode=$mode model=$model host=$cli_host concurrent_pull_succeeded=false elapsed=$((SECONDS - wait_start))"
+  return 0
+}
+
 # Ensure target Ollama model is loaded on the given host; warm it in a subprocess if not.
 # Three-state probe: unreachable → skip with hint; loaded → skip; cached-not-loaded → warm.
 # Avoids silent model pulls: if the model isn't cached on the target host, prints a pull
@@ -2612,50 +2737,85 @@ ensure_ollama_running() {
     # Use `pgrep -af` to list full command lines, then `grep -Fx` for an exact-line
     # match against "ollama pull <model>". This avoids false positives where another
     # process's argv happens to contain the model name as a substring.
+    local _need_own_pull=1
     if pgrep -af 'ollama pull ' 2>/dev/null | awk '{$1=""; sub(/^ /,""); print}' | grep -Fxq "ollama pull $model"; then
-      claude_router_debug_event "ollama prep pull skip mode=$mode model=$model host=$cli_host reason=already_pulling"
-      return 0
+      # Don't exit early — wait for the in-flight pull and verify the model lands cached.
+      wait_for_concurrent_pull "$model" "$cli_host" "$mode" ollama_cli_env timeout_cmd 600
+      if [[ "${CONCURRENT_PULL_CACHED:-0}" == "1" ]]; then
+        ollama_prep_state_update "models" "$state_key" "pull_success" "cached"
+        list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null) || list_output=""
+        age_text="$(ollama_extract_age_text "$model" "$list_output" || true)"
+        _need_own_pull=0
+      fi
+      # Otherwise the concurrent pull failed or timed out — fall through to our own pull.
     fi
-    echo "c-thru: '$model' not cached on $cli_host — pulling now..." >&2
-    ollama_prep_state_update "models" "$state_key" "pull_attempt" "pulling"
-    claude_router_debug_event "ollama prep pull start mode=$mode model=$model host=$cli_host reason=missing"
-    if ! "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
-      echo "c-thru: failed to pull '$model' from $cli_host" >&2
-      ollama_prep_state_update "models" "$state_key" "pull_failure" "pull_failed"
-      claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=false"
-      return 0
+    if (( _need_own_pull )); then
+      echo "c-thru: '$model' not cached on $cli_host — pulling now..." >&2
+      ollama_prep_state_update "models" "$state_key" "pull_attempt" "pulling"
+      claude_router_debug_event "ollama prep pull start mode=$mode model=$model host=$cli_host reason=missing"
+      if ! "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
+        echo "c-thru: failed to pull '$model' from $cli_host — try \`ollama pull $model\` manually (check network / disk space)" >&2
+        ollama_prep_state_update "models" "$state_key" "pull_failure" "pull_failed"
+        claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=false"
+        return 0
+      fi
+      # Verify-after-pull: confirm the model is actually cached now. CLI exit 0 with
+      # missing-from-list has been observed on flaky networks / partial downloads.
+      list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null) || {
+        claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true list_after_failed=true"
+        return 0
+      }
+      if ! echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
+        echo "c-thru: '$model' is still unavailable on $cli_host after pull — try \`ollama pull $model\` manually" >&2
+        ollama_prep_state_update "models" "$state_key" "pull_failure" "pull_silent_failure"
+        claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host cached=false after_pull=true"
+        return 0
+      fi
+      ollama_prep_state_update "models" "$state_key" "pull_success" "cached"
+      "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
+      claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true verified=true"
+      age_text="$(ollama_extract_age_text "$model" "$list_output" || true)"
     fi
-    ollama_prep_state_update "models" "$state_key" "pull_success" "cached"
-    "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
-    claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true"
-    list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null) || return 0
-    if ! echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
-      echo "c-thru: '$model' is still unavailable on $cli_host after pull" >&2
-      claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host cached=false after_pull=true"
-      return 0
-    fi
-    age_text="$(ollama_extract_age_text "$model" "$list_output" || true)"
   else
     ollama_prep_state_update "models" "$state_key" "cached" "cached" "$age_text"
   fi
 
   if [[ "$mode" == "sweep" ]] && ollama_refresh_age_is_stale "$age_text" && \
      ollama_prep_retry_allowed "models" "$state_key" "last_pull_attempt_at" "$OLLAMA_PREP_MIN_RETRY_SECONDS"; then
+    local _refresh_skip=0
     if pgrep -af 'ollama pull ' 2>/dev/null | awk '{$1=""; sub(/^ /,""); print}' | grep -Fxq "ollama pull $model"; then
-      claude_router_debug_event "ollama stale refresh skip model=$model host=$cli_host reason=already_pulling"
-    else
-    ollama_prep_state_update "models" "$state_key" "pull_attempt" "refreshing" "$age_text"
-    claude_router_debug_event "ollama stale refresh start model=$model host=$cli_host age=\"$age_text\""
-    if "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
-      ollama_prep_state_update "models" "$state_key" "pull_success" "refreshed" "$age_text"
-      "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
-      claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=true"
-      list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null || true)
-    else
-      ollama_prep_state_update "models" "$state_key" "pull_failure" "refresh_failed" "$age_text"
-      claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=false"
+      # A concurrent pull is already refreshing the model — wait for it instead of
+      # exiting silently. On success the refresh is effectively done; on failure we
+      # skip our own retry (sweep is best-effort, not blocking the active path).
+      wait_for_concurrent_pull "$model" "$cli_host" "$mode" ollama_cli_env timeout_cmd 600
+      if [[ "${CONCURRENT_PULL_CACHED:-0}" == "1" ]]; then
+        ollama_prep_state_update "models" "$state_key" "pull_success" "refreshed" "$age_text"
+        list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null || true)
+        claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=true via=concurrent_wait"
+      else
+        claude_router_debug_event "ollama stale refresh skip model=$model host=$cli_host reason=concurrent_pull_unverified"
+      fi
+      _refresh_skip=1
     fi
-    fi  # end: not already_pulling
+    if (( ! _refresh_skip )); then
+      ollama_prep_state_update "models" "$state_key" "pull_attempt" "refreshing" "$age_text"
+      claude_router_debug_event "ollama stale refresh start model=$model host=$cli_host age=\"$age_text\""
+      if "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
+        # Verify-after-pull on the refresh path too.
+        list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null || true)
+        if echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
+          ollama_prep_state_update "models" "$state_key" "pull_success" "refreshed" "$age_text"
+          "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
+          claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=true verified=true"
+        else
+          ollama_prep_state_update "models" "$state_key" "pull_failure" "refresh_silent_failure" "$age_text"
+          claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=false reason=not_in_list"
+        fi
+      else
+        ollama_prep_state_update "models" "$state_key" "pull_failure" "refresh_failed" "$age_text"
+        claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=false"
+      fi
+    fi
   fi
 
   if [[ -n "$warm_skip_reason" ]]; then
