@@ -133,6 +133,11 @@ function maybeSyncLayeredProfileModelMap(options = {}) {
   return Object.assign({ projectOverlayPath, profileEffectivePath, projectPath }, profileResult);
 }
 
+// ARCH: resolveSelectedConfigPath — 3-tier config precedence:
+//   (1) CLAUDE_MODEL_MAP_PATH env override → (2) session-scoped project-overlay (tmp file,
+//   system+global+project merged) → (3) persistent profile (system+global only).
+//   Calls maybeSyncLayeredProfileModelMap first to regenerate derived files so callers
+//   always get a fresh view without needing to manually trigger a sync.
 function resolveSelectedConfigPath(options = {}) {
   const { baseDir = __dirname, cwd = process.env.CLAUDE_MODEL_MAP_LAUNCH_CWD || process.cwd(), syncProfile = true, onSyncFailure = null } = options;
 

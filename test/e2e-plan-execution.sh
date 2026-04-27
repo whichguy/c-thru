@@ -22,8 +22,6 @@ git commit -m "initial commit" -q
 export C_THRU_PLAN_TEST_MODE=1
 export C_THRU_PLAN_STUBS_PATH="$STUBS_PATH"
 export CLAUDE_ROUTER_DEBUG=1
-# Ensure the proxy port doesn't collide if another is running
-export CLAUDE_PROXY_PORT=9997
 
 echo "Executing plan-orchestrator simulation via harness subcommands"
 # Simulate the environment the orchestrator expects

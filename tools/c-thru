@@ -1526,6 +1526,9 @@ router_signal_handler() {
   esac
 }
 
+# ARCH: arm_router_child_cleanup — arms EXIT/signal traps exactly once after the proxy is spawned.
+#   Idempotent because ensure_proxy_running can be called from both the routing path and the
+#   transparent path within the same session; double-arming would overwrite a live trap.
 arm_router_child_cleanup() {
   [[ "$ROUTER_CLEANUP_ARMED" == "1" ]] && return 0
   ROUTER_CLEANUP_ARMED=1
@@ -1594,14 +1597,14 @@ describe_proxy_log_target() {
   printf ' — see %s' "$path"
 }
 
-# ARCH: ensure_proxy_running — idempotent proxy lifecycle guard.
-#   1. If CLAUDE_PROXY_PORT is set (explicit), skip spawn — caller owns the port.
-#   2. Otherwise, acquire per-port flock (or mkdir fallback): only ONE router
-#      wins the lock and spawns; others wait then reuse the winner's proxy.
-#   3. Spawn via FIFO ready-pipe: proxy writes "READY <port>" to stdout (which
-#      is the FIFO), router reads it and records the port. Timeout = 45s.
-#   4. After READY, verify /ping — catches the race where proxy crashes between
-#      printing READY and actually answering HTTP.
+# ARCH: ensure_proxy_running — per-shell proxy spawner (one proxy per c-thru invocation).
+#   1. If CLAUDE_PROXY_PORT is set (explicit path), connect to that port — no spawn.
+#   2. Otherwise, spawn claude-proxy as a foreground child (NOT disowned) so it dies
+#      when this shell exits. The proxy binds on port 0 (OS-assigned).
+#   3. Proxy writes "READY <port>" to a named FIFO (stdout); router blocks reading it
+#      (timeout=45s) and records the port in ROUTER_PROXY_PORT.
+#   4. Verifies /ping after READY — catches the race where the proxy crashes between
+#      printing READY and actually answering HTTP (e.g. config syntax error).
 ensure_proxy_running() {
   [[ "${CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART:-0}" == "1" ]] && return 0
 
@@ -1881,6 +1884,10 @@ ensure_proxy_running() {
   return 0
 }
 
+# ARCH: ensure_proxy_http_base — decides between explicit-port (CLAUDE_PROXY_PORT set) and
+#   dynamic-spawn paths; both call ensure_proxy_running and populate ENSURED_PROXY_HTTP_BASE.
+#   ROUTER_PROXY_PORT is normalized in both branches so write_ephemeral_settings and
+#   system-prompt injection always see the real port regardless of how the proxy was started.
 ensure_proxy_http_base() {
   if proxy_port_is_explicit; then
     local explicit_base=""
@@ -3192,6 +3199,10 @@ run_real_claude() {
   return "$ec"
 }
 
+# ARCH: build_forwarded_args — strips c-thru-private flags (--route, --mode, --profile,
+#   --memory-gb, --bypass-proxy, etc.) from ORIG_ARGS before passing to the real claude
+#   binary; re-injects --model with the resolved concrete model name. This is the ONLY
+#   place where the c-thru flag vocabulary is erased — do not strip flags elsewhere.
 build_forwarded_args() {
   local desired_model="$1"
   local -a forwarded=()

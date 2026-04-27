@@ -236,6 +236,10 @@ function filterFor(mode) {
   return null;
 }
 
+// ARCH: applyModeFilter — Phase 2 provider-filter modes (cloud-only, claude-only, opensource-only)
+//   walk the primary model + fallback chain left-to-right and return the first candidate that
+//   satisfies the policy predicate; returns null if none qualifies (caller surfaces the error).
+//   Non-filter modes return primary unchanged — this function is always safe to call.
 // applyModeFilter — given a primary model and a fallback chain, return the first
 // model satisfying the filter, or null if none. Walks chain left-to-right.
 function applyModeFilter(mode, primary, chain, modelRoutes, backends) {
@@ -279,6 +283,10 @@ function rankableScore(criterion, model, bench, role, minQuality) {
   }
 }
 
+// ARCH: pickBenchmarkBest — Phase 3 benchmark-ranking: scores each candidate against
+//   benchmark.json data for a given role and returns the highest-scoring model.
+//   Tie-breaks (in order): primary score → tokens_per_sec → -ram_gb (smaller first) → alphabetical.
+//   Returns null if no candidate has benchmark data or passes the minimum-quality threshold.
 // pickBenchmarkBest — walk candidate models, rank under criterion, return the best
 // or null if none qualifies. Tiebreaks (in order): primary score, then tokens_per_sec,
 // then -ram_gb (smaller first), then alphabetical (deterministic).
