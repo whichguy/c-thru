@@ -307,14 +307,27 @@ setup_ephemeral_session() {
   # 4. Export the ephemeral config dir for the child process
   export CLAUDE_CONFIG_DIR="$EPHEMERAL_SESSION_DIR"
   export CLAUDE_PROFILE_DIR="$EPHEMERAL_SESSION_DIR"
+  # settings.json is written later by write_ephemeral_settings() once the proxy
+  # port is known (after the READY handshake).
+}
 
-  # __PROXY_PORT__ is a placeholder; replaced with the actual OS-assigned port
-  # by the main flow after ensure_proxy_http_base() succeeds (see line ~3793).
-  local hooks_url="http://127.0.0.1:__PROXY_PORT__/hooks/context"
-  local tools_dest="$ROUTER_SELF_DIR" # Use the dir where this script lives
-  
-  # Claude Code executes hooks via /bin/sh -c "<command>". 
-  # In the repo, they are .sh files. Use the actual files if they exist.
+cleanup_ephemeral_session() {
+  if [[ -n "$EPHEMERAL_SESSION_DIR" && -d "$EPHEMERAL_SESSION_DIR" ]]; then
+    rm -rf "$EPHEMERAL_SESSION_DIR"
+  fi
+}
+
+# Write (or rewrite) the ephemeral settings.json from scratch using the now-known proxy port.
+# Called after the proxy READY handshake so ROUTER_PROXY_PORT is set.
+# No-op in bypass mode (EPHEMERAL_SETTINGS_FILE is empty).
+# If ROUTER_PROXY_PORT is empty (non-Ollama cloud path), writes settings without the
+# SessionStart HTTP hook — command hooks still fire, proxy context injection is skipped.
+write_ephemeral_settings() {
+  [[ -n "${EPHEMERAL_SETTINGS_FILE:-}" ]] || return 0
+  local port="${ROUTER_PROXY_PORT:-}"
+  local tools_dest="$ROUTER_SELF_DIR"
+
+  # Resolve actual path for a tool (checks for .sh suffix too).
   find_tool_path() {
     local base="$1"
     if [[ -x "$tools_dest/$base" ]]; then echo "$tools_dest/$base";
@@ -322,13 +335,14 @@ setup_ephemeral_session() {
     else echo "$tools_dest/$base"; fi
   }
 
-  local session_cmd="$(find_tool_path c-thru-session-start)"
-  local health_cmd="$(find_tool_path c-thru-proxy-health)"
-  local classify_cmd="$(find_tool_path c-thru-classify)"
-  local map_changed_cmd="$(find_tool_path c-thru-map-changed)"
-  local postcompact_cmd="$(find_tool_path c-thru-postcompact-context)"
-  local planner_hint_cmd="$(find_tool_path c-thru-enter-plan-hook)"
-  local mcp_js="$(find_tool_path llm-capabilities-mcp.js)"
+  local session_cmd health_cmd classify_cmd map_changed_cmd postcompact_cmd planner_hint_cmd mcp_js
+  session_cmd="$(find_tool_path c-thru-session-start)"
+  health_cmd="$(find_tool_path c-thru-proxy-health)"
+  classify_cmd="$(find_tool_path c-thru-classify)"
+  map_changed_cmd="$(find_tool_path c-thru-map-changed)"
+  postcompact_cmd="$(find_tool_path c-thru-postcompact-context)"
+  planner_hint_cmd="$(find_tool_path c-thru-enter-plan-hook)"
+  mcp_js="$(find_tool_path llm-capabilities-mcp.js)"
 
   # Hook inventory — every hook registered per session. To add a hook:
   #   1. Create tools/c-thru-<name>.sh with a # ARCH: <Event>/<matcher> header line.
@@ -337,16 +351,17 @@ setup_ephemeral_session() {
   # No persistent writes to ~/.claude/settings.json — all hooks are ephemeral.
   #
   # Event            Matcher         Script                    Purpose
+  # SessionStart     (all)           hooks/context (HTTP)      classify_intent context injection (proxy only)
   # SessionStart     (all)           c-thru-session-start      proxy+Ollama health check
-  # SessionStart     (all)           hooks/context (HTTP)      classify_intent context injection
   # PostCompact      (all)           c-thru-postcompact-context re-inject context after compaction
   # UserPromptSubmit *               c-thru-proxy-health       asyncRewake if proxy down
   # UserPromptSubmit *               c-thru-classify           classify_intent tagging
   # PostToolUse      *               c-thru-map-changed        validate model-map.json on edit
   # PreToolUse       EnterPlanMode   c-thru-enter-plan-hook    advisory hint for /c-thru-plan
 
-  # 1. Generate settings.json with hooks and MCP
-  cat > "$EPHEMERAL_SETTINGS_FILE" <<EOF
+  if [[ -n "$port" ]]; then
+    local hooks_url="http://127.0.0.1:${port}/hooks/context"
+    cat > "$EPHEMERAL_SETTINGS_FILE" <<EOF
 {
   "mcpServers": {
     "llm-capabilities": {
@@ -370,11 +385,32 @@ setup_ephemeral_session() {
   }
 }
 EOF
+  else
+    # No proxy port (non-Ollama cloud path) — omit the SessionStart HTTP hook
+    cat > "$EPHEMERAL_SETTINGS_FILE" <<EOF
+{
+  "mcpServers": {
+    "llm-capabilities": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["$mcp_js"]
+    }
+  },
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "$session_cmd", "timeout": 5}]}],
+    "PostCompact": [{"hooks": [{"type": "command", "command": "$postcompact_cmd", "timeout": 5}]}],
+    "UserPromptSubmit": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "$health_cmd", "timeout": 3, "async": true, "asyncRewake": true}]},
+      {"matcher": "*", "hooks": [{"type": "command", "command": "$classify_cmd", "timeout": 5, "async": true}]}
+    ],
+    "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "$map_changed_cmd", "timeout": 5}]}],
+    "PreToolUse": [{"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
+  },
+  "permissions": {
+    "allow": ["mcp__llm-capabilities__*"]
+  }
 }
-
-cleanup_ephemeral_session() {
-  if [[ -n "$EPHEMERAL_SESSION_DIR" && -d "$EPHEMERAL_SESSION_DIR" ]]; then
-    rm -rf "$EPHEMERAL_SESSION_DIR"
+EOF
   fi
 }
 
@@ -3628,16 +3664,6 @@ elif [[ -n "$route_name" ]]; then
   MODEL="$_resolved"
 fi
 
-# Replace the __PROXY_PORT__ placeholder written by setup_ephemeral_session before
-# the proxy started with the actual OS-assigned port from the READY handshake.
-# Called from both the transparent path and the main routing path.
-finalize_ephemeral_settings_port() {
-  [[ -n "${ROUTER_PROXY_PORT:-}" && -f "${EPHEMERAL_SETTINGS_FILE:-}" ]] || return 0
-  local _tmp
-  _tmp=$(sed "s|__PROXY_PORT__|$ROUTER_PROXY_PORT|g" "$EPHEMERAL_SETTINGS_FILE")
-  printf '%s' "$_tmp" > "$EPHEMERAL_SETTINGS_FILE"
-}
-
 # No explicit/default model: transparent proxy fallback (legacy behavior) + real claude binary.
 if [[ -z "$MODEL" ]]; then
   REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
@@ -3647,7 +3673,7 @@ if [[ -z "$MODEL" ]]; then
     exit $?
   fi
   ensure_proxy_http_base || exit 1
-  finalize_ephemeral_settings_port
+  write_ephemeral_settings
   export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
   if transparent_proxy_can_match_ollama_env; then
     # In this query, we are supposed to have the env variables for ollama as specifically "ollama" for the pwd
@@ -3821,7 +3847,7 @@ fi
 
 claude_router_debug_dump routed
 
-finalize_ephemeral_settings_port
+write_ephemeral_settings
 
 # Router has already set ANTHROPIC_BASE_URL via apply_provider_block().
 FINAL_MODEL_ARG="$EFFECTIVE_MODEL"

@@ -71,10 +71,10 @@ URL injection). Several tests assumed port 9997 or the shared flock/reuse model:
 2. **`proxy-lifecycle.test.js`** — add assertions: (a) proxy binds exclusively to
    `127.0.0.1` (not `0.0.0.0`); (b) two concurrent proxy spawns land on different
    ports; (c) proxy exits when its parent node process exits.
-3. **`install-smoke.test.sh`** — verify the `__PROXY_PORT__` placeholder is present
-   in the generated settings.json before proxy start, and replaced with a real port
-   afterwards (may require a minimal stub proxy that writes `READY <port>` to test
-   the sed-replace path in the router).
+3. **`install-smoke.test.sh`** — verify settings.json is written correctly after the
+   proxy READY handshake (contains the real port, no placeholder). May require a
+   minimal stub proxy that writes `READY <port>` to exercise the write_ephemeral_settings
+   path in the router.
 4. **Mocks in Node tests** — any test that stubs `server.listen` or hard-codes the
    proxy base URL should be updated to handle dynamic ports.
 5. **README test-running section** — verify instructions for running the full test
@@ -186,14 +186,6 @@ pattern that could recur.
    is a sharp edge that should be documented explicitly in CLAUDE.md for
    future contributors who might be tempted to add `exec` for "efficiency".
 
-6. **`__PROXY_PORT__` sed-replacement fragility.**
-   The placeholder in ephemeral settings.json is replaced with `sed` after
-   proxy start. This is brittle if the settings schema evolves (e.g., if
-   the port appears in more than one JSON field, or if a path or URL
-   accidentally contains the placeholder string). A more robust approach
-   would regenerate the settings.json entirely after proxy start using
-   a dedicated `write_ephemeral_settings $port` function rather than
-   in-place sed substitution.
 
 **[learning] Reusable patterns from session work (from senior-eng review)**
 
