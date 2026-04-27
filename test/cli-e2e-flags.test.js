@@ -75,6 +75,7 @@ function runCthru(args, configOverrides = {}) {
 
   const result = spawnSync(CTHRU, args, {
     encoding: 'utf8',
+    timeout: 15000,
     env: {
       ...process.env,
       HOME: homeDir,
@@ -86,6 +87,7 @@ function runCthru(args, configOverrides = {}) {
       CLAUDE_PROXY_STARTUP_PROBE: '0',
       CLAUDE_PROXY_SKIP_OLLAMA_WARMUP: '1',
       OLLAMA_URL: 'http://127.0.0.1:11434',
+      CLAUDE_LLM_PROFILE: '16gb',
     },
     cwd: tmpRoot,
   });
