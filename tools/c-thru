@@ -47,10 +47,10 @@ LAUNCH_PROJECT_DIR=""
 ORIGINAL_CLAUDE_PROFILE_DIR="${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 CLAUDE_PROFILE_DIR="$ORIGINAL_CLAUDE_PROFILE_DIR"
 OLLAMA_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
-# Default to a fixed proxy port so concurrent router invocations (main session,
-# classify hook, background subprocesses) converge on a single proxy via flock
-# coordination in ensure_proxy_running, instead of each starting its own.
-: "${CLAUDE_PROXY_PORT:=9997}"
+# CLAUDE_PROXY_PORT is intentionally NOT defaulted here.  When unset the proxy
+# binds to port 0 (OS-assigned free port), enabling one independent proxy per
+# shell.  Set CLAUDE_PROXY_PORT explicitly only when you need a fixed port
+# (e.g. c-thru reload, c-thru restart, or direct ANTHROPIC_BASE_URL targeting).
 export CLAUDE_PROXY_PORT
 ROUTER_STARTED_PROXY_PID=""
 CLAUDE_CHILD_PID=""
@@ -308,7 +308,9 @@ setup_ephemeral_session() {
   export CLAUDE_CONFIG_DIR="$EPHEMERAL_SESSION_DIR"
   export CLAUDE_PROFILE_DIR="$EPHEMERAL_SESSION_DIR"
 
-  local hooks_url="http://127.0.0.1:${CLAUDE_PROXY_PORT:-9997}/hooks/context"
+  # __PROXY_PORT__ is a placeholder; replaced with the actual OS-assigned port
+  # by the main flow after ensure_proxy_http_base() succeeds (see line ~3793).
+  local hooks_url="http://127.0.0.1:__PROXY_PORT__/hooks/context"
   local tools_dest="$ROUTER_SELF_DIR" # Use the dir where this script lives
   
   # Claude Code executes hooks via /bin/sh -c "<command>". 
@@ -327,6 +329,21 @@ setup_ephemeral_session() {
   local postcompact_cmd="$(find_tool_path c-thru-postcompact-context)"
   local planner_hint_cmd="$(find_tool_path c-thru-enter-plan-hook)"
   local mcp_js="$(find_tool_path llm-capabilities-mcp.js)"
+
+  # Hook inventory — every hook registered per session. To add a hook:
+  #   1. Create tools/c-thru-<name>.sh with a # ARCH: <Event>/<matcher> header line.
+  #   2. Add a find_tool_path variable above.
+  #   3. Add one line to the appropriate event array below.
+  # No persistent writes to ~/.claude/settings.json — all hooks are ephemeral.
+  #
+  # Event            Matcher         Script                    Purpose
+  # SessionStart     (all)           c-thru-session-start      proxy+Ollama health check
+  # SessionStart     (all)           hooks/context (HTTP)      classify_intent context injection
+  # PostCompact      (all)           c-thru-postcompact-context re-inject context after compaction
+  # UserPromptSubmit *               c-thru-proxy-health       asyncRewake if proxy down
+  # UserPromptSubmit *               c-thru-classify           classify_intent tagging
+  # PostToolUse      *               c-thru-map-changed        validate model-map.json on edit
+  # PreToolUse       EnterPlanMode   c-thru-enter-plan-hook    advisory hint for /c-thru-plan
 
   # 1. Generate settings.json with hooks and MCP
   cat > "$EPHEMERAL_SETTINGS_FILE" <<EOF
@@ -436,11 +453,12 @@ cmd_help() {
   echo "  CLAUDE_PROXY_BYPASS=1         skip proxy entirely (direct Anthropic path)"
   echo "  CLAUDE_ROUTER_DEBUG=1|2       verbose route resolution to stderr"
   echo "  CLAUDE_PROXY_DEBUG=1|2        proxy-side verbose logs"
-  echo -e "  CLAUDE_LLM_MODE=<mode>        ${GRAY}connected | offline | local-only | semi-offload |${NC}"
-  echo -e "                                ${GRAY}cloud-judge-only | cloud-thinking | local-review |${NC}"
-  echo -e "                                ${GRAY}cloud-best-quality | local-best-quality |${NC}"
-  echo -e "                                ${GRAY}cloud-only | claude-only | opensource-only |${NC}"
-  echo -e "                                ${GRAY}fastest-possible | smallest-possible | best-opensource${NC}"
+  echo -e "  CLAUDE_LLM_MODE=<mode>        where calls go and how models are selected"
+  echo -e "  ${GRAY}    Connectivity:   connected|offline|local-only — cloud vs local routing${NC}"
+  echo -e "  ${GRAY}    Per-cap mix:    semi-offload|cloud-judge-only|cloud-thinking|local-review${NC}"
+  echo -e "  ${GRAY}    Best-of-tier:   cloud-best-quality|local-best-quality${NC}"
+  echo -e "  ${GRAY}    Provider filter:cloud-only|claude-only|opensource-only${NC}"
+  echo -e "  ${GRAY}    Benchmark rank: fastest-possible|smallest-possible|best-opensource|best-opensource-cloud|best-opensource-local${NC}"
   echo "  CLAUDE_LLM_MEMORY_GB=<n>      override RAM detection for hw tier selection"
   echo "  CLAUDE_ROUTER_NO_UPDATE=1     disable git self-update at startup"
   echo "  CLAUDE_PROXY_JOURNAL=1        record every request/response to ~/.claude/journal/"
@@ -655,7 +673,16 @@ if [[ "${1:-}" == "/c-thru-control" ]]; then
   CONFIG="$CLAUDE_MODEL_MAP_PATH"
   # Try to ensure proxy is running before control
   ensure_proxy_running >/dev/null 2>&1 || true
-  exec "$ROUTER_SELF_DIR/c-thru-control" "$@"
+  # Propagate the OS-assigned port so c-thru-control can reach the proxy.
+  # ensure_proxy_running sets ROUTER_PROXY_PORT but not ANTHROPIC_BASE_URL.
+  [[ -z "${ANTHROPIC_BASE_URL:-}" && -n "${ROUTER_PROXY_PORT:-}" ]] && \
+    export ANTHROPIC_BASE_URL="http://127.0.0.1:$ROUTER_PROXY_PORT"
+  # Do NOT use `exec` here — bash skips EXIT traps on exec, so the proxy would
+  # survive after c-thru-control exits.  Run as a foreground child so that when
+  # c-thru exits normally (exit $?), the EXIT trap fires cleanup_router_children
+  # which kills the proxy.
+  "$ROUTER_SELF_DIR/c-thru-control" "$@"
+  exit $?
 fi
 
 _self_update_script="$ROUTER_SELF_DIR/c-thru-self-update.sh"
@@ -747,6 +774,10 @@ tab_field_decode() {
   fi
 }
 
+# ARCH: detect_total_memory_gb — RAM detection for hw-tier selection.
+#   Override: CLAUDE_LLM_MEMORY_GB (must be a positive integer, else error).
+#   Auto: sysctl hw.memsize (macOS) → /proc/meminfo (Linux) → returns 1 on failure.
+#   Tier thresholds: <24→16gb, <40→32gb, <56→48gb, <96→64gb, ≥96→128gb.
 detect_total_memory_gb() {
   if [[ -n "${CLAUDE_LLM_MEMORY_GB:-}" ]]; then
     if [[ "${CLAUDE_LLM_MEMORY_GB}" =~ ^[0-9]+$ ]] && (( CLAUDE_LLM_MEMORY_GB > 0 )); then
@@ -1522,6 +1553,14 @@ describe_proxy_log_target() {
   printf ' — see %s' "$path"
 }
 
+# ARCH: ensure_proxy_running — idempotent proxy lifecycle guard.
+#   1. If CLAUDE_PROXY_PORT is set (explicit), skip spawn — caller owns the port.
+#   2. Otherwise, acquire per-port flock (or mkdir fallback): only ONE router
+#      wins the lock and spawns; others wait then reuse the winner's proxy.
+#   3. Spawn via FIFO ready-pipe: proxy writes "READY <port>" to stdout (which
+#      is the FIFO), router reads it and records the port. Timeout = 45s.
+#   4. After READY, verify /ping — catches the race where proxy crashes between
+#      printing READY and actually answering HTTP.
 ensure_proxy_running() {
   [[ "${CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART:-0}" == "1" ]] && return 0
 
@@ -1810,6 +1849,8 @@ ensure_proxy_http_base() {
     }
     ensure_proxy_running "$explicit_base" || return 1
     ENSURED_PROXY_HTTP_BASE="$explicit_base"
+    # Normalize so both paths populate ROUTER_PROXY_PORT (used for system-prompt injection).
+    ROUTER_PROXY_PORT="${ROUTER_PROXY_PORT:-$CLAUDE_PROXY_PORT}"
     return 0
   fi
 
@@ -1841,6 +1882,26 @@ is_local_ollama_host() {
       return 1
       ;;
   esac
+}
+
+# HTTP-only liveness check for the Ollama REST server. No CLI dependency.
+# Returns 0 if /api/version responds within 3s, 1 otherwise.
+ollama_server_http_alive() {
+  curl -sf --max-time 3 "${1}/api/version" -o /dev/null 2>/dev/null
+}
+
+# Braille spinner UX helpers — Gemma-CLI style persistent lines.
+# Overwrite the current terminal line with an animated spinner frame.
+_ollama_spin() {
+  local sp="$1" label="$2" detail="$3" elapsed="$4"
+  printf "\r  ${BOLD}%s${NC} %s  ${GRAY}%s${NC}  ${GRAY}(%s)${NC}          " \
+    "$sp" "$label" "$detail" "$elapsed" >&2
+}
+# Print a persistent completion line (ends with \n — stays on screen).
+_ollama_done() {
+  local icon="$1" label="$2" detail="$3"
+  printf "\r  ${BOLD}%s${NC} %s  ${GRAY}%s${NC}                              \n" \
+    "$icon" "$label" "$detail" >&2
 }
 
 # Ollama API key for CLI: optional inline .api_key on backend JSON, else ${!.auth_env}.
@@ -2631,9 +2692,10 @@ wait_for_concurrent_pull() {
 }
 
 # Ensure target Ollama model is loaded on the given host; warm it in a subprocess if not.
-# Three-state probe: unreachable → skip with hint; loaded → skip; cached-not-loaded → warm.
-# Avoids silent model pulls: if the model isn't cached on the target host, prints a pull
-# hint instead of firing `ollama run` (which would trigger a multi-GB download in background).
+# Server liveness: lsof (singleton guard) + curl /api/version (HTTP health).
+# Model check: ollama list for cache presence and age; /api/ps for in-VRAM status.
+# Stale models (>7 days) are re-pulled in all modes; active mode does it in background.
+# Zombie recovery: if port is occupied but HTTP fails after 3 retries, kill + respawn.
 # Non-fatal — failures do not block routing.
 # Optional $3: OLLAMA_API_KEY value for `ollama` CLI (inline from model-map or env).
 ensure_ollama_running() {
@@ -2667,14 +2729,9 @@ ensure_ollama_running() {
   local state_key=""
   state_key="$(ollama_model_state_key "$model" "$cli_host")"
 
-  # Optional: if local Ollama isn't reachable, start it once and retry.
-  # Opt-in to avoid unexpectedly spawning daemons in CI/tests or when users
-  # intentionally point at remote Ollama hosts.
   local autostart="${CLAUDE_ROUTER_OLLAMA_AUTOSTART:-1}"
 
-  # 3s timeout prevents unreachable-host hangs (~75s default TCP). Fall back to direct
-  # invocation if no timeout CLI is available (bare macOS) — the `ollama` CLI itself
-  # still has its own internal timeout, which is a bit longer but bounded.
+  # 3s timeout for ollama CLI calls (list, pull). curl uses --max-time directly.
   local -a timeout_cmd=()
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=(timeout 3)
@@ -2682,50 +2739,102 @@ ensure_ollama_running() {
     timeout_cmd=(gtimeout 3)
   fi
 
-  # --- Probe 1: is the server reachable AND is the model already loaded? ---
-  # Capture stdout and exit code separately so we can distinguish "unreachable"
-  # (exit non-zero) from "up but model not loaded" (exit 0, model absent from output).
-  local ps_output
-  if ! ps_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama ps 2>/dev/null); then
-    if [[ "$autostart" == "1" ]]; then
-      # `ollama serve` blocks; detach it and retry a single time.
-      # Note: for local desktop installs, this should start the daemon without opening UI.
+  # Extract port from cli_host URL (e.g. http://localhost:11434 → 11434)
+  local ollama_port
+  ollama_port="${cli_host##*:}"
+  ollama_port="${ollama_port%%/*}"
+
+  # --- Probe 1: is the Ollama HTTP server reachable? ---
+  # Use lsof for singleton guard and curl for HTTP health — no CLI dependency.
+  local braille=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+
+  if ! ollama_server_http_alive "$cli_host"; then
+    [[ "$mode" == "active" ]] && _ollama_spin "${braille[0]}" "Ollama server" "$cli_host" "checking"
+
+    if [[ "$autostart" != "1" ]]; then
+      [[ "$mode" == "active" ]] && _ollama_done "${RED}✗${NC}" "Ollama server" "unreachable — skipping"
+      echo "c-thru: cannot reach Ollama on $cli_host — is 'ollama serve' running? Skipping warm-up." >&2
+      claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host reachable=false"
+      return 0
+    fi
+
+    # Check if port is already occupied (something is listening but HTTP failed).
+    # Guard: only run lsof when port is a non-empty numeric string — bare URLs
+    # like http://localhost (no port) would yield an empty ollama_port, causing
+    # lsof -iTCP:"" to match all listeners and potentially kill an unrelated process.
+    local port_pid=""
+    if [[ -n "$ollama_port" && "$ollama_port" =~ ^[0-9]+$ ]] && command -v lsof >/dev/null 2>&1; then
+      port_pid=$(lsof -nP -iTCP:"$ollama_port" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true)
+    fi
+
+    local _alive=0
+    if [[ -z "$port_pid" ]]; then
+      # Nothing on the port — clean spawn
+      [[ "$mode" == "active" ]] && _ollama_spin "${braille[1]}" "Ollama server" "$cli_host" "starting"
       nohup ollama serve </dev/null >/dev/null 2>&1 &
       disown 2>/dev/null || true
-      sleep 0.3
-      ps_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama ps 2>/dev/null) || {
-        echo "c-thru: cannot reach Ollama on $cli_host — is 'ollama serve' running there? Skipping warm-up." >&2
-        claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host reachable=false"
-        return 0
-      }
     else
-      echo "c-thru: cannot reach Ollama on $cli_host — is 'ollama serve' running there? Skipping warm-up." >&2
+      # Port occupied but HTTP dead — zombie or crashed server.
+      # Retry HTTP 3 × 1s before giving up and killing it.
+      local _zombie_alive=0
+      for _i in 1 2 3; do
+        sleep 1
+        [[ "$mode" == "active" ]] && _ollama_spin "${braille[$(( _i % 10 ))]}" "Ollama server" "$cli_host" "retry ${_i}/3"
+        if ollama_server_http_alive "$cli_host"; then _zombie_alive=1; break; fi
+      done
+      if (( _zombie_alive )); then
+        # Server recovered on its own — skip spawn, mark alive
+        _alive=1
+      else
+        # Kill zombie and respawn
+        [[ "$mode" == "active" ]] && _ollama_spin "${braille[4]}" "Ollama server" "$cli_host" "killing zombie (pid $port_pid)"
+        kill "$port_pid" 2>/dev/null || true
+        sleep 0.5
+        nohup ollama serve </dev/null >/dev/null 2>&1 &
+        disown 2>/dev/null || true
+        claude_router_debug_event "ollama server zombie_kill pid=$port_pid port=$ollama_port host=$cli_host"
+      fi
+    fi
+
+    # Wait up to 3s for HTTP to respond after spawn/respawn (skipped when _alive already set)
+    if (( ! _alive )); then
+      for _i in 1 2 3; do
+        sleep 1
+        [[ "$mode" == "active" ]] && _ollama_spin "${braille[$(( _i % 10 ))]}" "Ollama server" "$cli_host" "starting (${_i}s)"
+        if ollama_server_http_alive "$cli_host"; then _alive=1; break; fi
+      done
+    fi
+    if (( ! _alive )); then
+      [[ "$mode" == "active" ]] && _ollama_done "${RED}✗${NC}" "Ollama server" "unreachable after spawn"
+      echo "c-thru: cannot reach Ollama on $cli_host after spawn — skipping warm-up." >&2
       claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host reachable=false"
       return 0
     fi
   fi
 
-  # grep -Fxq: Fixed-string, whole-line, quiet — handles model names with regex chars
+  [[ "$mode" == "active" ]] && _ollama_done "${GREEN}✓${NC}" "Ollama server" "$cli_host"
+  claude_router_debug_event "ollama prep server_alive mode=$mode host=$cli_host"
+
+  # --- Probe 2: is the model already loaded in VRAM? ---
+  # Use /api/ps REST endpoint — consistent with HTTP-only approach.
   local model_loaded=0
-  if echo "$ps_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
+  local api_ps_json
+  api_ps_json=$(curl -sf --max-time 3 "${cli_host}/api/ps" 2>/dev/null || true)
+  if echo "$api_ps_json" | grep -qF "\"${model}\""; then
     model_loaded=1
     if [[ "$mode" != "sweep" ]]; then
       claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host loaded=true"
       if [[ "$mode" == "active" ]]; then
-        printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} warming %s... ✅ ${GREEN}Ready${NC} (resident)\n" "fleet" "$model" >&2
+        _ollama_done "${GREEN}✓${NC}" "$model" "already resident"
         ROUTER_ACTIVE_MODEL_WARMED=1
       fi
-      return 0   # already loaded on that host
+      return 0
     fi
   fi
 
-  # --- Probe 2: is the model cached on that host? ---
-  # Server is up but model isn't loaded. Before firing `ollama run` (which would
-  # transparently trigger `ollama pull` for an uncached model — a multi-GB silent
-  # download), verify the model is actually cached and give the user a pull hint if not.
+  # --- Probe 3: is the model cached on disk? ---
   local list_output
   list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null) || {
-    # ps worked but list didn't — unexpected; bail safely without warming
     claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host list_failed=true"
     return 0
   }
@@ -2734,12 +2843,8 @@ ensure_ollama_running() {
 
   if ! echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
     # Guard against concurrent pull of the same model (race from multiple prepull jobs).
-    # Use `pgrep -af` to list full command lines, then `grep -Fx` for an exact-line
-    # match against "ollama pull <model>". This avoids false positives where another
-    # process's argv happens to contain the model name as a substring.
     local _need_own_pull=1
     if pgrep -af 'ollama pull ' 2>/dev/null | awk '{$1=""; sub(/^ /,""); print}' | grep -Fxq "ollama pull $model"; then
-      # Don't exit early — wait for the in-flight pull and verify the model lands cached.
       wait_for_concurrent_pull "$model" "$cli_host" "$mode" ollama_cli_env timeout_cmd 600
       if [[ "${CONCURRENT_PULL_CACHED:-0}" == "1" ]]; then
         ollama_prep_state_update "models" "$state_key" "pull_success" "cached"
@@ -2747,30 +2852,34 @@ ensure_ollama_running() {
         age_text="$(ollama_extract_age_text "$model" "$list_output" || true)"
         _need_own_pull=0
       fi
-      # Otherwise the concurrent pull failed or timed out — fall through to our own pull.
     fi
     if (( _need_own_pull )); then
-      echo "c-thru: '$model' not cached on $cli_host — pulling now..." >&2
+      if [[ "$mode" == "active" ]]; then
+        _ollama_spin "${braille[0]}" "$model" "pulling" "0s"
+      else
+        echo "c-thru: '$model' not cached on $cli_host — pulling now..." >&2
+      fi
       ollama_prep_state_update "models" "$state_key" "pull_attempt" "pulling"
       claude_router_debug_event "ollama prep pull start mode=$mode model=$model host=$cli_host reason=missing"
       if ! "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
+        [[ "$mode" == "active" ]] && _ollama_done "${RED}✗${NC}" "$model" "pull failed (offline?)"
         echo "c-thru: failed to pull '$model' from $cli_host — try \`ollama pull $model\` manually (check network / disk space)" >&2
         ollama_prep_state_update "models" "$state_key" "pull_failure" "pull_failed"
         claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=false"
         return 0
       fi
-      # Verify-after-pull: confirm the model is actually cached now. CLI exit 0 with
-      # missing-from-list has been observed on flaky networks / partial downloads.
       list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null) || {
         claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true list_after_failed=true"
         return 0
       }
       if ! echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
-        echo "c-thru: '$model' is still unavailable on $cli_host after pull — try \`ollama pull $model\` manually" >&2
+        [[ "$mode" == "active" ]] && _ollama_done "${RED}✗${NC}" "$model" "pull silent failure"
+        echo "c-thru: '$model' still unavailable after pull — try \`ollama pull $model\` manually" >&2
         ollama_prep_state_update "models" "$state_key" "pull_failure" "pull_silent_failure"
         claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host cached=false after_pull=true"
         return 0
       fi
+      [[ "$mode" == "active" ]] && _ollama_done "${GREEN}✓${NC}" "$model" "pulled"
       ollama_prep_state_update "models" "$state_key" "pull_success" "cached"
       "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
       claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true verified=true"
@@ -2780,13 +2889,12 @@ ensure_ollama_running() {
     ollama_prep_state_update "models" "$state_key" "cached" "cached" "$age_text"
   fi
 
-  if [[ "$mode" == "sweep" ]] && ollama_refresh_age_is_stale "$age_text" && \
+  # --- Stale refresh: re-pull models older than OLLAMA_PREP_REFRESH_DAYS (all modes) ---
+  # Active mode spawns the pull in background to avoid blocking the request.
+  if ollama_refresh_age_is_stale "$age_text" && \
      ollama_prep_retry_allowed "models" "$state_key" "last_pull_attempt_at" "$OLLAMA_PREP_MIN_RETRY_SECONDS"; then
     local _refresh_skip=0
     if pgrep -af 'ollama pull ' 2>/dev/null | awk '{$1=""; sub(/^ /,""); print}' | grep -Fxq "ollama pull $model"; then
-      # A concurrent pull is already refreshing the model — wait for it instead of
-      # exiting silently. On success the refresh is effectively done; on failure we
-      # skip our own retry (sweep is best-effort, not blocking the active path).
       wait_for_concurrent_pull "$model" "$cli_host" "$mode" ollama_cli_env timeout_cmd 600
       if [[ "${CONCURRENT_PULL_CACHED:-0}" == "1" ]]; then
         ollama_prep_state_update "models" "$state_key" "pull_success" "refreshed" "$age_text"
@@ -2800,20 +2908,26 @@ ensure_ollama_running() {
     if (( ! _refresh_skip )); then
       ollama_prep_state_update "models" "$state_key" "pull_attempt" "refreshing" "$age_text"
       claude_router_debug_event "ollama stale refresh start model=$model host=$cli_host age=\"$age_text\""
-      if "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
-        # Verify-after-pull on the refresh path too.
-        list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null || true)
-        if echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
-          ollama_prep_state_update "models" "$state_key" "pull_success" "refreshed" "$age_text"
-          "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
-          claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=true verified=true"
-        else
-          ollama_prep_state_update "models" "$state_key" "pull_failure" "refresh_silent_failure" "$age_text"
-          claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=false reason=not_in_list"
-        fi
+      if [[ "$mode" == "active" ]]; then
+        # Don't block the live request — refresh in background
+        ( "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1 ) &
+        disown $! 2>/dev/null || true
+        claude_router_debug_event "ollama stale refresh start mode=active model=$model host=$cli_host bg=true"
       else
-        ollama_prep_state_update "models" "$state_key" "pull_failure" "refresh_failed" "$age_text"
-        claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=false"
+        if "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
+          list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null || true)
+          if echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
+            ollama_prep_state_update "models" "$state_key" "pull_success" "refreshed" "$age_text"
+            "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
+            claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=true verified=true"
+          else
+            ollama_prep_state_update "models" "$state_key" "pull_failure" "refresh_silent_failure" "$age_text"
+            claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=false reason=not_in_list"
+          fi
+        else
+          ollama_prep_state_update "models" "$state_key" "pull_failure" "refresh_failed" "$age_text"
+          claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=false"
+        fi
       fi
     fi
   fi
@@ -2823,18 +2937,14 @@ ensure_ollama_running() {
     return 0
   fi
 
-  # --- Cached + not loaded + reachable → fire background warm-up ---
+  # --- Cached + not resident → fire warm-up via /api/generate (keep-alive 60m) ---
   if [[ "$mode" == "sweep" && -n "$capabilities" ]]; then
-    printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} warming %s (background)\n" "fleet" "$model" >&2
-  elif [[ "$mode" == "active" ]]; then
-    # We do NOT print a line here yet; the spinner loop will handle the first line
-    :
-  else
-    printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} warming %s (background)\n" "fleet" "$model" >&2
+    printf "  ${GRAY}•${NC} ${BOLD}%-18s${NC} warming %s (background)\n" "fleet" "$model" >&2
+  elif [[ "$mode" != "active" ]]; then
+    printf "  ${GRAY}•${NC} ${BOLD}%-18s${NC} warming %s (background)\n" "fleet" "$model" >&2
   fi
   claude_router_debug_event "ollama prep warm start mode=$mode model=$model host=$cli_host"
-  
-  # Trigger load via API. Keep-alive ensures it stays in VRAM.
+
   (
     curl -sf -X POST "$cli_host/api/generate" \
       -d "{\"model\":\"$model\",\"prompt\":\"\",\"keep_alive\":\"60m\",\"options\":{\"num_ctx\":65536}}" \
@@ -2843,41 +2953,41 @@ ensure_ollama_running() {
   disown $! 2>/dev/null || true
   claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host warmed=true"
 
-  # --- If active, loop and inform user until resident ---
+  # --- Active mode: braille spinner until model appears in /api/ps ---
   if [[ "$mode" == "active" && "$model_loaded" == "0" ]]; then
-    local max_wait_iters=200 # 0.6s * 200 = 120s (2 minutes total)
+    local model_size_str=""
+    local _list_for_size
+    _list_for_size=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null || true)
+    model_size_str=$(printf '%s' "$_list_for_size" | awk -v m="$model" 'NR>1 && $1==m {print $3" "$4; exit}' 2>/dev/null || true)
+
+    local max_wait_iters=200  # 0.6s × 200 = 120s
     local i=0
     local start_loop_time=$SECONDS
-    local spinner=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
     while (( i < max_wait_iters )); do
       local elapsed=$(( SECONDS - start_loop_time ))
-      local mins=$(( elapsed / 60 ))
-      local secs=$(( elapsed % 60 ))
-      local time_str=""
-      if (( mins > 0 )); then
-        time_str="${mins}m ${secs}s"
+      local time_str
+      if (( elapsed >= 60 )); then
+        time_str="$(( elapsed / 60 ))m $(( elapsed % 60 ))s"
       else
-        time_str="${secs}s"
+        time_str="${elapsed}s"
       fi
-
-      local sp="${spinner[$((i % 10))]}"
-      printf "\r  ${GRAY}•${NC} ${BOLD}%-10s${NC} warming %s... %s (%s)            " "fleet" "$model" "$sp" "$time_str" >&2
+      local sp="${braille[$((i % 10))]}"
+      _ollama_spin "$sp" "$model" "loading weights" "$time_str"
       sleep 0.6
-      i=$((i + 1))
-      # Probe less frequently to avoid flooding Ollama
+      i=$(( i + 1 ))
       if (( i % 5 == 0 )); then
-        ps_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama ps 2>/dev/null || echo "")
-        if echo "$ps_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
-          printf "\r  ${GRAY}•${NC} ${BOLD}%-10s${NC} warming %s... ✅ ${GREEN}Ready${NC}                                          \n" "fleet" "$model" >&2
+        api_ps_json=$(curl -sf --max-time 3 "${cli_host}/api/ps" 2>/dev/null || true)
+        if echo "$api_ps_json" | grep -qF "\"${model}\""; then
+          _ollama_done "${GREEN}✓${NC}" "$model" "ready  ${GRAY}${model_size_str:+($model_size_str, }${time_str}${model_size_str:+)}${NC}"
           ROUTER_ACTIVE_MODEL_WARMED=1
           return 0
         fi
       fi
     done
-    if [[ "$model_loaded" == "0" ]]; then
-      printf "\r  ${GRAY}•${NC} ${RED}${BOLD}%-10s${NC} warming %s... ❌ ${RED}Timeout${NC}                                        \n" "fleet" "$model" >&2
-      exit 1
-    fi
+    _ollama_done "${RED}✗${NC}" "$model" "load timeout"
+    # exit (not return) — active mode is called directly in the router's main path,
+    # so a load timeout is a hard stop for the session.
+    exit 1
   fi
 }
 
@@ -3120,6 +3230,9 @@ build_forwarded_args() {
   if [[ "${CLAUDE_PROXY_BYPASS:-0}" != "1" && "${C_THRU_SKIP_INFO_INJECTION:-0}" != "1" ]]; then
     local info_summary
     info_summary="$(get_system_info_summary "$model")"
+    # Append proxy URL so agents that call the proxy directly (e.g. context-injection
+    # hooks) know where it is without hard-coding a port.
+    [[ -n "${ROUTER_PROXY_PORT:-}" ]] && info_summary+=" Proxy: http://127.0.0.1:${ROUTER_PROXY_PORT}."
     forwarded+=("--append-system-prompt" "$info_summary")
   fi
 
@@ -3277,12 +3390,16 @@ cmd_reload() {
 
   # Derive the actual listening port from lsof (proxy port is dynamic when CLAUDE_PROXY_PORT
   # is unset — the router learns it from the READY <port> handshake, not a fixed default).
-  # Fall back to CLAUDE_PROXY_PORT or 9997 only when lsof is unavailable.
+  # Fall back to CLAUDE_PROXY_PORT when lsof is unavailable; fail if neither is known.
   local proxy_port=""
   if command -v lsof >/dev/null 2>&1; then
     proxy_port="$(lsof -iTCP -sTCP:LISTEN -n -P -p "$proxy_pid" 2>/dev/null | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1 || true)"
   fi
-  [[ -z "$proxy_port" ]] && proxy_port="${CLAUDE_PROXY_PORT:-9997}"
+  [[ -z "$proxy_port" ]] && proxy_port="${CLAUDE_PROXY_PORT:-}"
+  if [[ -z "$proxy_port" ]]; then
+    echo "c-thru: reload: cannot determine proxy port (lsof unavailable and CLAUDE_PROXY_PORT not set)" >&2
+    return 1
+  fi
 
   # Poll /ping for up to 2s to confirm proxy is still alive after config reload.
   local i
@@ -3320,11 +3437,15 @@ cmd_restart() {
   fi
 
   # Derive the actual listening port from lsof before signaling; the proxy port is
-  # dynamic when CLAUDE_PROXY_PORT is unset — 9997 is not a safe default.
+  # dynamic when CLAUDE_PROXY_PORT is unset — guessing 9997 is unsafe.
   if [[ -n "$proxy_pid" ]] && kill -0 "$proxy_pid" 2>/dev/null && command -v lsof >/dev/null 2>&1; then
     old_port="$(lsof -iTCP -sTCP:LISTEN -n -P -p "$proxy_pid" 2>/dev/null | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1 || true)"
   fi
-  [[ -z "$old_port" ]] && old_port="${CLAUDE_PROXY_PORT:-9997}"
+  [[ -z "$old_port" ]] && old_port="${CLAUDE_PROXY_PORT:-}"
+  if [[ -z "$old_port" ]]; then
+    echo "c-thru: restart: cannot determine proxy port (lsof unavailable and CLAUDE_PROXY_PORT not set)" >&2
+    return 1
+  fi
 
   # If PID file didn't resolve a running process, fall back to lsof on the guessed port.
   if [[ -z "$proxy_pid" ]] || ! kill -0 "$proxy_pid" 2>/dev/null; then
@@ -3502,6 +3623,16 @@ elif [[ -n "$route_name" ]]; then
   MODEL="$_resolved"
 fi
 
+# Replace the __PROXY_PORT__ placeholder written by setup_ephemeral_session before
+# the proxy started with the actual OS-assigned port from the READY handshake.
+# Called from both the transparent path and the main routing path.
+finalize_ephemeral_settings_port() {
+  [[ -n "${ROUTER_PROXY_PORT:-}" && -f "${EPHEMERAL_SETTINGS_FILE:-}" ]] || return 0
+  local _tmp
+  _tmp=$(sed "s|__PROXY_PORT__|$ROUTER_PROXY_PORT|g" "$EPHEMERAL_SETTINGS_FILE")
+  printf '%s' "$_tmp" > "$EPHEMERAL_SETTINGS_FILE"
+}
+
 # No explicit/default model: transparent proxy fallback (legacy behavior) + real claude binary.
 if [[ -z "$MODEL" ]]; then
   REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
@@ -3511,6 +3642,7 @@ if [[ -z "$MODEL" ]]; then
     exit $?
   fi
   ensure_proxy_http_base || exit 1
+  finalize_ephemeral_settings_port
   export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
   if transparent_proxy_can_match_ollama_env; then
     # In this query, we are supposed to have the env variables for ollama as specifically "ollama" for the pwd
@@ -3683,6 +3815,8 @@ else
 fi
 
 claude_router_debug_dump routed
+
+finalize_ephemeral_settings_port
 
 # Router has already set ANTHROPIC_BASE_URL via apply_provider_block().
 FINAL_MODEL_ARG="$EFFECTIVE_MODEL"

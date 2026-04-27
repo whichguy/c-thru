@@ -69,32 +69,42 @@ echo "Hook assertions:"
 if ! command -v jq >/dev/null 2>&1; then
     echo "  SKIP  (jq not available)"
 else
-    # Bug #2 regression: matcher must be "*", not a pipe-syntax literal
-    mc_matcher=$(jq -r '
-        [.hooks.PostToolUse // [] | .[].hooks[] |
-         select(.command // "" | endswith("c-thru-map-changed"))] |
-        .[0] // null' "$SETTINGS" 2>/dev/null)
+    # Ephemeral architecture: hooks are NOT written to persistent settings.json.
+    # Regression guard: install.sh must NOT inject persistent hooks.
+    has_hooks=$(jq 'has("hooks")' "$SETTINGS" 2>/dev/null || echo "false")
+    check 'No persistent hooks in settings.json (ephemeral arch)' "false" "$has_hooks"
 
-    # The matcher lives on the PostToolUse entry, not the hook itself
-    mc_entry_matcher=$(jq -r '
-        (.hooks.PostToolUse // []) |
-        map(select(.hooks[]?.command // "" | endswith("c-thru-map-changed"))) |
-        .[0].matcher // ""' "$SETTINGS" 2>/dev/null)
-    check 'PostToolUse c-thru-map-changed matcher == "*"' "*" "$mc_entry_matcher"
-
-    # No duplicate c-thru-map-changed registrations
-    mc_count=$(jq '[
-        (.hooks.PostToolUse // []) |
-        .[].hooks[] |
-        select(.command // "" | endswith("c-thru-map-changed"))
-    ] | length' "$SETTINGS" 2>/dev/null || echo 0)
-    check "PostToolUse c-thru-map-changed count == 1" "1" "$mc_count"
-
-    # MCP server registered in ~/.claude.json (HOME is sandboxed)
+    # MCP server is also ephemeral — not in ~/.claude.json.
     claude_json="$FAKE_HOME/.claude.json"
-    mcp_arg=$(jq -r '.mcpServers["llm-capabilities"].args[0] // ""' "$claude_json" 2>/dev/null || echo "")
-    check 'MCP llm-capabilities registered' "yes" "$([ -n "$mcp_arg" ] && echo yes || echo no)"
+    has_mcp=$(jq 'has("mcpServers")' "$claude_json" 2>/dev/null || echo "false")
+    check 'No persistent MCP in .claude.json (ephemeral arch)' "false" "$has_mcp"
 fi
+
+# ---------------------------------------------------------------------------
+# Hook script executability — all hook tools must be symlinked and executable
+# ---------------------------------------------------------------------------
+echo "Hook scripts:"
+HOOK_SCRIPTS=(
+    c-thru-session-start
+    c-thru-proxy-health
+    c-thru-classify
+    c-thru-map-changed
+    c-thru-stop-hook
+    c-thru-enter-plan-hook
+    c-thru-postcompact-context
+    c-thru-statusline
+    c-thru-statusline-overlay
+)
+for hs in "${HOOK_SCRIPTS[@]}"; do
+    link="$FAKE_CLAUDE/tools/$hs"
+    if [ -L "$link" ] && [ -x "$link" ]; then
+        check "hook script $hs: symlinked + executable" "ok" "ok"
+    elif [ -L "$link" ]; then
+        check "hook script $hs: symlinked + executable" "ok" "symlinked-but-not-executable"
+    else
+        check "hook script $hs: symlinked + executable" "ok" "missing"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # Second run — idempotency + overrides preservation
@@ -114,13 +124,9 @@ if command -v jq >/dev/null 2>&1; then
     check "overrides .custom preserved" "preserved" "$ovr_custom"
     check "overrides .llm_mode preserved" "offline" "$ovr_mode"
 
-    # No new duplicate map-changed hook after second run
-    mc_count2=$(jq '[
-        (.hooks.PostToolUse // []) |
-        .[].hooks[] |
-        select(.command // "" | endswith("c-thru-map-changed"))
-    ] | length' "$SETTINGS" 2>/dev/null || echo 0)
-    check "No duplicate c-thru-map-changed after second run" "1" "$mc_count2"
+    # Idempotency: settings.json still has no persistent hooks after second run
+    has_hooks2=$(jq 'has("hooks")' "$SETTINGS" 2>/dev/null || echo "false")
+    check 'No persistent hooks after second run' "false" "$has_hooks2"
 fi
 
 echo ""

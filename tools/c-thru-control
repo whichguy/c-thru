@@ -16,9 +16,15 @@ ROUTER_REPO_ROOT="$( cd -P "$( dirname "$SOURCE" )/.." >/dev/null 2>&1 && pwd )"
 # Resolve environment via Node helper
 eval "$(CLAUDE_MODEL_MAP_LAUNCH_CWD="$PWD" node "$ROUTER_REPO_ROOT/tools/model-map-config.js" --shell-env 2>/dev/null || true)"
 
-# Default port if not set
-: "${CLAUDE_PROXY_PORT:=9997}"
-export ANTHROPIC_BASE_URL="http://127.0.0.1:$CLAUDE_PROXY_PORT"
+# When invoked from within a running c-thru session, ANTHROPIC_BASE_URL is
+# already exported.  When invoked standalone, derive it from CLAUDE_PROXY_PORT.
+if [[ -z "${ANTHROPIC_BASE_URL:-}" ]]; then
+  if [[ -z "${CLAUDE_PROXY_PORT:-}" ]]; then
+    echo "c-thru-control: neither ANTHROPIC_BASE_URL nor CLAUDE_PROXY_PORT is set" >&2
+    exit 1
+  fi
+  export ANTHROPIC_BASE_URL="http://127.0.0.1:$CLAUDE_PROXY_PORT"
+fi
 
 # Run the controller
 exec node "$ROUTER_REPO_ROOT/tools/c-thru-control.js" "$@"

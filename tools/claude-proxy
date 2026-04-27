@@ -70,7 +70,10 @@ function parseCliFlags(argv) {
 }
 parseCliFlags(process.argv.slice(2));
 
-const INITIAL_PORT = numberFromEnv('CLAUDE_PROXY_PORT', 9997);
+// 0 = OS assigns a free port; the actual port is reported via "READY <port>" on stdout.
+// Set CLAUDE_PROXY_PORT to a specific number only when you need a fixed port
+// (e.g. c-thru reload, c-thru restart, or an explicit ANTHROPIC_BASE_URL).
+const INITIAL_PORT = numberFromEnv('CLAUDE_PROXY_PORT', 0);
 const HOOKS_PORT = numberFromEnv('CLAUDE_PROXY_HOOKS_PORT', 9998);
 const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_DEBUG', 0));
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
@@ -896,28 +899,380 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   up.end();
 }
 
+// Build the JSON body for an Ollama /api/chat request.
+// Pure: no side effects; called just before up.write() so body.rewrite logging
+// can record bytes_in vs bytes_out in the same callsite as the send.
+function buildOllamaRequestBody(body, effectiveModel) {
+  const numCtx = body.num_ctx || (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
+  // Use ?? not || for temperature: a caller-provided `0` is a valid request
+  // (deterministic generation), and `||` would misinterpret it as "unset"
+  // and replace with our default. If caller didn't specify, omit the field
+  // entirely so Ollama uses the modelfile default rather than forcing 0.
+  const ollamaOptions = { num_ctx: numCtx };
+  if (body.temperature !== undefined && body.temperature !== null) {
+    ollamaOptions.temperature = body.temperature;
+  }
+  return JSON.stringify({
+    model: effectiveModel,
+    messages: flattenMessagesForOllama(body),
+    stream: body.stream,
+    keep_alive: OLLAMA_KEEP_ALIVE,
+    options: ollamaOptions,
+  });
+}
+
+// Handle a non-200 response from Ollama. Re-shapes native Ollama errors into
+// Anthropic's error envelope, then tries cloud→local rewrite and fallback chain
+// before falling back to surfacing the original status to the client.
+// ARCH: 400 is excluded from fallback (shouldFallbackOnStatus guard) so
+//       caller-malformed requests don't loop through the fallback chain.
+function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
+  let errBody = '';
+  upRes.on('data', c => errBody += c.toString());
+  upRes.on('end', async () => {
+    let message = errBody;
+    try {
+      const parsed = JSON.parse(errBody);
+      if (parsed.error) {
+        message = typeof parsed.error === 'string' ? parsed.error : (parsed.error.message || JSON.stringify(parsed.error));
+      }
+    } catch {}
+    if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
+      // Cloud→local rewrite first: if the failing model is :cloud-suffixed
+      // (e.g. user has no Ollama subscription), swap in the configured
+      // local fallback model and retry against the same backend before
+      // walking the per-backend fallback_to chain.
+      if (tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta)) {
+        return;
+      }
+      markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, message));
+      const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
+        reason: `upstream returned ${upRes.statusCode}`,
+        statusCode: upRes.statusCode,
+        error: message.slice(0, 200),
+      });
+      if (handled) return;
+    }
+    sendAnthropicError(res, upRes.statusCode, message || `upstream returned ${upRes.statusCode}`);
+  });
+}
+
+// Set up the full Anthropic SSE pipeline for a streaming Ollama response.
+// Called synchronously from the upRes callback so it runs before the stream
+// starts flowing. Updates timerControls.stop so the outer up.on('error')
+// handler can clear the stall/ping intervals on connection failures.
+//
+// ARCH: three concurrent timers created here:
+//   stallCheck (1s) — log at >=5s idle, hard-fail at STREAM_STALL_HARDFAIL_MS
+//   pingTick (SSE_PING_INTERVAL_MS) — keep intermediate proxies alive
+//   Both are cleared on: res.close, upRes.end, upRes.error, stallCheck hard-fail,
+//   and via timerControls.stop() for pre-stream errors in up.on('error').
+function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, up, requestStartedAt, timerControls, upRes) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    // Match real Anthropic — anti-buffering hint for nginx & Cloudflare.
+    'X-Accel-Buffering': 'no',
+  });
+
+  const messageId = anthropicMessageId();
+
+  // Emit Anthropic-shape message_start. Real Anthropic includes input_tokens
+  // here, but Ollama doesn't tell us prompt_eval_count until the final chunk;
+  // we update those numbers in message_delta at the end. cache_*_input_tokens
+  // are always 0 (Ollama has no caching layer) but we include the fields so
+  // SDKs that probe their existence don't warn.
+  sseWrite(res, 'message_start', {
+    type: 'message_start',
+    message: {
+      id: messageId,
+      type: 'message',
+      role: 'assistant',
+      content: [],
+      model: effectiveModel,
+      stop_reason: null,
+      stop_sequence: null,
+      usage: {
+        input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        output_tokens: 0,
+      },
+    },
+  });
+
+  // Block state machine. Real Anthropic emits content_block_start when a
+  // block begins, content_block_delta(s) for tokens, content_block_stop on
+  // close. Thinking-mode models produce a thinking block first (index 0)
+  // then a text block (index 1); pure-text models produce only a text block.
+  // We don't open block 0 up-front anymore — we wait for the first
+  // content/thinking token to know which type to start.
+  let buffer = '';
+  let firstChunk = true;
+  let bytesOut = 0;
+  let lastChunkAt = Date.now();
+  let stalled = false;
+  let promptTokens = 0;
+  let outputTokens = 0;
+  let stopReason = 'end_turn';
+  let stopSequence = null;
+  // INVARIANT: each openBlock is paired with one closeBlock (currentBlockType
+  // null gates idempotency); messageClosed gates closeMessage idempotency —
+  // `done:true` and upstream `end` race to close, error paths skip entirely
+  // (SSE error frame is itself terminal).
+  let blockIndex = -1;          // -1 = no block open yet
+  let currentBlockType = null;  // 'thinking' | 'text' | null
+  let messageClosed = false;    // tracks whether message_delta+message_stop were emitted
+  const streamStart = Date.now();
+
+  const openBlock = (type) => {
+    blockIndex++;
+    currentBlockType = type;
+    const empty = type === 'thinking' ? { type: 'thinking', thinking: '' } : { type: 'text', text: '' };
+    sseWrite(res, 'content_block_start', { type: 'content_block_start', index: blockIndex, content_block: empty });
+  };
+  const closeBlock = () => {
+    if (currentBlockType === null) return;
+    sseWrite(res, 'content_block_stop', { type: 'content_block_stop', index: blockIndex });
+    currentBlockType = null;
+  };
+
+  // Emit terminal frames (message_delta + message_stop). Idempotent — guarded
+  // by `messageClosed` so we never double-emit if both `done:true` arrives AND
+  // upstream `end` fires after.
+  const closeMessage = () => {
+    if (messageClosed) return;
+    closeBlock();
+    sseWrite(res, 'message_delta', {
+      type: 'message_delta',
+      delta: { stop_reason: stopReason, stop_sequence: stopSequence },
+      usage: {
+        input_tokens: promptTokens,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        output_tokens: outputTokens,
+      },
+    });
+    sseWrite(res, 'message_stop', { type: 'message_stop' });
+    messageClosed = true;
+  };
+
+  // Idle watchdog — log at >=5s, hard-fail at >=120s. The 5-min `up.setTimeout`
+  // rearms on socket activity so it can't catch a slow trickle. This watchdog
+  // does. Hard-fail destroys the upstream and emits an Anthropic-shape error
+  // SSE frame so the client sees a structured failure instead of a silent hang.
+  // Ping keepalive (15s): emits `event: ping` while streaming so long generations
+  // survive idle-connection killers in intermediate proxies (nginx, CF, corp middleboxes).
+  const stallCheck = setInterval(() => {
+    if (!res.writable) { stopTimers(); return; }
+    const idle = Date.now() - lastChunkAt;
+    if (idle >= STREAM_STALL_HARDFAIL_MS) {
+      stopTimers();
+      ctxLog(ctx, 'ollama.stream.hard_stall', { idle_ms: idle, backend: backend.id });
+      // We deliberately skip closeMessage() here. The Anthropic SSE error
+      // event is itself a terminal frame — clients treat it as "stream is
+      // over, no more events coming" and emitting message_delta+message_stop
+      // after an error frame would be inconsistent with the failure semantics.
+      sseWrite(res, 'error', {
+        type: 'error',
+        error: { type: 'timeout_error', message: `upstream stalled for ${idle}ms — aborting` },
+      });
+      if (!up.destroyed) up.destroy(new Error(`upstream mid-stream stall ${idle}ms`));
+      if (res.writable) res.end();
+      return;
+    }
+    if (idle >= 5000 && !stalled) {
+      stalled = true;
+      ctxLog(ctx, 'ollama.stream.stall', { idle_ms: idle, backend: backend.id });
+    } else if (idle < 5000 && stalled) {
+      stalled = false;
+    }
+  }, 1000);
+  const pingTick = setInterval(() => {
+    if (!res.writable) { stopTimers(); return; }
+    sseWrite(res, 'ping', { type: 'ping' });
+  }, SSE_PING_INTERVAL_MS);
+  const stopTimers = () => { clearInterval(stallCheck); clearInterval(pingTick); };
+  timerControls.stop = stopTimers;  // expose to outer-scope error handlers via mutable ref
+
+  // Client disconnected mid-stream: the request-level `res.on('close')` fires.
+  // We need to clear our intervals (otherwise they retain `res`/`upRes` refs
+  // and burn CPU writing to a dead socket) AND tear down the upstream so Ollama
+  // stops generating tokens we'll never deliver.
+  res.on('close', () => {
+    if (messageClosed) return;  // normal completion path
+    stopTimers();
+    if (!up.destroyed) up.destroy(new Error('client disconnected mid-stream'));
+  });
+
+  // upRes is the IncomingMessage from Ollama — register data/end/error handlers
+  // here (synchronously, before the stream starts flowing).
+  upRes.on('data', chunk => {
+    if (!res.writable) return;
+    if (firstChunk) {
+      firstChunk = false;
+      ctxLog(ctx, 'ollama.stream.first_chunk', { ttft_ms: Date.now() - requestStartedAt, backend: backend.id });
+    }
+    bytesOut += chunk.length;
+    lastChunkAt = Date.now();
+    buffer += chunk.toString();
+    let lines = buffer.split('\n');
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const ollamaJson = JSON.parse(line);
+        if (ollamaJson.done) {
+          promptTokens = ollamaJson.prompt_eval_count || 0;
+          outputTokens = ollamaJson.eval_count || 0;
+          stopReason = mapStopReason(ollamaJson.done_reason);
+          closeMessage();
+          continue;
+        }
+        const msg = ollamaJson.message || {};
+        const thinkingDelta = msg.thinking;
+        const textDelta = msg.content;
+        // Thinking tokens: open thinking block lazily, stream as thinking_delta.
+        if (thinkingDelta) {
+          if (currentBlockType !== 'thinking') {
+            if (currentBlockType === 'text') closeBlock();  // shouldn't happen — text rarely precedes thinking
+            openBlock('thinking');
+          }
+          sseWrite(res, 'content_block_delta', {
+            type: 'content_block_delta',
+            index: blockIndex,
+            delta: { type: 'thinking_delta', thinking: thinkingDelta },
+          });
+        }
+        // Text tokens: open text block lazily; if a thinking block is open,
+        // close it first so we transition cleanly to a new block index.
+        if (textDelta) {
+          if (currentBlockType !== 'text') {
+            if (currentBlockType === 'thinking') closeBlock();
+            openBlock('text');
+          }
+          sseWrite(res, 'content_block_delta', {
+            type: 'content_block_delta',
+            index: blockIndex,
+            delta: { type: 'text_delta', text: textDelta },
+          });
+        }
+        // If both empty (pure heartbeat chunk), drop silently.
+      } catch (e) {
+        ctxLog(ctx, 'ollama.stream.parse_error', { line, error: e.message });
+      }
+    }
+  });
+  upRes.on('end', () => {
+    stopTimers();
+    // ALWAYS close the message — covers both normal completion (no-op via
+    // messageClosed guard since `done:true` already called closeMessage) AND
+    // half-open streams where upstream ended without sending `done` or sent
+    // zero ndjson lines. Without this, clients see message_start with no
+    // matching message_stop and hang.
+    closeMessage();
+    ctxLog(ctx, 'ollama.stream.done', {
+      backend: backend.id,
+      model: effectiveModel,
+      duration_ms: Date.now() - streamStart,
+      bytes_out: bytesOut,
+      prompt_tokens: promptTokens,
+      output_tokens: outputTokens,
+      stop_reason: stopReason,
+    });
+    recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
+    clearBackendCooldown(backend.id);
+    if (res.writable) res.end();
+  });
+  upRes.on('error', e => {
+    stopTimers();
+    ctxLog(ctx, 'ollama.stream.backend_error', { error: e.message, backend: backend.id });
+    // Mid-stream upstream error — emit Anthropic-shape error event so
+    // clients see a structured failure instead of an abrupt close.
+    sseWrite(res, 'error', {
+      type: 'error',
+      error: { type: 'api_error', message: `upstream Ollama error: ${e.message}` },
+    });
+    if (res.writable) res.end();
+  });
+}
+
+// Handle a non-streaming Ollama response. Buffers the full body, parses the
+// Ollama JSON, and re-shapes it into an Anthropic Messages response object.
+// Mirrors the content array structure of the streaming path (thinking first,
+// then text) so callers get a consistent shape regardless of stream mode.
+function handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, upRes) {
+  let fullBody = '';
+  let bytesOut = 0;
+  const nonStreamStart = Date.now();
+  upRes.on('data', chunk => { bytesOut += chunk.length; fullBody += chunk.toString(); });
+  upRes.on('end', () => {
+    try {
+      const ollamaJson = JSON.parse(fullBody);
+      const promptTokens = ollamaJson.prompt_eval_count || 0;
+      const outputTokens = ollamaJson.eval_count || 0;
+      const stopReason = mapStopReason(ollamaJson.done_reason);
+      const msg = ollamaJson.message || {};
+      // Build Anthropic-shape content array — thinking block (if present)
+      // first, then text block. Mirrors what the streaming path emits.
+      const content = [];
+      if (msg.thinking) content.push({ type: 'thinking', thinking: msg.thinking });
+      content.push({ type: 'text', text: msg.content || '' });
+      const anthropicJson = {
+        id: anthropicMessageId(),
+        type: 'message',
+        role: 'assistant',
+        model: effectiveModel,
+        content,
+        stop_reason: stopReason,
+        stop_sequence: null,
+        usage: {
+          input_tokens: promptTokens,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          output_tokens: outputTokens,
+        },
+      };
+      const respBody = JSON.stringify(anthropicJson);
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(respBody)
+      });
+      res.end(respBody);
+      ctxLog(ctx, 'ollama.nonstream.done', {
+        backend: backend.id,
+        model: effectiveModel,
+        duration_ms: Date.now() - nonStreamStart,
+        bytes_out: bytesOut,
+        prompt_tokens: promptTokens,
+        output_tokens: outputTokens,
+        stop_reason: stopReason,
+      });
+      recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
+      clearBackendCooldown(backend.id);
+    } catch (e) {
+      sendAnthropicError(res, 502, `failed to parse Ollama response: ${e.message}`);
+    }
+  });
+}
+
 async function forwardOllama(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   const url = backend.url.replace(/\/$/, '') + '/api/chat';
   const headers = scrubCthruHeaders(req.headers);
   headers['content-type'] = 'application/json';
-
-  // Outer-scope hook for the streaming branch's interval cleanup. Defaults to
-  // a no-op for the non-streaming path; reassigned inside the streaming branch.
-  // Lifted out so up.on('error') can call it on connection failures regardless
-  // of whether streaming had started.
-  let stopStreamTimers = () => {};
-
-  const options = {
-    method: 'POST',
-    headers
-  };
-
   const isStream = !!body.stream;
   const inBytes = (requestMeta && requestMeta.inBytes) || 0;
 
   ctxLog(ctx, 'ollama.request', { backend: backend.id, url, model: effectiveModel, stream: isStream });
   const upTimeoutMs = OLLAMA_UPSTREAM_TIMEOUT_MS;
   const requestStartedAt = Date.now();
+
+  // timerControls.stop is updated by setupOllamaStream so up.on('error') can
+  // clear the stall/ping intervals even on pre-stream connection failures.
+  const timerControls = { stop: () => {} };
+
   // TTFT (time-to-first-response-headers) timer. Fires fast (default 11s)
   // if upstream doesn't return HTTP headers, distinguishing "Ollama is
   // unreachable / dead / wedged" from "Ollama is taking a while to load
@@ -936,332 +1291,19 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
     });
     up.destroy(new Error(`upstream did not return headers within ${OLLAMA_TTFT_TIMEOUT_MS}ms (TTFT)`));
   }, OLLAMA_TTFT_TIMEOUT_MS);
-  const up = http.request(url, options, upRes => {
+
+  const up = http.request(url, { method: 'POST', headers }, upRes => {
     if (ttftTimer) { clearTimeout(ttftTimer); ttftTimer = null; }
     const ttftMs = Date.now() - requestStartedAt;
     ctxLog(ctx, 'ollama.response', { backend: backend.id, status: upRes.statusCode, model: effectiveModel, ttft_ms: ttftMs });
     if (upRes.statusCode !== 200) {
-      // Re-shape Ollama's native errors (e.g. {"error":"model 'X' not found"})
-      // into Anthropic's {type:"error", error:{type:"...", message:"..."}} shape.
-      // Buffer the body for diagnostic + fallback path, then either:
-      //  (a) tryFallbackOrFail to a configured fallback backend, OR
-      //  (b) surface the original error to the client.
-      // Common Ollama-side triggers: 404 (model not pulled / cloud subscription
-      // missing for :cloud models), 401 (auth required for cloud), 5xx (daemon
-      // hung). The 400 exclusion in shouldFallbackOnStatus prevents loops on
-      // caller-malformed requests.
-      let errBody = '';
-      upRes.on('data', c => errBody += c.toString());
-      upRes.on('end', async () => {
-        let message = errBody;
-        try {
-          const parsed = JSON.parse(errBody);
-          if (parsed.error) {
-            message = typeof parsed.error === 'string' ? parsed.error : (parsed.error.message || JSON.stringify(parsed.error));
-          }
-        } catch {}
-        if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
-          // Cloud→local rewrite first: if the failing model is :cloud-suffixed
-          // (e.g. user has no Ollama subscription), swap in the configured
-          // local fallback model and retry against the same backend before
-          // walking the per-backend fallback_to chain.
-          if (tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta)) {
-            return;
-          }
-          markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, message));
-          const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
-            reason: `upstream returned ${upRes.statusCode}`,
-            statusCode: upRes.statusCode,
-            error: message.slice(0, 200),
-          });
-          if (handled) return;
-        }
-        sendAnthropicError(res, upRes.statusCode, message || `upstream returned ${upRes.statusCode}`);
-      });
+      handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes);
       return;
     }
-
     if (isStream) {
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        // Match real Anthropic — anti-buffering hint for nginx & Cloudflare.
-        'X-Accel-Buffering': 'no',
-      });
-
-      const messageId = anthropicMessageId();
-
-      // Emit Anthropic-shape message_start. Real Anthropic includes input_tokens
-      // here, but Ollama doesn't tell us prompt_eval_count until the final chunk;
-      // we update those numbers in message_delta at the end. cache_*_input_tokens
-      // are always 0 (Ollama has no caching layer) but we include the fields so
-      // SDKs that probe their existence don't warn.
-      sseWrite(res, 'message_start', {
-        type: 'message_start',
-        message: {
-          id: messageId,
-          type: 'message',
-          role: 'assistant',
-          content: [],
-          model: effectiveModel,
-          stop_reason: null,
-          stop_sequence: null,
-          usage: {
-            input_tokens: 0,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-            output_tokens: 0,
-          },
-        },
-      });
-
-      // Block state machine. Real Anthropic emits content_block_start when a
-      // block begins, content_block_delta(s) for tokens, content_block_stop on
-      // close. Thinking-mode models produce a thinking block first (index 0)
-      // then a text block (index 1); pure-text models produce only a text block.
-      // We don't open block 0 up-front anymore — we wait for the first
-      // content/thinking token to know which type to start.
-      let buffer = '';
-      let firstChunk = true;
-      let bytesOut = 0;
-      let lastChunkAt = Date.now();
-      let stalled = false;
-      let promptTokens = 0;
-      let outputTokens = 0;
-      let stopReason = 'end_turn';
-      let stopSequence = null;
-      // INVARIANT: each openBlock is paired with one closeBlock (currentBlockType
-      // null gates idempotency); messageClosed gates closeMessage idempotency —
-      // `done:true` and upstream `end` race to close, error paths skip entirely
-      // (SSE error frame is itself terminal).
-      let blockIndex = -1;          // -1 = no block open yet
-      let currentBlockType = null;  // 'thinking' | 'text' | null
-      let messageClosed = false;    // tracks whether message_delta+message_stop were emitted
-      const streamStart = Date.now();
-
-      const openBlock = (type) => {
-        blockIndex++;
-        currentBlockType = type;
-        const empty = type === 'thinking' ? { type: 'thinking', thinking: '' } : { type: 'text', text: '' };
-        sseWrite(res, 'content_block_start', { type: 'content_block_start', index: blockIndex, content_block: empty });
-      };
-      const closeBlock = () => {
-        if (currentBlockType === null) return;
-        sseWrite(res, 'content_block_stop', { type: 'content_block_stop', index: blockIndex });
-        currentBlockType = null;
-      };
-
-      // Emit terminal frames (message_delta + message_stop). Idempotent — guarded
-      // by `messageClosed` so we never double-emit if both `done:true` arrives AND
-      // upstream `end` fires after.
-      const closeMessage = () => {
-        if (messageClosed) return;
-        closeBlock();
-        sseWrite(res, 'message_delta', {
-          type: 'message_delta',
-          delta: { stop_reason: stopReason, stop_sequence: stopSequence },
-          usage: {
-            input_tokens: promptTokens,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-            output_tokens: outputTokens,
-          },
-        });
-        sseWrite(res, 'message_stop', { type: 'message_stop' });
-        messageClosed = true;
-      };
-
-      // Idle watchdog — log at >=5s, hard-fail at >=120s. The 5-min `up.setTimeout`
-      // rearms on socket activity so it can't catch a slow trickle. This watchdog
-      // does. Hard-fail destroys the upstream and emits an Anthropic-shape error
-      // SSE frame so the client sees a structured failure instead of a silent hang.
-      // Ping keepalive (15s): emits `event: ping` while streaming so long generations
-      // survive idle-connection killers in intermediate proxies (nginx, CF, corp middleboxes).
-      const stallCheck = setInterval(() => {
-        if (!res.writable) { stopTimers(); return; }
-        const idle = Date.now() - lastChunkAt;
-        if (idle >= STREAM_STALL_HARDFAIL_MS) {
-          stopTimers();
-          ctxLog(ctx, 'ollama.stream.hard_stall', { idle_ms: idle, backend: backend.id });
-          // We deliberately skip closeMessage() here. The Anthropic SSE error
-          // event is itself a terminal frame — clients treat it as "stream is
-          // over, no more events coming" and emitting message_delta+message_stop
-          // after an error frame would be inconsistent with the failure semantics.
-          sseWrite(res, 'error', {
-            type: 'error',
-            error: { type: 'timeout_error', message: `upstream stalled for ${idle}ms — aborting` },
-          });
-          if (!up.destroyed) up.destroy(new Error(`upstream mid-stream stall ${idle}ms`));
-          if (res.writable) res.end();
-          return;
-        }
-        if (idle >= 5000 && !stalled) {
-          stalled = true;
-          ctxLog(ctx, 'ollama.stream.stall', { idle_ms: idle, backend: backend.id });
-        } else if (idle < 5000 && stalled) {
-          stalled = false;
-        }
-      }, 1000);
-      const pingTick = setInterval(() => {
-        if (!res.writable) { stopTimers(); return; }
-        sseWrite(res, 'ping', { type: 'ping' });
-      }, SSE_PING_INTERVAL_MS);
-      const stopTimers = () => { clearInterval(stallCheck); clearInterval(pingTick); };
-      stopStreamTimers = stopTimers;  // expose to outer-scope error handlers
-
-      // Client disconnected mid-stream: the request-level `res.on('close')` fires.
-      // We need to clear our intervals (otherwise they retain `res`/`upRes` refs
-      // and burn CPU writing to a dead socket) AND tear down the upstream so Ollama
-      // stops generating tokens we'll never deliver.
-      res.on('close', () => {
-        if (messageClosed) return;  // normal completion path
-        stopTimers();
-        if (!up.destroyed) up.destroy(new Error('client disconnected mid-stream'));
-      });
-
-      upRes.on('data', chunk => {
-        if (!res.writable) return;
-        if (firstChunk) {
-          firstChunk = false;
-          ctxLog(ctx, 'ollama.stream.first_chunk', { ttft_ms: Date.now() - requestStartedAt, backend: backend.id });
-        }
-        bytesOut += chunk.length;
-        lastChunkAt = Date.now();
-        buffer += chunk.toString();
-        let lines = buffer.split('\n');
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const ollamaJson = JSON.parse(line);
-            if (ollamaJson.done) {
-              promptTokens = ollamaJson.prompt_eval_count || 0;
-              outputTokens = ollamaJson.eval_count || 0;
-              stopReason = mapStopReason(ollamaJson.done_reason);
-              closeMessage();
-              continue;
-            }
-            const msg = ollamaJson.message || {};
-            const thinkingDelta = msg.thinking;
-            const textDelta = msg.content;
-            // Thinking tokens: open thinking block lazily, stream as thinking_delta.
-            if (thinkingDelta) {
-              if (currentBlockType !== 'thinking') {
-                if (currentBlockType === 'text') closeBlock();  // shouldn't happen — text rarely precedes thinking
-                openBlock('thinking');
-              }
-              sseWrite(res, 'content_block_delta', {
-                type: 'content_block_delta',
-                index: blockIndex,
-                delta: { type: 'thinking_delta', thinking: thinkingDelta },
-              });
-            }
-            // Text tokens: open text block lazily; if a thinking block is open,
-            // close it first so we transition cleanly to a new block index.
-            if (textDelta) {
-              if (currentBlockType !== 'text') {
-                if (currentBlockType === 'thinking') closeBlock();
-                openBlock('text');
-              }
-              sseWrite(res, 'content_block_delta', {
-                type: 'content_block_delta',
-                index: blockIndex,
-                delta: { type: 'text_delta', text: textDelta },
-              });
-            }
-            // If both empty (pure heartbeat chunk), drop silently.
-          } catch (e) {
-            ctxLog(ctx, 'ollama.stream.parse_error', { line, error: e.message });
-          }
-        }
-      });
-      upRes.on('end', () => {
-        stopTimers();
-        // ALWAYS close the message — covers both normal completion (no-op via
-        // messageClosed guard since `done:true` already called closeMessage) AND
-        // half-open streams where upstream ended without sending `done` or sent
-        // zero ndjson lines. Without this, clients see message_start with no
-        // matching message_stop and hang.
-        closeMessage();
-        ctxLog(ctx, 'ollama.stream.done', {
-          backend: backend.id,
-          model: effectiveModel,
-          duration_ms: Date.now() - streamStart,
-          bytes_out: bytesOut,
-          prompt_tokens: promptTokens,
-          output_tokens: outputTokens,
-          stop_reason: stopReason,
-        });
-        recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
-        clearBackendCooldown(backend.id);
-        if (res.writable) res.end();
-      });
-      upRes.on('error', e => {
-        stopTimers();
-        ctxLog(ctx, 'ollama.stream.backend_error', { error: e.message, backend: backend.id });
-        // Mid-stream upstream error — emit Anthropic-shape error event so
-        // clients see a structured failure instead of an abrupt close.
-        sseWrite(res, 'error', {
-          type: 'error',
-          error: { type: 'api_error', message: `upstream Ollama error: ${e.message}` },
-        });
-        if (res.writable) res.end();
-      });
+      setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, up, requestStartedAt, timerControls, upRes);
     } else {
-      let fullBody = '';
-      let bytesOut = 0;
-      const nonStreamStart = Date.now();
-      upRes.on('data', chunk => { bytesOut += chunk.length; fullBody += chunk.toString(); });
-      upRes.on('end', () => {
-        try {
-          const ollamaJson = JSON.parse(fullBody);
-          const promptTokens = ollamaJson.prompt_eval_count || 0;
-          const outputTokens = ollamaJson.eval_count || 0;
-          const stopReason = mapStopReason(ollamaJson.done_reason);
-          const msg = ollamaJson.message || {};
-          // Build Anthropic-shape content array — thinking block (if present)
-          // first, then text block. Mirrors what the streaming path emits.
-          const content = [];
-          if (msg.thinking) content.push({ type: 'thinking', thinking: msg.thinking });
-          content.push({ type: 'text', text: msg.content || '' });
-          const anthropicJson = {
-            id: anthropicMessageId(),
-            type: 'message',
-            role: 'assistant',
-            model: effectiveModel,
-            content,
-            stop_reason: stopReason,
-            stop_sequence: null,
-            usage: {
-              input_tokens: promptTokens,
-              cache_creation_input_tokens: 0,
-              cache_read_input_tokens: 0,
-              output_tokens: outputTokens,
-            },
-          };
-          const respBody = JSON.stringify(anthropicJson);
-          res.writeHead(200, {
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(respBody)
-          });
-          res.end(respBody);
-          ctxLog(ctx, 'ollama.nonstream.done', {
-            backend: backend.id,
-            model: effectiveModel,
-            duration_ms: Date.now() - nonStreamStart,
-            bytes_out: bytesOut,
-            prompt_tokens: promptTokens,
-            output_tokens: outputTokens,
-            stop_reason: stopReason,
-          });
-          recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
-          clearBackendCooldown(backend.id);
-        } catch (e) {
-          sendAnthropicError(res, 502, `failed to parse Ollama response: ${e.message}`);
-        }
-      });
+      handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, upRes);
     }
   });
 
@@ -1280,7 +1322,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
     ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'ollama', error: e.message });
     const statusCode = e.message.startsWith('upstream timeout') || e.message.includes('TTFT') ? 504 : 502;
     // Always stop interval timers first to avoid the leak.
-    stopStreamTimers();
+    timerControls.stop();
     if (res.headersSent) {
       // Mid-stream upstream error: too late for fallback (bytes already on
       // the wire to the client). Emit a structured SSE error frame instead
@@ -1321,22 +1363,8 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
       sendAnthropicError(res, statusCode, `backend ollama at ${backend.url} error: ${e.message}`);
     }
   });
-  const numCtx = body.num_ctx || (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
-  // Use ?? not || for temperature: a caller-provided `0` is a valid request
-  // (deterministic generation), and `||` would misinterpret it as "unset"
-  // and replace with our default. If caller didn't specify, omit the field
-  // entirely so Ollama uses the modelfile default rather than forcing 0.
-  const ollamaOptions = { num_ctx: numCtx };
-  if (body.temperature !== undefined && body.temperature !== null) {
-    ollamaOptions.temperature = body.temperature;
-  }
-  const ollamaBody = JSON.stringify({
-    model: effectiveModel,
-    messages: flattenMessagesForOllama(body),
-    stream: isStream,
-    keep_alive: OLLAMA_KEEP_ALIVE,
-    options: ollamaOptions,
-  });
+
+  const ollamaBody = buildOllamaRequestBody(body, effectiveModel);
   ctxLog(ctx, 'body.rewrite', {
     bytes_in: inBytes,
     bytes_out: ollamaBody.length,

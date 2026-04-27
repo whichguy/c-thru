@@ -75,7 +75,11 @@ link_tool() {
     local src="$1" dest_name="$2"
     local dest="$TOOLS_DEST/$dest_name"
     local want="$TOOLS_SRC/$src"
-    [ -x "$want" ] || return 0
+    if [ ! -e "$want" ]; then return 0; fi
+    if [ ! -x "$want" ]; then
+        echo -e "  ${YELLOW}⚠️  ${dest_name} — source ${src} exists but is not executable; skipping (run: chmod +x ${want})${NC}"
+        return 0
+    fi
 
     if [ -L "$dest" ]; then
         local current
@@ -245,6 +249,31 @@ extend_model_map() {
     echo -e "  ${GREEN}✅ model-map.system.json extended${NC}"
 }
 
+# --- Apply community recommendations into the effective model-map ---
+apply_recommendations() {
+    command -v node >/dev/null 2>&1 || return 0
+    local rec_script="$TOOLS_SRC/model-map-apply-recommendations.js"
+    [ -f "$rec_script" ] || return 0
+    [ -f "$USER_MAP" ] || return 0
+
+    local tmp="${USER_MAP}.rec.$$" stderr_tmp="${USER_MAP}.rec.err.$$"
+    if CLAUDE_ROUTER_DEBUG=1 node "$rec_script" "$REPO_DIR" "$USER_MAP" >"$tmp" 2>"$stderr_tmp"; then
+        local applied
+        applied=$(grep -oE 'applied [0-9]+' "$stderr_tmp" 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)
+        rm -f "$stderr_tmp"
+        if [ "${applied:-0}" -gt 0 ] 2>/dev/null; then
+            mv "$tmp" "$USER_MAP"
+            echo -e "  ${GREEN}✅ model-map.json — ${applied} community recommendation(s) applied (rec)${NC}"
+        else
+            rm -f "$tmp"
+            echo -e "  ${GRAY}✓  recommendations already current${NC}"
+        fi
+    else
+        rm -f "$tmp" "$stderr_tmp"
+        echo -e "  ${YELLOW}⚠️  recommendations apply failed (run CLAUDE_ROUTER_DEBUG=1 ./install.sh for details)${NC}"
+    fi
+}
+
 cleanup_old_persistent_config() {
     echo ""
     echo "Cleanup (migrating to ephemeral config):"
@@ -303,6 +332,7 @@ cleanup_old_persistent_config
 install_skill
 install_cplan_command
 extend_model_map
+apply_recommendations
 
 # --- Add ~/.claude/tools to PATH via shell rc file (idempotent) ---
 # Markers MUST stay verbatim — uninstall.sh greps these to remove the block.
@@ -573,6 +603,24 @@ run_e2e_checks() {
 }
 
 run_e2e_checks
+
+# --- Active route summary ---
+if [ -f "$USER_MAP" ] && command -v node >/dev/null 2>&1; then
+    echo ""
+    echo "Active routes (effective model-map):"
+    node -e "
+try {
+  const m = JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));
+  const r = m.routes || {};
+  const maxLen = Math.max(...Object.keys(r).map(k=>k.length), 0);
+  for (const [k,v] of Object.entries(r))
+    console.log('  ' + k.padEnd(maxLen) + '  →  ' + String(v));
+  const tier = (m.llm_profiles || {});
+  const tiers = Object.keys(tier);
+  if (tiers.length) console.log('  hw tiers configured: ' + tiers.join(', '));
+} catch(e) { process.exit(0); }
+" "$USER_MAP" 2>/dev/null || true
+fi
 
 echo ""
 echo -e "${GREEN}✅ Done. c-thru is now using ephemeral session control.${NC}"

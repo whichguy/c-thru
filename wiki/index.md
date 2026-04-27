@@ -58,6 +58,9 @@
 | [ux-progress-visibility](entities/ux-progress-visibility.md) | TODO: research + design for expressive progress notifications during c-thru agentic operations — wave/agent/routing events via statusline, Stop-hook systemMessage, OS toasts; 7 open research questions; candidate state-file schema | 2026-04-21 |
 | [wave-md-manifest](entities/wave-md-manifest.md) | wave.md markdown format (contract v3) replacing wave.json — YAML frontmatter, 5-state checkbox items (pending/in_progress/complete/blocked/extend), sole-writer invariant, O_EXCL file lock, 7 harness subcommands, v2→v3 migration path, ci_risk annotation | 2026-04-22 |
 | [orchestrator-self-questions](entities/orchestrator-self-questions.md) | Pattern: plan-orchestrator reasons through migration and CI/CD questions as LLM steps before each wave — self-reasoning > user prompts > file-pattern heuristics; explicit reasoning eliminates downstream heuristic gates (persisted_state rubric, ci_risk generalization) | 2026-04-22 |
+| [detect-config-drift-pattern](entities/detect-config-drift-pattern.md) | Reusable pattern: anything in a derived/merged file not traceable to canonical sources is drift — basis for --detect-pollution / check-config-drift; `detectConfigDrift(sources, derived)` returns `{ leaks }` | 2026-04-26 |
+| [detect-clean-twin-flag-convention](entities/detect-clean-twin-flag-convention.md) | CLI convention: every destructive cleanup tool exposes --detect-X (dry-run, --strict for CI) and --clean-X (idempotent apply) as a pair; c-thru-ollama-gc.sh sweep currently lacks the detect half | 2026-04-26 |
+| [rebuild-not-patch-derived-files](entities/rebuild-not-patch-derived-files.md) | Architectural rule: clean a derived file by re-syncing from canonical sources (full rebuild = strong guarantee), not by surgically patching individual keys (weak guarantee, accumulates drift) | 2026-04-26 |
 
 ## About
 

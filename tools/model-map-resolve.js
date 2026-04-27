@@ -79,6 +79,8 @@ function resolveProfileModel(entry, mode) {
 
 // Resolve the active connectivity mode.
 // Precedence: CLAUDE_LLM_MODE → CLAUDE_CONNECTIVITY_MODE (legacy) → config.llm_mode → (auto detection) → 'connected'
+// ARCH: when mode is 'connected' or 'auto', calls detectConnectivity() which makes a real outbound
+//       network call (curl/ping). Skip by setting CLAUDE_LLM_MODE=connected explicitly.
 function resolveLlmMode(config) {
   const envMode = process.env.CLAUDE_LLM_MODE;
   if (envMode) {

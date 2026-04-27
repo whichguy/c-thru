@@ -66,6 +66,30 @@ This is a half-day-plus item. Worth its own dedicated session.
 
 ## Testing
 
+**[testing] Review + update tests/mocks for per-shell dynamic-port proxy design**
+
+Follows the per-shell proxy redesign (port 0, no shared proxy, system-prompt
+URL injection). Several tests assumed port 9997 or the shared flock/reuse model:
+
+1. **Audit all test files for hardcoded port 9997** — `test/smoke-check.sh` and
+   `test/e2e-plan-execution.sh` explicitly set `CLAUDE_PROXY_PORT=9997`. Decide
+   whether each test legitimately wants a fixed port (keep) or should use a
+   free port (update).
+2. **`proxy-lifecycle.test.js`** — add assertions: (a) proxy binds exclusively to
+   `127.0.0.1` (not `0.0.0.0`); (b) two concurrent proxy spawns land on different
+   ports; (c) proxy exits when its parent node process exits.
+3. **`install-smoke.test.sh`** — verify the `__PROXY_PORT__` placeholder is present
+   in the generated settings.json before proxy start, and replaced with a real port
+   afterwards (may require a minimal stub proxy that writes `READY <port>` to test
+   the sed-replace path in the router).
+4. **Mocks in Node tests** — any test that stubs `server.listen` or hard-codes the
+   proxy base URL should be updated to handle dynamic ports.
+5. **README test-running section** — verify instructions for running the full test
+   suite are accurate and complete. Add a standard `npm test` or `make test` entry
+   point if one doesn't exist so contributors can run all tests with one command.
+6. **Contract check** — run `bash tools/c-thru-contract-check.sh` after all test
+   changes and confirm exit 0.
+
 **[testing] Implement HIGH-priority test gaps from coverage audit**
 Audit shipped in 9e5a616 (see `docs/test-coverage-audit.md`). The audit
 identifies the test sketches but doesn't write them. Estimated 3.3 hours
@@ -183,6 +207,59 @@ two persistent files in `~/.claude/` outside vendor stuff:
 should be derived/cached/symlinked.
 
 ## Architecture / boundaries
+
+**[proxy] One-proxy-per-shell: loopback-only, parent-owned, port in system prompt**
+
+**Motivation.** Today the proxy is `disown`ed and survives after the launching
+`c-thru` shell exits; the next invocation re-attaches to it via `/ping`.
+This creates shared mutable state across unrelated shells — a debugging
+hazard (stale config, wrong model-map) and a security surface (any local
+process can reach the proxy on its fixed/known port).
+
+**Desired behaviour.**
+1. **One proxy per shell.** Each `c-thru` invocation owns exactly one
+   `claude-proxy` child. When the parent shell exits the proxy exits with
+   it (no `disown`, no `nohup`).
+2. **Loopback-only bind.** `claude-proxy` must call `server.listen(port,
+   '127.0.0.1', ...)` (not `0.0.0.0`), so it is unreachable from other
+   hosts on the network.
+3. **Dynamic port, communicated to the router.** The proxy picks the next
+   free OS port by binding to port 0, then writes `READY <port>` to the
+   existing FIFO ready-pipe. The router reads it and exports
+   `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`. (The FIFO mechanism
+   already exists — only the loopback bind and the kill-on-exit need to
+   change.)
+4. **Port/URL injected into the Claude system prompt.** Append a line such
+   as `c-thru proxy: http://127.0.0.1:<port>` to the `--append-system-prompt`
+   value that `c-thru` passes to the real `claude` binary. This makes the
+   active proxy URL observable to Claude agents that need it (e.g.
+   context-injection hooks that call the proxy directly).
+
+**Design constraints / open questions.**
+- Removing `disown` means the proxy must be started as a proper background
+  child (`cmd &`) with its PID captured and propagated through the
+  `exec claude …` call. `exec` replaces the shell process so the proxy
+  would be re-parented to the shell's parent (typically the terminal). Need
+  to verify the OS re-parenting behaviour on macOS and Linux and whether
+  the proxy dies correctly when the terminal closes.
+- Alternative: replace `exec claude` with a wrapper that traps `EXIT` and
+  kills the proxy PID before handing control back. Adds latency on startup
+  but keeps lifecycle deterministic.
+- Multiple concurrent `c-thru` invocations in the same terminal tab (e.g.
+  backgrounded) each need their own proxy — the current flock-and-share
+  approach must be removed in favour of unconditional per-invocation spawn.
+- The system-prompt injection should be a one-liner addition to the
+  existing `--append-system-prompt` construction in `c-thru`; confirm the
+  string doesn't conflict with any running hook that parses the system
+  prompt for the proxy URL.
+- `/ping` health-check logic in `c-thru` currently caches the proxy PID in
+  `~/.claude/proxy.pid`; that file becomes meaningless when every session
+  gets its own proxy. Remove or scope it to the current TTY/session.
+
+**Scope:** `tools/claude-proxy` (bind address + port 0 listen), `tools/c-thru`
+(remove `disown`, capture PID, kill-on-exit trap or wrapper, system-prompt
+append), `test/proxy-lifecycle.test.js` (assert loopback-only, assert proxy
+exits with parent).
 
 **[ollama] Document the Ollama / proxy lifecycle boundary in CLAUDE.md**
 Today `ollama serve` is a long-running daemon spawning one runner per

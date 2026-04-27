@@ -49,6 +49,10 @@ function canonicalizeFile(file) {
   }
 }
 
+// ARCH: walks up from dir until it finds .claude/model-map.json. May return
+//       the profile's own ~/.claude/model-map.json if cwd is under ~/ — callers
+//       MUST filter that case out (resolveSelectedConfigPath does this via
+//       profileClaudeDir() guard), otherwise project=profile causes pollution.
 function findParentModelMap(dir) {
   const real = canonicalizeDir(dir);
   if (!real) return null;
@@ -228,8 +232,10 @@ function main() {
     // system or globalOverrides — so leaks in model_routes,
     // agent_to_capability, llm_profiles, backends, model_overrides, etc.
     // are all caught. --clean-pollution removes them via canonical re-sync;
-    // --detect-pollution just reports.
+    // --detect-pollution just reports. --detect-pollution --strict exits 1
+    // when drift is found (CI fail gate).
     const dryRun = arg === '--detect-pollution';
+    const strict = dryRun && process.argv.includes('--strict');
     if (!claudeDir) {
       console.error('c-thru: no profile dir found');
       process.exit(1);
@@ -332,7 +338,7 @@ function main() {
     }
     if (dryRun) {
       console.log('\nrun: model-map-config.js --clean-pollution to remove them');
-      process.exit(0);
+      process.exit(strict ? 1 : 0);
     }
     // Remove + rewrite. Use a sync rebuild (system+global only, no project
     // tier) instead of patching profile in-place — that way we get back a

@@ -6,7 +6,11 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const baseUrl = process.env.ANTHROPIC_BASE_URL || 'http://127.0.0.1:9997';
+const baseUrl = process.env.ANTHROPIC_BASE_URL || '';
+if (!baseUrl) {
+  console.error('c-thru-control: ANTHROPIC_BASE_URL not set — run from within a c-thru session or set CLAUDE_PROXY_PORT');
+  process.exit(1);
+}
 const args = process.argv.slice(2);
 const prompt = args.join(' ').toLowerCase();
 
