@@ -37,6 +37,10 @@ const FLAG_ENV_MAP = {
   '--hooks-port':  'CLAUDE_PROXY_HOOKS_PORT',
 };
 const UNRECOGNIZED_CLI_FLAGS = [];
+// Permissive: unknown flags are buffered (logged once proxyLog is up at
+// L1387) rather than rejected — hard-fail bricks the proxy on a future-flag
+// from c-thru we don't know; silent-ignore hides typos. Buffer-and-log splits
+// the difference.
 function parseCliFlags(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -72,6 +76,11 @@ const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_D
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 
 // Tunable timing constants — env-overridable for tests + power users.
+// THREE-TIER UPSTREAM WATCHDOG (each catches a distinct failure mode;
+// none subsumes the other — see L914 (TTFT), L1062 (stream stall), L1254 (upstream)):
+//   1. TTFT (OLLAMA_TTFT_TIMEOUT_MS, ~11s)        — pre-headers: upstream wedged on connect/load
+//   2. Stream stall (STREAM_STALL_HARDFAIL_MS, 2m) — mid-stream: socket alive but no bytes
+//   3. Upstream (OLLAMA_UPSTREAM_TIMEOUT_MS, 5m)  — req.setTimeout: rearms on any socket activity
 // OLLAMA_UPSTREAM_TIMEOUT_MS: hard cap from request issue to first byte.
 //   Note: this is `req.setTimeout` semantics — rearms on socket activity.
 //   For mid-stream stalls, see STREAM_STALL_HARDFAIL_MS.
@@ -331,6 +340,9 @@ function recordUsage(model, backendId, input, output) {
 // Debounced async flush. Coalesces multiple recordUsage() calls within a 5s
 // window into a single fs.writeFile. The hot path returns immediately; the
 // next flush picks up the latest in-memory state.
+// CAUTION: in-memory deltas accumulated within the debounce window are lost
+// on hard kill (SIGKILL / OOM). SIGTERM/SIGINT/beforeExit handlers (L1561+)
+// call flushPersistentUsageNowSync to drain the window — see pairing there.
 let usageFlushTimer = null;
 const USAGE_FLUSH_DEBOUNCE_MS = 5000;
 function scheduleUsageFlush() {
@@ -696,13 +708,11 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
       hopsWalked++;
       continue;
     }
-    // We've found a candidate to dispatch. Do NOT add resolved.backend.id
-    // to the chain here — the dispatched target's own re-entry into
-    // tryFallbackOrFail (when it fails) will add itself via the entry
-    // chain.add(backend.id) at the top of this function. Adding here
-    // would make the dispatched backend appear as already-cycled when
-    // its own failure handler runs, short-circuiting its legitimate
-    // fallback chain.
+    // INVARIANT: only cooldown-skipped intermediates get chain.add()'d in
+    // this loop (L694 above). The dispatched target adds itself on re-entry
+    // (L668, top-of-function). Adding here would falsely flag it as cycled
+    // when its own failure handler runs, killing its legitimate fallback chain.
+    // Bug history: this used to add unconditionally, which broke 2-deep chains.
     ctxLog(ctx, 'fallback.triggered', {
       from_backend: backend.id,
       to: resolved.backend.id,
@@ -839,6 +849,11 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
         let inputTokens = 0, outputTokens = 0;
         if (isSse) {
           // Locate the message_start frame and pull data: line; parse as JSON.
+          // Regex anchors `event:<name>\n` directly to `data:{...}` — Anthropic
+          // always emits both lines paired (SSE allows data-only frames but
+          // Anthropic doesn't use them). `{[^\n]+}` is a single-line capture:
+          // Anthropic's per-frame JSON never contains a raw newline, so no
+          // tokenizer needed.
           const startFrame = txt.match(/event:\s*message_start\s*\n\s*data:\s*({[^\n]+})/);
           if (startFrame) {
             try { inputTokens = JSON.parse(startFrame[1]).message?.usage?.input_tokens || 0; } catch {}
@@ -1016,6 +1031,10 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
       let outputTokens = 0;
       let stopReason = 'end_turn';
       let stopSequence = null;
+      // INVARIANT: each openBlock is paired with one closeBlock (currentBlockType
+      // null gates idempotency); messageClosed gates closeMessage idempotency —
+      // `done:true` and upstream `end` race to close, error paths skip entirely
+      // (SSE error frame is itself terminal).
       let blockIndex = -1;          // -1 = no block open yet
       let currentBlockType = null;  // 'thinking' | 'text' | null
       let messageClosed = false;    // tracks whether message_delta+message_stop were emitted
