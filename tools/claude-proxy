@@ -1460,7 +1460,7 @@ const server = http.createServer((req, res) => {
         }
       });
 
-      if (req.url === '/ping') return send(res, 200, { ok: true, pid: process.pid, config_path: CONFIG_PATH, active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG) });
+      if (req.url === '/ping') return send(res, 200, { ok: true, pid: process.pid, config_path: CONFIG_PATH, active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG), bind_address: server.address().address });
 
       if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/')) {
         const tier = resolveActiveTier(CONFIG);

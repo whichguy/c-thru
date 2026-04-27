@@ -47,6 +47,7 @@ write_agent() {
 ---
 name: $name
 model: $name
+tier_budget: 50000
 ---
 # $name
 Input: $input_line
@@ -179,11 +180,13 @@ teardown_workspace "$F6"
 echo "Fixture 7: agent count mismatch → fail..."
 F7=$(setup_workspace)
 mkdir -p "$F7/config"
-# 2 agent files, but model-map has 3 agent_to_capability keys
+# 3 agent files but model-map only has 2 agent_to_capability entries — count mismatch.
+# (3 files vs 2 entries: agent-c has a file but no capability entry, so 3 ≠ 2.)
 write_agent "$F7" "agent-a" "digest path."
 write_agent "$F7" "agent-b" "digest path."
+write_agent "$F7" "agent-c" "digest path."
 cat > "$F7/config/model-map.json" <<'EOF'
-{ "agent_to_capability": { "agent-a": "pattern-coder", "agent-b": "pattern-coder", "agent-c": "pattern-coder" } }
+{ "agent_to_capability": { "agent-a": "pattern-coder", "agent-b": "pattern-coder" } }
 EOF
 write_skill "$F7" "agent-a" "digest: /tmp/c-thru/x/test-slug/digests/item.md"
 rc=0; run_checker_in "$F7" >/dev/null 2>&1 || rc=$?
@@ -236,6 +239,7 @@ cat > "$F9/agents/status-agent.md" <<'EOF'
 ---
 name: status-agent
 model: status-agent
+tier_budget: 50000
 ---
 # status-agent
 Input: digest path.
@@ -284,6 +288,7 @@ cat > "$F10/agents/keyed-agent.md" <<'EOF'
 ---
 name: keyed-agent
 model: keyed-agent
+tier_budget: 50000
 ---
 # keyed-agent
 Input: `digest` path.
@@ -329,6 +334,7 @@ cat > "$F11/agents/multi-agent.md" <<'EOF'
 ---
 name: multi-agent
 model: multi-agent
+tier_budget: 50000
 ---
 # multi-agent
 
@@ -379,6 +385,7 @@ cat > "$F12/agents/hyphen-agent.md" <<'EOF'
 ---
 name: hyphen-agent
 model: hyphen-agent
+tier_budget: 50000
 ---
 # hyphen-agent
 Input: `replan-brief` path.

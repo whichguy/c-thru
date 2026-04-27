@@ -451,6 +451,38 @@ c-thru explain --capability workhorse        # resolution chain (pure JS, no pro
 
 ---
 
+## Running tests
+
+```sh
+bash test/run-all.sh          # full suite (all shells + node tests)
+```
+
+Individual suites:
+
+```sh
+# Shell tests
+bash test/install-smoke.test.sh          # install idempotency, symlinks, ephemeral arch (21 tests)
+bash test/ollama-probe.test.sh           # ollama-probe health-check script (10 tests)
+bash test/preflight-model-readiness.test.sh  # proxy /v1/active-models preflight (11 tests)
+bash test/c-thru-contract-check.test.sh  # agent/skill contract integrity
+
+# Node tests
+node test/model-map-v12-adapter.test.js        # adapter regression (24 tests)
+node test/proxy-lifecycle.test.js              # proxy startup, /ping, shutdown, loopback bind (9 tests)
+node test/proxy-forward-ollama-midstream-error.test.js  # SSE mid-stream error handling (12 tests)
+node test/proxy-client-disconnect-cleanup.test.js       # timer cleanup on client disconnect (6 tests)
+node test/proxy-content-length-scrub.test.js            # body rewrite content-length (12 tests)
+node test/proxy-cooldown-ttl.test.js                    # backend cooldown TTL expiry (23 tests)
+node test/model-map-config-project-overlay.test.js      # project-overlay path derivation (18 tests)
+
+# Validators
+node tools/model-map-validate.js config/model-map.json
+bash tools/c-thru-contract-check.sh
+bash -n tools/c-thru && node --check tools/claude-proxy
+```
+
+---
+
 ## Honest about limits
 
 This README itself is a first-pass rewrite — see `TODO.md` entry **`[docs] Full repo audit + thoughtful README rewrite`** for the full audit scope (cross-checking every claim/env-var/skill against actual code, agent-by-agent purpose tables, file-by-file tool inventory). What's here is true and verified, but there's more depth to surface.

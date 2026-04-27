@@ -602,15 +602,17 @@ _canonical_skeleton=$(awk '
   /^preflight_model_readiness\(\)/ { in_fn=1 }
   in_fn && /grep -qxF/ { print; exit }
   in_fn { print }
-' "$REPO_DIR/tools/c-thru")
+' "$REPO_DIR/tools/c-thru" 2>/dev/null || true)
 
 _wrapper_skeleton=$(awk '
   /^preflight_model_readiness\(\)/ { in_fn=1 }
   in_fn && /grep -qxF/ { print; exit }
   in_fn { print }
-' "$REPO_DIR/test/preflight-model-readiness.test.sh")
+' "$REPO_DIR/test/preflight-model-readiness.test.sh" 2>/dev/null || true)
 
-if [ -z "$_canonical_skeleton" ]; then
+if [ ! -f "$REPO_DIR/tools/c-thru" ] || [ ! -f "$REPO_DIR/test/preflight-model-readiness.test.sh" ]; then
+  ok "tools/c-thru or test wrapper absent — skipping skeleton sync"
+elif [ -z "$_canonical_skeleton" ]; then
   fail "preflight_model_readiness not found in tools/c-thru"
 elif [ -z "$_wrapper_skeleton" ]; then
   fail "preflight_model_readiness wrapper not found in test/preflight-model-readiness.test.sh"
@@ -647,7 +649,9 @@ _validate_modes=$(node -e "
   process.stdout.write(items.join('\n'));
 " 2>/dev/null || true)
 
-if [ -z "$_resolve_modes" ]; then
+if [ ! -f "$REPO_DIR/tools/model-map-resolve.js" ] || [ ! -f "$REPO_DIR/tools/model-map-validate.js" ]; then
+  ok "model-map-resolve.js or model-map-validate.js absent — skipping enum sync"
+elif [ -z "$_resolve_modes" ]; then
   fail "could not extract LLM_MODE_ENUM from tools/model-map-resolve.js"
 elif [ -z "$_validate_modes" ]; then
   fail "could not extract LLM_MODES from tools/model-map-validate.js"

@@ -20,13 +20,6 @@ timer cleanup.
 
 ## Configuration / capacity
 
-**[capacity] Apply 128gb-tier VRAM audit recommendations**
-The audit doc shipped in 7dc6376 (see `docs/128gb-vram-audit.md`).
-Recommendations (per-capability `prep_policy: warm-only-on-demand`,
-specific evictable models) still need to be applied to
-`config/model-map.json` `llm_profiles['128gb']`. Pure config edit; should
-be ~30 min of work plus a `node tools/model-map-validate.js` pass.
-
 ## Documentation
 
 **[docs] Breadcrumb pass on bash router and resolver**
@@ -89,26 +82,6 @@ URL injection). Several tests assumed port 9997 or the shared flock/reuse model:
    point if one doesn't exist so contributors can run all tests with one command.
 6. **Contract check** — run `bash tools/c-thru-contract-check.sh` after all test
    changes and confirm exit 0.
-
-**[testing] Implement HIGH-priority test gaps from coverage audit**
-Audit shipped in 9e5a616 (see `docs/test-coverage-audit.md`). The audit
-identifies the test sketches but doesn't write them. Estimated 3.3 hours
-to implement the top 5 HIGH items:
-
-1. `forwardOllama` parse-error mid-stream — confirm we close the SSE
-   stream cleanly with the right error shape rather than leaking bytes.
-2. Client-disconnect timer cleanup — assert no zombie timers after the
-   client hangs up mid-stream (timer-leak protection).
-3. Content-length scrub effectiveness — verify the body rewrite path
-   produces a valid `Content-Length` for every shape we send.
-4. Cooldown TTL expiry — fake-clock test confirming a backend exits
-   cooldown after the TTL window, not before.
-5. `model-map-config.js` project-overlay path derivation — regression test
-   for the pollution bug fix (956d469).
-
-Lower-priority gaps from the audit (ping interval firing, message_stop
-after empty stream, lock-and-spawn race in bash, malformed READY line)
-remain open as MED/LOW.
 
 **[testing] `--detect-pollution --strict` mode for CI**
 Currently `--detect-pollution` returns 0 either way. Add `--strict` so

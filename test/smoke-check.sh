@@ -22,24 +22,27 @@ echo -n "2. Checking dependencies... "
 tools/c-thru check-deps > /dev/null
 echo "✅ OK"
 
-# 3. Kill existing proxy and start a new one
+# 3. Start a proxy on a free port (READY <port> on stdout)
 echo -n "3. Starting proxy... "
-pkill -f claude-proxy || true
-# Start proxy directly for testing
-CLAUDE_PROFILE_DIR=$HOME/.claude CLAUDE_MODEL_MAP_PATH=$HOME/.claude/model-map.json CLAUDE_PROXY_PORT=9997 node tools/claude-proxy > /dev/null 2>&1 &
-# Wait for proxy to bind
-for i in {1..20}; do
-  if curl -sf --max-time 2.0 "http://127.0.0.1:9997/ping" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.5
-done
+SMOKE_PIPE=$(mktemp -t c-thru-smoke-ready.XXXXXX)
+rm -f "$SMOKE_PIPE"; mkfifo "$SMOKE_PIPE"
+CLAUDE_PROFILE_DIR=$HOME/.claude CLAUDE_MODEL_MAP_PATH=$HOME/.claude/model-map.json \
+  node tools/claude-proxy >"$SMOKE_PIPE" 2>/dev/null &
+SMOKE_PROXY_PID=$!
+SMOKE_PORT=""
+if IFS= read -r -t 10 ready_line <"$SMOKE_PIPE"; then
+  SMOKE_PORT="${ready_line#READY }"
+fi
+rm -f "$SMOKE_PIPE"
+trap 'kill "$SMOKE_PROXY_PID" 2>/dev/null; wait "$SMOKE_PROXY_PID" 2>/dev/null' EXIT
 
-if ! curl -sf --max-time 2.0 "http://127.0.0.1:9997/ping" >/dev/null 2>&1; then
-  echo "❌ FAILED (Proxy did not start)"
+if [[ -z "$SMOKE_PORT" ]] || ! curl -sf --max-time 2.0 "http://127.0.0.1:$SMOKE_PORT/ping" >/dev/null 2>&1; then
+  echo "❌ FAILED (Proxy did not start or READY not received)"
   exit 1
 fi
-echo "✅ OK"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:$SMOKE_PORT"
+export CLAUDE_PROXY_PORT="$SMOKE_PORT"
+echo "✅ OK (port $SMOKE_PORT)"
 
 # 4. Control Channel: Status (via / interceptor)
 echo -n "4. Testing /c-thru-control status interceptor... "
