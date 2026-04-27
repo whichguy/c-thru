@@ -20,6 +20,7 @@ const {
   resolveCapabilityAlias,
   LLM_MODE_ENUM,
   pickBenchmarkBest,
+  applyModeFilter,
 } = require('./model-map-resolve.js');
 
 // CLI flag parsing — flags are aliases for env vars, set before any consumers
@@ -665,6 +666,12 @@ function tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta) 
 async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, failure) {
   if (res.headersSent) return false;
 
+  // hard_fail: profile entry has on_failure:'hard_fail' — skip cascade entirely.
+  if (requestMeta.onFailure === 'hard_fail') {
+    ctxLog(ctx, 'fallback.hard_fail_gate', { backend: backend.id, capability: requestMeta.capability });
+    return false;
+  }
+
   // Cycle / depth tracking across fallback hops. resolveBackend has its own
   // _seen Set for route-chain cycles within a single resolution; this Set
   // tracks across DISPATCH hops (separate invocations of forwardOllama /
@@ -733,7 +740,36 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
     return true;
   }
 
-  // Per-backend chain exhausted. Fall through to the global default.
+  // Per-backend chain exhausted. Try capability-level fallback_chains next.
+  const capKey = requestMeta.capability;
+  const capChain = capKey && CONFIG.fallback_chains?.[requestMeta.hwTier]?.[capKey];
+  if (capChain) {
+    for (const candidate of capChain) {
+      const m = typeof candidate === 'string' ? candidate : candidate.model;
+      if (!m) continue;
+      const candidateResolved = resolveBackend(m, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
+      if (candidateResolved.error) continue;
+      if (chain.has(candidateResolved.backend.id)) continue;
+      if (candidateResolved.backend.fallback_to && isInCooldown(candidateResolved.backend.id)) continue;
+      // Do NOT add to chain here — the dispatched candidate adds itself on the next
+      // tryFallbackOrFail entry (chain.add(backend.id) at top), matching the
+      // invariant used by the per-backend fallback_to walk.
+      ctxLog(ctx, 'fallback.chain_candidate', {
+        model: m, backend: candidateResolved.backend.id,
+        capability: capKey, reason: failure.reason,
+      });
+      requestMeta._fallbackFrom = requestMeta._fallbackFrom || backend.id;
+      body.model = candidateResolved.effectiveModel;
+      if (candidateResolved.backend.kind === 'ollama') {
+        forwardOllama(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
+      } else {
+        forwardAnthropic(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
+      }
+      return true;
+    }
+  }
+
+  // All chains exhausted. Fall through to the global default.
   return tryGlobalDefaultFallback(ctx, req, res, body, requestMeta);
 }
 
@@ -838,6 +874,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     }
     outHeaders['x-c-thru-served-by'] = effectiveModel || '';
     outHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
+    if (requestMeta._fallbackFrom) outHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
     res.writeHead(upRes.statusCode, outHeaders);
     // Tee the upstream bytes for usage extraction without affecting the
     // pipe to the client. Anthropic emits `usage.input_tokens` in the
@@ -996,6 +1033,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
   }
   streamHeaders['x-c-thru-served-by'] = effectiveModel || '';
   streamHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
+  if (requestMeta._fallbackFrom) streamHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
   res.writeHead(200, streamHeaders);
 
   const messageId = anthropicMessageId();
@@ -1273,6 +1311,7 @@ function handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, u
       }
       nonStreamHeaders['x-c-thru-served-by'] = effectiveModel || '';
       nonStreamHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
+      if (requestMeta._fallbackFrom) nonStreamHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
       res.writeHead(200, nonStreamHeaders);
       res.end(respBody);
       ctxLog(ctx, 'ollama.nonstream.done', {
@@ -1655,7 +1694,38 @@ const server = http.createServer((req, res) => {
           }
         }
 
-        const { backend, effectiveModel, logicalRole } = resolved;
+        let { backend, effectiveModel, logicalRole } = resolved;
+
+        // ── Phase 2: mode filter + fallback_chains pre-dispatch selection ──
+        // For filter modes (claude-only, opensource-only): scan fallback_chains for
+        // the first candidate that satisfies the mode predicate. Returns the primary
+        // unchanged for non-filter modes. Returns null when no compliant candidate exists.
+        const capKey = logicalRole;
+        const capChain = capKey && CONFIG.fallback_chains?.[hwTier]?.[capKey];
+        const profileEntry = capKey && (CONFIG.llm_profiles?.[hwTier] || {})[capKey];
+        const onFailure = profileEntry?.on_failure || 'cascade';
+
+        if (capChain) {
+          const chainModels = capChain.map(c => (typeof c === 'string' ? c : c.model)).filter(Boolean);
+          const filteredModel = applyModeFilter(
+            activeMode, effectiveModel, chainModels,
+            CONFIG.model_routes || {}, CONFIG.backends || {}
+          );
+          if (filteredModel === null) {
+            ctxLog(ctx, 'mode_filter.reject_all', { mode: activeMode, capability: capKey });
+            return sendAnthropicError(res, 502,
+              `No ${activeMode} model available for capability '${capKey}': all candidates rejected by mode filter`);
+          }
+          if (filteredModel !== effectiveModel) {
+            const swapped = resolveBackend(filteredModel, CONFIG, hwTier, activeMode);
+            if (!swapped.error) {
+              ctxLog(ctx, 'mode_filter.swap', { from: effectiveModel, to: filteredModel, mode: activeMode });
+              ({ backend: backend, effectiveModel: effectiveModel, logicalRole: logicalRole } =
+                Object.assign(swapped, { logicalRole: capKey }));
+            }
+          }
+        }
+
         const requestMeta = {
           capability: logicalRole,
           stream: !!body.stream,
@@ -1665,6 +1735,7 @@ const server = http.createServer((req, res) => {
           hwTier,
           activeMode,
           startedAt: requestStartedAt,
+          onFailure,
         };
 
         ctxLog(ctx, 'dispatch', {
