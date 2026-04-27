@@ -83,10 +83,6 @@ URL injection). Several tests assumed port 9997 or the shared flock/reuse model:
 6. **Contract check** — run `bash tools/c-thru-contract-check.sh` after all test
    changes and confirm exit 0.
 
-**[testing] `--detect-pollution --strict` mode for CI**
-Currently `--detect-pollution` returns 0 either way. Add `--strict` so
-CI can fail the build when drift is detected.
-
 ## Reliability — smaller items
 
 **[install] PostToolUse hook matcher could be self-documenting**
@@ -236,76 +232,6 @@ two persistent files in `~/.claude/` outside vendor stuff:
 should be derived/cached/symlinked.
 
 ## Architecture / boundaries
-
-**[proxy] One-proxy-per-shell: loopback-only, parent-owned, port in system prompt**
-
-**Motivation.** Today the proxy is `disown`ed and survives after the launching
-`c-thru` shell exits; the next invocation re-attaches to it via `/ping`.
-This creates shared mutable state across unrelated shells — a debugging
-hazard (stale config, wrong model-map) and a security surface (any local
-process can reach the proxy on its fixed/known port).
-
-**Desired behaviour.**
-1. **One proxy per shell.** Each `c-thru` invocation owns exactly one
-   `claude-proxy` child. When the parent shell exits the proxy exits with
-   it (no `disown`, no `nohup`).
-2. **Loopback-only bind.** `claude-proxy` must call `server.listen(port,
-   '127.0.0.1', ...)` (not `0.0.0.0`), so it is unreachable from other
-   hosts on the network.
-3. **Dynamic port, communicated to the router.** The proxy picks the next
-   free OS port by binding to port 0, then writes `READY <port>` to the
-   existing FIFO ready-pipe. The router reads it and exports
-   `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`. (The FIFO mechanism
-   already exists — only the loopback bind and the kill-on-exit need to
-   change.)
-4. **Port/URL injected into the Claude system prompt.** Append a line such
-   as `c-thru proxy: http://127.0.0.1:<port>` to the `--append-system-prompt`
-   value that `c-thru` passes to the real `claude` binary. This makes the
-   active proxy URL observable to Claude agents that need it (e.g.
-   context-injection hooks that call the proxy directly).
-
-**Design constraints / open questions.**
-- Removing `disown` means the proxy must be started as a proper background
-  child (`cmd &`) with its PID captured and propagated through the
-  `exec claude …` call. `exec` replaces the shell process so the proxy
-  would be re-parented to the shell's parent (typically the terminal). Need
-  to verify the OS re-parenting behaviour on macOS and Linux and whether
-  the proxy dies correctly when the terminal closes.
-- Alternative: replace `exec claude` with a wrapper that traps `EXIT` and
-  kills the proxy PID before handing control back. Adds latency on startup
-  but keeps lifecycle deterministic.
-- Multiple concurrent `c-thru` invocations in the same terminal tab (e.g.
-  backgrounded) each need their own proxy — the current flock-and-share
-  approach must be removed in favour of unconditional per-invocation spawn.
-- The system-prompt injection should be a one-liner addition to the
-  existing `--append-system-prompt` construction in `c-thru`; confirm the
-  string doesn't conflict with any running hook that parses the system
-  prompt for the proxy URL.
-- `/ping` health-check logic in `c-thru` currently caches the proxy PID in
-  `~/.claude/proxy.pid`; that file becomes meaningless when every session
-  gets its own proxy. Remove or scope it to the current TTY/session.
-
-**Scope:** `tools/claude-proxy` (bind address + port 0 listen), `tools/c-thru`
-(remove `disown`, capture PID, kill-on-exit trap or wrapper, system-prompt
-append), `test/proxy-lifecycle.test.js` (assert loopback-only, assert proxy
-exits with parent).
-
-**[ollama] Document the Ollama / proxy lifecycle boundary in CLAUDE.md**
-Today `ollama serve` is a long-running daemon spawning one runner per
-loaded model — already independent of c-thru. Goal: ensure Ollama runs
-as its own daemon (e.g. macOS app or `launchctl`) while the proxy lives
-strictly as a child of `c-thru`. Verify and document:
-
-1. The proxy never spawns/kills ollama runners (confirmed: lives in
-   `tools/c-thru` bash, not `claude-proxy`).
-2. The proxy connects to `OLLAMA_BASE_URL` (default
-   `http://localhost:11434`) assuming external management.
-3. `c-thru` startup detects whether Ollama is reachable and either starts
-   it (`CLAUDE_ROUTER_OLLAMA_AUTOSTART=1`, default) or warns.
-4. When `c-thru` exits, the proxy child exits with it; Ollama persists.
-
-Document the boundary in CLAUDE.md so future contributors don't conflate
-the two.
 
 ## UX / Polish
 

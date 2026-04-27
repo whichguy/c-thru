@@ -34,7 +34,6 @@ const FLAG_ENV_MAP = {
   '--profile':     'CLAUDE_LLM_PROFILE',
   '--mode':        'CLAUDE_LLM_MODE',
   '--port':        'CLAUDE_PROXY_PORT',
-  '--hooks-port':  'CLAUDE_PROXY_HOOKS_PORT',
 };
 const UNRECOGNIZED_CLI_FLAGS = [];
 // Permissive: unknown flags are buffered (logged once proxyLog is up at
@@ -74,7 +73,6 @@ parseCliFlags(process.argv.slice(2));
 // Set CLAUDE_PROXY_PORT to a specific number only when you need a fixed port
 // (e.g. c-thru reload, c-thru restart, or an explicit ANTHROPIC_BASE_URL).
 const INITIAL_PORT = numberFromEnv('CLAUDE_PROXY_PORT', 0);
-const HOOKS_PORT = numberFromEnv('CLAUDE_PROXY_HOOKS_PORT', 9998);
 const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_DEBUG', 0));
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 

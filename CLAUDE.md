@@ -47,7 +47,7 @@ tools/
   c-thru-session-start.sh # SessionStart/PostCompact hook — proxy+Ollama health check, silent on happy path
   c-thru-proxy-health.sh  # UserPromptSubmit hook — asyncRewake (exit 2, stderr) on proxy down
   c-thru-map-changed.sh   # FileChanged/PostToolUse hook — validates model-map.json on edit
-  c-thru-classify.sh      # UserPromptSubmit hook — sends prompt to /hooks/context (port 9998) for classify_intent context injection
+  c-thru-classify.sh      # UserPromptSubmit hook — sends prompt to /hooks/context on the proxy for classify_intent context injection
   c-thru-ollama-gc.sh     # GC tool — tracks c-thru-pulled Ollama tags; sweeps unreferenced ones. Subcommands: init|record|sweep|purge
   c-thru-self-update.sh   # startup self-update: best-effort git ff-merge with 1s grace; opt-out via CLAUDE_ROUTER_NO_UPDATE=1
   hw-profile.js             # shared 5-tier hardware detection (tierForGb); used by router and proxy
@@ -105,6 +105,10 @@ Only the profile graph is layered: `model-map.system.json` + `model-map.override
 
 MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including all `llm_capabilities` entries plus `ask_model` and `list_models`). Called by Claude Code as a local MCP server — injected ephemerally via `--settings` by `c-thru` at startup.
 
+### Bash sharp edges for contributors
+
+**`exec` silently skips all EXIT traps.** In bash, `exec <cmd>` replaces the current shell process and never fires the `trap ... EXIT` handler. Any path that `exec`s into the real `claude` binary must ensure proxy cleanup is complete beforehand, or that no proxy was spawned yet. The guard in `c-thru` (`if [[ -z "${ROUTER_STARTED_PROXY_PID:-}" ]]`) enforces this: `exec` is only used on the transparent (no-proxy) path. On the routing path (proxy running), the pattern is `foreground child + exit $?` so the EXIT trap fires and kills the proxy. Do not add new `exec` calls in `c-thru` without verifying no proxy PID is live.
+
 ## Proxy CLI Flags
 
 `claude-proxy` accepts these flags in addition to env vars:
@@ -114,7 +118,6 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 | `--config <path>` | Override config path (sets `CLAUDE_MODEL_MAP_PATH`). `/ping` reports `config_source: "override"`. |
 | `--profile <tier>` | Force hardware tier (sets `CLAUDE_LLM_PROFILE`). `/ping` reports `active_tier`. |
 | `--port <n>` | Bind to fixed port (suppresses `READY <port>` stdout line). |
-| `--hooks-port <n>` | Bind hooks listener to fixed port (default 9998). |
 | `--mode <m>` | Set connectivity / routing mode (sets `CLAUDE_LLM_MODE`). |
 
 ## c-thru Router Flags (env-var equivalents)
@@ -143,7 +146,6 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 | `CLAUDE_PROFILE_DIR` | Override `~/.claude` location |
 | `CLAUDE_MODEL_MAP_DEFAULTS_PATH` | Override shipped `config/model-map.json` path |
 | `CLAUDE_MODEL_MAP_OVERRIDES_PATH` | Override `~/.claude/model-map.overrides.json` path |
-| `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for Phase 2 HTTP hooks listener (default `9998`) |
 | `CLAUDE_PROXY_JOURNAL=1` | Enable per-request JSONL journaling to `~/.claude/journal/YYYY-MM-DD/<capability>.jsonl`. Off by default. Captures full request + response bodies (auth headers scrubbed). Privacy-sensitive — see `docs/journaling.md`. |
 | `CLAUDE_PROXY_JOURNAL_DIR` | Override default journal directory |
 | `CLAUDE_PROXY_JOURNAL_INCLUDE` | Comma-separated capabilities to journal (default: all) |

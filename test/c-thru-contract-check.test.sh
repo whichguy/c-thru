@@ -417,6 +417,13 @@ check "hyphenated prompt key (replan-brief) → exit 0" 0 "$rc"
 teardown_workspace "$F12"
 
 # ---------------------------------------------------------------------------
+# Real agents/ regression — run checker against the actual repo
+# ---------------------------------------------------------------------------
+echo "Real agents/: checker must pass on the live repo..."
+rc=0; bash "$CHECKER" >/dev/null 2>&1 || rc=$?
+check "real agents/ passes checker → exit 0" 0 "$rc"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

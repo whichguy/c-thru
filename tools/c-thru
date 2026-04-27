@@ -1470,7 +1470,12 @@ cleanup_router_children() {
     fi
     ROUTER_STARTED_PROXY_PID=""
   fi
-  return "$ec"
+  # NOTE: do not return "$ec" here.  When this function is called from the
+  # EXIT trap ("trap 'cleanup_router_children $?' EXIT"), the process exit code
+  # is already determined by the shell before the trap fires; a return value
+  # from a trap-invoked function is silently ignored and cannot change it.
+  # Signal-handler paths (router_signal_handler) work correctly because they
+  # call `exit` directly with the intended code rather than relying on return.
 }
 
 router_signal_handler() {

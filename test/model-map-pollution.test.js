@@ -63,8 +63,8 @@ function makeTmpHome(seedSystem = true) {
   return { tmpHome, claudeDir };
 }
 
-function runCLI(tmpHome, flag) {
-  return spawnSync(process.execPath, [CLI, flag], {
+function runCLI(tmpHome, ...flags) {
+  return spawnSync(process.execPath, [CLI, ...flags], {
     env: {
       ...process.env,
       HOME: tmpHome,
@@ -202,6 +202,32 @@ console.log('model-map-pollution tests\n');
     const out = (result.stdout || '') + (result.stderr || '');
     assert(/profile is clean|no leaked/i.test(out),
       `test6: output mentions clean/no-leaked via repo-defaults fallback (got: ${out.trim().slice(0, 300)})`);
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+})();
+
+// ── Test 7: --detect-pollution --strict exits 0 on clean profile ───────────
+(function testStrictClean() {
+  const { tmpHome, claudeDir } = makeTmpHome(true);
+  try {
+    const result = runCLI(tmpHome, '--detect-pollution', '--strict');
+    assertEq(result.status, 0, 'test7: --detect-pollution --strict exits 0 on clean profile');
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+})();
+
+// ── Test 8: --detect-pollution --strict exits 1 when drift is present ───────
+(function testStrictWithLeak() {
+  const { tmpHome, claudeDir } = makeTmpHome(true);
+  try {
+    injectLeaks(claudeDir, ['strict-test-leak-xyz']);
+    const result = runCLI(tmpHome, '--detect-pollution', '--strict');
+    assertEq(result.status, 1, 'test8: --detect-pollution --strict exits 1 when drift present');
+    const out = (result.stdout || '') + (result.stderr || '');
+    assert(out.includes('strict-test-leak-xyz'),
+      `test8: output names the leaked key under --strict (got: ${out.trim().slice(0, 300)})`);
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
