@@ -677,6 +677,7 @@ function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
   const termResolved = resolveBackend(termModel, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
   if (termResolved.error || termResolved.backend.kind !== 'ollama') return false;
   requestMeta._localTerminalAppended = true;
+  requestMeta._fallbackFrom = requestMeta._fallbackFrom || termResolved.backend.id;
   body.model = termResolved.effectiveModel;
   ctxLog(ctx, 'fallback.local_terminal', { model: termModel, backend: termResolved.backend.id, capability: capKey });
   forwardOllama(ctx, req, res, body, termResolved.backend, termResolved.effectiveModel, requestMeta);
@@ -903,6 +904,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     outHeaders['x-c-thru-served-by'] = effectiveModel || '';
     outHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
     if (requestMeta._fallbackFrom) outHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
+    if (requestMeta._fallbackFrom) outHeaders['x-claude-proxy-fallback-from'] = requestMeta._fallbackFrom;
     res.writeHead(upRes.statusCode, outHeaders);
     // Tee the upstream bytes for usage extraction without affecting the
     // pipe to the client. Anthropic emits `usage.input_tokens` in the
@@ -1079,6 +1081,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
   streamHeaders['x-c-thru-served-by'] = effectiveModel || '';
   streamHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
   if (requestMeta._fallbackFrom) streamHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
+  if (requestMeta._fallbackFrom) streamHeaders['x-claude-proxy-fallback-from'] = requestMeta._fallbackFrom;
   res.writeHead(200, streamHeaders);
 
   const messageId = anthropicMessageId();
@@ -1358,6 +1361,7 @@ function handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, u
       nonStreamHeaders['x-c-thru-served-by'] = effectiveModel || '';
       nonStreamHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
       if (requestMeta._fallbackFrom) nonStreamHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
+      if (requestMeta._fallbackFrom) nonStreamHeaders['x-claude-proxy-fallback-from'] = requestMeta._fallbackFrom;
       res.writeHead(200, nonStreamHeaders);
       res.end(respBody);
       ctxLog(ctx, 'ollama.nonstream.done', {
