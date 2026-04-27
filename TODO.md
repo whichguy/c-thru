@@ -80,6 +80,66 @@ verify the install worked without running a separate command.
 
 ## Reliability
 
+**[ollama] Separate "first response" timeout from total timeout**
+Today `OLLAMA_UPSTREAM_TIMEOUT_MS` (default 5min) is a single timer
+covering the entire request lifecycle — connect, send, response, and
+all streaming bytes. Want to fail fast if Ollama can't even start
+generating: target ~11s for first-byte/first-chunk, but keep the long
+total-timeout for actual generation runs.
+
+Two distinct cases:
+1. **Cold/loading**: Ollama is loading the model from disk → VRAM.
+   First chunk can legitimately take 5-30s for big models. We don't
+   want to abort on these.
+2. **Stuck/down**: Ollama daemon is unreachable, model can't be loaded
+   (OOM, missing tag), or the upstream chat endpoint is hanging
+   waiting on something. First chunk never arrives. **This is what
+   we want to detect quickly** so the client (Claude Code) can fall
+   back, retry, or surface the failure.
+
+These cases share the same observable shape (no bytes from upstream
+yet) but with very different healthy/unhealthy boundaries. The trick:
+distinguish "model is loading" from "Ollama is broken."
+
+**Implementation sketches:**
+
+A. **TTFT (time-to-first-token) timeout** = ~11s. Track when the first
+   chunk arrives via the existing `ollama.stream.first_chunk` event.
+   If first_chunk hasn't fired by 11s AND the model isn't actively
+   loading, abort. Detection-of-loading: poll `/api/ps` or check the
+   request response (Ollama returns `loading` events in some flows).
+   Cleaner: use `/api/show` to check model size + estimate cold-load
+   time before even firing the chat request, and pick the timeout
+   accordingly.
+
+B. **Two-tier watchdog**: 11s "fast-fail-if-no-bytes-AND-no-load-evidence"
+   + 5min "total upstream lifetime". If 11s hits and no chunks have
+   arrived, check `/api/ps` — if the target model is in
+   `loading`/`starting` state, extend timeout to total. Otherwise
+   abort with `timeout_error` shape.
+
+C. **Header-only first response**: `up.setTimeout(11000)` rearms on
+   socket activity (data flowing); but `upRes` only fires once the
+   FIRST byte arrives. Set a separate one-shot timer between
+   `up.write()` and `upRes` callback. If `upRes` doesn't fire in 11s,
+   destroy. Once it fires, switch to the existing `lastChunkAt`
+   stall watchdog.
+
+C is the simplest and matches real fallback semantics — "if Ollama
+can't even respond with HTTP headers in 11s, give up." Pull off via:
+```js
+let ttftTimer = setTimeout(() => up.destroy(...), TTFT_TIMEOUT_MS);
+const up = http.request(..., upRes => {
+  clearTimeout(ttftTimer);  // first response received, switch to stall watchdog
+  ...
+});
+```
+
+Add `CLAUDE_PROXY_OLLAMA_TTFT_MS` env var (default 11000) so users
+can tune. The runtime upstream-fallback (commit 66e3a71) will then
+fire faster on Ollama-down scenarios — the user gets a clean fallback
+in 11s instead of waiting 5min.
+
 **[ollama] Treat Ollama cloud models like local models with fallback**
 Ollama supports `:cloud`-suffixed models (e.g. `glm-5.1:cloud`,
 `deepseek-v4-flash:cloud`, `kimi-k2.6:cloud`) that route to Ollama's
