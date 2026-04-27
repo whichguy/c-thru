@@ -143,6 +143,62 @@ without running a separate command.
 
 ## Learning / patterns extraction
 
+**[learning] Senior-review findings — systemic issues to address**
+
+These came out of multi-pass senior-engineer code reviews during the
+Ollama-lifecycle + per-shell-proxy session. Each finding points to a
+pattern that could recur.
+
+1. **`$(awk ...)` in `set -euo pipefail` scripts silently exits 2.**
+   Contrary to the common assumption that variable assignments suppress
+   `set -e`, `var=$(failing_cmd)` with `set -euo pipefail` does propagate
+   the failure exit code in bash (verified: exit 2 from awk). All
+   `c-thru-contract-check.sh`-style scripts that use awk on files that may
+   not exist need `2>/dev/null || true`. Audit `tools/*.sh` for unprotected
+   `var=$(awk ... $FILE)` patterns where `$FILE` may be absent in test
+   fixtures or CI.
+
+2. **Test fixture drift when new contract checks are added.** Check 9
+   (tier_budget) and check 10 (preflight skeleton) were added to
+   `c-thru-contract-check.sh` without updating the test fixtures in
+   `test/c-thru-contract-check.test.sh`. Pattern: when adding a new check,
+   always update the "clean" fixtures to satisfy it so they still return
+   exit 0. Consider adding a lint step: run the checker against each fixture
+   and assert the expected exit code directly, so new checks fail the test
+   immediately rather than silently passing until someone runs the test.
+
+3. **`HOOKS_PORT` defined but never used in `claude-proxy`.**
+   `tools/claude-proxy` line 77: `const HOOKS_PORT = numberFromEnv(...)`.
+   The hooks listener on a separate port was designed but never implemented.
+   The hooks endpoint (`/hooks/context`) is on the main proxy server.
+   Three proxy-lifecycle tests were testing this non-existent feature.
+   Either implement the separate hooks server or remove the dead constant
+   and update docs/CLAUDE.md where the `--hooks-port` flag is documented.
+
+4. **`return "$ec"` in EXIT trap has no effect on process exit code.**
+   `cleanup_router_children` uses `return "$ec"` which only matters when
+   called as a regular function. When called from the `trap ... EXIT`
+   handler, the return value is irrelevant — the process exits with the
+   code passed to `exit`. The misleading `return` could cause future
+   contributors to incorrectly believe they can change the exit code via
+   the cleanup function. Remove or comment.
+
+5. **`exec` skips EXIT traps — document as a bash sharp edge in CLAUDE.md.**
+   The c-thru control dispatch was using `exec c-thru-control` which
+   silently skips all EXIT traps, leaving proxy orphans. Now fixed with
+   foreground-child + `exit $?`. This pattern (exec = EXIT trap bypass)
+   is a sharp edge that should be documented explicitly in CLAUDE.md for
+   future contributors who might be tempted to add `exec` for "efficiency".
+
+6. **`__PROXY_PORT__` sed-replacement fragility.**
+   The placeholder in ephemeral settings.json is replaced with `sed` after
+   proxy start. This is brittle if the settings schema evolves (e.g., if
+   the port appears in more than one JSON field, or if a path or URL
+   accidentally contains the placeholder string). A more robust approach
+   would regenerate the settings.json entirely after proxy start using
+   a dedicated `write_ephemeral_settings $port` function rather than
+   in-place sed substitution.
+
 **[learning] Reusable patterns from session work (from senior-eng review)**
 
 1. **`detectConfigDrift(canonical[], actual)` utility.** The "anything in
