@@ -80,6 +80,151 @@ verify the install worked without running a separate command.
 
 ## Reliability
 
+**[fallback] Bump max hops to ~20 + add backend-failure cooldown cache**
+Two related improvements to runtime fallback:
+
+1. **Bump `CLAUDE_PROXY_MAX_FALLBACK_HOPS` default from 3 → 20.** Long
+   chains are legitimate when users build redundancy across many
+   providers (anthropic → openrouter → bedrock → vertex → glm-cloud →
+   local-large → local-medium → local-small → ...). 3 was a
+   conservative starting cap; bump it now that the cycle detector is
+   load-bearing and well-tested.
+
+2. **Skip-recently-failed cache.** If we bump the cap to 20, the
+   pathological case is "primary just failed, dispatcher walks 19
+   targets again next request, all of which are still down." Need a
+   short-lived `failed_backends` Map keyed by backend id with a TTL
+   (e.g. 60s) so subsequent requests skip targets we just learned
+   are down.
+
+   **CRITICAL constraint: never cooldown the terminal node of a chain.**
+   If a chain is A→B→C→D (D has no `fallback_to`), D must always be
+   retried. Otherwise: D fails once, gets cooldowned, every
+   subsequent request walks A→B→C→D-skipped → no targets remain →
+   request fails entirely. The cooldown cache becomes a footgun that
+   makes the system MORE broken than no fallback at all.
+
+   The rule: a backend is cooldown-eligible only if it has a
+   `fallback_to` AND that fallback resolves to a non-cooldown'd
+   target. The terminal of any chain (whether explicitly designated
+   as the final hop, or the last reachable node after cooldown
+   skipping) is always tried, even if it just failed.
+
+   ```js
+   // module-scope
+   const FAILED_BACKEND_TTL_MS = numberFromEnv('CLAUDE_PROXY_FAILED_BACKEND_TTL_MS', 60000);
+   const failedBackendUntil = new Map();  // backend.id → timestamp_ms_to_skip_until
+
+   // in tryFallbackOrFail, before resolving the next hop:
+   if (failedBackendUntil.has(resolved.backend.id)) {
+     const until = failedBackendUntil.get(resolved.backend.id);
+     if (Date.now() < until && resolved.backend.fallback_to) {
+       // Has a fallback target — safe to skip and descend.
+       ctxLog(ctx, 'fallback.skip_cooldown', { backend: resolved.backend.id, expires_in_ms: until - Date.now() });
+       backend = resolved.backend;  // continue into THIS backend's fallback_to
+       continue;
+     } else if (Date.now() < until) {
+       // Terminal node — don't skip, retry even if recently failed.
+       ctxLog(ctx, 'fallback.retry_terminal', { backend: resolved.backend.id, in_cooldown: true });
+     }
+     if (Date.now() >= until) failedBackendUntil.delete(resolved.backend.id);
+   }
+
+   // in the failure handlers (up.on('error'), non-200 with non-recoverable status):
+   // Only cooldown if this backend has a fallback — never cooldown a terminal.
+   if (backend.fallback_to) {
+     failedBackendUntil.set(backend.id, Date.now() + FAILED_BACKEND_TTL_MS);
+   }
+   ```
+
+   Skip semantics: when a fallback target is in the cooldown set
+   AND has a fallback_to of its own, transparently descend into
+   THAT target's fallback_to instead of trying it. So a chain
+   A→B→C→D where B is cooling down becomes effectively A→C→D for
+   the cooldown window — but D, as terminal, never enters cooldown.
+
+   On success: clear that backend's cooldown entry (it's healthy
+   again). On any new failure: refresh the entry's TTL (only if
+   the backend has a fallback — terminals stay uncooldown'd).
+
+3. **Global default model is the ultimate last-resort fallback.**
+   Distinct from per-backend `fallback_to` chains — `routes.default`
+   in model-map.json acts as the system-wide safety net. If a
+   request's declared chain runs out (no `fallback_to` configured,
+   or chain exhausted, or all hops in cooldown AND terminal also
+   just failed), try the global default before surfacing the error
+   to the client.
+
+   The mental model is three tiers:
+   ```
+   Tier 1: per-backend fallback_to chain (user's declared graph)
+   Tier 2: skip-cooldown'd intermediate nodes (transparent shortcut)
+   Tier 3: global default model (catches anything that falls off
+           the end of every declared chain)
+   ```
+
+   Implementation: after `tryFallbackOrFail` exhausts the configured
+   chain (depth cap hit / cycle detected / terminal-and-cooldown'd /
+   no fallback_to set), make ONE more attempt against the model
+   resolved by `routes.default` — but only if the default's resolved
+   backend isn't already in the visited set for this request (to
+   avoid re-trying the same target twice).
+
+   The default-model fallback ALSO never enters cooldown. It's the
+   absolute terminal of the system. If even the default fails, the
+   client gets the error — but only after the proxy has genuinely
+   exhausted every path.
+
+   ```js
+   // Inside tryFallbackOrFail, after all per-backend options exhausted:
+   if (chain.size > 0 && CONFIG.routes?.default) {
+     const defaultModel = CONFIG.routes.default;
+     const defaultResolved = resolveBackend(defaultModel, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
+     if (!defaultResolved.error && !chain.has(defaultResolved.backend.id)) {
+       ctxLog(ctx, 'fallback.global_default', { default_model: defaultModel, resolved_backend: defaultResolved.backend.id });
+       chain.add(defaultResolved.backend.id);
+       body.model = defaultResolved.effectiveModel;
+       if (defaultResolved.backend.kind === 'ollama') {
+         forwardOllama(ctx, req, res, body, defaultResolved.backend, defaultResolved.effectiveModel, requestMeta);
+       } else {
+         forwardAnthropic(ctx, req, res, body, defaultResolved.backend, defaultResolved.effectiveModel, requestMeta);
+       }
+       return true;
+     }
+   }
+   return false;  // genuinely nowhere left to go
+   ```
+
+   Importantly: this means EVERY request, even one with no
+   `fallback_to` configured anywhere, gets a free retry on the
+   global default if the primary fails. The user-facing contract
+   becomes: "as long as `routes.default` resolves to a working
+   model, your request will get answered."
+
+4. **Probe semantics for cloud backends.** Cloud failures (auth-class)
+   shouldn't necessarily put a backend in cooldown — they're
+   permanent until config changes. Network/5xx-class failures should.
+   Ranking the failure types and only adding to cooldown for transient
+   ones avoids a "subscription missing" turning into "perpetually skip
+   cloud."
+
+5. **Bound the failure cache size.** A misbehaving config could keep
+   adding new transient failures and grow the Map. Cap at, say, 100
+   entries with LRU eviction. Realistic configs have <10 backends so
+   100 is way headroom.
+
+6. **Surface in /c-thru/status.** Add `cooldown_backends: [...]` to
+   the response so users can see at a glance which backends the proxy
+   is currently routing around. Also surface the `routes.default`
+   resolution so users see what the absolute last-resort target is.
+
+Why this matters: at 20-hop default, a fully-broken primary causes
+20 requests' worth of latency (TTFT × 20 = 220s) on the FIRST
+request. Without cooldown, the SECOND request through the same
+primary also burns 220s. With cooldown, second request skips the
+cooling-down target and goes straight to the next healthy hop —
+~11s instead of 220s.
+
 **[ollama] Separate "first response" timeout from total timeout**
 Today `OLLAMA_UPSTREAM_TIMEOUT_MS` (default 5min) is a single timer
 covering the entire request lifecycle — connect, send, response, and
