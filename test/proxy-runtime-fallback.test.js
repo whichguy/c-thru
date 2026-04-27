@@ -345,6 +345,62 @@ async function main() {
       }
     }
 
+    // ── Test 10b: permanent failure (401 auth) does NOT enter cooldown ─────
+    console.log('\n10b. cooldown: permanent failure (401) does NOT cooldown — same backend re-tried');
+    {
+      // Chain A→B→C. A returns 401 (permanent — auth-class). On the first
+      // request, A fails → fallback through B → fallback to C (serves).
+      // CRITICAL: even though A has fallback_to, A must NOT be cooldowned on
+      // a 401 (cooldown would just delay the same auth error on next request
+      // until the user fixes config). On the second request, A must be hit
+      // again — because re-trying gives the user a fast deterministic signal
+      // and because there's no point skipping a backend whose error is
+      // configuration-locked.
+      const A = await stubBackend({ failWith: 401 });
+      const B = await stubBackend({ failWith: 500 });   // transient — gets cooldowned normally
+      const C = await ollamaStubBackend(HEALTHY_OLLAMA_NDJSON);
+      try {
+        const cfg = {
+          backends: {
+            A_be: { kind: 'anthropic', url: `http://127.0.0.1:${A.port}`, fallback_to: 'B-target' },
+            B_be: { kind: 'anthropic', url: `http://127.0.0.1:${B.port}`, fallback_to: 'C-target' },
+            C_be: { kind: 'ollama', url: `http://127.0.0.1:${C.port}` },
+          },
+          model_routes: { 'A-model': 'A_be', 'B-target': 'B_be', 'C-target': 'C_be' },
+          llm_profiles: { '128gb': { workhorse: { connected_model: 'A-model', disconnect_model: 'A-model' } } },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          // First request: A (401 perm) → B (500 trans) → C (serves).
+          const r1 = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'A-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r1.status, 200, 'first request: chain works (200) via C');
+          assertEq(A.requests.length, 1, 'first req: A tried 1x');
+          assertEq(B.requests.length, 1, 'first req: B tried 1x');
+          assertEq(C.requests.length, 1, 'first req: C served 1x');
+
+          // Second request. EXPECTED behavior (the change being tested):
+          //   - A is RE-TRIED (permanent 401 ⇒ NOT cooldowned). A.requests=2.
+          //   - B is SKIPPED (transient 500 ⇒ cooldowned). B.requests=1 (unchanged).
+          //   - C serves. C.requests=2.
+          const r2 = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'A-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r2.status, 200, 'second request: chain still serves (200)');
+          assertEq(A.requests.length, 2, 'second req: A RE-TRIED (401 permanent — no cooldown)');
+          assertEq(B.requests.length, 1, 'second req: B skipped (500 transient — cooldowned)');
+          assertEq(C.requests.length, 2, 'second req: C served 1x more');
+        });
+      } finally {
+        await A.close().catch(() => {});
+        await B.close().catch(() => {});
+        await C.close().catch(() => {});
+      }
+    }
+
     // ── Test 11: terminal exemption — terminal in chain never enters cooldown ─
     console.log('\n11. terminal node never cooldowns even when it just failed');
     {

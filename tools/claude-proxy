@@ -137,9 +137,48 @@ function isInCooldown(backendId) {
   }
   return true;
 }
-function markBackendFailed(backendId, hasFallback) {
+// Classify an upstream failure as 'transient' (worth retrying after a
+// cooldown) or 'permanent' (the same retry will deterministically reproduce
+// the failure until the user's config changes — cooldown is meaningless).
+//
+// 'permanent':
+//   401, 403  — auth-class. The Authorization header isn't going to change
+//               between requests of the same session; cooldowning the backend
+//               just delays the same error on the next request.
+//   404       — the model is genuinely unavailable on this backend (e.g. a
+//               cloud :variant the user lacks a subscription for, or a model
+//               not pulled locally). Like auth, retrying without operator
+//               action will keep failing the same way. Debatable: a 404
+//               could in principle mean "model briefly unloaded by Ollama"
+//               (then a retry might work later), but in practice the
+//               cloud→local rewrite path runs first for Ollama, and 404 from
+//               a configured backend almost always means the route graph is
+//               wrong, not transient. Classify permanent and let the operator
+//               re-pull / fix routes; the cooldown adds nothing.
+//
+// 'transient' (default — conservative for unknown codes):
+//   429, 500-599, ECONNREFUSED, ENOTFOUND, ETIMEDOUT, TTFT timeout —
+//   genuinely worth waiting on. Backend may recover.
+function classifyFailure(statusCode, errorMessage) {
+  if (statusCode === 401 || statusCode === 403 || statusCode === 404) return 'permanent';
+  if (statusCode === 429) return 'transient';
+  if (typeof statusCode === 'number' && statusCode >= 500 && statusCode <= 599) return 'transient';
+  if (typeof errorMessage === 'string') {
+    if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|EPIPE/.test(errorMessage)) return 'transient';
+    if (/TTFT|upstream timeout/i.test(errorMessage)) return 'transient';
+  }
+  return 'transient';
+}
+
+function markBackendFailed(backendId, hasFallback, failureClass = 'transient') {
   // Don't cooldown terminals — they're the last resort within a chain.
   if (!hasFallback) return;
+  // Permanent failures (401/403/404) reproduce on every retry until the
+  // user fixes config; a cooldown just delays the inevitable while still
+  // skipping the backend on the next request. Skip the marking entirely
+  // so the backend remains in-chain and the same error surfaces directly,
+  // giving the user a faster, clearer signal that something is wrong.
+  if (failureClass === 'permanent') return;
   // FIFO cap: when full, evict the oldest entry so new failures still
   // get tracked. Realistic configs have <10 backends so 100 is way headroom.
   if (failedBackendUntil.size >= FAILED_BACKEND_CACHE_MAX) {
@@ -763,7 +802,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       let errBody = '';
       upRes.on('data', c => errBody += c.toString());
       upRes.on('end', async () => {
-        markBackendFailed(backend.id, !!backend.fallback_to);
+        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, errBody));
         const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
           reason: `upstream returned ${upRes.statusCode}`,
           statusCode: upRes.statusCode,
@@ -825,7 +864,11 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   });
   up.on('error', async e => {
     ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'anthropic', error: e.message });
-    markBackendFailed(backend.id, !!backend.fallback_to);
+    // Connection-error path — no HTTP status to read. classifyFailure
+    // inspects the error string for ECONNREFUSED/timeout markers; result
+    // is 'transient' (we want to cooldown wedged backends so retries skip
+    // them quickly).
+    markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
     const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
       reason: 'connection error',
       error: e.message,
@@ -910,7 +953,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
           if (tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta)) {
             return;
           }
-          markBackendFailed(backend.id, !!backend.fallback_to);
+          markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, message));
           const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
             reason: `upstream returned ${upRes.statusCode}`,
             statusCode: upRes.statusCode,
@@ -1246,7 +1289,11 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
     if (tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta)) {
       return;
     }
-    markBackendFailed(backend.id, !!backend.fallback_to);
+    // Connection-error / TTFT timeout path. statusCode here is our synthetic
+    // 502/504 (computed above from the error message); pass the message so
+    // classifyFailure can pick up the TTFT/timeout markers — both classify
+    // as 'transient'.
+    markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(statusCode, e.message));
     const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
       reason: 'connection error',
       error: e.message,

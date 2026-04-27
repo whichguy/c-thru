@@ -1,639 +1,451 @@
 # c-thru
 
-**c-thru** is a transparent routing layer between Claude Code and any model backend — Ollama (local or cloud-relay), OpenRouter, Bedrock, Vertex, or Anthropic. It adds hardware-aware model selection, offline fallback, automatic Ollama fleet management, and a wave-based agentic planning system. You never change your Claude Code workflow.
-
----
-
-## Getting Started: Redirecting Claude Code
-
-To start Claude Code with a different model, you must redirect its API requests to the c-thru proxy using environment variables. This allows you to use models from providers like OpenRouter, LM Studio, or Ollama while keeping the Claude Code interface.
-
-### Method 1: Quick Redirect (CLI)
-
-You can point Claude Code to a different model by setting two primary environment variables in your terminal before launching the tool:
-
-1.  **Set the Base URL:** Redirect requests to the c-thru proxy.
-2.  **Set the Auth Token:** Use the token `"ollama"` (required for local/spoofed backends).
-3.  **Launch with Model Flag:** Specify the model name.
-
-**Example using `c-thru` wrapper (automates steps 1 & 2):**
-```sh
-c-thru --model qwen3.5:27b
-```
-
-**Example for manual redirection:**
-```sh
-export ANTHROPIC_BASE_URL=http://localhost:9997
-export ANTHROPIC_AUTH_TOKEN=ollama
-claude --model qwen3.5:27b
-```
-
-### Method 2: Use Local Models (Ollama or LM Studio)
-
-To use local models, ensure you have a local server running that the c-thru proxy can communicate with.
-
-*   **Ollama:** Install Ollama and pull your model (e.g., `qwen3.5:27b`). `c-thru` automatically handles `ollama serve` and pre-warming.
-*   **LM Studio:** Start the LM Studio local server (typically on port `1234`), then add it as a backend in `model-map.json`.
-
-### Method 3: Simplified Shell Functions
-
-For frequent use, add functions to your shell configuration file (e.g., `.zshrc` or `.bashrc`) to switch with one command:
-
-```sh
-# Add to ~/.zshrc or ~/.bashrc
-function claude-qwen() {
-  c-thru --model qwen3.6:35b "$@"
-}
-
-function claude-gpt4() {
-  c-thru --model openrouter/openai/gpt-4o "$@"
-}
-```
-
-After adding this, simply run `claude-qwen` or `claude-gpt4` in your terminal to start a session with the respective model.
-
-### Key Commands for Session Control
-
-*   **`/model`**: Within an active session, use this command to see a picker and switch between available models immediately.
-*   **`--model <name>`**: Use this flag when starting Claude Code to force a specific model for that session.
-*   **`/status`**: Use this to verify which model and backend provider are currently active.
-
----
-
-## The problem
-
-Claude Code is locked to one vendor and one billing model. Local LLMs via Ollama are capable enough for most tasks — but there's no transparent bridge. You can't route different agents to different models. And when you go offline, your entire workflow stops.
-
----
-
-## How it works
-
-```
-You type: c-thru
-
-Claude Code
-    │  Anthropic Messages API (unmodified)
-    ▼
-c-thru               reads model-map.json, resolves route + backend
-    │
-    ▼
-claude-proxy        translates protocol, manages Ollama, applies fallbacks
-    │
-    ├──▶ Ollama (local)          qwen3.5:27b, devstral-small:2, ...
-    ├──▶ Ollama (cloud relay)    glm-5.1:cloud, qwen3-coder:480b-cloud
-    ├──▶ OpenRouter / Bedrock    cloud alternatives
-    └──▶ Anthropic               transparent fallback
-```
-
-The router wraps `claude`, rewrites `ANTHROPIC_BASE_URL` and credentials per-route, and auto-spawns the proxy. The proxy speaks Anthropic Messages API inbound and translates to whatever the backend needs. You get streaming, tool use, and multi-turn context — all preserved.
-
----
-
-## Model resolution: the 4-layer graph
-
-Every request goes through four resolution steps. Agents declare a logical name; the proxy finds the right model for the current hardware and connectivity.
-
-```
-model: implementer          ← agent declares its own name
-    │
-    ▼  agent_to_capability
-  deep-coder                ← logical capability tier
-    │
-    ▼  llm_profiles[detected-hw][deep-coder]
-  connected_model           ← concrete model tag
-    │
-    ▼  model_overrides (optional rename)
-  devstral-small:2          ← sent to Ollama
-```
-
-**What this means in practice:**
-
-- Rebind an agent to a different capability tier → one line in `agent_to_capability`
-- Swap a tier's backing model on any hardware → one line in `llm_profiles[hw][alias]`
-- Agent files never change for either operation
-
-Capability aliases and the agents that use them:
-
-| Alias | Cognitive tier | Agents |
-|---|---|---|
-| `judge` | cloud or 27B+ local | planner, auditor, review-plan, final-reviewer |
-| `judge-strict` | cloud or 27B+, hard_fail | security-reviewer |
-| `orchestrator` | mid-tier local | plan-orchestrator, integrator, doc-writer |
-| `local-planner` | local 27B+, never cloud | planner-local |
-| `deep-coder` | local coding model | implementer |
-| `code-analyst` | local mid-tier | test-writer, wave-reviewer, wave-synthesizer |
-| `pattern-coder` | local small | scaffolder, discovery-advisor, learnings-consolidator |
-
----
-
-## Hardware-aware routing
-
-RAM is auto-detected at proxy startup via `hw-profile.js`. The same agent routes to different models depending on what your machine can run.
-
-| Machine | Connectivity | judge (planner) | orchestrator | deep-coder (implementer) |
-|---|---|---|---|---|
-| 128 GB | connected | claude-opus-4-6 | qwen3.6:35b | devstral-small:2 |
-| 128 GB | offline | qwen3.5:122b | qwen3.5:122b | devstral-small:2 |
-| 64 GB | connected | claude-opus-4-6 | qwen3.6:35b | devstral-small:2 |
-| 64 GB | offline | qwen3.5:27b | qwen3.5:27b | devstral-small:2 |
-| 48 GB | connected | claude-opus-4-6 | qwen3.5:9b | devstral-small:2 |
-| 48 GB | offline | qwen3.5:27b | qwen3.5:27b | qwen3.5:27b |
-| ≤32 GB | any | qwen3.5:1.7b | qwen3.5:1.7b | qwen3.5:1.7b |
-
-Verify detected tier: `c-thru list`
-
-Override for testing: `c-thru --memory-gb 48 list` (or `CLAUDE_LLM_MEMORY_GB=48 c-thru list`)
-
----
-
-## Connectivity modes
-
-### I want to…
-
-| Goal | Use |
-|---|---|
-| **Save money** — minimise cloud calls | `--mode local-best-quality` (or `local-only` if no internet) |
-| **Best quality regardless of cost** | `--mode cloud-best-quality` |
-| **Cloud only for high-stakes decisions** (planner, auditor) | `--mode cloud-judge-only` |
-| **Cloud for thinking-class tasks**, local for workers | `--mode cloud-thinking` |
-| **Local for review/security**, cloud for everything else | `--mode local-review` |
-| **Use only Claude** (no GLM, no openrouter, no local) | `--mode claude-only` |
-| **Avoid Claude** — open-source models only | `--mode opensource-only` |
-| **Must be cloud** — hard-fail if no cloud option | `--mode cloud-only` |
-| **Fastest model that's still good** | `--mode fastest-possible` |
-| **Smallest model that fits the role** | `--mode smallest-possible` |
-| **Best open-source model** for the task | `--mode best-opensource` |
-| **Audit my agent's outputs** | `CLAUDE_PROXY_JOURNAL=1` (see [docs/journaling.md](docs/journaling.md)) |
-| **Force a specific model** for one invocation | `--model <model-name>` |
-| **Force a specific hardware tier** (testing) | `--profile 16gb`/`32gb`/`48gb`/`64gb`/`128gb` |
-
-Every capability alias has model slots for each mode and a failure policy:
-
-```json
-"judge": {
-  "connected_model":  "claude-opus-4-6",
-  "disconnect_model": "qwen3.5:27b",
-  "cloud_best_model": "claude-opus-4-6",
-  "local_best_model": "qwen3.5:27b",
-  "modes": {
-    "semi-offload":    "qwen3.6:35b",
-    "cloud-judge-only": "claude-opus-4-6"
-  },
-  "on_failure": "cascade"
-}
-```
-
-The proxy selects the right slot based on the active mode. Switch mode with `--mode` or `CLAUDE_LLM_MODE`. Full reference: [docs/connectivity-modes.md](docs/connectivity-modes.md).
-
-| Mode | Slot used | When to use |
-|---|---|---|
-| `connected` | `connected_model` | Normal operation with cloud access |
-| `offline` | `disconnect_model` | No internet; local models only |
-| `local-only` | `disconnect_model` (alias of `offline`) | Force local even when online (e.g. cost or privacy) |
-| `semi-offload` | `modes.semi-offload` → `disconnect_model` | Local workers, cloud for high-stakes decisions |
-| `cloud-judge-only` | `modes.cloud-judge-only` → `disconnect_model` | Cloud for judge/audit only; everything else local |
-| `cloud-thinking` | `modes.cloud-thinking` → `disconnect_model` | Cloud for thinking-class capabilities (judge, planner, reasoner); workers stay local |
-| `local-review` | `modes.local-review` → `connected_model` | INVERSE: review/security/code-analysis stays local; logic + orchestration go cloud |
-| `cloud-best-quality` | `cloud_best_model` → `connected_model` | Force best cloud model regardless of tier |
-| `local-best-quality` | `local_best_model` → `disconnect_model` | Force best local model; no cloud calls |
-
-> **6 more modes** (`cloud-only`, `claude-only`, `opensource-only`, `fastest-possible`,
-> `smallest-possible`, `best-opensource`) are *not* slot-based — they apply post-resolution
-> filters or benchmark-driven ranking against `model_routes`. See
-> [`docs/connectivity-modes.md`](docs/connectivity-modes.md) for the full reference and
-> [`docs/benchmark.json`](docs/benchmark.json) for the data the ranking modes consult.
-
-`on_failure: cascade` walks the fallback chain to the next available model if the primary fails. `on_failure: hard_fail` (used by `judge-strict`) returns an explicit error instead of silently substituting a weaker model.
-
----
-
-## Ollama lifecycle management
-
-c-thru manages the Ollama fleet. You never run `ollama pull` or `ollama run` manually.
-
-**From launch to first response:**
-
-```
-c-thru starts
-    │
-    ├─▶ detect hardware tier from RAM
-    ├─▶ detect connectivity (connected / disconnected)
-    ├─▶ resolve profile → model slots for all 5 capability aliases
-    │
-    └─▶ background Ollama prep (non-blocking, runs while you read the banner)
-             │
-             ├─▶ GET /api/tags    → which models are already cached locally?
-             ├─▶ GET /api/ps      → which are currently loaded in VRAM?
-             └─▶ POST /api/generate (keep_alive, empty prompt)
-                     → pre-warm profile models into GPU memory
-
-First request arrives:
-    │
-    ├─▶ model cached?  no  → POST /api/pull  (transparent; concurrent pulls deduplicated)
-    ├─▶ role changed?  yes → POST /api/generate (keep_alive=0) to unload previous model
-    ├─▶ model warm?    no  → POST /api/generate (fire-and-forget pre-warm)
-    └─▶ forward request → stream response back to Claude Code
-```
-
-**Five behaviors, zero manual steps:**
-
-| Behavior | What happens |
-|---|---|
-| **Background warm-up** | Profile models pre-loaded into VRAM while startup banner displays |
-| **Auto-pull** | Missing model pulled via `/api/pull` before request proceeds; concurrent pulls for the same model are deduplicated — one download, multiple waiters |
-| **Pre-warming** | After pull, model loaded into VRAM via fire-and-forget request so it's ready before inference starts |
-| **Role exclusivity** | When a capability role switches to a different model, the previous model for that role is evicted — automatic VRAM budget management on memory-constrained machines |
-| **GC tracking** | `c-thru-ollama-gc` records every model c-thru pulled (distinct from models you pulled manually). `sweep` purges tags the current profile no longer references |
-
-> All Ollama management runs via the HTTP API. The `ollama` CLI is not a runtime dependency.
-
----
-
-## The agentic planning system: `/c-thru-plan`
-
-`/c-thru-plan` is a wave-based task orchestrator. It breaks any intent into a structured plan, executes it in parallel waves using specialized agents, and adapts when findings change what needs to happen next — all while keeping cloud costs minimal.
-
-```sh
-/c-thru-plan add a palindrome checker to the auth module
-```
-
-### The plan as living state
-
-The plan lives in a single file: `current.md`. It has two parts:
-
-- **`## Outcome`** — written once by the initial planner call, never modified. Every subsequent decision is checked against it.
-- **`## Items`** — a dependency-ordered list of work items. Each item tracks: id, description, target file paths, depends_on, success criteria, assumption state, and status. This section is updated after every wave.
-
-The planner's job is not just to write the initial plan — it maintains the dep map across the entire run. After each wave, findings flow back in and the planner updates affected items before selecting what executes next. `current.md` is the single source of truth that all agents read and the planner owns.
-
-### End-to-end flow
-
-```
-/c-thru-plan <intent>
-      │
-      ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │  Phase 0 — Pre-check                                        │
-  │  Prior state exists? → resume / restart / abort             │
-  │  Fresh start → create state directory                       │
-  └─────────────────────────────────────────────────────────────┘
-      │
-      ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │  Phase 1 — Discovery (read-only, no code changes)           │
-  │                                                             │
-  │  orchestrator reads codebase → recon.md                     │
-  │      │                                                      │
-  │      ▼                                                      │
-  │  discovery-advisor → gaps.md (what's still unknown?)        │
-  │      │                                                      │
-  │      ▼  (one agent per gap, in parallel)                    │
-  │  explorer  explorer  explorer → discovery/*.md              │
-  └─────────────────────────────────────────────────────────────┘
-      │
-      ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │  Phase 2 — Plan construction                                │
-  │                                                             │
-  │  planner  (signal=intent, cloud judge)                      │
-  │  reads:   intent + all discovery context                    │
-  │  writes:  current.md                                        │
-  │           ├─ ## Outcome  (immutable from this point)        │
-  │           └─ ## Items    (dep-ordered, first wave selected) │
-  │  returns: READY_ITEMS[] for wave 001                        │
-  └─────────────────────────────────────────────────────────────┘
-      │
-      ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │  Phase 3 — Plan review loop (max 20 rounds total)           │
-  │                                                             │
-  │  review-plan agent reads current.md                         │
-  │  ├─ APPROVED → proceed to wave loop                         │
-  │  └─ NEEDS_REVISION                                          │
-  │       │                                                     │
-  │       ▼                                                     │
-  │       planner (signal=wave_summary, reads review findings)  │
-  │       updates current.md → loop back to review-plan         │
-  └─────────────────────────────────────────────────────────────┘
-      │
-      ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │  Phase 4 — Wave loop  (repeats until no ready items)        │
-  │                                                             │
-  │  ┌───────────────────────────────────────────────────────┐  │
-  │  │  plan-orchestrator executes one wave                  │  │
-  │  │                                                       │  │
-  │  │  topo-sort + resource-conflict batch → wave.md        │  │
-  │  │                                                       │  │
-  │  │  dispatch workers in parallel:                        │  │
-  │  │    implementer   → writes code                        │  │
-  │  │    scaffolder    → stubs, boilerplate                 │  │
-  │  │    test-writer   → tests                              │  │
-  │  │    wave-reviewer → review + fix loop                  │  │
-  │  │    doc-writer    → documentation                      │  │
-  │  │                                                       │  │
-  │  │  concat findings → findings.jsonl                     │  │
-  │  │  verify (bash/node, zero LLM)                         │  │
-  │  │  git commit  (trailer: Wave: NNN)                     │  │
-  │  └───────────────────────────────────────────────────────┘  │
-  │                          │                                  │
-  │                          ▼                                  │
-  │  ┌───────────────────────────────────────────────────────┐  │
-  │  │  Deterministic pre-processor  (zero LLM cost)         │  │
-  │  │                                                       │  │
-  │  │  reads findings.jsonl                                 │  │
-  │  │  marks completed items [x] in current.md              │  │
-  │  │  applies dep_discoveries to pending items             │  │
-  │  │  computes newly-unblocked items                       │  │
-  │  │  classifies transition →                              │  │
-  │  └───────────────────────────────────────────────────────┘  │
-  │            │                                                │
-  │     ┌──────┼──────────────────────┐                        │
-  │     ▼      ▼                      ▼                        │
-  │  clean  dep_update          outcome_risk                   │
-  │     │      │                      │                        │
-  │     │      │ planner-local        │ planner                │
-  │     │      │ (local 27B+,         │ (cloud judge)          │
-  │     │      │  never cloud)        │ may invoke:            │
-  │     │      │                      │   auditor              │
-  │     │      │ reads: affected      │   wave-synthesizer     │
-  │     │      │ items + discoveries  │                        │
-  │     │      │ updates current.md   │ re-evaluates outcome   │
-  │     │      │ dep map only         │ may revise plan scope  │
-  │     │      │ DELTA_ADDED: 0       │ updates current.md     │
-  │     │      │                      │                        │
-  │     ▼      ▼                      ▼                        │
-  │  READY_ITEMS[] for next wave ─────────────────────────────▶│
-  │  (empty → Phase 5)                                         │
-  └─────────────────────────────────────────────────────────────┘
-      │
-      ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │  Phase 5 — Final review                                     │
-  │                                                             │
-  │  final-reviewer reads current.md + journal.md              │
-  │  ├─ COMPLETE → archive plan, print summary                  │
-  │  └─ needs_items                                             │
-  │       │                                                     │
-  │       ▼                                                     │
-  │       planner (signal=final_review) appends gap items       │
-  │       re-enter Phase 4                                      │
-  └─────────────────────────────────────────────────────────────┘
-```
-
-### The planner's three signals
-
-The planner is invoked three different ways across the lifecycle, always reading `current.md` and always leaving `## Outcome` and completed `[x]` items untouched:
-
-| Signal | When | Input | What changes in current.md |
-|---|---|---|---|
-| `intent` | Once at start | User intent + full discovery context | Writes `## Outcome` + all items + first READY_ITEMS |
-| `wave_summary` | After `dep_update` or `outcome_risk` wave | Compressed findings for affected items | Updates dep map, enriches pending items, selects next wave |
-| `final_review` | After final-reviewer finds gaps | Gap list | Appends new items with deps on completed work |
-
-After every write, the planner emits a compact STATUS block (≤20 lines) — not file contents. The driver holds pointers, not bodies. Context stays bounded regardless of plan size.
-
-### The three wave transitions
-
-After each wave, the deterministic pre-processor reads findings and classifies the transition. This is where the system decides how much intelligence to spend on the next step:
-
-```
-Wave N completes
-     │
-     ▼  deterministic pre-processor (zero LLM)
-     │  reads findings.jsonl
-     │  marks [x] items, applies dep_discoveries, computes ready set
-     │
-     ├─▶ clean
-     │     all dep_discoveries high-confidence, no outcome_risk flags
-     │     commit message generated by local 7B
-     │     next READY_ITEMS computed from dep graph
-     │     → Wave N+1 starts immediately. No planner call.
-     │
-     ├─▶ dep_update
-     │     some dep_discovery is low-confidence, or implies a dep change
-     │     between pending items (not just resource enrichment)
-     │     → planner-local (local 27B+, never cloud)
-     │          reads only affected items + their discoveries
-     │          updates target_resources and dep links
-     │          DELTA_ADDED always 0 — cannot add items
-     │          → READY_ITEMS for Wave N+1
-     │
-     └─▶ outcome_risk
-           any finding flags outcome_risk=true
-           OR an unrecoverable finding was detected
-           → planner (cloud judge)
-                re-reads ## Outcome (north star)
-                may invoke auditor (continue/extend/revise verdict)
-                may invoke wave-synthesizer (context compression)
-                may revise plan scope, add blocking prerequisites
-                → READY_ITEMS for Wave N+1, or VERDICT: done
-```
-
-### Cost pyramid
-
-Cloud is called once to write the plan. After that, it's involved only when something genuinely threatens the outcome.
-
-```
-OPERATION                   COST       MODEL                    FREQUENCY
-─────────────────────────────────────────────────────────────────────────
-Initial planning            cloud      judge (Opus / qwen122b)  once / plan
-Plan review                 cloud      judge                    up to 20 rounds
-Outcome risk re-plan        cloud      judge                    rare — on flag
-────────────────────────────────────────────────────────────────── ↑ cloud ──
-Dep-map update              local      local-planner 27B+       per dep_update wave
-Workers: code               local      devstral-small:2         N per wave
-Workers: tests              local      qwen3.5:9b               N per wave
-Workers: scaffolding        local      qwen3.5:1.7b             N per wave
-Workers: docs               local      qwen3.5:9b               N per wave
-Commit message              local 7B   commit-msg-gen           per clean wave
-Learnings consolidation     local 7B   learnings-consolidator   per wave
-────────────────────────────────────────────────────────────────── ↓ zero ──
-[x] marking                 zero       deterministic            per wave
-Dep graph traversal         zero       deterministic            per wave
-Topo-sort / batching        zero       deterministic            per wave
-Verification                zero       bash / node              per wave
-Git commit                  zero       bash                     per wave
-```
-
-### Plan state layout
-
-```
-/tmp/c-thru/<repo>/<slug>/
-  current.md              ← single source of truth (Outcome + Items)
-  meta.json               ← slug, wave_count, revision_rounds, status
-  journal.md              ← append-only wave log
-  learnings.md            ← cross-wave wiki; refreshed by planner
-  pre-processor.log       ← structured transition log per wave
-  plan/snapshots/         ← p-NNN.md after each wave commit
-  discovery/              ← recon.md, gaps.md, per-gap explorer outputs
-  waves/NNN/
-    wave.md               ← orchestrator markdown manifest (wave_id, batches:, needs:, state markers)
-    findings.jsonl        ← per-item structured findings
-    wave-summary.md       ← key findings + signals
-    verify.json           ← deterministic post-wave checks
-    wave_summary_compressed.md  ← prose-stripped for planner context
-```
-
-Plans are resumable across sessions. Completed plans are archived to `~/.claude/c-thru-archive/<slug>-<timestamp>/`.
-
----
-
-## Install
+**c-thru** is a router/proxy that lets Claude Code talk to alternative model providers — Ollama (local or cloud-relayed), OpenRouter, or any Anthropic-compatible endpoint — without changing the vendor CLI. It bridges the Anthropic Messages API to Ollama-style backends with full SSE fidelity (proper event/data lines, ping keepalives, thinking blocks, accurate token counts), and routes individual Claude Code agents to appropriate-tier models based on hardware, connectivity, and capability.
 
 ```sh
 git clone https://github.com/whichguy/c-thru.git
 cd c-thru
 ./install.sh
+c-thru   # launches Claude Code through c-thru
 ```
-
-The installer symlinks `c-thru` (also aliased as `claude-router`), `claude-proxy`, and model-map helpers into `~/.claude/tools/`, seeds `~/.claude/model-map.json` from `config/model-map.json` on first run (never overwritten on upgrade), and registers the `llm-capabilities-mcp` server and hook scripts in `~/.claude/settings.json`.
-
-Add `~/.claude/tools` to your `PATH`:
-
-```sh
-export PATH="$HOME/.claude/tools:$PATH"   # add to ~/.zshrc or ~/.bashrc
-```
-
-Verify:
-
-```sh
-bash -n tools/c-thru-classify.sh          # shell syntax check
-node --check tools/claude-proxy           # node syntax check
-node tools/model-map-validate.js config/model-map.json
-c-thru check-deps                         # audit system dependencies
-c-thru list                               # runtime smoke-test (active profile + routes)
-c-thru explain --capability workhorse --mode best-opensource   # show resolution chain
-c-thru --help                             # show all flags and subcommands
-```
-
-If any optional dependencies (jq, ollama) are missing, run `c-thru check-deps --fix` to install them via brew on macOS.
 
 ---
 
-## Usage
+## Table of Contents
 
-### Subcommands (operate on c-thru itself)
-
-```sh
-c-thru list                           # show active hw profile, routes, local Ollama models
-c-thru explain --capability X         # print routing resolution chain for a hypothetical request
-c-thru reload                         # SIGHUP running proxy; confirm via /ping
-c-thru restart [--force]              # stop + respawn proxy
-c-thru check-deps [--fix]             # audit system deps; --fix installs missing optional tools
-c-thru help                           # show full reference (also: --help, -h)
-```
-
-### Launch flags (modify how the next claude invocation is routed)
-
-```sh
-c-thru                                # routes.default, or transparent Anthropic fallback
-c-thru --route background             # named route from model-map
-c-thru --model devstral-small:2       # explicit Ollama model (highest precedence)
-c-thru --mode offline                 # set connectivity / routing mode (15 modes; see below)
-c-thru --profile 64gb                 # force hardware tier (16gb/32gb/48gb/64gb/128gb)
-c-thru --memory-gb 48                 # override RAM detection (= CLAUDE_LLM_MEMORY_GB)
-c-thru --bypass-proxy                 # skip proxy (= CLAUDE_PROXY_BYPASS=1)
-c-thru --journal                      # enable per-request journaling (= CLAUDE_PROXY_JOURNAL=1)
-c-thru --proxy-debug [N]              # proxy verbose logs N=1|2 (= CLAUDE_PROXY_DEBUG)
-c-thru --router-debug [N]             # router verbose logs (= CLAUDE_ROUTER_DEBUG)
-c-thru --no-update                    # skip git self-update (= CLAUDE_ROUTER_NO_UPDATE=1)
-/c-thru-plan <intent>                 # (Claude skill) launch wave-based task orchestrator
-```
-
-The router strips all its own flags (`--route`, `--model`, `--mode`, `--profile`,
-`--memory-gb`, `--bypass-proxy`, `--journal`, `--proxy-debug`, `--router-debug`,
-`--no-update`) before forwarding to the real `claude` binary — they never reach
-Claude Code's own argument parser.
-
-Each `--<flag>` listed above sets the equivalent `CLAUDE_*` env var; flag wins over env var.
-
-### Flag precedence
-
-When multiple selection flags are passed:
-
-```
---model <X>      → forces concrete model X for this invocation (highest precedence on selection)
---route <name>   → uses the named route from model-map.json (used when --model not given)
---mode <M>       → orthogonal: picks WHICH SLOT of the resolved capability is used
-                   (connected/disconnect/cloud-best/etc.)
---profile <T>    → orthogonal: forces hardware tier (overrides RAM auto-detection)
-```
-
-The first two are about **which model**; the second two are about **which slot of that
-model's capability**. They compose. `c-thru --route deep-coder --mode cloud-best-quality
---profile 128gb` is well-defined.
+- [Why c-thru exists](#why-c-thru-exists)
+- [The killer feature: agent → capability → model](#the-killer-feature-agent--capability--model)
+- [Architecture](#architecture)
+- [Resolution graph](#resolution-graph)
+- [Three-tier fallback](#three-tier-fallback)
+- [Hardware-tier-aware routing](#hardware-tier-aware-routing)
+- [Connectivity modes](#connectivity-modes)
+- [Configuration recipes](#configuration-recipes)
+- [Observability](#observability)
+- [Install and uninstall](#install-and-uninstall)
+- [Honest about limits](#honest-about-limits)
+- [Further reading](#further-reading)
+- [License](#license)
 
 ---
 
-## Configuration
+## Why c-thru exists
 
-### model-map.json — config selection precedence
+Claude Code is locked to Anthropic's billing path. Local Ollama models are good enough for most coding work — but there's no transparent bridge that:
+
+- preserves Claude Code's wire protocol so streaming, tool use, and multi-turn context all work,
+- routes individual agents inside a single session to different models (cheap fast model for the scout, judge-class model for review, heavy coder for implementation),
+- adapts when the network goes away or a backend hangs,
+- tells you what it actually did, per request.
+
+That's c-thru. It wraps `claude`, rewrites `ANTHROPIC_BASE_URL` and credentials per launch, auto-spawns a local proxy, and translates Anthropic Messages API to whatever the backend speaks.
+
+---
+
+## The killer feature: agent → capability → model
+
+A single Claude Code session uses 5+ different models simultaneously. You don't configure that per agent — you configure it once per capability tier, and every agent that needs that tier picks up the model.
+
+Each agent file (`agents/*.md`) declares a `model:` matching its name. The proxy resolves that name in two hops: first to a capability alias (`judge`, `deep-coder`, `fast-scout`, ...), then to the concrete model for the active hardware tier and connectivity mode.
 
 ```
-$CLAUDE_MODEL_MAP_PATH         ← explicit override path
-$PWD/.claude/model-map.json    ← selected project graph
-~/.claude/model-map.json       ← selected profile graph (seeded by install.sh, never clobbered)
-config/model-map.json          ← shipped defaults, synced into the profile graph via model-map.system.json + model-map.overrides.json
+You ask: "/c-thru-plan add a palindrome checker"
+
+  planner agent       → judge          → claude-opus-4-6              (cloud, decisions)
+  explorer agent      → fast-scout     → gemma4:26b-a4b               (local, fast)
+  implementer agent   → deep-coder     → qwen3-coder:30b              (local, heavy)
+  test-writer agent   → code-analyst   → devstral-2                   (local, careful)
+  scaffolder agent    → pattern-coder  → qwen3:1.7b                   (local, tiny)
+  doc-writer agent    → orchestrator   → qwen3.6:35b-a3b              (local, mid)
 ```
 
-The router/proxy traverses the selected `model-map.json` as the full DAG for that launch. Project-local configs are selected by precedence; they are not merged on top of the profile graph.
+```mermaid
+flowchart LR
+  A[Agent name<br/>e.g. implementer] --> B[agent_to_capability]
+  B --> C[Capability alias<br/>e.g. deep-coder]
+  C --> D{Active mode +<br/>hw tier}
+  D --> E[llm_profiles.64gb.deep-coder.connected_model]
+  E --> F[Concrete model<br/>qwen3-coder:30b]
+  F --> G[Resolved backend<br/>ollama_local]
+```
 
-Top-level keys: `backends`, `routes`, `llm_profiles`, `agent_to_capability`, `model_overrides`, `targets`.
+Two consequences of this design:
 
-- **`backends`** — connection metadata (url, auth, kind). `kind: "ollama"` or `kind: "anthropic"`.
-- **`routes`** — named string→string graph edges. `routes.default` used when no flag passed.
-- **`llm_profiles`** — per-hardware-tier, per-capability-alias model slots (`connected_model` / `disconnect_model`).
-- **`agent_to_capability`** — maps agent names to capability aliases. One line to rebind an agent.
-- **`model_overrides`** — unconditional tag rename before route resolution. Example: `{"gemma4:26b": "gemma4:31b"}`.
-- **`targets`** — optional final mapping layer from terminal label → backend/model/request defaults. Unmatched terminal labels continue through `targets.default` in the proxy only.
+- **Rebind one agent to a different tier:** change one line in `agent_to_capability`. Agent file untouched.
+- **Swap a tier's backing model:** change one line in `llm_profiles[<hw>][<alias>]`. Every agent on that tier follows.
 
-See [`docs/model-map.md`](docs/model-map.md) for full schema.
+Capability aliases shipped today (excerpt — full list in `config/model-map.json`):
 
-### Environment variables
+| Alias | Cognitive tier | Used by |
+|---|---|---|
+| `judge` | cloud or 27B+ local | planner, auditor, review-plan, final-reviewer, judge |
+| `judge-strict` | cloud or 27B+, hard_fail | security-reviewer |
+| `deep-coder` | local coding model | implementer, agentic-coder |
+| `code-analyst` | local mid-tier | test-writer, wave-reviewer, reviewer |
+| `pattern-coder` | local small | scaffolder, edge, discovery-advisor |
+| `fast-scout` | small + low latency | fast-scout, explorer |
+| `orchestrator` | mid-tier local | plan-orchestrator, integrator, doc-writer |
+| `reasoner` | reasoning-class local | reasoner |
 
-| Variable | Effect |
-|---|---|
-| `CLAUDE_PROXY_BYPASS=1` | Skip proxy entirely — transparent Anthropic path |
-| `CLAUDE_LLM_MODE` | Connectivity / routing mode (see [docs/connectivity-modes.md](docs/connectivity-modes.md)). 16 modes: `connected` | `offline` | `local-only` | `semi-offload` | `cloud-judge-only` | `cloud-thinking` | `local-review` | `cloud-best-quality` | `local-best-quality` | `cloud-only` | `claude-only` | `opensource-only` | `fastest-possible` | `smallest-possible` | `best-opensource` | `best-opensource-cloud` |
-| `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection |
-| `CLAUDE_ROUTER_DEBUG=1` | Verbose router logging to stderr |
-| `CLAUDE_ROUTER_DEBUG=2` | + proxy port, Ollama vars, route keys |
-| `CLAUDE_PROXY_DEBUG=1` | Verbose proxy logging |
-| `CLAUDE_PROXY_DEBUG=2` | + full request/response tracing |
-| `CLAUDE_PROXY_HOOKS_PORT` | Fixed port for HTTP hooks listener (default `9998`) |
-| `CLAUDE_ROUTER_NO_UPDATE=1` | Disable git self-update at startup |
-| `CLAUDE_PROXY_OLLAMA_PULL_TIMEOUT_MS` | Timeout for model pull via HTTP API (default 1 800 000 ms) |
-| `CLAUDE_PROXY_OLLAMA_WARM_TIMEOUT_MS` | Timeout for model warm-up (default 60 000 ms) |
-| `CLAUDE_PROXY_OLLAMA_KEEP_ALIVE` | Keep-alive duration passed to Ollama on warm requests |
-| `CLAUDE_PROXY_JOURNAL=1` | Record every request/response to `~/.claude/journal/YYYY-MM-DD/<capability>.jsonl` (see [docs/journaling.md](docs/journaling.md)) |
-| `CLAUDE_PROXY_CLASSIFY=1` | Phase A dynamic classifier — observe-only role classification on every prompt; output in `x-c-thru-classified-role` header + journal (see [docs/dynamic-classification-phase-a.md](docs/dynamic-classification-phase-a.md)) |
-| `NO_COLOR` | Disable colored output in c-thru CLI (follows [no-color.org](https://no-color.org/)) |
+---
 
-Proxy logs: `~/.claude/proxy.*.log`. Kill a stuck proxy: `pkill -f claude-proxy`.
+## Architecture
 
-### Skill surface
+```mermaid
+flowchart TB
+  CC[Claude Code CLI<br/>unmodified]
+  CC -->|Anthropic Messages API| CT[c-thru<br/>bash router]
+  CT -->|sets ANTHROPIC_BASE_URL,<br/>injects hooks + agents| CC
+  CT -->|spawns + manages| CP[claude-proxy<br/>Node, stdlib only]
+  CP -->|translates protocol| O1[Ollama local<br/>localhost:11434]
+  CP -->|forwards| O2[Anthropic API]
+  CP -->|forwards| O3[OpenRouter]
+  CP -->|relays via local Ollama| O4[Ollama Cloud<br/>:cloud models]
+```
+
+ASCII fallback:
+
+```
+You type: c-thru
+
+Claude Code (vendor CLI, unmodified)
+    │  Anthropic Messages API
+    ▼
+c-thru (bash)        reads model-map.json, picks route + backend,
+    │                exports env, spawns proxy, exec's `claude`
+    ▼
+claude-proxy (node)  translates Anthropic ↔ Ollama, applies fallbacks,
+    │                emits SSE with proper event/data/ping framing
+    ├──▶ Ollama (local)         qwen3-coder:30b, devstral-2, gemma4:26b, ...
+    ├──▶ Ollama (cloud relay)   glm-5.1:cloud, deepseek-v4-flash:cloud
+    ├──▶ OpenRouter             deepseek/deepseek-v3, …
+    └──▶ Anthropic              transparent passthrough
+```
+
+The router strips its own flags (`--mode`, `--profile`, `--route`, `--model`, `--memory-gb`, `--bypass-proxy`, `--journal`, `--proxy-debug`, `--router-debug`, `--no-update`) before invoking `claude`. The proxy is a long-running local HTTP server; one proxy per c-thru session, port auto-selected, logs at `~/.claude/proxy.*.log`.
+
+**No external Node deps.** `claude-proxy`, `llm-capabilities-mcp.js`, and the `model-map-*.js` helpers all use Node stdlib (`http`, `https`, `fs`, `crypto`, `child_process`). There is no `package.json` and no `node_modules/`.
+
+---
+
+## Resolution graph
+
+Every request walks this graph. Each step is configured in `config/model-map.json`.
+
+```mermaid
+flowchart TB
+  R[Incoming request<br/>body.model = 'implementer'] --> O[model_overrides<br/>unconditional rename]
+  O --> MR{model_routes<br/>entry?}
+  MR -->|string target| MR2[recurse]
+  MR -->|mode-keyed object| MR3[pick by active mode<br/>or 'connected' fallback]
+  MR -->|backend id| BR[Resolved backend]
+  MR -->|none| AC{Capability alias?<br/>via agent_to_capability}
+  AC -->|yes| LP[llm_profiles<br/>hw → alias → mode-slot]
+  LP --> BR
+  AC -->|no| OL[Ollama passthrough<br/>localhost:11434]
+  BR --> SF[Strip @backend sigil,<br/>apply mode filters]
+  SF --> FW[Forward to backend]
+```
+
+ASCII:
+
+```
+body.model = "implementer"
+   │
+   ├──▶ model_overrides           unconditional name substitution (e.g. gemma4:26b → gemma4:31b)
+   │
+   ├──▶ model_routes              named graph edges:
+   │       string target           "claude-opus-4-6" → "anthropic"
+   │       mode-keyed object       { "cloud-only": "anthropic", "connected": "ollama_local" }
+   │       (recurses if target is another model name; cycle/depth guarded at 8 hops)
+   │
+   ├──▶ agent_to_capability       "implementer" → "deep-coder"
+   │
+   ├──▶ llm_profiles[hw][alias]   per-mode slots:
+   │       connected_model  / disconnect_model
+   │       cloud_best_model / local_best_model
+   │       modes.{semi-offload, cloud-judge-only, cloud-thinking, local-review, …}
+   │
+   └──▶ effective backend         strip @sigil, apply mode-level filters, forward
+```
+
+Top-level keys in `model-map.json`: `backends`, `routes`, `model_routes`, `model_overrides`, `agent_to_capability`, `llm_profiles`. Schema details: [`docs/model-map.md`](docs/model-map.md).
+
+---
+
+## Three-tier fallback
+
+When a backend fails, the proxy walks three tiers before surfacing the error.
+
+```mermaid
+flowchart TB
+  P[Primary backend] -->|success| OK[200 to client]
+  P -->|fail| T1{Tier 1:<br/>backend.fallback_to?}
+  T1 -->|yes| H1[Try next hop in chain]
+  T1 -->|no| T3[Tier 3: routes.default]
+  H1 -->|cooldown'd<br/>and has fallback_to| T2[Tier 2:<br/>skip and descend]
+  T2 --> H1
+  H1 -->|terminal hop| RT[Retry terminal even<br/>if recently failed]
+  RT -->|fail| T3
+  T3 -->|backend not yet tried| RD[Forward to default]
+  T3 -->|already tried| ERR[Anthropic-shape error<br/>to client]
+  RD -->|success| OK
+  RD -->|fail| ERR
+```
+
+ASCII:
+
+```
+Tier 1: per-backend fallback_to chain    user's declared graph in backends[*].fallback_to
+Tier 2: skip recently-failed nodes       cooldown TTL ~60s; only intermediate nodes —
+                                         terminal nodes never enter cooldown
+Tier 3: routes.default last resort       global safety net; tried at most once per request
+```
+
+Key invariants (enforced in `tools/claude-proxy`):
+
+- **Terminal nodes never cooldown.** If `D` is the end of `A→B→C→D`, `D` is always retried even when it just failed — otherwise the system would route a request to "nowhere".
+- **Cooldown skip only applies to intermediate hops.** A 60s cooldown on `B` turns `A→B→C→D` into effectively `A→C→D` for that window.
+- **`routes.default` itself never cooldowns.** It's the absolute terminal of the system.
+- **Cycle and depth guards.** Resolution depth capped at 8 hops; visited set prevents loops.
+- **TTFT fast-fail.** Hung Ollama upstreams that don't return HTTP headers within 11s (`CLAUDE_PROXY_OLLAMA_TTFT_MS`) trigger the fallback. The total upstream timeout (5min default) covers actual generation.
+
+You see the chosen path in the response header: `x-c-thru-resolved-via: {capability, profile, served_by, tier, mode}`.
+
+---
+
+## Hardware-tier-aware routing
+
+RAM is auto-detected at startup via `tools/hw-profile.js` and bucketed into 5 tiers:
+
+| Tier | RAM range | Posture |
+|---|---|---|
+| `16gb` | < 24 GB | tiny local + cloud for anything heavy |
+| `32gb` | 24–40 GB | small local, cloud for judge-class |
+| `48gb` | 40–56 GB | mid local, cloud for judge-class |
+| `64gb` | 56–96 GB | mid-large local, cloud as upgrade |
+| `128gb` | ≥ 96 GB | large local across the board |
+
+The same agent routes to different models depending on what your machine can run. Excerpt:
+
+| Machine | Mode | judge (planner) | orchestrator | deep-coder (implementer) |
+|---|---|---|---|---|
+| 128 GB | connected | claude-opus-4-6 | qwen3.6:35b-a3b | qwen3-coder:30b |
+| 128 GB | offline | phi4-reasoning | qwen3.6:35b-a3b | qwen3-coder:30b |
+| 64 GB | connected | claude-opus-4-6 | qwen3.6:35b | devstral-small:2 |
+| 64 GB | offline | qwen3.5:27b | qwen3.5:27b | devstral-small:2 |
+| ≤32 GB | any | qwen3.5:1.7b | qwen3.5:1.7b | qwen3.5:1.7b |
+
+Verify and override:
+
+```sh
+c-thru list                              # show detected tier + active routes
+c-thru --memory-gb 48 list                # treat as 48 GB for this run
+c-thru --profile 128gb                    # force a tier
+c-thru explain --capability deep-coder    # print resolution chain (no proxy spawn)
+```
+
+The shipped 128 GB profile is currently **VRAM-oversubscribed** if many local models load simultaneously — see [`docs/capacity-audit-128gb.md`](docs/capacity-audit-128gb.md) for the worst-case sums and recommended downgrades.
+
+---
+
+## Connectivity modes
+
+10 documented modes ([`docs/connectivity-modes.md`](docs/connectivity-modes.md)). 16 accepted at the CLI (the remaining 6 are filter/ranking modes that compose with `model_routes` rather than picking a profile slot).
+
+| Mode | Slot used | Use when |
+|---|---|---|
+| `connected` | `connected_model` | Normal — cloud reachable |
+| `offline` / `local-only` | `disconnect_model` | No internet (or want zero cloud calls) |
+| `semi-offload` | `modes.semi-offload` → `disconnect_model` | Local workers, cloud for high-stakes |
+| `cloud-judge-only` | `modes.cloud-judge-only` → `disconnect_model` | Cloud only for judge/audit |
+| `cloud-thinking` | `modes.cloud-thinking` → `disconnect_model` | Cloud for thinking-class capabilities |
+| `local-review` | `modes.local-review` → `connected_model` | Inverse — review/security stays local |
+| `cloud-best-quality` | `cloud_best_model` | Force best cloud model |
+| `local-best-quality` | `local_best_model` | Force best local; no cloud |
+| `best-opensource-cloud` | per spec | Best open-source on cloud-only routes |
+
+Filter/ranking modes that operate post-resolution against `docs/benchmark.json`: `cloud-only`, `claude-only`, `opensource-only`, `fastest-possible`, `smallest-possible`, `best-opensource`.
+
+```sh
+c-thru --mode cloud-judge-only            # cloud for high-stakes only
+c-thru --mode local-only                  # never call cloud
+c-thru --mode local-review                # invert — review locally, build cloud
+```
+
+Each capability declares `on_failure: "cascade"` (default) or `"hard_fail"`. `hard_fail` (used by `judge-strict`) returns a clean error rather than silently substituting a weaker model.
+
+---
+
+## Configuration recipes
+
+All four examples are minimal — drop into `~/.claude/model-map.overrides.json` to layer over shipped defaults.
+
+### Cloud-only with Anthropic
+
+```json
+{
+  "llm_mode": "cloud-only",
+  "routes": { "default": "claude-sonnet-4-6" }
+}
+```
+
+Every request goes to Anthropic. Local backends are filtered out post-resolution.
+
+### Local-only with Ollama
+
+```json
+{
+  "llm_mode": "local-only",
+  "routes": { "default": "qwen3-coder:30b" }
+}
+```
+
+Ollama at `localhost:11434`. No cloud calls regardless of capability slots.
+
+### Cloud primary, local fallback
+
+```json
+{
+  "backends": {
+    "anthropic": {
+      "fallback_to": "ollama_local"
+    }
+  },
+  "routes": { "default": "claude-sonnet-4-6" }
+}
+```
+
+If Anthropic 5xxs, times out, or fails TTFT, the proxy falls back to local Ollama transparently — same request body, no client retry. Visible in logs as `fallback.attempt`.
+
+### Mode-conditional `model_routes`
+
+`model_routes` entries can be plain strings or mode-keyed objects:
+
+```json
+{
+  "model_routes": {
+    "judge-best": {
+      "cloud-only":          "claude-opus-4-6",
+      "local-only":          "qwen3.5:27b",
+      "cloud-best-quality":  "claude-opus-4-6",
+      "local-best-quality":  "qwen3.5:27b",
+      "connected":           "claude-opus-4-6",
+      "offline":             "qwen3.5:27b"
+    }
+  }
+}
+```
+
+The active mode picks the slot; missing modes fall back to `connected`. Cycle detection caps recursion depth at 8.
+
+---
+
+## Observability
+
+### Per-request grep
+
+Every request gets a 12-char `req_id`. Every log line for that request carries it. To trace a single request end-to-end:
+
+```sh
+grep <req_id> ~/.claude/proxy.*.log
+```
+
+Events you'll see (excerpt): `request.start`, `resolve.chosen`, `ollama.stream.first_chunk`, `ollama.stream.done`, `fallback.skip_cooldown`, `fallback.global_default`, `request.end`. The proxy writes structured key=value lines including `elapsed_ms`.
+
+### Response headers
+
+On capability-routed responses, the proxy adds:
+
+```
+x-c-thru-resolved-via: {"capability":"deep-coder","profile":"deep-coder","served_by":"qwen3-coder:30b","tier":"64gb","mode":"connected","local_terminal_appended":false}
+```
+
+### Status endpoints and skills
+
+```sh
+curl http://127.0.0.1:<proxy_port>/ping         # liveness, prints active_tier + config_source
+curl http://127.0.0.1:<proxy_port>/c-thru/status # mode, tier, capabilities, usage stats
+```
+
+From a Claude session:
 
 | Skill | Purpose |
 |---|---|
-| `/c-thru-status` | Read-only snapshot: routes, models, backend health |
-| `/c-thru-config diag` | Full diagnostics: mode, tier, capability→model table, proxy status |
-| `/c-thru-config resolve <cap>` | What does a capability or agent name resolve to right now? |
-| `/c-thru-config mode [<mode>]` | Read or persistently set connectivity mode |
-| `/c-thru-config remap <cap> <model>` | Rebind a per-capability model in `llm_profiles` |
-| `/c-thru-config validate` | Schema-check the effective model-map |
-| `/c-thru-config reload` | SIGHUP the running proxy to apply config changes |
-| `/c-thru-plan <intent>` | Wave-based agentic planning orchestrator |
+| `/c-thru-status` | Routes, models, backend health |
+| `/c-thru-config diag` | Mode, tier, capability→model table, proxy status |
+| `/c-thru-config resolve <cap>` | What does this capability resolve to right now? |
+| `/c-thru-config mode <mode>` | Persist a mode change |
+| `/c-thru-config reload` | SIGHUP the running proxy after editing the map |
+| `/c-thru-plan <intent>` (or `/cplan`) | Wave-based agentic planner |
 
-**Note on `/model-map`:** The external `/model-map edit` subcommand has a known argument mismatch and is non-functional. Use `/c-thru-config remap` instead. The `/model-map show` and `/model-map reload` subcommands continue to work if you have that skill installed.
+### Journal (opt-in)
+
+`CLAUDE_PROXY_JOURNAL=1` records every request and response (auth scrubbed) to `~/.claude/journal/YYYY-MM-DD/<capability>.jsonl`. See [`docs/journaling.md`](docs/journaling.md) — it's privacy-sensitive, off by default.
+
+---
+
+## Install and uninstall
+
+`./install.sh` symlinks tools into `~/.claude/tools/`, seeds `~/.claude/model-map.system.json` (always overwritten — never edit), creates `~/.claude/model-map.overrides.json` if missing (your config; never overwritten on upgrade), and registers hooks in `~/.claude/settings.json`. It also runs an end-to-end validation suite (syntax checks, schema validation, proxy `/ping` round-trip, hook registration check) — failures abort install rather than leaving you with a half-broken setup.
+
+Add `~/.claude/tools` to PATH (the installer does this idempotently for zsh/bash):
+
+```sh
+export PATH="$HOME/.claude/tools:$PATH"
+```
+
+`./uninstall.sh` is the inverse:
+
+- Removes c-thru symlinks under `~/.claude/tools/` (only ones pointing back into this repo).
+- Deletes `~/.claude/model-map.system.json` and the derived `~/.claude/model-map.json`.
+- **Preserves `~/.claude/model-map.overrides.json`** — that's your data.
+- Surgically removes c-thru hook entries from `~/.claude/settings.json` (other hooks left alone).
+- Stops any running proxy.
+- Optional `--purge-models` to also drop Ollama tags c-thru pulled (tracked separately from your manual pulls).
+- Default mode shows what will be removed and prompts; `--dry-run` and `--yes` available.
+
+Verify a working install:
+
+```sh
+bash -n tools/c-thru                         # shell syntax
+node --check tools/claude-proxy              # node syntax
+node tools/model-map-validate.js config/model-map.json
+node test/model-map-v12-adapter.test.js      # adapter regression
+c-thru check-deps                            # audit jq, node, ollama, etc.
+c-thru list                                  # active profile + routes
+c-thru explain --capability workhorse        # resolution chain (pure JS, no proxy)
+```
+
+---
+
+## Honest about limits
+
+This README itself is a first-pass rewrite — see `TODO.md` entry **`[docs] Full repo audit + thoughtful README rewrite`** for the full audit scope (cross-checking every claim/env-var/skill against actual code, agent-by-agent purpose tables, file-by-file tool inventory). What's here is true and verified, but there's more depth to surface.
+
+Other open work that affects users today (full list in `TODO.md`):
+
+- **Test-coverage audit** (`[review]`). The proxy has 30+ defensive branches in `forwardOllama` alone. Test coverage exists but is uneven — TTFT, fallback, cooldown are exercised; mid-stream parse errors, ping-interval firing, content-length scrub effectiveness, and cooldown TTL expiry are not.
+- **Breadcrumb-comments pass** (`[docs]`). Some hot paths (SSE state machine, fallback invariants) are well-annotated; others (bash router lock-and-spawn, `model-map-resolve.js` mode handling) are bare.
+- **Senior-engineer review of `tools/claude-proxy`** (`[review]`). The proxy is ~1000+ lines doing real work; `forwardOllama` is ~250 lines doing translation + streaming + state machine + pings + watchdog + usage. Splitting into smaller functions is open work.
+- **128 GB VRAM oversubscription** (`[capacity]`). Shipped 128 GB profile worst-cases at ~193 GB resident across 13 distinct local models. Realistic heavy use lands at 85–159 GB. See [`docs/capacity-audit-128gb.md`](docs/capacity-audit-128gb.md) for the recommended downgrades.
+- **Token-usage stats** (`[stats]`). Wired up but only surfaced via `/c-thru/status` REST — the `/c-thru-status` skill doesn't render them yet.
+- **Ollama cloud fallback** (`[ollama]`). `:cloud`-suffixed models that fail with auth errors should fall back to local — implemented for `forwardAnthropic`, partially mirrored into `forwardOllama`, but cloud-failure-shape detection is heuristic.
+
+If a feature claim in this README doesn't hold for you, file an issue. Don't assume it's user error.
 
 ---
 
 ## Further reading
 
-- [`docs/agent-architecture.md`](docs/agent-architecture.md) — full agent roster, wave lifecycle, cross-wave communication
-- [`docs/hardware-profile-matrix.md`](docs/hardware-profile-matrix.md) — complete 6-profile × 5-alias model table
-- [`docs/model-map.md`](docs/model-map.md) — model-map schema reference
+- [`docs/agent-architecture.md`](docs/agent-architecture.md) — full agent roster, wave lifecycle, STATUS contract
+- [`docs/connectivity-modes.md`](docs/connectivity-modes.md) — all 16 modes, slot semantics, filter rules
+- [`docs/hardware-profile-matrix.md`](docs/hardware-profile-matrix.md) — full hw × capability table
+- [`docs/model-map.md`](docs/model-map.md) — schema reference
+- [`docs/journaling.md`](docs/journaling.md) — request/response journaling
+- [`docs/capacity-audit-128gb.md`](docs/capacity-audit-128gb.md) — 128 GB tier VRAM analysis
+- [`docs/dynamic-classification-phase-a.md`](docs/dynamic-classification-phase-a.md) — Phase A intent classifier
+- [`CLAUDE.md`](CLAUDE.md) — instructions for Claude Code working in this repo
 
 ---
 
