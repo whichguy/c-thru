@@ -833,8 +833,11 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
         served_by: effectiveModel,
         tier: requestMeta.hwTier,
         mode: requestMeta.activeMode,
+        latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
       });
     }
+    outHeaders['x-c-thru-served-by'] = effectiveModel || '';
+    outHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
     res.writeHead(upRes.statusCode, outHeaders);
     // Tee the upstream bytes for usage extraction without affecting the
     // pipe to the client. Anthropic emits `usage.input_tokens` in the
@@ -988,8 +991,11 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
       served_by: effectiveModel,
       tier: requestMeta.hwTier,
       mode: requestMeta.activeMode,
+      latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
     });
   }
+  streamHeaders['x-c-thru-served-by'] = effectiveModel || '';
+  streamHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
   res.writeHead(200, streamHeaders);
 
   const messageId = anthropicMessageId();
@@ -1262,8 +1268,11 @@ function handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, u
           served_by: effectiveModel,
           tier: requestMeta.hwTier,
           mode: requestMeta.activeMode,
+          latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
         });
       }
+      nonStreamHeaders['x-c-thru-served-by'] = effectiveModel || '';
+      nonStreamHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
       res.writeHead(200, nonStreamHeaders);
       res.end(respBody);
       ctxLog(ctx, 'ollama.nonstream.done', {
@@ -1534,12 +1543,30 @@ const server = http.createServer((req, res) => {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
         proxyLog('hook_injection', { tier, mode });
-        return send(res, 200, { 
-          hookSpecificOutput: { 
-            hookEventName: "SessionStart", 
-            additionalContext: `(c-thru) routing active. Profile: ${tier}, Mode: ${mode}.` 
+        return send(res, 200, {
+          hookSpecificOutput: {
+            hookEventName: "SessionStart",
+            additionalContext: `(c-thru) routing active. Profile: ${tier}, Mode: ${mode}.`
           }
         });
+      }
+
+      if (req.method === 'GET' && req.url === '/v1/active-models') {
+        const tier = resolveActiveTier(CONFIG);
+        const mode = resolveLlmMode(CONFIG);
+        const profiles = ((CONFIG || {}).llm_profiles || {})[tier] || {};
+        const local_models = [];
+        for (const [, entry] of Object.entries(profiles)) {
+          const m = resolveProfileModel(entry, mode);
+          if (!m) continue;
+          const sigilMatch = m.match(BACKEND_SIGIL_RE);
+          const backendId = sigilMatch ? sigilMatch[2] : null;
+          const base = sigilMatch ? sigilMatch[1] : m;
+          const backend = backendId && CONFIG.backends?.[backendId];
+          if (backend && backend.kind === 'ollama') local_models.push(base);
+          else if (!backend && !backendId) local_models.push(base);
+        }
+        return send(res, 200, { tier, mode, local_models });
       }
 
       if (req.method === 'POST' && req.url.startsWith('/v1/messages')) {
@@ -1557,6 +1584,16 @@ const server = http.createServer((req, res) => {
         }
         const hwTier = resolveActiveTier(CONFIG);
         const activeMode = resolveLlmMode(CONFIG);
+        const requestStartedAt = Date.now();
+
+        if (!body || typeof body.model !== 'string' || !body.model) {
+          return sendAnthropicError(res, 400, 'model field is required');
+        }
+
+        // Apply model_overrides unconditionally before route/alias resolution.
+        if (CONFIG.model_overrides && CONFIG.model_overrides[body.model]) {
+          body.model = CONFIG.model_overrides[body.model];
+        }
 
         let resolved = resolveBackend(body.model, CONFIG, hwTier, activeMode);
         if (resolved.error) {
@@ -1598,6 +1635,7 @@ const server = http.createServer((req, res) => {
           // resolveBackend if they need to fall back to a different upstream.
           hwTier,
           activeMode,
+          startedAt: requestStartedAt,
         };
 
         ctxLog(ctx, 'dispatch', {
@@ -1610,6 +1648,7 @@ const server = http.createServer((req, res) => {
           mode: activeMode
         });
 
+        body.model = effectiveModel;
         if (backend.kind === 'ollama') {
           return forwardOllama(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
