@@ -992,7 +992,10 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
             served_by: effectiveModel,
             endpoint: req.url,
             latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
-            request: Object.assign({}, body, { _headers: scrubHeaders(req.headers) }),
+            request: Object.assign({}, body, {
+              _headers: scrubHeaders(req.headers),
+              model: requestMeta.originalModel,  // pre-rewrite capability alias
+            }),
             response: parsedResponse,
           });
         }
@@ -1840,6 +1843,7 @@ const server = http.createServer((req, res) => {
           activeMode,
           startedAt: requestStartedAt,
           onFailure,
+          originalModel: body.model,  // captured before body.model is rewritten to effectiveModel
         };
 
         ctxLog(ctx, 'dispatch', {
