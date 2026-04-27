@@ -20,6 +20,35 @@ test plan covering the TTFT/timeout/stall split, fallback chain deduplication,
 and SSE mid-stream error frame path. Any regression breaks streaming for all
 Ollama backends.
 
+**[reliability] Restore fallback_chains capability-level cascade in proxy**
+Commit e60d6bd ("feat(c-thru): robust hot-reload, ephemeral session control, and
+tournament-optimized stack") removed `fallback_chains` support from `tools/claude-proxy`.
+`config/model-map.json` still contains 800+ lines of `fallback_chains` data that is now
+inert — the proxy ignores it entirely. This is distinct from per-backend `fallback_to`,
+which still works (proxy-runtime-fallback.test.js passes 63/63). `fallback_chains` was
+the capability-level cascade: e.g. `workhorse → [primary, secondary, tertiary]` where if
+the primary model fails, the proxy transparently retries with secondary, then tertiary.
+`fallback_to` only handles a single fallback at the backend level.
+
+Failing tests (as of e60d6bd): `test/proxy-fallback-cascade.test.js` (7 failures: cascade
+returns 502 instead of 200 on fallback), `test/proxy-mode-filters.test.js` (some failures),
+`test/proxy-resolution-matrix.test.js`. Wiki docs in `wiki/entities/best-quality-modes.md`
+and `wiki/entities/capability-profile-model-layers.md` document `fallback_chains` as
+functional but they are currently stale. Re-implementation requires a 3-site proxy change
+(see `wiki/entities/best-quality-modes.md` ~line 135 for the precise sites). Defer to its
+own dedicated session.
+
+**[reliability] Restore ANNOTATE_MODEL model-rewriting in proxy**
+Commit e60d6bd removed `CLAUDE_PROXY_ANNOTATE_MODEL` and `x-claude-proxy-served-by`
+from `tools/claude-proxy`. When enabled, this feature: (1) rewrote `body.model` in
+the forwarded request to `effectiveModel` (so backends see the concrete model name, not
+the capability alias), (2) rewrote `response.model` in the response JSON, (3) set
+`x-claude-proxy-served-by: effectiveModel` on responses. Failing tests: `proxy-messages.test.js`
+(7 failures — response.model, x-claude-proxy-served-by, stub received model_used),
+`proxy-translation.test.js` (4 failures — sigil stripping, model_overrides, agent chain
+model). This is a separate regression from `fallback_chains` — the fix is a body-rewrite
+pass in `forwardAnthropic` gated on `CLAUDE_PROXY_ANNOTATE_MODEL=1`.
+
 ## Configuration / capacity
 
 ## Documentation

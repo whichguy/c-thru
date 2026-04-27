@@ -68,6 +68,32 @@ run_suite "proxy-cooldown-ttl" \
   node "$REPO_DIR/test/proxy-cooldown-ttl.test.js"
 run_suite "model-map-config-project-overlay" \
   node "$REPO_DIR/test/model-map-config-project-overlay.test.js"
+run_suite "proxy-runtime-fallback (fallback chains, cycle detection)" \
+  node "$REPO_DIR/test/proxy-runtime-fallback.test.js"
+run_suite "capability-alias-resolve (2-hop agent→capability)" \
+  node "$REPO_DIR/test/capability-alias-resolve.test.js"
+run_suite "llm-mode-resolution-matrix (16-mode matrix)" \
+  node "$REPO_DIR/test/llm-mode-resolution-matrix.test.js"
+run_suite "resolve-capability (capability alias graph)" \
+  node "$REPO_DIR/test/resolve-capability.test.js"
+run_suite "model-map-filter (mode-based filtering)" \
+  node "$REPO_DIR/test/model-map-filter.test.js"
+run_suite "model-map-ranking (quality-score ranking)" \
+  node "$REPO_DIR/test/model-map-ranking.test.js"
+run_suite "proxy-tool-use (tool use / function calling)" \
+  node "$REPO_DIR/test/proxy-tool-use.test.js"
+run_suite "hw-profile (hardware tier detection)" \
+  node "$REPO_DIR/test/hw-profile.test.js"
+run_suite "model-map-layered (3-tier config merge)" \
+  node "$REPO_DIR/test/model-map-layered.test.js"
+run_suite "llm-profiles-editor (profile edit helpers)" \
+  node "$REPO_DIR/test/llm-profiles-editor.test.js"
+run_suite "model-map-config (config path resolution)" \
+  node "$REPO_DIR/test/model-map-config.test.js"
+run_suite "proxy-cli-flags (parseCliFlags edge cases)" \
+  node "$REPO_DIR/test/proxy-cli-flags.test.js"
+run_suite "proxy-usage-stats (recordUsage debounce + SIGTERM flush)" \
+  node "$REPO_DIR/test/proxy-usage-stats.test.js"
 
 echo ""
 echo "Validators:"

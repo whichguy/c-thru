@@ -143,6 +143,12 @@ find_parent_model_map() {
   return 1
 }
 
+# ARCH: resolve_model_map_config — 3-tier config selection: env override → project-local → profile.
+#   Tier 1: CLAUDE_MODEL_MAP_PATH (explicit override) — must be an absolute readable file.
+#   Tier 2: project-local (.claude/model-map.json at git root or walked up from CWD) — selected
+#           by precedence only; NOT merged on top of the profile graph.
+#   Tier 3: ~/.claude/model-map.json (profile graph, the only layered graph).
+#   Sets CONFIG and CONFIG_SOURCE globals; returns 1 only if all tiers are absent.
 resolve_model_map_config() {
   local override="${CLAUDE_MODEL_MAP_PATH:-}"
   local profile_real=""
@@ -200,6 +206,11 @@ resolve_model_map_config() {
   return 1
 }
 
+# ARCH: setup_ephemeral_session — creates a per-session tmpdir that shadows ~/.claude so
+#   the injected settings.json, agents, and skills don't pollute the user's permanent config.
+#   settings.json is written LATER by write_ephemeral_settings() once the proxy port is known;
+#   only the directory skeleton (symlinks + agent/skill dirs) is built here.
+#   No-op when CLAUDE_PROXY_BYPASS=1 — the session is transparent so injection is unnecessary.
 setup_ephemeral_session() {
   # Skip if bypass requested
   [[ "${CLAUDE_PROXY_BYPASS:-0}" == "1" ]] && return 0
@@ -1302,9 +1313,12 @@ final_model_has_fallback_strategy() {
   jq -e --arg m "$model" '(.fallback_strategies // {}) | has($m)' "$CONFIG" >/dev/null 2>&1
 }
 
-# Follow model-map `routes` as a graph (think → sonnet → qwen …) until a leaf.
-# Prints terminal id on stdout. Exits 1 on cycle or excess depth.
-# Max hops: ROUTES_MAX_DEPTH env, else model-map routes_max_depth, else 32 (cap 256).
+# ARCH: resolve_routes_graph — traverses the model-map `routes` DAG until a leaf (non-route) node.
+#   Resolution order: --route flag → routes.default → --model flag → Ollama passthrough.
+#   Cycle detection: each visited node is stored; revisiting any node aborts with exit 1.
+#   Max hops: ROUTES_MAX_DEPTH env → model-map routes_max_depth field → 32 (hard cap 256).
+#   Prints the terminal model id on stdout; must be called before exec to avoid forwarding
+#   a route alias name to the real claude binary as a model id.
 resolve_routes_graph() {
   local start="$1"
   local max="${ROUTES_MAX_DEPTH:-}"
@@ -2326,9 +2340,12 @@ run_background_ollama_prep_sweep() {
   disown 2>/dev/null || true
 }
 
-# Blocking pre-launch check: pull + warm any Ollama models the proxy says are needed
-# but not yet present locally. Runs after proxy is up, before exec'ing claude.
-# Skip: C_THRU_SKIP_PREFLIGHT=1 | proxy port unknown | curl missing | Ollama unreachable
+# ARCH: preflight_model_readiness — blocking pre-launch check that pulls and warms any Ollama
+#   models the proxy reports as needed but not yet present locally.
+#   Called in the main flow after the proxy is up, before exec'ing the real claude binary.
+#   Bypassed on cloud-only configs (proxy /v1/active-models returns an empty local_models list).
+#   Silent early-exits on: C_THRU_SKIP_PREFLIGHT=1, unknown proxy port, missing curl, or an
+#   unreachable Ollama host — none of these are fatal to the session.
 preflight_model_readiness() {
   local port="${1:-}"
   [[ "${C_THRU_SKIP_PREFLIGHT:-0}" == "1" ]] && return 0
@@ -2405,6 +2422,12 @@ ensure_active_tier_ollama_requirements() {
   ensure_ollama_cli_available "startup" || true
 }
 
+# ARCH: ensure_active_tier_prepulled — fires a disowned background subshell on every router
+#   invocation to pull missing active-tier local Ollama models before they are first needed.
+#   Debounced by .prepull-stamp-<tier> (mtime compared to model-map.json mtime); re-runs only
+#   after a config change or fresh install. Stamp is touched BEFORE launching the background
+#   job to prevent concurrent duplicate runs within the same second.
+#   C_THRU_SKIP_PREPULL=1 disables entirely (CI/tests). All output is suppressed (>/dev/null).
 ensure_active_tier_prepulled() {
   # Pre-pull all active-tier local Ollama models in the background so the first
   # request after a config change or fresh install does not block on a multi-GB pull.
@@ -2739,13 +2762,15 @@ wait_for_concurrent_pull() {
   return 0
 }
 
-# Ensure target Ollama model is loaded on the given host; warm it in a subprocess if not.
-# Server liveness: lsof (singleton guard) + curl /api/version (HTTP health).
-# Model check: ollama list for cache presence and age; /api/ps for in-VRAM status.
-# Stale models (>7 days) are re-pulled in all modes; active mode does it in background.
-# Zombie recovery: if port is occupied but HTTP fails after 3 retries, kill + respawn.
-# Non-fatal — failures do not block routing.
-# Optional $3: OLLAMA_API_KEY value for `ollama` CLI (inline from model-map or env).
+# ARCH: ensure_ollama_running — health-checks and, if needed, starts or repairs a local Ollama server,
+#   then ensures the requested model is pulled and warm. Non-fatal: any failure returns 0 to
+#   avoid blocking routing.
+#   Server health: curl /api/version (not the CLI), so no ollama binary path is required.
+#   Singleton guard: lsof on the port before spawning — guards against double-spawn; zombie
+#   recovery retries HTTP 3×1s before kill+respawn.
+#   Mode controls depth: "active" shows spinner + pulls synchronously; "prepull"/"sweep" run
+#   in the background subshell callers already created.
+#   Stale models (>7 days by mtime) are re-pulled unconditionally in all modes.
 ensure_ollama_running() {
   local model="$1"
   local host="$2"
@@ -3414,6 +3439,12 @@ fi
 # Placed before ORIG_ARGS parsing so they're accessible even if the main launch path
 # would be blocked (e.g., stale config causing validate_model_map_config to error).
 
+# ARCH: cmd_reload — sends SIGHUP to the running proxy and confirms it survived the reload.
+#   Port is derived from lsof on the live PID (not from config), so it works even when the
+#   proxy was started on a dynamic OS-assigned port rather than CLAUDE_PROXY_PORT.
+#   Falls back to CLAUDE_PROXY_PORT when lsof is unavailable; fails if neither is known.
+#   Polls /ping for up to 2 s (20 × 100 ms) after SIGHUP to catch immediate crashes
+#   (e.g., invalid model-map.json committed while the proxy is live).
 cmd_reload() {
   local pid_file="$CLAUDE_PROFILE_DIR/proxy.pid"
 
@@ -3476,6 +3507,12 @@ cmd_reload() {
   return 0
 }
 
+# ARCH: cmd_restart — SIGTERM + wait-for-listener-gone, then re-spawns a fresh proxy process.
+#   Does NOT inherit the old port by default; the new proxy picks an OS-assigned port unless
+#   CLAUDE_PROXY_PORT is set. This means the next c-thru session will negotiate a new port
+#   via the READY <port> FIFO handshake in ensure_proxy_running.
+#   --force escalates to SIGKILL when SIGTERM is ignored (e.g., busy GC, hung syscall).
+#   Port is derived from lsof on the live PID before signaling — same rationale as cmd_reload.
 cmd_restart() {
   local force=0
   [[ "${2:-}" == "--force" ]] && force=1
@@ -3710,7 +3747,13 @@ validate_ollama_cloud_auth_for_launch "$EFFECTIVE_MODEL" || exit 1
 
 REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
 
-# --- Helper: expand placeholders and export resolved provider env vars ---
+# ARCH: apply_provider_block — injects backend env vars (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN,
+#   ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR, plus arbitrary keys from the backend's `env` JSON)
+#   into the current shell environment for the resolved provider.
+#   Must be called after route resolution and before exec/claude — env vars set here are
+#   inherited by the real claude binary (or the proxy) via the exec boundary.
+#   Expands $OLLAMA_URL/$OLLAMA_BASE_URL placeholders in base_url at call time so the map
+#   can be written with a symbolic reference and remain portable across host changes.
 apply_provider_block() {
   local base_url="$1" auth_token="$2" api_key="$3" config_dir="$4" env_json="$5"
   # Expand placeholders

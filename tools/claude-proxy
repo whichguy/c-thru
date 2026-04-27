@@ -826,7 +826,16 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       });
       return;
     }
-    res.writeHead(upRes.statusCode, upRes.headers);
+    const outHeaders = Object.assign({}, upRes.headers);
+    if (requestMeta.capability) {
+      outHeaders['x-c-thru-resolved-via'] = JSON.stringify({
+        capability: requestMeta.capability,
+        served_by: effectiveModel,
+        tier: requestMeta.hwTier,
+        mode: requestMeta.activeMode,
+      });
+    }
+    res.writeHead(upRes.statusCode, outHeaders);
     // Tee the upstream bytes for usage extraction without affecting the
     // pipe to the client. Anthropic emits `usage.input_tokens` in the
     // message_start SSE frame (or the top-level `usage` for non-stream)
@@ -966,13 +975,22 @@ function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
 //   Both are cleared on: res.close, upRes.end, upRes.error, stallCheck hard-fail,
 //   and via timerControls.stop() for pre-stream errors in up.on('error').
 function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, up, requestStartedAt, timerControls, upRes) {
-  res.writeHead(200, {
+  const streamHeaders = {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
     // Match real Anthropic — anti-buffering hint for nginx & Cloudflare.
     'X-Accel-Buffering': 'no',
-  });
+  };
+  if (requestMeta.capability) {
+    streamHeaders['x-c-thru-resolved-via'] = JSON.stringify({
+      capability: requestMeta.capability,
+      served_by: effectiveModel,
+      tier: requestMeta.hwTier,
+      mode: requestMeta.activeMode,
+    });
+  }
+  res.writeHead(200, streamHeaders);
 
   const messageId = anthropicMessageId();
 
@@ -1234,10 +1252,19 @@ function handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, u
         },
       };
       const respBody = JSON.stringify(anthropicJson);
-      res.writeHead(200, {
+      const nonStreamHeaders = {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(respBody)
-      });
+        'Content-Length': Buffer.byteLength(respBody),
+      };
+      if (requestMeta.capability) {
+        nonStreamHeaders['x-c-thru-resolved-via'] = JSON.stringify({
+          capability: requestMeta.capability,
+          served_by: effectiveModel,
+          tier: requestMeta.hwTier,
+          mode: requestMeta.activeMode,
+        });
+      }
+      res.writeHead(200, nonStreamHeaders);
       res.end(respBody);
       ctxLog(ctx, 'ollama.nonstream.done', {
         backend: backend.id,
