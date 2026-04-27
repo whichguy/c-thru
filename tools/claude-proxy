@@ -686,6 +686,8 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
     return tryGlobalDefaultFallback(ctx, req, res, body, requestMeta);
   }
   chain.add(backend.id);
+  const triedModels = requestMeta._triedModels || (requestMeta._triedModels = new Set());
+  triedModels.add(body.model);
 
   // Walk the per-backend chain, transparently skipping cooldowned
   // intermediate nodes. Terminal nodes (no fallback_to) always get tried,
@@ -749,7 +751,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
       if (!m) continue;
       const candidateResolved = resolveBackend(m, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
       if (candidateResolved.error) continue;
-      if (chain.has(candidateResolved.backend.id)) continue;
+      if (triedModels.has(m)) continue;
       if (candidateResolved.backend.fallback_to && isInCooldown(candidateResolved.backend.id)) continue;
       // Do NOT add to chain here — the dispatched candidate adds itself on the next
       // tryFallbackOrFail entry (chain.add(backend.id) at top), matching the
@@ -766,6 +768,25 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
         forwardAnthropic(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
       }
       return true;
+    }
+  }
+
+  // Local-terminal guard: if fallback_chains exhausted and disconnect_model routes to Ollama, try it.
+  if (!res.headersSent && capKey) {
+    const profileEntry = (CONFIG.llm_profiles?.[requestMeta.hwTier] || {})[capKey];
+    const termModel = profileEntry?.disconnect_model;
+    if (termModel) {
+      const triedM = requestMeta._triedModels || new Set();
+      if (!triedM.has(termModel)) {
+        const termResolved = resolveBackend(termModel, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
+        if (!termResolved.error && termResolved.backend.kind === 'ollama') {
+          requestMeta._localTerminalAppended = true;
+          body.model = termResolved.effectiveModel;
+          ctxLog(ctx, 'fallback.local_terminal', { model: termModel, backend: termResolved.backend.id, capability: capKey });
+          forwardOllama(ctx, req, res, body, termResolved.backend, termResolved.effectiveModel, requestMeta);
+          return true;
+        }
+      }
     }
   }
 
@@ -870,6 +891,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
         tier: requestMeta.hwTier,
         mode: requestMeta.activeMode,
         latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
+        local_terminal_appended: requestMeta._localTerminalAppended || false,
       });
     }
     outHeaders['x-c-thru-served-by'] = effectiveModel || '';
@@ -919,6 +941,22 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
         }
         recordUsage(effectiveModel, backend.id, inputTokens, outputTokens);
         clearBackendCooldown(backend.id);
+        if (shouldJournal(requestMeta.capability)) {
+          let parsedResponse = null;
+          try { parsedResponse = JSON.parse(Buffer.concat(usageBuf).toString()); } catch {}
+          writeJournalEntry({
+            schema_version: 1,
+            id: 'j_' + crypto.randomBytes(6).toString('hex'),
+            ts_iso: new Date().toISOString(),
+            capability: requestMeta.capability || null,
+            mode: requestMeta.activeMode,
+            served_by: effectiveModel,
+            endpoint: req.url,
+            latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
+            request: Object.assign({}, body, { _headers: scrubHeaders(req.headers) }),
+            response: parsedResponse,
+          });
+        }
       } catch { /* malformed body — skip stats */ }
     });
     upRes.pipe(res);
@@ -1029,6 +1067,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
       tier: requestMeta.hwTier,
       mode: requestMeta.activeMode,
       latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
+      local_terminal_appended: requestMeta._localTerminalAppended || false,
     });
   }
   streamHeaders['x-c-thru-served-by'] = effectiveModel || '';
@@ -1307,6 +1346,7 @@ function handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, u
           tier: requestMeta.hwTier,
           mode: requestMeta.activeMode,
           latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
+          local_terminal_appended: requestMeta._localTerminalAppended || false,
         });
       }
       nonStreamHeaders['x-c-thru-served-by'] = effectiveModel || '';
@@ -1619,22 +1659,24 @@ const server = http.createServer((req, res) => {
         });
       }
 
-      if (req.method === 'GET' && req.url === '/v1/active-models') {
+      if (req.method === 'GET' && (req.url === '/v1/active-models' || req.url === '/v1/active-models/')) {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
-        const profiles = ((CONFIG || {}).llm_profiles || {})[tier] || {};
+        const profiles = (CONFIG.llm_profiles || {})[tier] || {};
         const local_models = [];
-        for (const [, entry] of Object.entries(profiles)) {
+        const capabilities = [];
+        for (const [alias, entry] of Object.entries(profiles)) {
           const m = resolveProfileModel(entry, mode);
           if (!m) continue;
           const sigilMatch = m.match(BACKEND_SIGIL_RE);
           const backendId = sigilMatch ? sigilMatch[2] : null;
           const base = sigilMatch ? sigilMatch[1] : m;
           const backend = backendId && CONFIG.backends?.[backendId];
-          if (backend && backend.kind === 'ollama') local_models.push(base);
-          else if (!backend && !backendId) local_models.push(base);
+          const isLocal = (backend && backend.kind === 'ollama') || (!backend && !backendId);
+          capabilities.push({ capability: alias, model: base, local: isLocal });
+          if (isLocal) local_models.push(base);
         }
-        return send(res, 200, { tier, mode, local_models });
+        return send(res, 200, { tier, mode, local_models, capabilities });
       }
 
       if (req.method === 'POST' && req.url.startsWith('/v1/messages')) {
@@ -1688,7 +1730,7 @@ const server = http.createServer((req, res) => {
               const replaced = resolveBackend(best, CONFIG, hwTier, activeMode);
               if (!replaced.error) {
                 ctxLog(ctx, 'ranking_promotion', { criterion, role, old_model: resolved.effectiveModel, new_model: replaced.effectiveModel });
-                resolved = replaced;
+                resolved = Object.assign({}, replaced, { logicalRole: resolved.logicalRole });
               }
             }
           }
