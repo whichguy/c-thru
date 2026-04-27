@@ -663,6 +663,31 @@ function tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta) 
   return true;
 }
 
+// Re-order a fallback_chains array so in-band candidates (quality_score within
+// tolerancePct% of the untried top) are sorted by speed_score desc, then out-of-band.
+// topScore is computed over untried candidates only to avoid threshold inflation from
+// an already-tried high-quality entry.
+function sortFallbackChainByTolerance(chain, tolerancePct, triedModels) {
+  if (!tolerancePct || chain.length <= 1) return chain;
+  const untried = chain.filter(c => {
+    const m = typeof c === 'string' ? c : c?.model;
+    return m && !triedModels.has(m);
+  });
+  const scored = untried.filter(c => typeof c?.quality_score === 'number');
+  if (scored.length === 0) return chain;
+  const topScore = Math.max(...scored.map(c => c.quality_score));
+  const threshold = topScore * (1 - tolerancePct / 100);
+  return [...chain].sort((a, b) => {
+    const aQ = typeof a?.quality_score === 'number' ? a.quality_score : -Infinity;
+    const bQ = typeof b?.quality_score === 'number' ? b.quality_score : -Infinity;
+    const aIn = aQ >= threshold, bIn = bQ >= threshold;
+    if (aIn && bIn) return (b?.speed_score || 0) - (a?.speed_score || 0);
+    if (aIn) return -1;
+    if (bIn) return 1;
+    return 0;  // preserve original order for out-of-band
+  });
+}
+
 // Try the profile's disconnect_model as a last-resort local terminal.
 // Only fires if the model routes to an Ollama backend and hasn't been tried yet.
 function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
@@ -769,7 +794,13 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
   const capKey = requestMeta.capability;
   const capChain = capKey && CONFIG.fallback_chains?.[requestMeta.hwTier]?.[capKey];
   if (capChain) {
-    for (const candidate of capChain) {
+    const tolerancePct = CONFIG.quality_tolerance_pct;
+    const applyTolerance = tolerancePct != null &&
+      (requestMeta.activeMode === 'cloud-best-quality' || requestMeta.activeMode === 'local-best-quality');
+    const sortedChain = applyTolerance
+      ? sortFallbackChainByTolerance(capChain, tolerancePct, triedModels)
+      : capChain;
+    for (const candidate of sortedChain) {
       const m = typeof candidate === 'string' ? candidate : candidate.model;
       if (!m) continue;
       const candidateResolved = resolveBackend(m, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
