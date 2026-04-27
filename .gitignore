@@ -11,3 +11,4 @@ docs/planning/review-manifests/
 
 # Defensive — see commit a0083bf and follow-up
 temp_gas_prod/
+.worktrees/
