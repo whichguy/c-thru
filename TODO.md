@@ -80,6 +80,49 @@ verify the install worked without running a separate command.
 
 ## Reliability
 
+**[review] Senior-engineer review of `tools/claude-proxy`**
+The proxy has accumulated significant complexity through this session
+(observability layer, mode-conditional routing, Anthropic SSE fidelity
+state machine, runtime upstream fallback with cycle detection,
+debounced async usage stats, request-correlated logging, hard-stall
+watchdog, content-length-scrub for body rewrites). It's now ~1000+
+lines doing real work and worth a fresh senior-engineer pass that's
+NOT just incremental review of recent diffs.
+
+What such a review should produce:
+1. **Architecture diagram**: client → dispatch → resolveBackend →
+   forwardOllama / forwardAnthropic → response shaping → client. Show
+   the cycle-detection sets, fallback chain, observability ctx, and
+   where each layer's invariants live. Currently spread across the
+   file with no high-level map.
+2. **Single-responsibility audit**: identify functions with >1 reason
+   to change. `forwardOllama` is ~250 lines doing translation +
+   streaming + state machine + pings + watchdog + usage. Likely
+   should be 3-4 smaller functions (or a class) for clarity.
+3. **Magic numbers**: 120000ms watchdog, 15000ms ping, 5000ms stall,
+   5000ms debounce, 256KB usage buffer, 8 cycle-depth, 60m keep_alive,
+   65536 num_ctx, 5min upstream timeout. Promote to named constants
+   at top of file with comments justifying each value.
+4. **Test coverage gaps**: anthropic backend is only smoke-tested
+   (proxy-streaming.test.js has 5 pre-existing failures). Add
+   coverage for: streaming Anthropic happy path, usage extraction
+   from SSE, mid-stream error event, content-length scrub.
+5. **Backwards-compat paths**: anything we're carrying for older
+   Claude Code versions or model-map schemas? Document or remove.
+6. **Failure mode ranking**: list every code path that calls
+   `sendAnthropicError` or writes a non-200, and verify the
+   response shape is faithful to the real Anthropic API.
+7. **Concurrency review**: shared mutable state — persistentUsage,
+   GLOBAL_CONFIG, UNRECOGNIZED_CLI_FLAGS, the fallback chain Set per
+   request. Are there any cross-request leaks?
+8. **Dead-code sweep** (post-removal of the warmup machinery): is
+   anything else unused since the simplification? Re-grep for orphans.
+
+Acceptance: a written review document (~500-800 words) covering
+the eight points above, plus a prioritized list of suggested
+refactors (none required to land, but each scored low/medium/high
+on payoff and effort).
+
 **[CRITICAL] [config] Project-local `.claude/model-map.json` pollutes the global profile**
 Reproduced this session (2026-04-26): running `c-thru` (or any tool that
 calls `resolveSelectedConfigPath` with `syncProfile: true`) from a cwd

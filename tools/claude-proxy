@@ -162,26 +162,74 @@ const PROXY_LOG_MAX_SIZE = 10 * 1024 * 1024;
 const USAGE_STATS_FILE = process.env.CLAUDE_PROXY_USAGE_STATS_FILE || path.join(os.homedir(), '.claude', 'usage-stats.json');
 const PID_FILE = path.join(os.homedir(), '.claude', 'proxy.pid');
 
-let persistentUsage = { total_input: 0, total_output: 0, by_model: {} };
+// Persistent token-usage stats. Loaded at boot, mutated in-process by
+// recordUsage() (called from the dispatch-completion paths in forwardOllama
+// + forwardAnthropic), debounce-flushed to disk so the hot path doesn't pay
+// fs.writeFileSync latency per request. Sync-flushed on shutdown signals so
+// we don't lose the last debounce window.
+let persistentUsage = {
+  total_input: 0,
+  total_output: 0,
+  by_model: {},
+  by_backend: {},
+  first_recorded: null,
+  last_recorded: null,
+};
 function loadPersistentUsage() {
   try {
     if (fs.existsSync(USAGE_STATS_FILE)) {
-      persistentUsage = JSON.parse(fs.readFileSync(USAGE_STATS_FILE, 'utf8'));
+      const loaded = JSON.parse(fs.readFileSync(USAGE_STATS_FILE, 'utf8'));
+      // Merge defensively — a stats file from an older proxy version may be
+      // missing newer fields. Preserve loaded counts, fill in missing keys.
+      persistentUsage = Object.assign(persistentUsage, loaded);
+      if (!persistentUsage.by_backend) persistentUsage.by_backend = {};
     }
   } catch {}
 }
 loadPersistentUsage();
 
-function recordUsage(model, input, output) {
+function recordUsage(model, backendId, input, output) {
+  if (!input && !output) return;  // skip noise from empty/error responses
   persistentUsage.total_input += input;
   persistentUsage.total_output += output;
-  if (!persistentUsage.by_model[model]) persistentUsage.by_model[model] = { input: 0, output: 0 };
+  // Per-model: counts + call frequency
+  if (!persistentUsage.by_model[model]) persistentUsage.by_model[model] = { input: 0, output: 0, calls: 0 };
   persistentUsage.by_model[model].input += input;
   persistentUsage.by_model[model].output += output;
-  flushPersistentUsageNowSync();
+  persistentUsage.by_model[model].calls += 1;
+  // Per-backend: same shape, lets /c-thru/status answer "how much went to
+  // anthropic vs local?" at a glance
+  if (backendId) {
+    if (!persistentUsage.by_backend[backendId]) persistentUsage.by_backend[backendId] = { input: 0, output: 0, calls: 0 };
+    persistentUsage.by_backend[backendId].input += input;
+    persistentUsage.by_backend[backendId].output += output;
+    persistentUsage.by_backend[backendId].calls += 1;
+  }
+  const now = nowIso();
+  if (!persistentUsage.first_recorded) persistentUsage.first_recorded = now;
+  persistentUsage.last_recorded = now;
+  scheduleUsageFlush();
 }
 
+// Debounced async flush. Coalesces multiple recordUsage() calls within a 5s
+// window into a single fs.writeFile. The hot path returns immediately; the
+// next flush picks up the latest in-memory state.
+let usageFlushTimer = null;
+const USAGE_FLUSH_DEBOUNCE_MS = 5000;
+function scheduleUsageFlush() {
+  if (usageFlushTimer) return;
+  usageFlushTimer = setTimeout(() => {
+    usageFlushTimer = null;
+    fs.promises.mkdir(path.dirname(USAGE_STATS_FILE), { recursive: true })
+      .then(() => fs.promises.writeFile(USAGE_STATS_FILE, JSON.stringify(persistentUsage, null, 2)))
+      .catch(() => {});  // swallow — disk-full / readonly-fs shouldn't break the hot path
+  }, USAGE_FLUSH_DEBOUNCE_MS);
+}
+
+// Sync flush for shutdown handlers. Called from SIGTERM/SIGINT to make sure
+// the last debounce window's writes don't get lost when the process exits.
 function flushPersistentUsageNowSync() {
+  if (usageFlushTimer) { clearTimeout(usageFlushTimer); usageFlushTimer = null; }
   try {
     fs.mkdirSync(path.dirname(USAGE_STATS_FILE), { recursive: true });
     fs.writeFileSync(USAGE_STATS_FILE, JSON.stringify(persistentUsage, null, 2));
@@ -590,6 +638,45 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       return;
     }
     res.writeHead(upRes.statusCode, upRes.headers);
+    // Tee the upstream bytes for usage extraction without affecting the
+    // pipe to the client. Anthropic emits `usage.input_tokens` in the
+    // message_start SSE frame (or the top-level `usage` for non-stream)
+    // and `usage.output_tokens` in message_delta. Buffer caps at 256KB to
+    // bound memory on long generations — past that we skip stats rather
+    // than blow up. The pipe to res still gets every byte regardless.
+    const usageBuf = [];
+    let usageBytes = 0;
+    const USAGE_BUF_CAP = 256 * 1024;
+    upRes.on('data', chunk => {
+      if (usageBytes < USAGE_BUF_CAP) {
+        usageBuf.push(chunk);
+        usageBytes += chunk.length;
+      }
+    });
+    upRes.on('end', () => {
+      if (upRes.statusCode !== 200) return;
+      try {
+        const txt = Buffer.concat(usageBuf).toString('utf8');
+        const isSse = (upRes.headers['content-type'] || '').includes('text/event-stream');
+        let inputTokens = 0, outputTokens = 0;
+        if (isSse) {
+          // Locate the message_start frame and pull data: line; parse as JSON.
+          const startFrame = txt.match(/event:\s*message_start\s*\n\s*data:\s*({[^\n]+})/);
+          if (startFrame) {
+            try { inputTokens = JSON.parse(startFrame[1]).message?.usage?.input_tokens || 0; } catch {}
+          }
+          const deltaFrame = txt.match(/event:\s*message_delta\s*\n\s*data:\s*({[^\n]+})/);
+          if (deltaFrame) {
+            try { outputTokens = JSON.parse(deltaFrame[1]).usage?.output_tokens || 0; } catch {}
+          }
+        } else {
+          const obj = JSON.parse(txt);
+          inputTokens = obj.usage?.input_tokens || 0;
+          outputTokens = obj.usage?.output_tokens || 0;
+        }
+        recordUsage(effectiveModel, backend.id, inputTokens, outputTokens);
+      } catch { /* malformed body — skip stats */ }
+    });
     upRes.pipe(res);
   });
   up.on('socket', socket => {
@@ -867,6 +954,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
           output_tokens: outputTokens,
           stop_reason: stopReason,
         });
+        recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
         if (res.writable) res.end();
       });
       upRes.on('error', e => {
@@ -927,6 +1015,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
             output_tokens: outputTokens,
             stop_reason: stopReason,
           });
+          recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
         } catch (e) {
           sendAnthropicError(res, 502, `failed to parse Ollama response: ${e.message}`);
         }
@@ -1073,7 +1162,14 @@ const server = http.createServer((req, res) => {
           const m = resolveProfileModel(entry, mode);
           if (m) active_capabilities[alias] = m.replace(BACKEND_SIGIL_RE, '$1');
         }
-        return send(res, 200, { ok: true, mode, hardware_tier: tier, config_source: CONFIG_SOURCE, active_capabilities });
+        return send(res, 200, {
+          ok: true,
+          mode,
+          hardware_tier: tier,
+          config_source: CONFIG_SOURCE,
+          active_capabilities,
+          usage: persistentUsage,
+        });
       }
 
       if (req.method === 'POST' && (req.url === '/c-thru/mode' || req.url === '/c-thru/mode/')) {
@@ -1182,8 +1278,12 @@ server.listen(INITIAL_PORT, '127.0.0.1', () => {
 });
 
 process.on('SIGHUP', () => reloadConfigFromDisk());
-process.on('SIGTERM', () => process.exit(0));
-process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => { flushPersistentUsageNowSync(); process.exit(0); });
+process.on('SIGINT', () => { flushPersistentUsageNowSync(); process.exit(0); });
+// `beforeExit` fires on natural process termination (event loop emptied).
+// `exit` is too late for async I/O. This catches "node ran out of work"
+// shutdowns where SIGTERM/SIGINT didn't fire.
+process.on('beforeExit', () => flushPersistentUsageNowSync());
 process.on('SIGPIPE', () => proxyLog('process.sigpipe', { message: 'ignored SIGPIPE' }));
 
 process.on('uncaughtException', err => {
