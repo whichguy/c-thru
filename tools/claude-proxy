@@ -95,6 +95,13 @@ const OLLAMA_KEEP_ALIVE = process.env.CLAUDE_PROXY_OLLAMA_KEEP_ALIVE || '60m';
 // stall watchdog (STREAM_STALL_HARDFAIL_MS) takes over for mid-stream
 // idleness.
 const OLLAMA_TTFT_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_TTFT_MS', 11000);
+// Maximum fallback chain depth. A → B → C → D is the default (3 hops);
+// beyond that we assume the chain is malformed or the user has built a
+// graph too deep to be useful. Tunable for power users with longer chains.
+// Acts in concert with the per-backend cycle detection (visited Set) —
+// the depth cap is a belt-and-suspenders safety net, the cycle Set is
+// the primary loop-prevention mechanism.
+const MAX_FALLBACK_HOPS = numberFromEnv('CLAUDE_PROXY_MAX_FALLBACK_HOPS', 3);
 
 let GLOBAL_CONFIG;
 let CONFIG_PATH;
@@ -531,10 +538,12 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
     ctxLog(ctx, 'fallback.cycle_detected', { from_backend: backend.id, chain: [...chain] });
     return false;
   }
-  // Belt-and-suspenders depth cap (3 hops). A → B → C → D is the maximum;
-  // beyond that the user has built a fallback graph too deep to be useful.
-  if (chain.size >= 3) {
-    ctxLog(ctx, 'fallback.depth_exceeded', { chain: [...chain] });
+  // Belt-and-suspenders depth cap. Default 3 hops; tunable via
+  // CLAUDE_PROXY_MAX_FALLBACK_HOPS. The cycle-detection Set (above) is
+  // the primary loop-prevention mechanism; this cap catches malformed
+  // chains that aren't strictly cyclic but go pathologically deep.
+  if (chain.size >= MAX_FALLBACK_HOPS) {
+    ctxLog(ctx, 'fallback.depth_exceeded', { chain: [...chain], cap: MAX_FALLBACK_HOPS });
     return false;
   }
   chain.add(backend.id);
@@ -738,11 +747,17 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
     ctxLog(ctx, 'ollama.response', { backend: backend.id, status: upRes.statusCode, model: effectiveModel, ttft_ms: ttftMs });
     if (upRes.statusCode !== 200) {
       // Re-shape Ollama's native errors (e.g. {"error":"model 'X' not found"})
-      // into Anthropic's {type:"error", error:{type:"...", message:"..."}} shape
-      // so clients see a consistent error contract regardless of backend.
+      // into Anthropic's {type:"error", error:{type:"...", message:"..."}} shape.
+      // Buffer the body for diagnostic + fallback path, then either:
+      //  (a) tryFallbackOrFail to a configured fallback backend, OR
+      //  (b) surface the original error to the client.
+      // Common Ollama-side triggers: 404 (model not pulled / cloud subscription
+      // missing for :cloud models), 401 (auth required for cloud), 5xx (daemon
+      // hung). The 400 exclusion in shouldFallbackOnStatus prevents loops on
+      // caller-malformed requests.
       let errBody = '';
       upRes.on('data', c => errBody += c.toString());
-      upRes.on('end', () => {
+      upRes.on('end', async () => {
         let message = errBody;
         try {
           const parsed = JSON.parse(errBody);
@@ -750,6 +765,14 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
             message = typeof parsed.error === 'string' ? parsed.error : (parsed.error.message || JSON.stringify(parsed.error));
           }
         } catch {}
+        if (shouldFallbackOnStatus(upRes.statusCode) && backend.fallback_to && !res.headersSent) {
+          const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
+            reason: `upstream returned ${upRes.statusCode}`,
+            statusCode: upRes.statusCode,
+            error: message.slice(0, 200),
+          });
+          if (handled) return;
+        }
         sendAnthropicError(res, upRes.statusCode, message || `upstream returned ${upRes.statusCode}`);
       });
       return;
@@ -1043,16 +1066,16 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
     ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'ollama', error: `upstream timeout after ${upTimeoutMs}ms` });
     up.destroy(new Error(`upstream timeout after ${upTimeoutMs}ms`));
   });
-  up.on('error', e => {
+  up.on('error', async e => {
     if (ttftTimer) { clearTimeout(ttftTimer); ttftTimer = null; }
     ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'ollama', error: e.message });
-    const statusCode = e.message.startsWith('upstream timeout') ? 504 : 502;
-    // If the stream already started writing to the client, headers are sent and
-    // sendAnthropicError() will be a no-op. Switch to an SSE `event: error`
-    // frame so the client sees a structured terminal frame instead of a silent
-    // socket close. Always stop interval timers first to avoid the leak.
+    const statusCode = e.message.startsWith('upstream timeout') || e.message.includes('TTFT') ? 504 : 502;
+    // Always stop interval timers first to avoid the leak.
     stopStreamTimers();
     if (res.headersSent) {
+      // Mid-stream upstream error: too late for fallback (bytes already on
+      // the wire to the client). Emit a structured SSE error frame instead
+      // of a silent socket close.
       if (res.writable) {
         sseWrite(res, 'error', {
           type: 'error',
@@ -1060,7 +1083,19 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
         });
         res.end();
       }
-    } else {
+      return;
+    }
+    // Pre-stream: try the configured fallback if any. Catches connection
+    // errors (ECONNREFUSED, ENOTFOUND), TTFT timeouts (upstream wedged on
+    // headers), upstream timeouts (5min hard cap). Same machinery as
+    // forwardAnthropic — re-resolves through the route graph and dispatches
+    // through forwardOllama or forwardAnthropic depending on the fallback
+    // target's backend kind.
+    const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
+      reason: 'connection error',
+      error: e.message,
+    });
+    if (!handled && !res.headersSent) {
       sendAnthropicError(res, statusCode, `backend ollama at ${backend.url} error: ${e.message}`);
     }
   });

@@ -166,6 +166,137 @@ async function main() {
       } finally { await ollama.close().catch(() => {}); }
     }
 
+    // ── Test 7: Ollama backend non-200 → fallback to a healthy ollama ──────
+    console.log('\n7. Ollama backend returns 404 (model not found) → fallback fires');
+    {
+      // Primary "ollama" backend is a stub that returns 404 like Ollama would
+      // for a model it can't load (e.g., :cloud model without a subscription).
+      const ollamaPrimary = await stubBackend({ failWith: 404 });
+      const ollamaHealthy = await ollamaStubBackend(HEALTHY_OLLAMA_NDJSON);
+      try {
+        const cfg = {
+          backends: {
+            primary_ollama: {
+              kind: 'ollama',
+              url: `http://127.0.0.1:${ollamaPrimary.port}`,
+              fallback_to: 'fallback-target',
+            },
+            healthy_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaHealthy.port}` },
+          },
+          model_routes: { 'primary-model': 'primary_ollama', 'fallback-target': 'healthy_ollama' },
+          llm_profiles: {
+            '128gb': { workhorse: { connected_model: 'primary-model', disconnect_model: 'primary-model' } },
+          },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'primary-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r.status, 200, 'Ollama 404 → fallback succeeded with 200');
+          assert(r.json.content && r.json.content.some(b => b.text === 'fallback-served'),
+            `response served by healthy fallback (got: ${JSON.stringify(r.json.content)})`);
+          assertEq(ollamaPrimary.requests.length, 1, 'primary tried once');
+          assertEq(ollamaHealthy.requests.length, 1, 'healthy fallback hit once');
+        });
+      } finally {
+        await ollamaPrimary.close().catch(() => {});
+        await ollamaHealthy.close().catch(() => {});
+      }
+    }
+
+    // ── Test 8: Ollama TTFT timeout (hung upstream) → fallback fires ────────
+    console.log('\n8. Ollama hangs on headers (TTFT timeout) → fallback to healthy backend');
+    {
+      // Bare http server that accepts the connection but never responds —
+      // simulates a wedged Ollama daemon.
+      const http = require('http');
+      const hangSrv = await new Promise((resolve, reject) => {
+        const s = http.createServer(req => { req.on('data', () => {}); req.on('end', () => {}); });
+        s.on('error', reject);
+        s.listen(0, '127.0.0.1', () => resolve(s));
+      });
+      const ollamaHealthy = await ollamaStubBackend(HEALTHY_OLLAMA_NDJSON);
+      try {
+        const cfg = {
+          backends: {
+            hung_ollama: {
+              kind: 'ollama',
+              url: `http://127.0.0.1:${hangSrv.address().port}`,
+              fallback_to: 'fallback-target',
+            },
+            healthy_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaHealthy.port}` },
+          },
+          model_routes: { 'primary-model': 'hung_ollama', 'fallback-target': 'healthy_ollama' },
+          llm_profiles: {
+            '128gb': { workhorse: { connected_model: 'primary-model', disconnect_model: 'primary-model' } },
+          },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        // Tighten TTFT for the test so it fires in 1s instead of the 11s default.
+        await withProxy({
+          configPath, profile: '128gb', mode: 'connected',
+          env: { CLAUDE_PROXY_OLLAMA_TTFT_MS: '1000' },
+        }, async ({ port }) => {
+          const t0 = Date.now();
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'primary-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          }, {}, 10000);
+          const elapsed = Date.now() - t0;
+          assertEq(r.status, 200, 'TTFT-timed-out request still returned 200 via fallback');
+          assert(elapsed < 5000, `fast fallback (elapsed ${elapsed}ms < 5000ms — TTFT(1s) + dispatch)`);
+          assertEq(ollamaHealthy.requests.length, 1, 'healthy fallback hit once');
+        });
+      } finally {
+        await new Promise(r => hangSrv.close(r));
+        await ollamaHealthy.close().catch(() => {});
+      }
+    }
+
+    // ── Test 9: 2-hop fallback chain — primary fails, secondary fails, tertiary serves ─
+    console.log('\n9. 2-hop chain: primary→secondary→tertiary; first two fail, tertiary serves');
+    {
+      const primary = await stubBackend({ failWith: 500 });
+      const secondary = await stubBackend({ failWith: 500 });
+      const tertiary = await ollamaStubBackend(HEALTHY_OLLAMA_NDJSON);
+      try {
+        const cfg = {
+          backends: {
+            primary_be:   { kind: 'anthropic', url: `http://127.0.0.1:${primary.port}`,   fallback_to: 'secondary-target' },
+            secondary_be: { kind: 'anthropic', url: `http://127.0.0.1:${secondary.port}`, fallback_to: 'tertiary-target' },
+            tertiary_be:  { kind: 'ollama',    url: `http://127.0.0.1:${tertiary.port}` },
+          },
+          model_routes: {
+            'primary-model':     'primary_be',
+            'secondary-target':  'secondary_be',
+            'tertiary-target':   'tertiary_be',
+          },
+          llm_profiles: {
+            '128gb': { workhorse: { connected_model: 'primary-model', disconnect_model: 'primary-model' } },
+          },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'primary-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r.status, 200, 'chain succeeded — got 200');
+          assert(r.json.content && r.json.content.some(b => b.text === 'fallback-served'),
+            `served by tertiary (got: ${JSON.stringify(r.json.content)})`);
+          assertEq(primary.requests.length,   1, 'primary tried once');
+          assertEq(secondary.requests.length, 1, 'secondary tried once (after primary fail)');
+          assertEq(tertiary.requests.length,  1, 'tertiary served (after secondary fail)');
+        });
+      } finally {
+        await primary.close().catch(() => {});
+        await secondary.close().catch(() => {});
+        await tertiary.close().catch(() => {});
+      }
+    }
+
     // ── Test 6: fallback_to with self-loop is broken by cycle detection ─────
     // resolveBackend has an `_seen` Set that detects cycles in route chains.
     // Construct: model_routes points at a "cloud" backend that fallback_to's
