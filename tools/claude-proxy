@@ -1417,7 +1417,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
 
 // ── Config loading & reload ────────────────────────────────────────────
 function loadConfig() {
-  const resolved = resolveSelectedConfigPath({ baseDir: __dirname, syncProfile: false });
+  const resolved = resolveConfigSelectionForReload();
   if (!resolved) { console.error('c-thru: no model-map.json found'); process.exit(1); }
   CONFIG_PATH = resolved.path;
   CONFIG_SOURCE = resolved.source;
@@ -1430,7 +1430,35 @@ function loadConfig() {
   }
 }
 
+// Walk up from dir looking for .claude/model-map.json.
+// Used by SIGHUP reload to discover a newly-added project-local config
+// without running the full sync (which would re-merge the layered profile).
+function findProjectLocalConfig(startDir) {
+  let dir = startDir;
+  for (;;) {
+    const candidate = path.join(dir, '.claude', 'model-map.json');
+    try { fs.accessSync(candidate, fs.constants.R_OK); return candidate; } catch {}
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 function resolveConfigSelectionForReload() {
+  // Tier 1: explicit override path (same as resolveSelectedConfigPath).
+  const override = process.env.CLAUDE_MODEL_MAP_PATH;
+  if (override) {
+    try { return { path: fs.realpathSync(override), source: 'override' }; } catch {}
+  }
+
+  // Tier 2: project-local .claude/model-map.json walked from cwd.
+  // Bypasses the full profile-sync so SIGHUP is cheap; picks up configs
+  // added after startup without needing to restart the proxy.
+  const launchCwd = process.env.CLAUDE_MODEL_MAP_LAUNCH_CWD || process.cwd();
+  const projectLocal = findProjectLocalConfig(launchCwd);
+  if (projectLocal) return { path: projectLocal, source: 'project' };
+
+  // Tier 3: profile graph (system + overrides, no project merge).
   return resolveSelectedConfigPath({ baseDir: __dirname, syncProfile: false });
 }
 
@@ -1448,7 +1476,8 @@ function reloadConfigFromDisk() {
     // picks up fresh data without restarting the proxy.
     const nextBenchmark = loadBenchmark();
     if (nextBenchmark) BENCHMARK = nextBenchmark;
-    if (activeRequests > 0) console.error(`c-thru: hot-reloaded config (draining ${activeRequests} in-flight requests)`);
+    const draining = activeRequests > 0 ? ` (draining ${activeRequests} in-flight requests)` : '';
+    console.error(`c-thru: reloaded config from ${resolved.path}${draining}`);
     return true;
   } catch (e) {
     console.error(`c-thru: config reload failed: ${e.message}`);
