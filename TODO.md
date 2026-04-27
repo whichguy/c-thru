@@ -51,6 +51,46 @@ verify the install worked without running a separate command.
 
 ## Reliability
 
+**[ollama] `ollama pull <model>` must block until completion before starting**
+When the active model isn't cached and a pull is needed, the launching
+shell must wait for the pull to fully finish before proceeding to
+`ollama run` / inference. Today the codepath in `ensure_ollama_running`
+(`tools/c-thru` ~L2540) does invoke `ollama pull "$model"` synchronously,
+which is correct — but two adjacent paths can drift:
+
+1. **Concurrent-session race already mitigated.** The `pgrep -af 'ollama pull '`
+   + `awk` + `grep -Fxq` dedup (added in commit f65b8da) prevents a second
+   c-thru process from kicking off a parallel pull. But it does NOT make the
+   *second process wait* for the first one's pull to finish — it just exits
+   the prep step early, and the caller assumes the model is ready when it
+   isn't yet. Add a wait loop: if dedup detects an in-flight pull from
+   another session, poll `ollama list | grep -Fxq "$model"` until it
+   appears (with a sane timeout, e.g. 10 minutes for large models) before
+   returning success.
+
+2. **Background prepull jobs** (`ensure_active_tier_prepulled`, fired with
+   `( ... ) >/dev/null 2>&1 &; disown`) are intentionally async — they
+   warm models for *future* sessions, not the current one. The current
+   session's blocking pull (path 1) is what guarantees correctness for
+   "I need this model now". Keep this separation; document it.
+
+3. **Verify completion before claiming success.** After `ollama pull`
+   returns 0, re-verify with `ollama list | grep -Fxq "$model"` so we
+   catch the case where the CLI exits 0 but the model isn't actually
+   cached (network-flaky environments, partial downloads).
+
+4. **Pull-failure UX.** If the pull fails, surface a clear error with
+   the model name + cause + suggested action (network check / disk space
+   / `ollama pull <model>` to retry manually). Today the failure path
+   silently returns 0 in some branches.
+
+5. **Mirror to `ollama run` warmup.** When `ollama_run_warm` is called and
+   the model isn't yet resident in VRAM, the warmup should also block until
+   the runner reports it's loaded (currently fires a background `curl
+   -sf -X POST /api/generate` and returns immediately). For prompt-time
+   warming this is fine; for "must be ready before inference" paths,
+   block.
+
 **[deps] `brew install` must block until completion before continuing**
 When `c-thru check-deps --fix` (or any path that auto-installs missing
 optional tools via `brew install`) runs, the calling script must wait for
