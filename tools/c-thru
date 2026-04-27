@@ -3644,9 +3644,9 @@ while [[ $i -lt $n ]]; do
     --model=*)          explicit_model="${a#--model=}"; i=$((i + 1)) ;;
     --model)            if [[ $((i+1)) -lt $n ]]; then explicit_model="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
     --mode=*)           export CLAUDE_LLM_MODE="${a#--mode=}"; i=$((i + 1)) ;;
-    --mode)             if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_MODE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
+    --mode)             if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_MODE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else echo "c-thru: --mode requires a value" >&2; exit 1; fi ;;
     --profile=*)        export CLAUDE_LLM_PROFILE="${a#--profile=}"; i=$((i + 1)) ;;
-    --profile)          if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_PROFILE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
+    --profile)          if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_PROFILE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else echo "c-thru: --profile requires a tier name" >&2; exit 1; fi ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;
     --no-update)        export CLAUDE_ROUTER_NO_UPDATE=1; i=$((i + 1)) ;;
@@ -3668,8 +3668,20 @@ while [[ $i -lt $n ]]; do
         export CLAUDE_ROUTER_DEBUG=1; i=$((i + 1))
       fi
       ;;
-    --memory-gb=*)      export CLAUDE_LLM_MEMORY_GB="${a#--memory-gb=}"; i=$((i + 1)) ;;
-    --memory-gb)        if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_MEMORY_GB="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
+    --memory-gb=*)
+      _mgb="${a#--memory-gb=}"
+      if ! [[ "$_mgb" =~ ^[0-9]+$ ]] || (( _mgb <= 0 )); then
+        echo "c-thru: --memory-gb requires a positive integer (got '${_mgb}')" >&2; exit 1
+      fi
+      export CLAUDE_LLM_MEMORY_GB="$_mgb"; i=$((i + 1)) ;;
+    --memory-gb)
+      if [[ $((i+1)) -lt $n ]]; then
+        _mgb="${ORIG_ARGS[i+1]}"
+        if ! [[ "$_mgb" =~ ^[0-9]+$ ]] || (( _mgb <= 0 )); then
+          echo "c-thru: --memory-gb requires a positive integer (got '${_mgb}')" >&2; exit 1
+        fi
+        export CLAUDE_LLM_MEMORY_GB="$_mgb"; i=$((i + 2))
+      else i=$((i + 1)); fi ;;
     *) i=$((i + 1)) ;;
   esac
 done

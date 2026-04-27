@@ -663,6 +663,26 @@ function tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta) 
   return true;
 }
 
+// Try the profile's disconnect_model as a last-resort local terminal.
+// Only fires if the model routes to an Ollama backend and hasn't been tried yet.
+function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
+  if (res.headersSent) return false;
+  const capKey = requestMeta.capability;
+  if (!capKey) return false;
+  const profileEntry = (CONFIG.llm_profiles?.[requestMeta.hwTier] || {})[capKey];
+  const termModel = profileEntry?.disconnect_model;
+  if (!termModel) return false;
+  const triedM = requestMeta._triedModels || new Set();
+  if (triedM.has(termModel)) return false;
+  const termResolved = resolveBackend(termModel, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
+  if (termResolved.error || termResolved.backend.kind !== 'ollama') return false;
+  requestMeta._localTerminalAppended = true;
+  body.model = termResolved.effectiveModel;
+  ctxLog(ctx, 'fallback.local_terminal', { model: termModel, backend: termResolved.backend.id, capability: capKey });
+  forwardOllama(ctx, req, res, body, termResolved.backend, termResolved.effectiveModel, requestMeta);
+  return true;
+}
+
 async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, failure) {
   if (res.headersSent) return false;
 
@@ -679,10 +699,12 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
   const chain = requestMeta._fallbackChain || (requestMeta._fallbackChain = new Set());
   if (chain.has(backend.id)) {
     ctxLog(ctx, 'fallback.cycle_detected', { from_backend: backend.id, chain: [...chain] });
+    if (tryLocalTerminalFallback(ctx, req, res, body, requestMeta)) return true;
     return tryGlobalDefaultFallback(ctx, req, res, body, requestMeta);
   }
   if (chain.size >= MAX_FALLBACK_HOPS) {
     ctxLog(ctx, 'fallback.depth_exceeded', { chain: [...chain], cap: MAX_FALLBACK_HOPS });
+    if (tryLocalTerminalFallback(ctx, req, res, body, requestMeta)) return true;
     return tryGlobalDefaultFallback(ctx, req, res, body, requestMeta);
   }
   chain.add(backend.id);
@@ -771,24 +793,8 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
     }
   }
 
-  // Local-terminal guard: if fallback_chains exhausted and disconnect_model routes to Ollama, try it.
-  if (!res.headersSent && capKey) {
-    const profileEntry = (CONFIG.llm_profiles?.[requestMeta.hwTier] || {})[capKey];
-    const termModel = profileEntry?.disconnect_model;
-    if (termModel) {
-      const triedM = requestMeta._triedModels || new Set();
-      if (!triedM.has(termModel)) {
-        const termResolved = resolveBackend(termModel, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
-        if (!termResolved.error && termResolved.backend.kind === 'ollama') {
-          requestMeta._localTerminalAppended = true;
-          body.model = termResolved.effectiveModel;
-          ctxLog(ctx, 'fallback.local_terminal', { model: termModel, backend: termResolved.backend.id, capability: capKey });
-          forwardOllama(ctx, req, res, body, termResolved.backend, termResolved.effectiveModel, requestMeta);
-          return true;
-        }
-      }
-    }
-  }
+  // Local-terminal guard: if fallback_chains exhausted, try disconnect_model as Ollama terminal.
+  if (tryLocalTerminalFallback(ctx, req, res, body, requestMeta)) return true;
 
   // All chains exhausted. Fall through to the global default.
   return tryGlobalDefaultFallback(ctx, req, res, body, requestMeta);
@@ -1669,12 +1675,33 @@ const server = http.createServer((req, res) => {
           const m = resolveProfileModel(entry, mode);
           if (!m) continue;
           const sigilMatch = m.match(BACKEND_SIGIL_RE);
-          const backendId = sigilMatch ? sigilMatch[2] : null;
           const base = sigilMatch ? sigilMatch[1] : m;
-          const backend = backendId && CONFIG.backends?.[backendId];
-          const isLocal = (backend && backend.kind === 'ollama') || (!backend && !backendId);
+          // Determine locality: explicit @sigil → check backend kind; bare model →
+          // check backends dict, then route target name (ollama* = local, else cloud).
+          let isLocal = false;
+          if (sigilMatch) {
+            const bk = CONFIG.backends?.[sigilMatch[2]];
+            isLocal = bk ? bk.kind === 'ollama' : false;
+          } else {
+            const routeTarget = (CONFIG.model_routes || {})[base];
+            if (routeTarget) {
+              const bk = CONFIG.backends?.[routeTarget];
+              if (bk) {
+                isLocal = bk.kind === 'ollama';
+              } else {
+                // Backend not in dict; infer from name convention: ollama* = local, cloud/anthropic/openai = not local
+                const rt = routeTarget.toLowerCase();
+                isLocal = rt.includes('ollama') && !rt.includes('cloud');
+              }
+            }
+            // No route found: fall through to resolveBackend (handles sigil/capability aliases)
+            if (!routeTarget) {
+              const resolved = resolveBackend(m, CONFIG, tier, mode);
+              isLocal = !resolved.error && resolved.backend.kind === 'ollama' && !resolved.backend._ollamaFallback;
+            }
+          }
           capabilities.push({ capability: alias, model: base, local: isLocal });
-          if (isLocal) local_models.push(base);
+          if (isLocal && !local_models.includes(base)) local_models.push(base);
         }
         return send(res, 200, { tier, mode, local_models, capabilities });
       }

@@ -32,7 +32,7 @@ PARTIAL_OUTPUT: <repo-relative path if ATTEMPTED=yes — omit when ATTEMPTED=no>
 SUMMARY: <≤20 words>
 ```
 
-Note: `RECOMMEND:` is intentionally absent — `security-reviewer` routes via `judge-strict`
+Note: The recommend field is intentionally absent — `security-reviewer` routes via `judge-strict`
 (hard_fail); there is no cascade target to hand off to.
 
 ## Return format

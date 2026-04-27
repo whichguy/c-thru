@@ -261,6 +261,11 @@
         "connected_model": "devstral-small:2",
         "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
+      },
+      "local-planner": {
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
+        "on_failure": "cascade"
       }
     },
     "48gb": {
@@ -555,6 +560,11 @@
       "agentic-coder": {
         "connected_model": "devstral-small:2",
         "disconnect_model": "devstral-small:2",
+        "on_failure": "cascade"
+      },
+      "fast-scout": {
+        "connected_model": "gemma4:e2b",
+        "disconnect_model": "gemma4:e2b",
         "on_failure": "cascade"
       }
     },
