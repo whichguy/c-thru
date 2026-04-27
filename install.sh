@@ -2,6 +2,12 @@
 # c-thru installer: symlinks router/proxy + helpers into ~/.claude/tools/
 # and seeds a user-level model-map on first run.
 # Safe to re-run: each step checks current state before acting.
+#
+# Environment opt-outs:
+#   C_THRU_INSTALL_NO_PATH=1  Skip appending the ~/.claude/tools PATH block to
+#                             the user's shell rc file (zshrc/bashrc/fish).
+#                             Useful for CI, containers, or users managing PATH
+#                             manually.
 
 set -euo pipefail
 
@@ -275,6 +281,94 @@ cleanup_old_persistent_config
 install_skill
 install_cplan_command
 extend_model_map
+
+# --- Add ~/.claude/tools to PATH via shell rc file (idempotent) ---
+# Markers MUST stay verbatim — uninstall.sh greps these to remove the block.
+PATH_MARKER_BEGIN='# >>> c-thru tools on PATH (added by install.sh) >>>'
+PATH_MARKER_END='# <<< c-thru tools on PATH <<<'
+
+register_path() {
+    if [ "${C_THRU_INSTALL_NO_PATH:-0}" = "1" ]; then
+        echo -e "  ${GRAY}✓  PATH edit skipped (C_THRU_INSTALL_NO_PATH=1)${NC}"
+        return 0
+    fi
+
+    # If c-thru is already resolvable on PATH and points at our install
+    # destination (or a path that contains $TOOLS_DEST/c-thru), skip.
+    if command -v c-thru >/dev/null 2>&1; then
+        local resolved
+        resolved="$(command -v c-thru 2>/dev/null || true)"
+        # Resolve symlink one level so ~/.local/bin/c-thru -> ~/.claude/tools/c-thru counts.
+        local target="$resolved"
+        if [ -L "$resolved" ]; then
+            target="$(readlink "$resolved" 2>/dev/null || echo "$resolved")"
+        fi
+        case "$target" in
+            "$TOOLS_DEST"/*|"$TOOLS_SRC"/*)
+                echo -e "  ${GRAY}✓  c-thru already on PATH (${resolved}); skipping rc edit${NC}"
+                return 0
+                ;;
+        esac
+    fi
+
+    # Detect rc file from $SHELL.
+    local shell_name rc_file rc_label is_fish=0
+    shell_name="$(basename "${SHELL:-}")"
+    case "$shell_name" in
+        zsh)
+            rc_file="$HOME/.zshrc"
+            rc_label="~/.zshrc"
+            ;;
+        bash)
+            # On macOS, login shells read .bash_profile not .bashrc, but most
+            # interactive Terminal sessions on modern setups read .bashrc via
+            # a shim. Pick .bashrc for simplicity; users on bare macOS bash
+            # may need to source it from .bash_profile manually.
+            rc_file="$HOME/.bashrc"
+            rc_label="~/.bashrc"
+            ;;
+        fish)
+            rc_file="$HOME/.config/fish/config.fish"
+            rc_label="~/.config/fish/config.fish"
+            is_fish=1
+            mkdir -p "$(dirname "$rc_file")" 2>/dev/null || true
+            ;;
+        *)
+            echo -e "  ${YELLOW}⚠️  unknown shell '${shell_name:-?}'; skipping PATH edit${NC}"
+            echo -e "  ${YELLOW}    Add this to your shell rc manually:${NC}"
+            echo -e "  ${YELLOW}      export PATH=\"\$HOME/.claude/tools:\$PATH\"${NC}"
+            return 0
+            ;;
+    esac
+
+    # Idempotency guard: if the marker is already present, skip.
+    if [ -f "$rc_file" ] && grep -Fq "$PATH_MARKER_BEGIN" "$rc_file" 2>/dev/null; then
+        echo -e "  ${GRAY}✓  PATH block already present in ${rc_label}${NC}"
+        return 0
+    fi
+
+    # Append the block. Use printf for portability (no echo -e quirks).
+    {
+        printf '\n%s\n' "$PATH_MARKER_BEGIN"
+        if [ "$is_fish" -eq 1 ]; then
+            printf '%s\n' 'if test -d $HOME/.claude/tools'
+            printf '%s\n' '    set -gx PATH $HOME/.claude/tools $PATH'
+            printf '%s\n' 'end'
+        else
+            printf '%s\n' 'if [ -d "$HOME/.claude/tools" ]; then'
+            printf '%s\n' '    export PATH="$HOME/.claude/tools:$PATH"'
+            printf '%s\n' 'fi'
+        fi
+        printf '%s\n' "$PATH_MARKER_END"
+    } >> "$rc_file"
+
+    echo -e "  ${GREEN}✅ added ~/.claude/tools to PATH in ${rc_label}${NC}"
+    echo -e "  ${YELLOW}   Run \`source ${rc_label}\` (or open a new shell) to put c-thru on your PATH${NC}"
+}
+
+echo ""
+echo "PATH:"
+register_path
 
 echo ""
 echo -e "${GREEN}✅ Done. c-thru is now using ephemeral session control.${NC}"

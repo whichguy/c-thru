@@ -590,6 +590,14 @@ else
   ( maybe_refresh_model_map_defaults_from_git ) &
   disown 2>/dev/null || true
 fi
+# Daily debounced benchmarks fetch — pulls upstream docs/benchmark.json
+# and SIGHUPs the proxy if it changed. Soft-fail; never blocks launch.
+# Opt-out: CLAUDE_ROUTER_NO_BENCHMARK_UPDATE=1
+_benchmarks_update_script="$ROUTER_SELF_DIR/c-thru-benchmarks-update.sh"
+if [[ -x "$_benchmarks_update_script" ]]; then
+  ( ROUTER_REPO_ROOT="$ROUTER_REPO_ROOT" bash "$_benchmarks_update_script" 2>/dev/null ) &
+  disown 2>/dev/null || true
+fi
 # Discover paths and environment via Node helper (single source of truth)
 eval "$(CLAUDE_MODEL_MAP_LAUNCH_CWD="$LAUNCH_CWD" node "$ROUTER_SELF_DIR/model-map-config.js" --shell-env 2>/dev/null || true)"
 

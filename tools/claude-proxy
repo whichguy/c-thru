@@ -431,10 +431,13 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
   };
 }
 
-const BENCHMARK = (() => {
+// BENCHMARK is reloadable on SIGHUP — see reloadConfigFromDisk.
+// `let` (not `const`) so the daily-fetch script can refresh it via signal.
+function loadBenchmark() {
   const bpath = path.join(__dirname, '..', 'docs', 'benchmark.json');
   try { return JSON.parse(fs.readFileSync(bpath, 'utf8')); } catch { return null; }
-})();
+}
+let BENCHMARK = loadBenchmark();
 
 // ── Request handling ───────────────────────────────────────────────
 function send(res, code, obj) {
@@ -1254,6 +1257,10 @@ function reloadConfigFromDisk() {
     CONFIG_PATH = resolved.path;
     CONFIG_SOURCE = resolved.source;
     CONFIG_MTIME_MS = nextMtime;
+    // Re-read benchmark.json so a SIGHUP from c-thru-benchmarks-update.sh
+    // picks up fresh data without restarting the proxy.
+    const nextBenchmark = loadBenchmark();
+    if (nextBenchmark) BENCHMARK = nextBenchmark;
     if (activeRequests > 0) console.error(`c-thru: hot-reloaded config (draining ${activeRequests} in-flight requests)`);
     return true;
   } catch (e) {
