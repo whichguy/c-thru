@@ -8,3 +8,6 @@ wiki/.session-*
 wiki/.cache/
 docs/planning/review-manifests/
 .clasp.json
+
+# Defensive — see commit a0083bf and follow-up
+temp_gas_prod/

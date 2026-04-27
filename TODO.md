@@ -51,6 +51,34 @@ verify the install worked without running a separate command.
 
 ## Reliability
 
+**[deps] `brew install` must block until completion before continuing**
+When `c-thru check-deps --fix` (or any path that auto-installs missing
+optional tools via `brew install`) runs, the calling script must wait for
+brew to fully finish before proceeding — including post-install scripts
+and any `brew link` steps. Risks if not waited:
+- Subsequent `command -v <tool>` checks return false even though the
+  install is in-flight, leading to spurious "tool missing" warnings.
+- Re-runs of `c-thru` may launch concurrent `brew install` processes for
+  the same package (the same race that bit `ollama pull` earlier this
+  session).
+- PATH cache in the parent shell may not reflect newly-installed binaries
+  until the shell re-hashes (`hash -r` or new shell).
+
+Implementation in `tools/c-thru` and any `--fix` paths:
+1. Always invoke `brew install <pkg>` synchronously (no `&` / `nohup` /
+   background). The default `brew install` does block, but watch for any
+   `&`-suffixed invocations that may have crept in.
+2. After install: `hash -r` (bash builtin) to refresh PATH cache so
+   subsequent `command -v` calls see the new binary in the same shell.
+3. Re-verify: `command -v <tool>` must return success before continuing
+   to the next step. If not, abort with a clear error rather than
+   silently passing.
+4. For multiple packages, install one-at-a-time (not `brew install a b c`)
+   so a failure on one doesn't leave the others in a partial state.
+5. Mirror the `pgrep`-based dedup we added for `ollama pull`: check
+   `pgrep -af 'brew install <pkg>'` before starting a new install,
+   skip if one is already in flight from another c-thru session.
+
 **[capacity] Audit 128gb-tier model fleet for VRAM oversubscription**
 On a 128GB unified-memory machine, this session observed three concurrent
 models loaded (≈95GB total VRAM) leaving only ~33GB for the OS + everything
