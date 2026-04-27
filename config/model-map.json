@@ -123,6 +123,11 @@
         "connected_model": "qwen3:1.7b",
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
+      },
+      "agentic-coder": {
+        "connected_model": "qwen3.5:1.7b",
+        "disconnect_model": "qwen3.5:1.7b",
+        "on_failure": "cascade"
       }
     },
     "32gb": {
@@ -303,7 +308,8 @@
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
-          "cloud-judge-only": "claude-sonnet-4-6"
+          "cloud-judge-only": "claude-sonnet-4-6",
+          "cloud-thinking": "claude-sonnet-4-6"
         }
       },
       "judge-strict": {
@@ -314,7 +320,8 @@
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
-          "cloud-judge-only": "claude-sonnet-4-6"
+          "cloud-judge-only": "claude-sonnet-4-6",
+          "cloud-thinking": "claude-sonnet-4-6"
         }
       },
       "orchestrator": {
@@ -330,7 +337,10 @@
       "code-analyst": {
         "connected_model": "devstral-small:2",
         "disconnect_model": "devstral-small:2",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "local-review": "devstral-small:2"
+        }
       },
       "pattern-coder": {
         "connected_model": "qwen3.6:27b-coding-nvfp4",
@@ -389,6 +399,14 @@
         "disconnect_model": "gemma4:e2b",
         "on_failure": "cascade"
       },
+      "reviewer": {
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
+        "on_failure": "cascade",
+        "modes": {
+          "local-review": "devstral-small:2"
+        }
+      },
       "agentic-coder": {
         "connected_model": "devstral-small:2",
         "disconnect_model": "devstral-small:2",
@@ -440,7 +458,8 @@
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
-          "cloud-judge-only": "claude-sonnet-4-6"
+          "cloud-judge-only": "claude-sonnet-4-6",
+          "cloud-thinking": "claude-sonnet-4-6"
         }
       },
       "judge-strict": {
@@ -451,7 +470,8 @@
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
-          "cloud-judge-only": "claude-sonnet-4-6"
+          "cloud-judge-only": "claude-sonnet-4-6",
+          "cloud-thinking": "claude-sonnet-4-6"
         }
       },
       "orchestrator": {
@@ -467,7 +487,10 @@
       "code-analyst": {
         "connected_model": "devstral-small:2",
         "disconnect_model": "devstral-small:2",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "local-review": "devstral-small:2"
+        }
       },
       "pattern-coder": {
         "connected_model": "qwen3.6:27b-coding-nvfp4",
@@ -522,6 +545,14 @@
         "on_failure": "hard_fail"
       },
       "reviewer": {
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
+        "on_failure": "cascade",
+        "modes": {
+          "local-review": "devstral-small:2"
+        }
+      },
+      "agentic-coder": {
         "connected_model": "devstral-small:2",
         "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"

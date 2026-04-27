@@ -132,7 +132,7 @@ console.log('\n1. resolve — capability/agent resolution');
 
 {
   const dir = tmpClaudeDir();
-  const r = run(['resolve', 'deep-coder'], { CLAUDE_PROFILE_DIR: dir });
+  const r = run(['resolve', 'deep-coder'], { CLAUDE_PROFILE_DIR: dir, CLAUDE_MODEL_MAP_PATH: path.join(dir, 'model-map.json') });
   assert(r.code === 0, 'resolve deep-coder exits 0');
   assert(r.stdout.trim() === 'devstral-small:2', 'resolve deep-coder → devstral-small:2');
   assert(r.stderr.includes('mode:'), 'resolve emits mode to stderr');
@@ -141,7 +141,7 @@ console.log('\n1. resolve — capability/agent resolution');
 {
   // Agent name lookup via agent_to_capability
   const dir = tmpClaudeDir();
-  const r = run(['resolve', 'implementer'], { CLAUDE_PROFILE_DIR: dir });
+  const r = run(['resolve', 'implementer'], { CLAUDE_PROFILE_DIR: dir, CLAUDE_MODEL_MAP_PATH: path.join(dir, 'model-map.json') });
   assert(r.code === 0, 'resolve implementer (agent alias) exits 0');
   assert(r.stdout.trim() === 'devstral-small:2', 'agent alias resolves to correct model');
   assert(r.stderr.includes('via agent: implementer'), 'stderr shows agent alias path');
@@ -150,7 +150,7 @@ console.log('\n1. resolve — capability/agent resolution');
 {
   // Unknown capability → exit 2
   const dir = tmpClaudeDir();
-  const r = run(['resolve', 'nonexistent-cap'], { CLAUDE_PROFILE_DIR: dir });
+  const r = run(['resolve', 'nonexistent-cap'], { CLAUDE_PROFILE_DIR: dir, CLAUDE_MODEL_MAP_PATH: path.join(dir, 'model-map.json') });
   assert(r.code === 2, 'resolve unknown capability exits 2');
 }
 

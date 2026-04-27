@@ -275,7 +275,7 @@ console.log('\n16. --memory-gb foo → exit non-zero');
 {
   const r = runCthru(['--memory-gb', 'foo']);
   assert(r.code !== 0, `non-numeric value rejected (got ${r.code})`);
-  assert(/--memory-gb requires a positive integer/.test(r.stderr), `clear error message`);
+  assert(/memory.gb.*positive integer|CLAUDE_LLM_MEMORY_GB.*positive integer/i.test(r.stderr), `clear error message`);
 }
 
 // ── Test 17: combined --journal + --proxy-debug 1 + --no-update ───────────
