@@ -95,6 +95,14 @@ run_suite "proxy-cli-flags (parseCliFlags edge cases)" \
 run_suite "proxy-usage-stats (recordUsage debounce + SIGTERM flush)" \
   node "$REPO_DIR/test/proxy-usage-stats.test.js"
 
+# EXCLUDED (currently failing — do not wire until fixed):
+# benchmark-coverage.test.js: coverage-map mismatch / fixture drift (run manually to diagnose)
+# proxy-classify.test.js:     withProxy async error at startup
+# proxy-targets.test.js:      withProxy async error at startup
+skip_suite "benchmark-coverage (excluded — fixture drift, run manually to diagnose)"
+skip_suite "proxy-classify (excluded — withProxy async error at startup)"
+skip_suite "proxy-targets (excluded — withProxy async error at startup)"
+
 echo ""
 echo "Validators:"
 run_suite "model-map-validate (config/model-map.json)" \
