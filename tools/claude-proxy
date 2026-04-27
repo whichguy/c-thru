@@ -407,6 +407,23 @@ function shouldJournal(capability) {
   return true;
 }
 
+// Parse SSE event/data pairs from a buffered response body.
+// Returns [{event, data}] — data is parsed JSON; unparseable lines are skipped.
+function parseSseEvents(buf) {
+  const events = [];
+  const lines = buf.toString().split('\n');
+  let curEvent = null;
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.startsWith('event:')) { curEvent = t.slice(6).trim(); }
+    else if (t.startsWith('data:') && curEvent) {
+      try { events.push({ event: curEvent, data: JSON.parse(t.slice(5).trim()) }); } catch {}
+      curEvent = null;
+    } else if (t === '') { curEvent = null; }
+  }
+  return events;
+}
+
 function writeJournalEntry(entry) {
   try {
     const date = entry.ts_iso.slice(0, 10);
@@ -988,8 +1005,16 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
         recordUsage(effectiveModel, backend.id, inputTokens, outputTokens);
         clearBackendCooldown(backend.id);
         if (shouldJournal(requestMeta.capability)) {
+          const rawBuf = Buffer.concat(usageBuf);
           let parsedResponse = null;
-          try { parsedResponse = JSON.parse(Buffer.concat(usageBuf).toString()); } catch {}
+          let streamEvents = null, streamEventsTruncated = false;
+          if (body.stream) {
+            const all = parseSseEvents(rawBuf);
+            streamEventsTruncated = all.length > JOURNAL_STREAM_EVENT_CAP;
+            streamEvents = all.slice(0, JOURNAL_STREAM_EVENT_CAP);
+          } else {
+            try { parsedResponse = JSON.parse(rawBuf.toString()); } catch {}
+          }
           writeJournalEntry({
             schema_version: 1,
             id: 'j_' + crypto.randomBytes(6).toString('hex'),
@@ -999,6 +1024,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
             served_by: effectiveModel,
             endpoint: req.url,
             latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
+            stream: !!body.stream,
+            ...(body.stream && { stream_events: streamEvents, stream_events_truncated: streamEventsTruncated }),
             request: Object.assign({}, body, {
               _headers: scrubHeaders(req.headers),
               model: requestMeta.originalModel,  // pre-rewrite capability alias
