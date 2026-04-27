@@ -8,15 +8,17 @@ Last cleanup: 2026-04-26
 
 ## Reliability
 
-**[refactor] Decompose `forwardOllama` into smaller functions**
-`forwardOllama` is ~250 lines doing translation + streaming + state machine
-+ pings + watchdog + usage extraction + fallback + TTFT. Should be 3-4
-smaller functions (or a class) for clarity. Senior-eng review (1ea41d9) +
-breadcrumb pass (9e5a616) made the existing structure clearer but did not
-decompose. Scope this for its own session — touches the hottest path in the
-proxy and needs a careful test plan around the SSE state machine, fallback
-chain Set, TTFT timer handoff to the stall watchdog, and client-disconnect
-timer cleanup.
+**[refactor] Extract `handleOllamaFallback` from `forwardOllama` error handler**
+`forwardOllama` has been partially decomposed: `setupOllamaStream`,
+`handleOllamaNonStream`, `handleOllamaError`, and `buildOllamaRequestBody`
+are all extracted. The remaining function is ~120 lines. The one dense section
+still in the main function body is the `up.on('error')` handler (~40 lines)
+which manages mid-stream vs pre-stream fallback, cloud→local rewrite, and
+`tryFallbackOrFail`. Extracting it as `handleOllamaFallback` requires passing
+8+ closed-over variables as parameters. Defer to its own session — needs a
+test plan covering the TTFT/timeout/stall split, fallback chain deduplication,
+and SSE mid-stream error frame path. Any regression breaks streaming for all
+Ollama backends.
 
 ## Configuration / capacity
 
