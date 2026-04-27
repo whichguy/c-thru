@@ -390,6 +390,38 @@ function ollamaStubBackend(ndjsonChunks, opts = {}) {
       let body = null;
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
       requests.push({ method: req.method, path: req.url, body, model_used: body?.model || null });
+
+      // Honor the request's `stream` field (matches real Ollama behaviour).
+      // stream:false → emit a single JSON object summarizing the full
+      // exchange. stream:true (or omitted) → emit ndjson chunks one per line.
+      // This matters because forwardOllama's non-streaming path JSON.parses
+      // the entire response as a single object — feeding it ndjson causes
+      // a parse failure that surfaces as 502 to the client.
+      const isStream = body?.stream !== false;
+      if (!isStream) {
+        // Build a single Ollama-shape JSON response from the chunks.
+        const finalChunk = ndjsonChunks[ndjsonChunks.length - 1] || {};
+        const contentChunk = ndjsonChunks.find(c => c.message?.content) || { message: { content: '' } };
+        const thinkingChunks = ndjsonChunks.filter(c => c.message?.thinking).map(c => c.message.thinking).join('');
+        const message = {
+          role: 'assistant',
+          content: contentChunk.message?.content || '',
+        };
+        if (thinkingChunks) message.thinking = thinkingChunks;
+        const respObj = {
+          model: body?.model || 'stub-ollama',
+          created_at: new Date().toISOString(),
+          message,
+          done: true,
+          done_reason: finalChunk.done_reason || 'stop',
+          prompt_eval_count: finalChunk.prompt_eval_count || 0,
+          eval_count: finalChunk.eval_count || 0,
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(respObj));
+        return;
+      }
+
       res.writeHead(200, {
         'Content-Type': 'application/x-ndjson',
         'Transfer-Encoding': 'chunked',

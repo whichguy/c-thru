@@ -459,6 +459,91 @@ function scrubCthruHeaders(headers) {
   return out;
 }
 
+// Runtime upstream-fallback. When a primary backend (Anthropic/OpenRouter/etc.)
+// returns a transient or auth/availability failure BEFORE we've started
+// streaming bytes back to the client, swap to the configured fallback target
+// and re-dispatch through the resolver.
+//
+// Triggers: connection error (ECONNREFUSED/ENOTFOUND/timeout), 401 (auth
+// missing/expired), 403, 404 (model unavailable on this backend), 429 (rate
+// limited), 5xx (upstream broken). NOT 400 (malformed request — we'd just
+// loop). NOT mid-stream (headers already sent — can't undo).
+//
+// Schema: backends.<id>.fallback_to = "<model_name>" or "<model@backend>".
+// The fallback target goes through resolveBackend() so all the existing
+// routing logic (sigil parse, mode-conditional routes, capability aliases)
+// applies. Cycle detection comes from resolveBackend's _seen Set.
+async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, failure) {
+  const fallback = backend.fallback_to;
+  if (!fallback || res.headersSent) return false;
+
+  // Cycle detection across fallback hops. resolveBackend has its own _seen
+  // Set for route-chain cycles, but that's a fresh Set per call. Fallback
+  // hops are SEPARATE invocations of the dispatch chain and need their own
+  // visited tracker. Without this, a config like
+  //   backend A → fallback_to: model-routed-to-A
+  // would loop forever.
+  const chain = requestMeta._fallbackChain || (requestMeta._fallbackChain = new Set());
+  if (chain.has(backend.id)) {
+    ctxLog(ctx, 'fallback.cycle_detected', { from_backend: backend.id, chain: [...chain] });
+    return false;
+  }
+  // Belt-and-suspenders depth cap (3 hops). A → B → C → D is the maximum;
+  // beyond that the user has built a fallback graph too deep to be useful.
+  if (chain.size >= 3) {
+    ctxLog(ctx, 'fallback.depth_exceeded', { chain: [...chain] });
+    return false;
+  }
+  chain.add(backend.id);
+
+  ctxLog(ctx, 'fallback.triggered', {
+    from_backend: backend.id,
+    to: fallback,
+    reason: failure.reason,
+    upstream_status: failure.statusCode,
+    upstream_error: failure.error,
+    chain_depth: chain.size,
+  });
+  const cfg = CONFIG;
+  const resolved = resolveBackend(fallback, cfg, requestMeta.hwTier, requestMeta.activeMode);
+  if (resolved.error) {
+    ctxLog(ctx, 'fallback.resolve_failed', { fallback, error: resolved.error });
+    return false;
+  }
+  // Don't loop into the same backend we just came from, even if route
+  // resolution lands there (e.g. fallback_to is a model name that happens
+  // to map to the same backend through model_routes).
+  if (chain.has(resolved.backend.id)) {
+    ctxLog(ctx, 'fallback.cycle_detected', { resolved_backend: resolved.backend.id, chain: [...chain] });
+    return false;
+  }
+  // Mark the body so the recursive call sees the rewritten target. The body
+  // flows into forwardOllama/forwardAnthropic where `body.model` gets
+  // substituted into the upstream request.
+  body.model = resolved.effectiveModel;
+  // Dispatch the fallback. forwardOllama/forwardAnthropic register async
+  // handlers and resolve their own promise immediately after setup — the
+  // actual response delivery is event-driven. We must return TRUE here
+  // (not the function's resolved value, which is undefined), otherwise the
+  // caller's `if (!handled)` fallthrough fires while the dispatched forward
+  // is still in flight, racing two writes to the same `res`.
+  if (resolved.backend.kind === 'ollama') {
+    forwardOllama(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
+  } else {
+    forwardAnthropic(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
+  }
+  return true;
+}
+
+// Whether an upstream status code should trigger fallback (vs. forwarding to
+// the client). 400 is excluded — that's our bug, not the upstream's, and
+// retrying through a different backend would just loop the same malformed
+// request.
+function shouldFallbackOnStatus(code) {
+  if (code === 400) return false;
+  return code >= 401 && code < 600;
+}
+
 async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
@@ -485,6 +570,25 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
 
   const up = lib.request(options, upRes => {
     ctxLog(ctx, 'backend_response', { backend: backend.id, statusCode: upRes.statusCode });
+    if (shouldFallbackOnStatus(upRes.statusCode) && backend.fallback_to && !res.headersSent) {
+      // Buffer the upstream error body for the log, then attempt fallback. If
+      // fallback isn't configured or fails to resolve, we fall through to
+      // piping the original error to the client.
+      let errBody = '';
+      upRes.on('data', c => errBody += c.toString());
+      upRes.on('end', async () => {
+        const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
+          reason: `upstream returned ${upRes.statusCode}`,
+          statusCode: upRes.statusCode,
+          error: errBody.slice(0, 200),
+        });
+        if (!handled && !res.headersSent) {
+          // Fallback didn't fire — surface the original error in Anthropic shape.
+          sendAnthropicError(res, upRes.statusCode, `backend ${backend.id} returned ${upRes.statusCode}: ${errBody.slice(0, 200)}`);
+        }
+      });
+      return;
+    }
     res.writeHead(upRes.statusCode, upRes.headers);
     upRes.pipe(res);
   });
@@ -492,9 +596,15 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     socket.on('connect', () => ctxDebug(ctx, 'upstream.socket.connected', { backend: backend.id }));
     socket.on('close', hadError => ctxDebug(ctx, 'upstream.socket.closed', { backend: backend.id, had_error: hadError }));
   });
-  up.on('error', e => {
+  up.on('error', async e => {
     ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'anthropic', error: e.message });
-    sendAnthropicError(res, 502, `backend anthropic at ${targetUrl.origin} error: ${e.message}`);
+    const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
+      reason: 'connection error',
+      error: e.message,
+    });
+    if (!handled && !res.headersSent) {
+      sendAnthropicError(res, 502, `backend anthropic at ${targetUrl.origin} error: ${e.message}`);
+    }
   });
   if (body) up.write(JSON.stringify(body));
   up.end();
@@ -1032,7 +1142,15 @@ const server = http.createServer((req, res) => {
         }
 
         const { backend, effectiveModel, logicalRole } = resolved;
-        const requestMeta = { capability: logicalRole, stream: !!body.stream, inBytes: buf.length };
+        const requestMeta = {
+          capability: logicalRole,
+          stream: !!body.stream,
+          inBytes: buf.length,
+          // Thread tier+mode through so forward functions can re-resolve via
+          // resolveBackend if they need to fall back to a different upstream.
+          hwTier,
+          activeMode,
+        };
 
         ctxLog(ctx, 'dispatch', {
           incoming_model: body.model,
