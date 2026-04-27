@@ -383,6 +383,8 @@ function checkRotateProxyLog() {
 const JOURNAL_ENABLED = process.env.CLAUDE_PROXY_JOURNAL === '1';
 const JOURNAL_DIR = process.env.CLAUDE_PROXY_JOURNAL_DIR || path.join(os.homedir(), '.claude', 'journal');
 const JOURNAL_STREAM_EVENT_CAP = 1000;
+const JOURNAL_INCLUDE = (process.env.CLAUDE_PROXY_JOURNAL_INCLUDE || '').split(',').filter(Boolean);
+const JOURNAL_EXCLUDE = (process.env.CLAUDE_PROXY_JOURNAL_EXCLUDE || '').split(',').filter(Boolean);
 const SCRUB_HEADERS = new Set(['authorization', 'x-api-key', 'cookie', 'set-cookie']);
 
 function scrubHeaders(headers) {
@@ -397,7 +399,12 @@ function scrubHeaders(headers) {
 }
 
 function shouldJournal(capability) {
-  return JOURNAL_ENABLED;
+  if (!JOURNAL_ENABLED) return false;
+  if (capability) {
+    if (JOURNAL_INCLUDE.length > 0 && !JOURNAL_INCLUDE.includes(capability)) return false;
+    if (JOURNAL_EXCLUDE.length > 0 && JOURNAL_EXCLUDE.includes(capability)) return false;
+  }
+  return true;
 }
 
 function writeJournalEntry(entry) {
