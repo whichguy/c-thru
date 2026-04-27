@@ -214,12 +214,6 @@
         "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
-      "reviewer": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
-        "on_failure": "cascade"
-      },
-
       "commit-message-generator": {
         "connected_model": "qwen3:1.7b",
         "disconnect_model": "qwen3:1.7b",
@@ -282,11 +276,6 @@
         "on_failure": "hard_fail"
       },
       "explorer": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
-        "on_failure": "cascade"
-      },
-      "reviewer": {
         "connected_model": "devstral-small:2",
         "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
@@ -436,11 +425,6 @@
         "disconnect_model": "devstral-small:2",
         "on_failure": "cascade"
       },
-      "reviewer": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
-        "on_failure": "cascade"
-      },
       "workhorse": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
@@ -548,14 +532,6 @@
         "connected_model": "qwen3.6:35b-a3b-coding-mxfp8",
         "disconnect_model": "qwen3.6:35b-a3b-coding-mxfp8",
         "on_failure": "hard_fail"
-      },
-      "reviewer": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
-        "on_failure": "cascade",
-        "modes": {
-          "local-review": "devstral-small:2"
-        }
       },
       "agentic-coder": {
         "connected_model": "devstral-small:2",

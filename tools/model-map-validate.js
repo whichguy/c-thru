@@ -49,6 +49,47 @@ function fail(message) {
   process.exit(1);
 }
 
+function checkNoDuplicateKeys(jsonText) {
+  const stack = [];
+  let i = 0;
+  const len = jsonText.length;
+  function skipWhitespace() { while (i < len && /\s/.test(jsonText[i])) i++; }
+  function readString() {
+    let result = '';
+    i++; // skip opening "
+    while (i < len) {
+      const ch = jsonText[i++];
+      if (ch === '\\') { i++; continue; }
+      if (ch === '"') return result;
+      result += ch;
+    }
+    throw new Error('unterminated string');
+  }
+  while (i < len) {
+    skipWhitespace();
+    if (i >= len) break;
+    const ch = jsonText[i];
+    if (ch === '{') { stack.push(new Set()); i++; }
+    else if (ch === '}') { stack.pop(); i++; }
+    else if (ch === '[' || ch === ']' || ch === ',' || ch === ':') { i++; }
+    else if (ch === '"') {
+      const start = i;
+      const key = readString();
+      skipWhitespace();
+      if (i < len && jsonText[i] === ':' && stack.length > 0) {
+        const currentObj = stack[stack.length - 1];
+        if (currentObj.has(key)) {
+          const lineNum = jsonText.slice(0, start).split('\n').length;
+          throw new Error(`Duplicate key "${key}" at line ${lineNum}`);
+        }
+        currentObj.add(key);
+      }
+    } else {
+      i++; // number, true, false, null
+    }
+  }
+}
+
 function isObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -660,12 +701,10 @@ function main() {
   const filePath = process.argv[2];
   if (!filePath) fail('usage: model-map-validate.js <path-to-model-map.json> [--rec config/recommended-mappings.json]');
   const absolutePath = path.resolve(filePath);
+  const rawText = fs.readFileSync(absolutePath, 'utf8');
+  try { checkNoDuplicateKeys(rawText); } catch (e) { fail(e.message); }
   let parsed;
-  try {
-    parsed = JSON.parse(fs.readFileSync(absolutePath, 'utf8'));
-  } catch (error) {
-    fail(`failed to read '${absolutePath}': ${error.message}`);
-  }
+  try { parsed = JSON.parse(rawText); } catch (error) { fail(`JSON parse error: ${error.message}`); }
   const errors = [];
   const profileDir = process.env.CLAUDE_PROFILE_DIR || path.join(process.env.HOME || '', '.claude');
   const trustedProfilePath = path.resolve(profileDir, 'model-map.json');
