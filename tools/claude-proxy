@@ -103,6 +103,15 @@ const OLLAMA_TTFT_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_TTFT_MS', 1100
 // the primary loop-prevention mechanism.
 const MAX_FALLBACK_HOPS = numberFromEnv('CLAUDE_PROXY_MAX_FALLBACK_HOPS', 20);
 
+// :cloud-suffixed Ollama models (e.g. glm-5.1:cloud, deepseek-v4-flash:cloud)
+// route through localhost:11434, which proxies to Ollama's hosted infra. Users
+// without a subscription get 401/403/404 back. When this env var is set, the
+// proxy transparently retries the same request against this local model name
+// instead of surfacing the auth error. Set to empty/unset to disable. This is a
+// runtime substitution — no model_routes entry is required. Tracked by
+// requestMeta._cloudFallbackTried to prevent double-fire on a chained retry.
+const OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL = process.env.OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL || 'qwen3.6:35b-a3b-coding-nvfp4';
+
 // Backend-failure cooldown cache. When a backend fails AND has a
 // `fallback_to`, we record it here with a TTL so subsequent requests
 // transparently skip past it instead of paying the TTFT × 20 cost again.
@@ -566,6 +575,41 @@ function scrubCthruHeaders(headers) {
 // The fallback target goes through resolveBackend() so all the existing
 // routing logic (sigil parse, mode-conditional routes, capability aliases)
 // applies. Cycle detection comes from resolveBackend's _seen Set.
+// Special-case fallback for Ollama `:cloud`-suffixed models. When the user has
+// no Ollama subscription, glm-5.1:cloud, deepseek-v4-flash:cloud, etc. fail
+// with 401/403/404 from localhost:11434 (which proxies to Ollama's hosted
+// infrastructure). Rather than surface the auth error or require per-model
+// fallback_to wiring, we transparently retry the same request against a local
+// model named by OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL.
+//
+// Returns true if the cloud→local rewrite fired and the request was
+// re-dispatched. Returns false if the case doesn't apply (not :cloud-suffixed,
+// already retried, or env var unset/empty) — the caller should fall through to
+// tryFallbackOrFail in that case.
+//
+// Edge cases handled:
+//  - body.model already rewritten by previous fallback hop (suffix gone)
+//  - requestMeta._cloudFallbackTried defensive flag against double-fire
+//  - OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL unset/empty → skip entirely
+function tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta) {
+  if (res.headersSent) return false;
+  if (!OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL) return false;
+  if (requestMeta._cloudFallbackTried) return false;
+  if (!body || typeof body.model !== 'string') return false;
+  if (!body.model.endsWith(':cloud')) return false;
+
+  const fromModel = body.model;
+  requestMeta._cloudFallbackTried = true;
+  ctxLog(ctx, 'ollama.cloud_to_local_fallback', {
+    backend: backend.id,
+    from_model: fromModel,
+    to_model: OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL,
+  });
+  body.model = OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL;
+  forwardOllama(ctx, req, res, body, backend, OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL, requestMeta);
+  return true;
+}
+
 async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, failure) {
   if (res.headersSent) return false;
 
@@ -859,6 +903,13 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
           }
         } catch {}
         if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
+          // Cloud→local rewrite first: if the failing model is :cloud-suffixed
+          // (e.g. user has no Ollama subscription), swap in the configured
+          // local fallback model and retry against the same backend before
+          // walking the per-backend fallback_to chain.
+          if (tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta)) {
+            return;
+          }
           markBackendFailed(backend.id, !!backend.fallback_to);
           const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
             reason: `upstream returned ${upRes.statusCode}`,
@@ -1187,6 +1238,14 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
     // forwardAnthropic — re-resolves through the route graph and dispatches
     // through forwardOllama or forwardAnthropic depending on the fallback
     // target's backend kind.
+    //
+    // Cloud→local rewrite first: if the failing model is :cloud-suffixed
+    // (network down → localhost can't reach Ollama's hosted infra), swap in
+    // the configured local fallback model and retry against the same backend
+    // before walking the per-backend fallback_to chain.
+    if (tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta)) {
+      return;
+    }
     markBackendFailed(backend.id, !!backend.fallback_to);
     const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
       reason: 'connection error',

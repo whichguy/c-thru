@@ -11,6 +11,28 @@
 
 set -euo pipefail
 
+# --- Arg parsing (minimal) ---
+SKIP_E2E=0
+for arg in "$@"; do
+    case "$arg" in
+        --skip-e2e)
+            SKIP_E2E=1
+            ;;
+        -h|--help)
+            cat <<USAGE
+Usage: install.sh [--skip-e2e]
+
+  --skip-e2e   Skip post-install end-to-end validation (CI / sandboxed envs).
+USAGE
+            exit 0
+            ;;
+        *)
+            echo "install.sh: unknown arg: $arg" >&2
+            exit 2
+            ;;
+    esac
+done
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -369,6 +391,188 @@ register_path() {
 echo ""
 echo "PATH:"
 register_path
+
+# --- Post-install end-to-end validation ---
+# Proves the install actually works: syntax sanity, model-map validation,
+# proxy boot + /ping, hook executability, and PATH block presence.
+# Wall-clock budget: < 30s. Skip with --skip-e2e for CI / sandboxed envs.
+run_e2e_checks() {
+    if [ "$SKIP_E2E" = "1" ]; then
+        echo ""
+        echo -e "  ${GRAY}✓  e2e checks skipped (--skip-e2e)${NC}"
+        return 0
+    fi
+
+    echo ""
+    echo "E2E checks:"
+
+    local proxy_pid=""
+    # Cleanup helper — invoked on every exit path.
+    local _cleanup_done=0
+    cleanup_e2e() {
+        [ "$_cleanup_done" = "1" ] && return 0
+        _cleanup_done=1
+        if [ -n "$proxy_pid" ] && kill -0 "$proxy_pid" 2>/dev/null; then
+            kill -TERM "$proxy_pid" 2>/dev/null || true
+            # Give it 500ms to exit gracefully, then SIGKILL.
+            for _ in 1 2 3 4 5; do
+                kill -0 "$proxy_pid" 2>/dev/null || break
+                sleep 0.1
+            done
+            kill -KILL "$proxy_pid" 2>/dev/null || true
+        fi
+    }
+    fail_e2e() {
+        local what="$1" reason="$2"
+        echo -e "  ${RED}[fail] ${what}: ${reason}${NC}" >&2
+        cleanup_e2e
+        echo -e "${RED}e2e checks failed; install may be incomplete${NC}" >&2
+        exit 1
+    }
+
+    # 1. Syntax sanity — bash and node.
+    local f
+    # bash: tools/c-thru is the bash entrypoint (no .sh suffix) plus all *.sh files.
+    for f in "$TOOLS_SRC/c-thru" "$TOOLS_SRC"/*.sh; do
+        [ -f "$f" ] || continue
+        if bash -n "$f" 2>/dev/null; then
+            echo -e "  ${GREEN}[ok]${NC}   syntax: tools/$(basename "$f")"
+        else
+            fail_e2e "syntax: tools/$(basename "$f")" "bash -n failed"
+        fi
+    done
+    if command -v node >/dev/null 2>&1; then
+        # node: claude-proxy (no .js suffix) plus all *.js files.
+        for f in "$TOOLS_SRC/claude-proxy" "$TOOLS_SRC"/*.js; do
+            [ -f "$f" ] || continue
+            if node --check "$f" 2>/dev/null; then
+                echo -e "  ${GREEN}[ok]${NC}   syntax: tools/$(basename "$f")"
+            else
+                fail_e2e "syntax: tools/$(basename "$f")" "node --check failed"
+            fi
+        done
+    else
+        echo -e "  ${YELLOW}[skip]${NC} node syntax checks (node not installed)"
+    fi
+
+    # 2. Validate shipped model-map.
+    if command -v node >/dev/null 2>&1 && [ -f "$SHIPPED_MAP" ]; then
+        if node "$TOOLS_SRC/model-map-validate.js" "$SHIPPED_MAP" >/dev/null 2>&1; then
+            echo -e "  ${GREEN}[ok]${NC}   validate: config/model-map.json"
+        else
+            fail_e2e "validate: config/model-map.json" "model-map-validate.js exited non-zero"
+        fi
+    else
+        echo -e "  ${YELLOW}[skip]${NC} model-map validate (node or shipped map missing)"
+    fi
+
+    # 3. Spawn proxy on a free port + /ping handshake.
+    if command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+        local free_port=""
+        free_port="$(node -e "const s=require('net').createServer(); s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})" 2>/dev/null || true)"
+        if [ -z "$free_port" ]; then
+            fail_e2e "proxy boot" "could not find a free port"
+        fi
+
+        # Spawn proxy detached; collect its pid.
+        node "$TOOLS_SRC/claude-proxy" --port "$free_port" >/dev/null 2>&1 &
+        proxy_pid=$!
+
+        # Poll /ping for up to 5s (10 iterations × 0.5s).
+        local body="" ok_seen=0 i
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+            if ! kill -0 "$proxy_pid" 2>/dev/null; then
+                fail_e2e "proxy boot" "process exited before /ping (pid=$proxy_pid port=$free_port)"
+            fi
+            body="$(curl -sf --max-time 1 "http://127.0.0.1:${free_port}/ping" 2>/dev/null || true)"
+            if [ -n "$body" ]; then
+                ok_seen=1
+                break
+            fi
+            sleep 0.5
+        done
+        if [ "$ok_seen" != "1" ]; then
+            fail_e2e "proxy boot" "/ping did not respond within 5s (pid=$proxy_pid port=$free_port)"
+        fi
+        case "$body" in
+            *'"ok":true'*|*'"ok": true'*)
+                echo -e "  ${GREEN}[ok]${NC}   proxy boot: pid=${proxy_pid} port=${free_port} /ping returned ok:true"
+                ;;
+            *)
+                fail_e2e "proxy boot" "/ping body missing ok:true (got: ${body:0:120})"
+                ;;
+        esac
+        cleanup_e2e
+        proxy_pid=""
+        _cleanup_done=0
+    else
+        echo -e "  ${YELLOW}[skip]${NC} proxy boot (node or curl missing)"
+    fi
+
+    # 4. Hook registration round-trip.
+    local settings="$CLAUDE_DIR/settings.json"
+    if [ -f "$settings" ] && [ "$JQ_AVAILABLE" -eq 1 ]; then
+        # Extract any hook command path that lives under TOOLS_DEST and references a c-thru tool.
+        local hook_paths total=0 ok=0
+        hook_paths="$(jq -r --arg t "$TOOLS_DEST" '
+            [ .hooks // {} | to_entries[] | .value[]?.hooks[]?.command // empty ]
+            | map(select(startswith($t) or contains("/c-thru-") or contains("/claude-proxy") or contains("/c-thru ")))
+            | .[]
+        ' "$settings" 2>/dev/null || true)"
+        if [ -n "$hook_paths" ]; then
+            local hp first_token
+            while IFS= read -r hp; do
+                [ -z "$hp" ] && continue
+                # Hook commands may include args; take the first whitespace-delimited token.
+                first_token="${hp%% *}"
+                total=$((total + 1))
+                if [ ! -e "$first_token" ]; then
+                    fail_e2e "hooks" "registered hook missing on disk: $first_token"
+                fi
+                if [ ! -x "$first_token" ]; then
+                    fail_e2e "hooks" "registered hook not executable: $first_token"
+                fi
+                ok=$((ok + 1))
+            done <<< "$hook_paths"
+            echo -e "  ${GREEN}[ok]${NC}   hooks: ${ok}/${total} registered hooks executable"
+        else
+            echo -e "  ${GRAY}[skip]${NC} hooks: no c-thru hooks registered in settings.json"
+        fi
+    else
+        echo -e "  ${GRAY}[skip]${NC} hooks: settings.json or jq unavailable"
+    fi
+
+    # 5. PATH integration verification (only if PATH was registered).
+    if [ "${C_THRU_INSTALL_NO_PATH:-0}" = "1" ]; then
+        echo -e "  ${GRAY}[skip]${NC} PATH check (C_THRU_INSTALL_NO_PATH=1)"
+    else
+        local shell_name path_rc rc_label
+        shell_name="$(basename "${SHELL:-}")"
+        case "$shell_name" in
+            zsh)  path_rc="$HOME/.zshrc"; rc_label="~/.zshrc" ;;
+            bash) path_rc="$HOME/.bashrc"; rc_label="~/.bashrc" ;;
+            fish) path_rc="$HOME/.config/fish/config.fish"; rc_label="~/.config/fish/config.fish" ;;
+            *)    path_rc=""; rc_label="" ;;
+        esac
+        if [ -n "$path_rc" ] && [ -f "$path_rc" ]; then
+            if grep -Fq "$PATH_MARKER_BEGIN" "$path_rc" 2>/dev/null; then
+                echo -e "  ${GREEN}[ok]${NC}   PATH: c-thru block present in ${rc_label}"
+            else
+                # Block absent could be legitimate (c-thru already on PATH via another route).
+                # register_path() prints a "skipping rc edit" message in that case; tolerate it.
+                if command -v c-thru >/dev/null 2>&1; then
+                    echo -e "  ${GRAY}[skip]${NC} PATH: c-thru already on PATH (no rc edit needed)"
+                else
+                    fail_e2e "PATH" "c-thru block missing from ${rc_label} and c-thru not on PATH"
+                fi
+            fi
+        else
+            echo -e "  ${GRAY}[skip]${NC} PATH: rc file ${rc_label:-unknown} not found"
+        fi
+    fi
+}
+
+run_e2e_checks
 
 echo ""
 echo -e "${GREEN}✅ Done. c-thru is now using ephemeral session control.${NC}"

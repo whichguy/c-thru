@@ -50,6 +50,26 @@ if [ ${#issues[@]} -gt 0 ]; then
     context_parts+=("${issues[@]}")
 fi
 
+# Check 3: profile pollution — silent on happy path, single advisory line on drift.
+# Resolve script dir (follow symlink) so we can find tools/model-map-config.js
+# whether invoked via ~/.claude/tools symlink or directly from the repo.
+_src="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_src" ]; do
+    _dir=$(cd -P "$(dirname "$_src")" && pwd)
+    _src=$(readlink "$_src")
+    case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+_script_dir=$(cd -P "$(dirname "$_src")" && pwd)
+ROUTER_REPO_ROOT=$(cd -P "$_script_dir/.." && pwd)
+_pollution_script="$ROUTER_REPO_ROOT/tools/model-map-config.js"
+if [ -f "$_pollution_script" ] && command -v node >/dev/null 2>&1; then
+    _pollution_out=$(node "$_pollution_script" --detect-pollution 2>/dev/null || true)
+    if [ -n "$_pollution_out" ] && \
+       ! printf '%s' "$_pollution_out" | grep -q -E "no leaked|profile is clean"; then
+        context_parts+=("c-thru: profile pollution detected (run \`c-thru --detect-pollution\` for details). May be from older c-thru versions.")
+    fi
+fi
+
 [ ${#context_parts[@]} -eq 0 ] && exit 0
 
 context=$(printf '%s\n' "${context_parts[@]}" | paste -sd '\n' -)
