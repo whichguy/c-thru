@@ -80,6 +80,53 @@ verify the install worked without running a separate command.
 
 ## Reliability
 
+**[ollama] Treat Ollama cloud models like local models with fallback**
+Ollama supports `:cloud`-suffixed models (e.g. `glm-5.1:cloud`,
+`deepseek-v4-flash:cloud`, `kimi-k2.6:cloud`) that route to Ollama's
+hosted infrastructure rather than the local runner. Most users won't
+have an Ollama subscription, so a `:cloud` model invocation will fail
+with auth errors (or 404, depending on Ollama's gating).
+
+The runtime upstream-fallback feature (commit 66e3a71) handles this
+for the `anthropic` backend kind via `backends.anthropic.fallback_to`,
+but Ollama cloud models route through `kind: ollama` to the same
+`localhost:11434`. The local Ollama daemon then proxies the cloud
+call. Failure cases:
+- User has no Ollama account / not signed in → cloud model returns
+  401/403/404 from `localhost:11434`. The proxy currently surfaces
+  this as an error to Claude Code.
+- User has an account but the cloud model isn't on their plan →
+  same failure shape.
+- Network down → `localhost:11434` returns network error from its
+  upstream call.
+
+**Goal**: when an Ollama cloud model fails, fall back to the
+configured local default for the same capability tier. Three sub-tasks:
+
+1. **Detect cloud-model failures** specifically. Ollama's error body
+   for "you need a subscription" looks different from "model not
+   pulled" or "GPU OOM" — the proxy needs to disambiguate so we only
+   fall back on subscription/auth-class failures, not GPU-OOM (which
+   means "stop launching this on cloud, but not 'no subscription'").
+
+2. **Wire `fallback_to` for ollama backends.** Currently the
+   `tryFallbackOrFail` machinery is attached only to `forwardAnthropic`
+   (commit 66e3a71). Mirror it into `forwardOllama` for cloud-model
+   failures: re-resolve through the user's local default for the
+   same capability.
+
+3. **Mark cloud models in the model-map as auto-fallback candidates.**
+   Either via a flag (`backend.kind: 'ollama-cloud'` to distinguish
+   from local Ollama) or a model-name heuristic (`/:cloud$/` pattern).
+   The ollama_local backend currently doesn't differentiate
+   `qwen3.6:35b` from `glm-5.1:cloud` — the proxy treats both as
+   talk-to-localhost-11434.
+
+The `:cloud` model UX needs to "just work" without a subscription —
+falling back to a comparable local model preserves the contract
+("this capability runs SOMEWHERE") even when the cloud option isn't
+available.
+
 **[review] Senior-engineer review of `tools/claude-proxy`**
 The proxy has accumulated significant complexity through this session
 (observability layer, mode-conditional routing, Anthropic SSE fidelity

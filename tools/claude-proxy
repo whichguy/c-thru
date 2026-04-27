@@ -18,10 +18,7 @@ const {
   resolveLlmMode,
   resolveActiveTier,
   resolveCapabilityAlias,
-  resolveTerminalTarget,
   LLM_MODE_ENUM,
-  LLM_PROFILE_ALIASES,
-  applyModeFilter,
   pickBenchmarkBest,
 } = require('./model-map-resolve.js');
 
@@ -73,6 +70,21 @@ const INITIAL_PORT = numberFromEnv('CLAUDE_PROXY_PORT', 9997);
 const HOOKS_PORT = numberFromEnv('CLAUDE_PROXY_HOOKS_PORT', 9998);
 const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_DEBUG', 0));
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+
+// Tunable timing constants — env-overridable for tests + power users.
+// OLLAMA_UPSTREAM_TIMEOUT_MS: hard cap from request issue to first byte.
+//   Note: this is `req.setTimeout` semantics — rearms on socket activity.
+//   For mid-stream stalls, see STREAM_STALL_HARDFAIL_MS.
+// STREAM_STALL_HARDFAIL_MS: idle gap that destroys a streaming response.
+//   Necessary because the upstream timeout can't catch slow trickles.
+// SSE_PING_INTERVAL_MS: cadence for `event: ping` frames during streaming.
+//   Keeps connections alive through nginx/CF/corp-middlebox idle killers.
+// OLLAMA_KEEP_ALIVE: how long Ollama should keep the model resident in
+//   VRAM after each request (forwarded as the `keep_alive` field).
+const OLLAMA_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_TIMEOUT_MS', 300000);
+const STREAM_STALL_HARDFAIL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_STALL_MS', 120000);
+const SSE_PING_INTERVAL_MS = numberFromEnv('CLAUDE_PROXY_PING_INTERVAL_MS', 15000);
+const OLLAMA_KEEP_ALIVE = process.env.CLAUDE_PROXY_OLLAMA_KEEP_ALIVE || '60m';
 
 let GLOBAL_CONFIG;
 let CONFIG_PATH;
@@ -282,26 +294,10 @@ function writeJournalEntry(entry) {
   }
 }
 
-// ── Fallback chain & health ──────────────────────────────────────────
-const stats = {
-  startedAt: nowIso(),
-  uptimeSec: 0,
-  requests: 0,
-  currentInFlight: 0,
-  byBackendId: {},
-  byFailureClass: {}
-};
 
-setInterval(() => {
-  stats.uptimeSec = Math.floor((nowMs() - new Date(stats.startedAt).getTime()) / 1000);
-}, 5000).unref();
 
 // ── Model Resolution ─────────────────────────────────────────────────
 const BACKEND_SIGIL_RE = /^(.*)@([a-zA-Z0-9_-]+)$/;
-
-function profileAliasKey(alias) {
-  return alias.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
-}
 
 function resolveBackend(model, cfg, tier, mode, _seen) {
   const backends = cfg.backends || {};
@@ -382,17 +378,6 @@ const BENCHMARK = (() => {
   const bpath = path.join(__dirname, '..', 'docs', 'benchmark.json');
   try { return JSON.parse(fs.readFileSync(bpath, 'utf8')); } catch { return null; }
 })();
-
-function lookupPatternValue(section, model) {
-  const obj = CONFIG[section] || {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (!k.startsWith('re:')) continue;
-    try {
-      if (new RegExp(k.slice(3)).test(model)) return v;
-    } catch {}
-  }
-  return null;
-}
 
 // ── Request handling ───────────────────────────────────────────────
 function send(res, code, obj) {
@@ -717,7 +702,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
   const inBytes = (requestMeta && requestMeta.inBytes) || 0;
 
   ctxLog(ctx, 'ollama.request', { backend: backend.id, url, model: effectiveModel, stream: isStream });
-  const upTimeoutMs = 300000; // 5 min — Ollama can be slow to start generating
+  const upTimeoutMs = OLLAMA_UPSTREAM_TIMEOUT_MS;
   const requestStartedAt = Date.now();
   const up = http.request(url, options, upRes => {
     const ttftMs = Date.now() - requestStartedAt;
@@ -795,10 +780,6 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
       let currentBlockType = null;  // 'thinking' | 'text' | null
       let messageClosed = false;    // tracks whether message_delta+message_stop were emitted
       const streamStart = Date.now();
-      // Hard-fail watchdog threshold for mid-stream stalls. After upstream goes
-      // idle this long, abort. The 5-min `up.setTimeout` rearms on socket activity,
-      // so it won't fire if Ollama trickles bytes very slowly — this is the safety net.
-      const STREAM_STALL_HARDFAIL_MS = 120000;
 
       const openBlock = (type) => {
         blockIndex++;
@@ -866,7 +847,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
       const pingTick = setInterval(() => {
         if (!res.writable) { stopTimers(); return; }
         sseWrite(res, 'ping', { type: 'ping' });
-      }, 15000);
+      }, SSE_PING_INTERVAL_MS);
       const stopTimers = () => { clearInterval(stallCheck); clearInterval(pingTick); };
       stopStreamTimers = stopTimers;  // expose to outer-scope error handlers
 
@@ -1053,12 +1034,20 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
     }
   });
   const numCtx = body.num_ctx || (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
+  // Use ?? not || for temperature: a caller-provided `0` is a valid request
+  // (deterministic generation), and `||` would misinterpret it as "unset"
+  // and replace with our default. If caller didn't specify, omit the field
+  // entirely so Ollama uses the modelfile default rather than forcing 0.
+  const ollamaOptions = { num_ctx: numCtx };
+  if (body.temperature !== undefined && body.temperature !== null) {
+    ollamaOptions.temperature = body.temperature;
+  }
   const ollamaBody = JSON.stringify({
     model: effectiveModel,
     messages: flattenMessagesForOllama(body),
     stream: isStream,
-    keep_alive: '60m',
-    options: { temperature: body.temperature || 0, num_ctx: numCtx }
+    keep_alive: OLLAMA_KEEP_ALIVE,
+    options: ollamaOptions,
   });
   ctxLog(ctx, 'body.rewrite', {
     bytes_in: inBytes,
@@ -1202,7 +1191,17 @@ const server = http.createServer((req, res) => {
 
       if (req.method === 'POST' && req.url.startsWith('/v1/messages')) {
         const buf = await readBody(req);
-        const body = JSON.parse(buf.toString());
+        let body;
+        try {
+          body = JSON.parse(buf.toString());
+        } catch (e) {
+          // Malformed request body. Real Anthropic returns 400 invalid_request_error
+          // for this; previously we let it throw into the outer catch and returned 500
+          // api_error which is misleading + masks client bugs (truncated bodies,
+          // version mismatches, content-type errors).
+          ctxLog(ctx, 'request.parse_error', { error: e.message, bytes_in: buf.length });
+          return sendAnthropicError(res, 400, `invalid JSON in request body: ${e.message}`);
+        }
         const hwTier = resolveActiveTier(CONFIG);
         const activeMode = resolveLlmMode(CONFIG);
 
