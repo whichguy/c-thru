@@ -4,6 +4,35 @@ Items identified from install.sh audit (2026-04-20). Ordered by impact.
 
 ## install.sh gaps / automation
 
+**[install] Add tools/ to PATH on install**
+`install.sh` currently symlinks individual scripts into `~/.claude/tools/`,
+but that directory isn't on the user's PATH by default. After install,
+running `c-thru` from anywhere requires either typing the full path or
+the user manually adding `~/.claude/tools/` (or `<repo>/tools/`) to PATH.
+
+Implementation:
+1. Detect the user's shell (`$SHELL`, `~/.zshrc` vs `~/.bashrc` vs
+   `~/.config/fish/config.fish`).
+2. Append a sourced block to the appropriate rc file:
+   ```sh
+   # c-thru: tools on PATH (added by install.sh)
+   if [[ -d "$HOME/.claude/tools" ]]; then
+     export PATH="$HOME/.claude/tools:$PATH"
+   fi
+   ```
+3. Idempotent — guard with a marker comment so re-running install.sh
+   doesn't append duplicate blocks.
+4. Provide an opt-out: env var `C_THRU_INSTALL_NO_PATH=1` skips the
+   PATH edit (CI / containers / users who want to manage PATH manually).
+5. Print a clear post-install message: "Run `source ~/.zshrc` (or open
+   a new shell) to put c-thru on your PATH" so the user knows what
+   happened and how to make it active without restarting their session.
+6. Alternative route: install a `c-thru` shim into `~/.local/bin/`
+   (which is more commonly on PATH) instead of editing rc files. Less
+   invasive but assumes `~/.local/bin/` is already on PATH.
+
+
+
 **[install] PostToolUse hook matcher could be self-documenting**
 `c-thru-map-changed.sh` has `# ARCH: FileChanged/PostToolUse hook` in its header. The hook
 currently uses `matcher: "*"` (fires on all tools, script exits silently for non-model-map
@@ -50,6 +79,60 @@ Adding a 3-5 line "Active routes" block (like `c-thru --list` compact output) wo
 verify the install worked without running a separate command.
 
 ## Reliability
+
+**[CRITICAL] [config] Project-local `.claude/model-map.json` pollutes the global profile**
+Reproduced this session (2026-04-26): running `c-thru` (or any tool that
+calls `resolveSelectedConfigPath` with `syncProfile: true`) from a cwd
+whose ancestor contains a `.claude/model-map.json` causes that file to
+be MERGED INTO `~/.claude/model-map.json` (the global profile) on every
+sync. The merged-in entries persist after the session exits and are
+visible to ALL future c-thru invocations from ANY directory.
+
+**Repro** (verified working session):
+```sh
+mkdir -p test-project/.claude
+echo '{"model_routes": {"test-project-model": "ollama_local"}}' > test-project/.claude/model-map.json
+cd test-project
+node -e "require('/path/to/tools/model-map-config.js').resolveSelectedConfigPath({...})"
+# Now ~/.claude/model-map.json contains "test-project-model" — visible
+# from every other cwd, even after cd-ing away.
+```
+
+**Where the bug lives**:
+- `tools/model-map-config.js:67` — `findParentModelMap(cwd)` walks
+  upward looking for `.claude/model-map.json`. Returns the first hit.
+- `tools/model-map-config.js:74` — `syncArgs` passes `projectPath` as
+  the THIRD merge tier into `model-map-sync.js`.
+- `tools/model-map-layered.js` — `mergeConfigLayers(defaults, global,
+  project)` does a recursive merge, blowing project-local entries into
+  the merged effective config that gets WRITTEN BACK to
+  `~/.claude/model-map.json`.
+
+**Why this is wrong**:
+The CLAUDE.md schema says project-local config should be "selected by
+precedence and traversed as its own DAG; it is not merged on top of the
+profile graph." But the implementation does merge it (just into the
+profile path rather than treating it as a separate selected path).
+Every project's local config leaks into the global profile.
+
+**Fix sketch**:
+1. STOP writing the merged result back to `~/.claude/model-map.json`
+   when project tier is non-null. Either (a) write to a session-scoped
+   path like `$TMPDIR/c-thru-effective-<sessionid>.json` and point the
+   proxy at it via `CLAUDE_MODEL_MAP_PATH`, OR (b) write to
+   `<project>/.claude/model-map.effective.json` and select that path
+   when present.
+2. Profile sync (system + global overrides) should NEVER include
+   project tier. Project-local merges happen at request resolution
+   time in the proxy, not at sync time.
+3. Add a one-time cleanup script that detects pollution in
+   `~/.claude/model-map.json` (anything not in system + global
+   overrides) and removes it. Document the cleanup as part of
+   install.sh post-upgrade hook.
+
+This bug compounds with the existing "everything else should be self
+contained" audit (TODO above) — both speak to the same architectural
+boundary that's currently leaky.
 
 **[ollama] `ollama pull <model>` must block until completion before starting**
 When the active model isn't cached and a pull is needed, the launching
