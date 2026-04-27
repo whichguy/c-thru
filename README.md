@@ -158,7 +158,20 @@ claude-proxy (node)  translates Anthropic ↔ Ollama, applies fallbacks,
     └──▶ Anthropic              transparent passthrough
 ```
 
-The router strips its own flags (`--mode`, `--profile`, `--route`, `--model`, `--memory-gb`, `--bypass-proxy`, `--journal`, `--proxy-debug`, `--router-debug`, `--no-update`) before invoking `claude`. The proxy is a long-running local HTTP server; multiple c-thru sessions converge on a single proxy via flock, port auto-selected, logs at `~/.claude/proxy.log` (rotates to `proxy.log.old` at 10 MB).
+Request flow through the stack:
+
+```mermaid
+flowchart LR
+    A[claude binary call] --> B[c-thru bash]
+    B --> C{route resolution}
+    C -->|Ollama/local| D[claude-proxy\nHTTP server]
+    C -->|Anthropic direct| E[Anthropic API]
+    D --> F[Ollama\nlocalhost:11434]
+    D --> G[OpenRouter / LiteLLM]
+    B --> H[real claude binary\nwith ephemeral settings]
+```
+
+The router strips its own flags (`--mode`, `--profile`, `--route`, `--model`, `--memory-gb`, `--bypass-proxy`, `--journal`, `--proxy-debug`, `--router-debug`, `--no-update`) before invoking `claude`. Each `c-thru` invocation owns its own `claude-proxy` child — the proxy binds on an OS-assigned port and exits when the parent shell exits. Logs land at `~/.claude/proxy.<port>.log`.
 
 **No external Node deps.** `claude-proxy`, `llm-capabilities-mcp.js`, and the `model-map-*.js` helpers all use Node stdlib (`http`, `https`, `fs`, `path`, `os`, `crypto`, `child_process`). There is no `package.json` and no `node_modules/`.
 
@@ -455,6 +468,7 @@ c-thru explain --capability workhorse        # resolution chain (pure JS, no pro
 
 ```sh
 bash test/run-all.sh          # full suite (all shells + node tests)
+bash test/run-all.sh --fast   # skip slow/optional suites (e2e, smoke-check)
 ```
 
 Individual suites:
