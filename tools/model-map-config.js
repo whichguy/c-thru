@@ -4,7 +4,27 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+
+// Session-scoped effective-config overlay. When a request runs from a cwd
+// whose ancestor contains `.claude/model-map.json` (the project tier), we
+// merge system+global+project into a temp file and point the proxy at it
+// via CLAUDE_MODEL_MAP_PATH — keeping the SHARED profile path
+// (~/.claude/model-map.json) free of any project-specific entries.
+//
+// Pre-fix bug: the merged result (including project tier) was written
+// directly to the profile path, leaking project-local entries into the
+// global config visible to ALL future sessions from ANY directory.
+function sessionEffectivePath(projectPath) {
+  if (!projectPath) return null;
+  const profileDir = profileClaudeDir() || '';
+  // Hash project path + profile dir so different projects don't collide
+  // and the same project always gets the same temp file (avoids
+  // accumulating one per session).
+  const hash = crypto.createHash('md5').update(`${projectPath}:${profileDir}`).digest('hex').slice(0, 12);
+  return path.join(os.tmpdir(), `c-thru-effective-${hash}.json`);
+}
 
 function canonicalizeDir(dir) {
   try {
@@ -65,41 +85,72 @@ function maybeSyncLayeredProfileModelMap(options = {}) {
 
   const overridesPath = path.join(claudeDir, 'model-map.overrides.json');
   const projectPath = findParentModelMap(cwd);
-  const effectivePath = path.join(claudeDir, 'model-map.json');
-  
+  const profileEffectivePath = path.join(claudeDir, 'model-map.json');
+
   const syncTool = path.join(baseDir, 'model-map-sync.js');
   if (!fs.existsSync(syncTool)) return;
 
-  // 3-Tier Sync: Defaults -> Global Overrides -> Project Overrides
-  const syncArgs = [syncTool, defaultsPath, overridesPath, projectPath || '', effectivePath];
-  
+  // ── Pass 1: PROFILE — system + global only (NEVER project tier) ─────────
+  // The profile file is shared across all sessions from all directories.
+  // Mixing project-local config into it leaks one project's overrides into
+  // every other project's config. Always sync only the persistent layers.
+  const profileSyncArgs = [syncTool, defaultsPath, overridesPath, '', profileEffectivePath];
+  let profileResult;
   try {
-    const result = spawnSync(process.execPath, syncArgs, {
-      encoding: 'utf8',
-      timeout: 5000,
-    });
-    if (result.status !== 0 && typeof onSyncFailure === 'function') {
-      onSyncFailure(result);
+    profileResult = spawnSync(process.execPath, profileSyncArgs, { encoding: 'utf8', timeout: 5000 });
+    if (profileResult.status !== 0 && typeof onSyncFailure === 'function') {
+      onSyncFailure(profileResult);
     }
-    return result;
   } catch (error) {
     if (typeof onSyncFailure === 'function') onSyncFailure(error);
+    return;
   }
+
+  // ── Pass 2: PROJECT OVERLAY — session-scoped, only when project tier exists ─
+  // Write merged (system + global + project) to a temp file keyed by the
+  // project's path. The proxy is pointed at this overlay via
+  // CLAUDE_MODEL_MAP_PATH; profile file stays untouched.
+  let projectOverlayPath = null;
+  if (projectPath) {
+    projectOverlayPath = sessionEffectivePath(projectPath);
+    const overlaySyncArgs = [syncTool, defaultsPath, overridesPath, projectPath, projectOverlayPath];
+    try {
+      const overlayResult = spawnSync(process.execPath, overlaySyncArgs, { encoding: 'utf8', timeout: 5000 });
+      if (overlayResult.status !== 0) {
+        if (typeof onSyncFailure === 'function') onSyncFailure(overlayResult);
+        projectOverlayPath = null;  // overlay failed, fall back to clean profile
+      }
+    } catch (error) {
+      if (typeof onSyncFailure === 'function') onSyncFailure(error);
+      projectOverlayPath = null;
+    }
+  }
+
+  return Object.assign({ projectOverlayPath, profileEffectivePath, projectPath }, profileResult);
 }
 
 function resolveSelectedConfigPath(options = {}) {
   const { baseDir = __dirname, cwd = process.env.CLAUDE_MODEL_MAP_LAUNCH_CWD || process.cwd(), syncProfile = true, onSyncFailure = null } = options;
 
-  if (syncProfile) maybeSyncLayeredProfileModelMap({ baseDir, onSyncFailure, cwd });
+  let syncResult = null;
+  if (syncProfile) syncResult = maybeSyncLayeredProfileModelMap({ baseDir, onSyncFailure, cwd });
 
   const override = canonicalizeFile(process.env.CLAUDE_MODEL_MAP_PATH || '');
   if (override) return { path: override, source: 'override' };
 
-  // After 3-tier sync, the effective profile path contains all merged layers.
+  // Prefer the project-scoped overlay when present (when running from a
+  // cwd whose ancestor has .claude/model-map.json). It's a session-scoped
+  // file in $TMPDIR containing system + global + project merged.
+  if (syncResult && syncResult.projectOverlayPath) {
+    const overlay = canonicalizeFile(syncResult.projectOverlayPath);
+    if (overlay) return { path: overlay, source: 'project-overlay' };
+  }
+
+  // Fall through to the persistent profile (system + global, no project).
   const profileDir = profileClaudeDir();
   const profile = profileDir ? canonicalizeFile(path.join(profileDir, 'model-map.json')) : null;
   if (profile) return { path: profile, source: 'profile' };
-  
+
   return null;
 }
 
@@ -134,10 +185,25 @@ function main() {
       console.log(`PROJECT=${project || ''}`);
       console.log(`EFFECTIVE=${effective || ''}`);
     } else {
-      // --shell-env: export variables for Bash eval
+      // --shell-env: export variables for Bash eval. Drive both the sync
+      // (which writes profile + optional overlay) and the active-path
+      // selection through resolveSelectedConfigPath so the bash side and
+      // the proxy side end up pointing at the same file.
       const override = canonicalizeFile(process.env.CLAUDE_MODEL_MAP_PATH || '');
-      const source = override ? 'override' : 'profile';
-      const activePath = override || effective || '';
+      let activePath, source;
+      if (override) {
+        activePath = override;
+        source = 'override';
+      } else {
+        const resolved = resolveSelectedConfigPath({ baseDir: __dirname, cwd, syncProfile: true });
+        if (resolved) {
+          activePath = resolved.path;
+          source = resolved.source;  // 'project-overlay' | 'profile'
+        } else {
+          activePath = effective || '';
+          source = 'profile';
+        }
+      }
 
       console.log(`export MODEL_MAP_DEFAULTS_FILE="${defaults || ''}";`);
       console.log(`export MODEL_MAP_OVERRIDES_FILE="${global || ''}";`);

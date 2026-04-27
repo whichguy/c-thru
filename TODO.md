@@ -4,6 +4,216 @@ Items identified from install.sh audit (2026-04-20). Ordered by impact.
 
 ## install.sh gaps / automation
 
+**[review] Test-coverage audit — every guard/check should have a quality test**
+The codebase has accumulated MANY runtime checks and invariants
+(cycle detection, depth caps, content-length scrub, TTFT timeout,
+stream-stall watchdog, fallback gates, mode-conditional routing,
+error-shape consistency, hard-stall hard-fail, terminal exemption,
+cooldown skip, global-default last-resort, half-open stream protection,
+client-disconnect timer cleanup, request body parse, etc.) — but
+test coverage is uneven.
+
+Senior-engineer review goal: for every defensive check / invariant /
+edge-case branch in `tools/claude-proxy`, `tools/c-thru`, and
+`tools/model-map-*.js`, answer:
+1. Is there a test that EXERCISES this branch (not just covers via grep)?
+2. If not, would adding one find a real bug or just rubber-stamp the
+   current behavior? (favor tests that prove invariants, not tests that
+   re-implement the function).
+3. If "yes, would find bugs" → file a sub-TODO with the test sketch.
+
+Concrete audit checklist (pull from a grep of `if (` on the hot paths):
+- forwardOllama: 30+ branches; verified for thinking/text transition,
+  TTFT, stall, fallback, but no test for: parse_error mid-stream,
+  client.disconnect timer-clear, content-length scrub effectiveness,
+  ping interval firing, message_stop after empty stream.
+- forwardAnthropic: usage extraction tee correctness, 4xx pipeable
+  body shape, mid-stream error.
+- tryFallbackOrFail: cooldown skip with multi-hop tested, but cooldown
+  TTL expiry not tested (would need fake clock or longer test wait).
+- model-map-config.js: project-overlay path derivation (just-fixed
+  bug), session-scoped hash collision.
+- c-thru bash: lock-and-spawn race, stale-pid cleanup, port-in-use
+  handling, malformed READY line, ECONNREFUSED on proxy spawn.
+
+Plan output:
+- Numbered list of N tests-worth-writing, each with a one-line
+  rationale (why this catches bugs vs noise).
+- Prioritize by HIGH (would catch real bugs) / MED / LOW.
+- Run as a once-per-quarter audit so coverage doesn't drift as the
+  codebase evolves.
+
+This pairs with the senior-eng `[review]` TODO above and the
+breadcrumb-comments item — together they form a quarterly maintenance
+trio: comments → coverage audit → architectural review.
+
+**[docs] Add LLM-token-efficient breadcrumb comments throughout the code**
+The codebase has substantial complexity (proxy state machine, fallback
+graph, observability ctx, bash router lifecycle, agent contracts) but
+inline comments are uneven — some sections heavily annotated (e.g. the
+fallback-cycle invariants, the SSE state machine), others bare (the
+bash router's lock-and-spawn dance, `model-map-resolve.js` mode handling,
+agent contract checker).
+
+Goal: every key function, tricky branch, and subtle invariant should
+have a breadcrumb comment that an LLM (or human reading for the first
+time) can use to orient quickly. NOT to write Doxygen — to leave
+"why" trail markers at decision points.
+
+**Token-efficient breadcrumb style**:
+- One concise sentence per breadcrumb. No multi-paragraph essays.
+- Lead with the WHY, not the WHAT (the code shows what; the comment
+  shows why).
+- Cross-reference related code (`see resolveBackend`, `mirrors L450
+  in claude-proxy`).
+- Mark non-obvious invariants explicitly (`INVARIANT: terminal nodes
+  never enter cooldown`).
+- Mark known sharp edges (`CAUTION: this clearTimeout races with the
+  setTimeout callback if X happens`).
+- Avoid restating function signatures, parameter names, or trivial logic.
+
+**Target sites** (audit + annotate):
+- `tools/c-thru` lock-and-spawn, ready-pipe handshake, hook
+  registration, env var scrubbing, hw-profile detection.
+- `tools/claude-proxy` ALS context lifecycle, ssEvent emission,
+  mid-stream watchdog, the streaming branch state machine,
+  forwardOllama dispatch, fallback chain Set, cooldown invariants
+  (already partly annotated — finish the pass).
+- `tools/model-map-resolve.js` 16-mode resolveProfileModel switch,
+  applyModeFilter, pickBenchmarkBest scoring.
+- `tools/model-map-config.js` 3-tier sync, project-overlay path
+  derivation (just-fixed pollution bug — annotate why).
+- `tools/c-thru-contract-check.sh` regex-derived contract validation.
+- `agents/*.md` — STATUS contract is well-annotated already.
+- `skills/c-thru-plan/SKILL.md` wave lifecycle, pre-processor flow.
+
+**Anti-patterns to avoid**:
+- "// returns the value" — useless.
+- "// added 2026-04-25 to fix X" — rots; the commit log has this.
+- "// TODO: figure out why this works" — file a TODO, don't comment.
+- Multi-paragraph block comments restating the function body.
+
+**Verification**:
+- Use a token-counter on diff output to confirm comments fit budget
+  (e.g., total breadcrumbs across the repo < 5K tokens).
+- Spot-check: pick a random function, see if the breadcrumb is enough
+  to predict what the function does without reading it.
+- Annotate the 5 sharpest edges in the codebase (e.g., the
+  `messageClosed` flag, the `_seen` recursion guard, the `_fallbackChain`
+  Set, the timer-leak protection, the content-length scrub).
+
+This is a maintenance pass, not a feature — best run as a
+once-per-quarter audit so the codebase stays self-documenting.
+
+**[docs] Full repo audit + thoughtful README rewrite**
+The repo has accumulated significant capability through this session
+(observability layer, mode-conditional routing, Anthropic SSE fidelity,
+runtime upstream fallback with cooldown + global default + TTFT, agent
+contract system, plan/wave orchestration, c-thru bash router, MCP server,
+hooks, skills, hardware-tier detection, etc.). The current README likely
+doesn't reflect any of this — needs a top-to-bottom rewrite grounded in
+what actually exists.
+
+Audit scope (file-by-file):
+1. **`README.md`** — current content, what's outdated, what's missing.
+2. **All `tools/*`** — name, what it does, who calls it, status (active/
+   deprecated/half-extracted). Cross-reference against grep to confirm
+   "active" claims.
+3. **All `agents/*.md`** — purpose, capability tier, contract status.
+4. **All `skills/*/SKILL.md`** — invocation, purpose, scope.
+5. **All `hooks/*` + `.claude/settings.json`** — what fires when.
+6. **`docs/*` + `wiki/*`** — what's authoritative vs stale vs orphaned.
+7. **`config/model-map.json` schema** — actual shape vs CLAUDE.md claims.
+8. **Every claim in current README/CLAUDE.md** — verify each is still true
+   (e.g., "Claude Code hooks may observe but must not modify
+   tool_input.model" — is that still enforced anywhere?).
+
+Goals for the new README:
+- **Purpose-first**: what is c-thru, what problem does it solve, what's
+  the simplest possible intro example.
+- **Architecture diagram(s)**: data flow client → c-thru bash → proxy →
+  backend; resolution graph (model_routes / sigil / capability aliases /
+  llm_profiles / fallback chain / cooldown / global default); component
+  diagram (router, proxy, MCP server, hooks, skills, agents).
+- **Agent / capability story**: surface the unique value prop —
+  Claude Code agents (planner, auditor, judge, implementer, etc.)
+  attract specific cognitive activities (planning vs review vs heavy
+  coding vs fast scout vs deep reasoning), and c-thru maps each to an
+  appropriate LLM on the back side. This is the killer feature and
+  isn't well-documented.
+- **Three-tier fallback story**: per-backend chain → cooldown skip →
+  routes.default global last-resort. With diagram showing how a hung
+  primary becomes a transparent local-rescue.
+- **Configuration recipes**: 5-10 common scenarios (cloud-only, local-
+  only, cloud-with-local-fallback, mode-conditional model_routes,
+  benchmark-driven ranking, hardware-tier defaults).
+- **Observability**: req_id grep usage, /c-thru/status fields, what each
+  log event means.
+- **Install + uninstall** (per the uninstall TODO above).
+- **Honest about limits**: what's still rough (project-pollution
+  architecture had a CRITICAL bug, the 5 pre-existing test failures,
+  the half-extracted journal block, etc.). Don't oversell.
+
+Cleanup pass (delete don't deprecate):
+- ANY claim, command, env var, file, agent, or skill mentioned in
+  README/CLAUDE.md that doesn't have a corresponding callsite in code
+  → REMOVE the claim. If the feature should exist, file a TODO; don't
+  let docs lie.
+- Cross-reference every file under `tools/` against grep — if it's not
+  invoked from anywhere active, it goes (or gets a TODO to wire it).
+- Same for env vars: if `CLAUDE_PROXY_FOO` is documented but no code
+  reads `process.env.CLAUDE_PROXY_FOO`, the doc lies.
+
+Diagrams:
+- Mermaid diagrams (renders on GitHub) for architecture + fallback +
+  resolution graph.
+- ASCII diagram fallback in CLAUDE.md (terminal-friendly).
+- Sequence diagram for the agent → capability → LLM mapping showing how
+  a single Claude Code session uses 5+ different models simultaneously.
+
+This is a large item — likely a full afternoon of methodical work to
+do well. Worth its own dedicated session.
+
+**[install] install.sh should run e2e tests to confirm functionality**
+After symlinking tools, seeding configs, and registering hooks,
+install.sh should fire a small e2e validation suite to confirm the
+install actually works end-to-end. Currently install just prints
+"installed!" with no proof the system is functional.
+
+Suggested e2e checks (post-install, pre-success-message):
+
+1. **Syntax + import sanity**: `bash -n` every shell tool, `node --check`
+   every .js tool. Catches install-time corruption (failed download,
+   permission issues, partial copy).
+2. **Validate shipped model-map**: `node tools/model-map-validate.js
+   config/model-map.json` (already in CLAUDE.md verify steps but not
+   actually run by install).
+3. **Spawn proxy + /ping + verify shape**: start proxy on a free port,
+   curl /ping, confirm response body contains `"ok":true`. Kill
+   proxy. ~3-5s, catches "proxy can't load config" / "proxy can't bind".
+4. **Hook registration round-trip**: read `~/.claude/settings.json`
+   after install, verify each declared hook (`c-thru-session-start.sh`,
+   `c-thru-proxy-health.sh`, etc.) actually exists at the registered
+   path AND is executable.
+5. **Sample request through proxy**: with no auth and a trivial
+   model-map, send a /v1/messages request → proxy attempts to forward
+   to Ollama at localhost:11434 → if Ollama is up, get a 200; if not,
+   get a clean Anthropic-shape error. Either result confirms the
+   proxy's request-handling pipeline works.
+6. **Shell PATH check**: if the install-PATH TODO landed, verify
+   `c-thru` is now on $PATH after sourcing rc.
+
+UX:
+- Print each check with a status: `[ok] proxy /ping verified`,
+  `[fail] hook 'c-thru-session-start.sh' missing executable bit`.
+- On any failure: rollback (or print remediation) — don't leave the
+  user with a half-broken install.
+- `--skip-e2e` flag for CI / sandboxed environments where network or
+  port-bind isn't available.
+
+This catches the "I ran install.sh but nothing works" class of bug
+that's currently invisible until the user actually tries to use c-thru.
+
 **[install] Add an `uninstall.sh` (standard repo convention)**
 The repo has `install.sh` that creates symlinks under `~/.claude/tools/`,
 seeds `model-map.system.json` + `model-map.overrides.json`, and registers
