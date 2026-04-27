@@ -18,23 +18,6 @@ proxy and needs a careful test plan around the SSE state machine, fallback
 chain Set, TTFT timer handoff to the stall watchdog, and client-disconnect
 timer cleanup.
 
-**[fallback] Cooldown spec items #5-#7 — bound cache size + status surface**
-Failure-class differentiation (#4) shipped in b79f296. Still open:
-
-5. **Bound the failure cache size.** A misbehaving config could keep adding
-   new transient failures and grow `failedBackendUntil`. Cap at ~100
-   entries with LRU eviction. Realistic configs have <10 backends, so 100
-   is plenty of headroom.
-
-6. **Surface in `/c-thru/status`.** Add `cooldown_backends: [...]` to the
-   response so users can see at a glance which backends the proxy is
-   currently routing around. Also surface `routes.default` resolution so
-   users can see what the absolute last-resort target is.
-
-7. **(Already covered by #6 above — keep grouped.)** Document the
-   three-tier fallback story (per-backend chain → cooldown skip → global
-   default) in README's reliability section once #6 lands.
-
 ## Configuration / capacity
 
 **[capacity] Apply 128gb-tier VRAM audit recommendations**
