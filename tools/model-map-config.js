@@ -220,6 +220,63 @@ function main() {
   } else if (arg === '--sync') {
     const result = maybeSyncLayeredProfileModelMap();
     process.exit(result && result.status === 0 ? 0 : 1);
+  } else if (arg === '--clean-pollution' || arg === '--detect-pollution') {
+    // One-shot helper for users whose ~/.claude/model-map.json accumulated
+    // project-tier entries from older c-thru versions (before commit 956d469
+    // which kept project-local scoped to $TMPDIR). Detection: anything in
+    // profile.model_routes that's NOT in (system + globalOverrides).model_routes
+    // is a leaked entry. --clean-pollution removes them; --detect-pollution
+    // just reports.
+    const dryRun = arg === '--detect-pollution';
+    if (!claudeDir) {
+      console.error('c-thru: no profile dir found');
+      process.exit(1);
+    }
+    const systemPath = path.join(claudeDir, 'model-map.system.json');
+    const overridesPath = path.join(claudeDir, 'model-map.overrides.json');
+    const profilePath = path.join(claudeDir, 'model-map.json');
+    let system, overrides, profile;
+    try {
+      const defaultsPath = fs.existsSync(systemPath) ? systemPath : repoDefaultsPath();
+      system = JSON.parse(fs.readFileSync(defaultsPath, 'utf8'));
+      overrides = fs.existsSync(overridesPath) ? JSON.parse(fs.readFileSync(overridesPath, 'utf8')) : {};
+      profile = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+    } catch (e) {
+      console.error(`c-thru: failed to load configs for pollution scan: ${e.message}`);
+      process.exit(1);
+    }
+    const sysRoutes = system.model_routes || {};
+    const ovRoutes = (overrides.model_routes || {});
+    const profileRoutes = profile.model_routes || {};
+    const polluted = [];
+    for (const k of Object.keys(profileRoutes)) {
+      if (!Object.prototype.hasOwnProperty.call(sysRoutes, k) &&
+          !Object.prototype.hasOwnProperty.call(ovRoutes, k)) {
+        polluted.push(k);
+      }
+    }
+    if (polluted.length === 0) {
+      console.log('c-thru: profile is clean — no leaked project-tier entries detected');
+      process.exit(0);
+    }
+    console.log(`c-thru: ${dryRun ? 'detected' : 'cleaning'} ${polluted.length} leaked profile entries:`);
+    for (const k of polluted) {
+      console.log(`  ${k}: ${JSON.stringify(profileRoutes[k])}`);
+    }
+    if (dryRun) {
+      console.log('\nrun: model-map-config.js --clean-pollution to remove them');
+      process.exit(0);
+    }
+    // Remove + rewrite. Use a sync rebuild (system+global only, no project
+    // tier) instead of patching profile in-place — that way we get back a
+    // canonical, deterministic profile rather than a hand-edited one.
+    const result = maybeSyncLayeredProfileModelMap();
+    if (!result || result.status !== 0) {
+      console.error('c-thru: re-sync failed; profile may still be polluted');
+      process.exit(1);
+    }
+    console.log(`\nc-thru: profile cleaned (re-synced from ${path.basename(systemPath)} + ${path.basename(overridesPath)})`);
+    process.exit(0);
   }
 }
 

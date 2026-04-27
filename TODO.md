@@ -636,6 +636,48 @@ the eight points above, plus a prioritized list of suggested
 refactors (none required to land, but each scored low/medium/high
 on payoff and effort).
 
+**[config] Pollution-detection follow-ups (from senior-eng review of cleanup helper)**
+The `--detect-pollution` / `--clean-pollution` mode in `tools/model-map-config.js`
+(commit closing the CRITICAL pollution bug) was approved by senior-eng review
+with five gap-followups worth filing:
+
+1. **Widen detection beyond `model_routes`.** Current scan only checks
+   `model_routes` for drift. A polluted profile could equally leak
+   `agent_to_capability`, `llm_profiles`, `backends`, or `model_overrides`
+   entries. Either widen detection to all top-level keys, or document
+   the limitation in the helper's header.
+2. **Auto-surface pollution at session start.** Users with legacy
+   pollution will never run `--detect-pollution` unsolicited. Add a
+   one-line drift check to `c-thru-session-start.sh` (existing SessionStart
+   hook, silent on happy path) that emits a single advisory when leaks
+   detected.
+3. **Warn on missing `model-map.system.json`.** `repoDefaultsPath()` falls
+   back silently if the system file is absent. Print a stderr warning so
+   broken installs surface.
+4. **Test coverage.** Add `test/model-map-pollution.test.js` with a
+   profile containing 2 leaked routes; assert detect/clean behavior +
+   strict-mode exit codes.
+5. **`--detect-pollution --strict`** for CI: exit 1 when drift is found.
+   Currently returns 0 either way.
+
+**[learning] Reusable patterns from session work (from senior-eng review)**
+Key patterns identified during the cleanup-helper review that are worth
+extracting and reusing:
+
+1. **`detectConfigDrift(canonical[], actual)` utility.** The "anything in
+   derived not in (canonical sources) is drift" pattern applies to
+   `~/.claude/settings.json` vs system+local, agents/ files vs source
+   manifest, etc. Extract a generic helper.
+2. **`--detect-X` / `--clean-X` twin-flag CLI convention.** Dry-run that
+   prints the exact apply command is good UX. Standardize across all
+   destructive helpers in `tools/` (e.g. `c-thru-ollama-gc.sh sweep`
+   currently lacks dry-run; should gain one).
+3. **"Rebuild, don't patch" derived files.** When cleaning the profile,
+   we re-sync from canonical sources rather than `delete`-ing keys.
+   Guarantees byte-identical state to fresh install. Worth a wiki entry
+   in `wiki/entities/declared-rewrites.md` as the canonical rule for
+   any derived/cached file.
+
 **[CRITICAL] [config] Project-local `.claude/model-map.json` pollutes the global profile**
 Reproduced this session (2026-04-26): running `c-thru` (or any tool that
 calls `resolveSelectedConfigPath` with `syncProfile: true`) from a cwd
