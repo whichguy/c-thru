@@ -109,6 +109,14 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 
 **`exec` silently skips all EXIT traps.** In bash, `exec <cmd>` replaces the current shell process and never fires the `trap ... EXIT` handler. Any path that `exec`s into the real `claude` binary must ensure proxy cleanup is complete beforehand, or that no proxy was spawned yet. The guard in `c-thru` (`if [[ -z "${ROUTER_STARTED_PROXY_PID:-}" ]]`) enforces this: `exec` is only used on the transparent (no-proxy) path. On the routing path (proxy running), the pattern is `foreground child + exit $?` so the EXIT trap fires and kills the proxy. Do not add new `exec` calls in `c-thru` without verifying no proxy PID is live.
 
+**`isolation: "worktree"` agents branch from the last pushed commit, not local HEAD.**
+When dispatching parallel agents with `isolation: "worktree"` (via the Agent tool), each
+worktree is created from `origin/main` HEAD — NOT from your local unpushed commits. Any
+work in local commits that hasn't been pushed will be invisible to the agents. Always run
+`git push` before dispatching worktree agents. If a worktree agent produces stale output
+or ignores recent changes, check `git log origin/main..HEAD` — any commits listed there
+were not available to the agent.
+
 ## Proxy CLI Flags
 
 `claude-proxy` accepts these flags in addition to env vars:
