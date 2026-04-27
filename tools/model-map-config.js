@@ -223,10 +223,12 @@ function main() {
   } else if (arg === '--clean-pollution' || arg === '--detect-pollution') {
     // One-shot helper for users whose ~/.claude/model-map.json accumulated
     // project-tier entries from older c-thru versions (before commit 956d469
-    // which kept project-local scoped to $TMPDIR). Detection: anything in
-    // profile.model_routes that's NOT in (system + globalOverrides).model_routes
-    // is a leaked entry. --clean-pollution removes them; --detect-pollution
-    // just reports.
+    // which kept project-local scoped to $TMPDIR). Detection walks every
+    // top-level key in the profile and flags anything not present in EITHER
+    // system or globalOverrides — so leaks in model_routes,
+    // agent_to_capability, llm_profiles, backends, model_overrides, etc.
+    // are all caught. --clean-pollution removes them via canonical re-sync;
+    // --detect-pollution just reports.
     const dryRun = arg === '--detect-pollution';
     if (!claudeDir) {
       console.error('c-thru: no profile dir found');
@@ -245,23 +247,88 @@ function main() {
       console.error(`c-thru: failed to load configs for pollution scan: ${e.message}`);
       process.exit(1);
     }
-    const sysRoutes = system.model_routes || {};
-    const ovRoutes = (overrides.model_routes || {});
-    const profileRoutes = profile.model_routes || {};
-    const polluted = [];
-    for (const k of Object.keys(profileRoutes)) {
-      if (!Object.prototype.hasOwnProperty.call(sysRoutes, k) &&
-          !Object.prototype.hasOwnProperty.call(ovRoutes, k)) {
-        polluted.push(k);
+    // Keys synthesized by the merge tool itself — these legitimately exist
+    // in profile but not in system/overrides, so skip them. See
+    // maybeSynthesizeV12Keys in tools/model-map-layered.js.
+    const SYNTHESIZED_KEYS = new Set(['models', 'schema_version']);
+    const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    // sections: { sectionName: [ { key, value } ] } where `key` may be
+    // dotted (e.g. "64gb.classifier") for leaks nested under per-tier maps
+    // like llm_profiles. primitiveLeaks: [ { key, value } ] for scalar
+    // drift on top-level primitives.
+    const sections = {};
+    const primitiveLeaks = [];
+    let totalLeaks = 0;
+    // Walk the profile object at `profObj`, comparing against `sysObj` /
+    // `ovObj`. Any key missing from BOTH is a leak. If a key exists in
+    // sys/ov AND its profile value is an object, recurse — that catches
+    // grandchildren leaks (e.g. llm_profiles.64gb.someAlias) under stable
+    // parent tiers. Returns flat list of { path, value } with dotted paths.
+    function walk(profObj, sysObj, ovObj, prefix) {
+      const out = [];
+      const sysC = isObj(sysObj) ? sysObj : {};
+      const ovC = isObj(ovObj) ? ovObj : {};
+      for (const k of Object.keys(profObj)) {
+        const pv = profObj[k];
+        const sysHas = Object.prototype.hasOwnProperty.call(sysC, k);
+        const ovHas = Object.prototype.hasOwnProperty.call(ovC, k);
+        const dotted = prefix ? `${prefix}.${k}` : k;
+        if (!sysHas && !ovHas) {
+          out.push({ path: dotted, value: pv });
+        } else if (isObj(pv) && (isObj(sysC[k]) || isObj(ovC[k]))) {
+          // Recurse only when both sides have an object — value-level
+          // primitive drift inside a known parent isn't pollution, just an
+          // override (and this scanner can't tell the two apart since it
+          // doesn't see the project-tier source).
+          out.push(...walk(pv, sysC[k], ovC[k], dotted));
+        }
+      }
+      return out;
+    }
+    for (const topKey of Object.keys(profile)) {
+      if (SYNTHESIZED_KEYS.has(topKey)) continue;
+      if (topKey.startsWith('_')) continue;
+      const profVal = profile[topKey];
+      const sysVal = system[topKey];
+      const ovVal = overrides[topKey];
+      if (isObj(profVal)) {
+        const leaks = walk(profVal, sysVal, ovVal, '');
+        if (leaks.length > 0) {
+          sections[topKey] = leaks.map((l) => ({ key: l.path, value: l.value }));
+          totalLeaks += leaks.length;
+        }
+      } else {
+        // Primitive: drift if profile differs from BOTH system and overrides.
+        // (Compare via JSON.stringify to handle arrays/null uniformly.)
+        const sysHas = Object.prototype.hasOwnProperty.call(system, topKey);
+        const ovHas = Object.prototype.hasOwnProperty.call(overrides, topKey);
+        const matchesSys = sysHas && same(profVal, sysVal);
+        const matchesOv = ovHas && same(profVal, ovVal);
+        if (!matchesSys && !matchesOv) {
+          primitiveLeaks.push({ key: topKey, value: profVal });
+          totalLeaks += 1;
+        }
       }
     }
-    if (polluted.length === 0) {
+    if (totalLeaks === 0) {
       console.log('c-thru: profile is clean — no leaked project-tier entries detected');
       process.exit(0);
     }
-    console.log(`c-thru: ${dryRun ? 'detected' : 'cleaning'} ${polluted.length} leaked profile entries:`);
-    for (const k of polluted) {
-      console.log(`  ${k}: ${JSON.stringify(profileRoutes[k])}`);
+    const sectionCount = Object.keys(sections).length + (primitiveLeaks.length > 0 ? 1 : 0);
+    const verb = dryRun ? 'detected' : 'cleaning';
+    console.log(`c-thru: ${verb} ${totalLeaks} leaked profile entries across ${sectionCount} section${sectionCount === 1 ? '' : 's'}:`);
+    for (const sectionName of Object.keys(sections)) {
+      console.log(`  ${sectionName}:`);
+      for (const { key, value } of sections[sectionName]) {
+        console.log(`    ${key}: ${JSON.stringify(value).slice(0, 100)}`);
+      }
+    }
+    if (primitiveLeaks.length > 0) {
+      console.log('  <top-level primitives>:');
+      for (const { key, value } of primitiveLeaks) {
+        console.log(`    ${key}: ${JSON.stringify(value).slice(0, 100)}`);
+      }
     }
     if (dryRun) {
       console.log('\nrun: model-map-config.js --clean-pollution to remove them');
@@ -269,7 +336,9 @@ function main() {
     }
     // Remove + rewrite. Use a sync rebuild (system+global only, no project
     // tier) instead of patching profile in-place — that way we get back a
-    // canonical, deterministic profile rather than a hand-edited one.
+    // canonical, deterministic profile rather than a hand-edited one. The
+    // rebuild covers the full profile, so widening detection automatically
+    // widens cleanup.
     const result = maybeSyncLayeredProfileModelMap();
     if (!result || result.status !== 0) {
       console.error('c-thru: re-sync failed; profile may still be polluted');
