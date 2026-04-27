@@ -239,6 +239,48 @@ console.log('\n17. model_routes unknown backend id');
   assert(errs.some(e => e.includes('ghost')), `error mentions missing backend id (got: ${errs[0]})`);
 }
 
+// ── 17a. model_routes mode-conditional object — valid backend ids ───────────
+console.log('\n17a. model_routes mode-conditional object form (valid)');
+{
+  const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+  cfg.model_routes['claude-haiku'] = { connected: 'local', offline: 'local' };
+  const errs = validate(cfg);
+  assert(errs.length === 0, 'object-form target with valid backends → no error');
+}
+
+// ── 17b. model_routes mode-conditional object — model-name fallback ─────────
+console.log('\n17b. model_routes mode-conditional object form (model name)');
+{
+  const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+  // Target contains '@' → treat as model name, skip backend-id validation
+  cfg.model_routes['claude-haiku'] = { connected: 'local', offline: 'qwen3.6:35b@local' };
+  const errs = validate(cfg);
+  assert(errs.length === 0, 'object-form target with model-name shape → no error (heuristic)');
+}
+
+// ── 17c. model_routes mode-conditional object — bare typo flagged ───────────
+console.log('\n17c. model_routes mode-conditional object form (typo per-mode)');
+{
+  const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+  cfg.model_routes['claude-haiku'] = { connected: 'local', offline: 'ghost' };
+  const errs = validate(cfg);
+  assert(errs.length > 0, 'object-form target with bare-id typo → error');
+  assert(errs.some(e => e.includes("(mode='offline')")), `error labels which mode (got: ${errs[0]})`);
+  assert(errs.some(e => e.includes('ghost')), `error names the bad target (got: ${errs[0]})`);
+}
+
+// ── 17d. validator checks backends BEFORE applying heuristic ────────────────
+console.log('\n17d. validator: backend named with `.` checked first, not skipped by heuristic');
+{
+  const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+  // Add a backend whose id contains '.' — heuristic would treat as model name.
+  // Validator should still recognize it as a known backend.
+  cfg.backends['ollama.local'] = { kind: 'ollama', url: 'http://localhost:11434' };
+  cfg.model_routes['my-model'] = 'ollama.local';
+  const errs = validate(cfg);
+  assert(errs.length === 0, 'backend id with `.` matched as known backend (not falsely accepted via heuristic)');
+}
+
 // ── 18. targets.default required ────────────────────────────────────────────
 console.log('\n18. targets.default required');
 {

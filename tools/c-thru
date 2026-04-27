@@ -2538,6 +2538,14 @@ ensure_ollama_running() {
   age_text="$(ollama_extract_age_text "$model" "$list_output" || true)"
 
   if ! echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
+    # Guard against concurrent pull of the same model (race from multiple prepull jobs).
+    # Use `pgrep -af` to list full command lines, then `grep -Fx` for an exact-line
+    # match against "ollama pull <model>". This avoids false positives where another
+    # process's argv happens to contain the model name as a substring.
+    if pgrep -af 'ollama pull ' 2>/dev/null | awk '{$1=""; sub(/^ /,""); print}' | grep -Fxq "ollama pull $model"; then
+      claude_router_debug_event "ollama prep pull skip mode=$mode model=$model host=$cli_host reason=already_pulling"
+      return 0
+    fi
     echo "c-thru: '$model' not cached on $cli_host — pulling now..." >&2
     ollama_prep_state_update "models" "$state_key" "pull_attempt" "pulling"
     claude_router_debug_event "ollama prep pull start mode=$mode model=$model host=$cli_host reason=missing"
@@ -2563,6 +2571,9 @@ ensure_ollama_running() {
 
   if [[ "$mode" == "sweep" ]] && ollama_refresh_age_is_stale "$age_text" && \
      ollama_prep_retry_allowed "models" "$state_key" "last_pull_attempt_at" "$OLLAMA_PREP_MIN_RETRY_SECONDS"; then
+    if pgrep -af 'ollama pull ' 2>/dev/null | awk '{$1=""; sub(/^ /,""); print}' | grep -Fxq "ollama pull $model"; then
+      claude_router_debug_event "ollama stale refresh skip model=$model host=$cli_host reason=already_pulling"
+    else
     ollama_prep_state_update "models" "$state_key" "pull_attempt" "refreshing" "$age_text"
     claude_router_debug_event "ollama stale refresh start model=$model host=$cli_host age=\"$age_text\""
     if "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
@@ -2574,6 +2585,7 @@ ensure_ollama_running() {
       ollama_prep_state_update "models" "$state_key" "pull_failure" "refresh_failed" "$age_text"
       claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=false"
     fi
+    fi  # end: not already_pulling
   fi
 
   if [[ -n "$warm_skip_reason" ]]; then

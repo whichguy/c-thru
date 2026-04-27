@@ -489,6 +489,29 @@ function validateConfig(config, _errors, options) {
   }
 
   if (config.model_routes != null && isObject(config.model_routes) && isObject(config.backends)) {
+    // A target value may be either a backend id (validated against config.backends), or a
+    // model name (forwarded by resolveBackend — model_routes lookup, sigil parse, or fallback).
+    // Since we don't have a closed list of valid model names, we only validate backend-id strings.
+    const validateTarget = (modelKey, target, modeLabel = '') => {
+      const ctx = modeLabel ? `${modelKey} (mode='${modeLabel}')` : modelKey;
+      if (typeof target !== 'string' || !target.trim()) {
+        report(`model_routes['${ctx}'] must be a non-empty string (backend id or model name)`);
+        return;
+      }
+      // Resolution rule (matches resolveBackend in claude-proxy):
+      //   1. If target matches a declared backend id → terminal, valid.
+      //   2. Else if target looks like a model name (contains '@', '.', or ':')
+      //      → recursive resolution will handle it; can't validate without
+      //      simulating the full route graph, so we accept it here.
+      //   3. Else → bare identifier that's neither a backend nor model-name-shaped.
+      //      Almost certainly a typo (e.g. 'anthropi' for 'anthropic'). Report.
+      // The order matters: future backend ids could legitimately contain '.' or
+      // '_' (e.g. "ollama.local", "bedrock_us-east-1"), and checking backends
+      // first means a typo won't silently pass on those configs.
+      if (config.backends[target]) return;
+      if (/[@.:]/.test(target)) return;
+      report(`model_routes['${ctx}'] references unknown backend '${target}'`);
+    };
     for (const [modelKey] of Object.entries(config.model_routes)) {
       const sigilMatch = modelKey.match(BACKEND_SIGIL_RE);
       if (sigilMatch) {
@@ -497,11 +520,14 @@ function validateConfig(config, _errors, options) {
           report(`model_routes key '${modelKey}' references @backend '${backendId}' which is not declared in backends`);
         }
       }
-      const backendId = config.model_routes[modelKey];
-      if (typeof backendId !== 'string' || !backendId.trim()) {
-        report(`model_routes['${modelKey}'] must be a non-empty backend id string`);
-      } else if (!config.backends[backendId]) {
-        report(`model_routes['${modelKey}'] references unknown backend '${backendId}'`);
+      const target = config.model_routes[modelKey];
+      // Object form: mode-conditional targets, e.g. { connected: "anthropic", offline: "qwen3.6@ollama_local" }
+      if (target && typeof target === 'object' && !Array.isArray(target)) {
+        for (const [modeKey, modeTarget] of Object.entries(target)) {
+          validateTarget(modelKey, modeTarget, modeKey);
+        }
+      } else {
+        validateTarget(modelKey, target);
       }
     }
   }

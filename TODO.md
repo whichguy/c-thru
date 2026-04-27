@@ -51,6 +51,216 @@ verify the install worked without running a separate command.
 
 ## Reliability
 
+**[capacity] Audit 128gb-tier model fleet for VRAM oversubscription**
+On a 128GB unified-memory machine, this session observed three concurrent
+models loaded (≈95GB total VRAM) leaving only ~33GB for the OS + everything
+else, which slowed inference dramatically. Audit `config/model-map.json`
+`llm_profiles['128gb']` for what gets prepulled / warmed / kept resident:
+
+1. Count the distinct models referenced across all capabilities at 128gb tier
+   (connected_model, disconnect_model, cloud_best_model, modes[*]).
+2. Sum their VRAM footprints (approximate — `ollama list` size or model card
+   data) for the worst-case "all loaded simultaneously" scenario.
+3. Compare against the 128GB headroom budget (target: ≤60GB resident at any
+   one time so 60GB+ is left for OS/buffers/prompt-eval).
+4. The `prep_policy: skip` field on backends already exists — extend
+   `ensure_active_tier_prepulled` (`tools/c-thru` ~L2152) to honor a
+   per-capability `prep_policy: warm-only-on-demand` so cold capabilities
+   don't get prepulled.
+5. Consider a scheduled eviction: if VRAM exceeds budget, evict the
+   least-recently-used resident model. Ollama's `keep_alive: 0` does this
+   per-model; could be wired to a watchdog.
+
+Not urgent but a real bottleneck — observed during this session: 3 models
+× ~30GB each = inference contention even on the supposedly-roomy 128gb tier.
+
+**[stats] Wire up token-usage tracking and surface via /c-thru/status**
+The proxy already has scaffolding for persistent usage tracking but it's
+**dead code today** — `recordUsage()`, `persistentUsage`, and
+`flushPersistentUsageNowSync()` exist at `tools/claude-proxy` L121–145, load
+`~/.claude/usage-stats.json` on boot, but **nothing ever calls `recordUsage()`**.
+The new observability events (`ollama.stream.done`, `ollama.nonstream.done`,
+`backend_response`) already capture `prompt_tokens` and `output_tokens` per
+request — we just need to feed them into the stats file and expose via the
+REST API.
+
+**Implementation:**
+
+1. **Hook into the stream-done paths** (in `forwardOllama` end-of-stream and
+   end-of-nonstream handlers). Add `recordUsage(effectiveModel, promptTokens,
+   outputTokens)` call alongside the existing `ctxLog(...'ollama.*.done', ...)`.
+   Also hook `forwardAnthropic` — extract usage from the upstream response
+   (Anthropic emits it in `message_delta` for streams, in `usage` field for
+   non-streams). For `forwardAnthropic`, extracting from the streamed body
+   needs minor parsing — currently we just `pipe()` upstream straight to client.
+
+2. **Switch `flushPersistentUsageNowSync` → async** to avoid blocking the
+   event loop on the hot path. Use `fs.promises.writeFile` with a debounce:
+   coalesce multiple `recordUsage()` calls within a 5-second window and only
+   flush once. Pattern:
+   ```js
+   let flushTimer = null;
+   function scheduleFlush() {
+     if (flushTimer) return;
+     flushTimer = setTimeout(async () => {
+       flushTimer = null;
+       await fs.promises.writeFile(USAGE_STATS_FILE, JSON.stringify(persistentUsage));
+     }, 5000);
+   }
+   ```
+   Crash-safety: also flush on `SIGTERM`/`SIGINT` synchronously in the existing
+   shutdown handler so we don't lose the last 5s window.
+
+3. **Track per-LLM AND per-backend.** Extend the schema beyond the current
+   `{total_input, total_output, by_model:{}}` to include backend:
+   ```json
+   {
+     "total_input": 12345,
+     "total_output": 6789,
+     "by_model": {
+       "qwen3.6:35b-a3b-coding-nvfp4": { "input": 1200, "output": 800, "calls": 5 },
+       "claude-haiku-4-5-20251001":    { "input": 4000, "output": 2000, "calls": 3 }
+     },
+     "by_backend": {
+       "ollama_local": { "input": 1200, "output": 800, "calls": 5 },
+       "anthropic":    { "input": 4000, "output": 2000, "calls": 3 }
+     },
+     "first_recorded": "<iso8601>",
+     "last_recorded":  "<iso8601>"
+   }
+   ```
+   `calls` count + `first_recorded` + `last_recorded` are useful for rate-of-use
+   inference. `by_backend` lets `/c-thru-status` show "you spent N tokens on
+   anthropic vs M tokens on local" at a glance.
+
+4. **Surface via `/c-thru/status` REST endpoint.** The endpoint already returns
+   `{ok, mode, hardware_tier, config_source, active_capabilities}`
+   (`tools/claude-proxy` L546–553). Add a `usage` field with the persistentUsage
+   snapshot. Optional query param `?usage=since:<iso8601>` could compute a
+   delta; defer that to a follow-up.
+
+5. **Surface in `/c-thru-status` skill.** The skill (`skills/c-thru-status/`)
+   currently shows routes/models/health. Add a "Token usage" block that reads
+   from `/c-thru/status` and renders a compact table. Keep it brief — top 5
+   models by token count, with totals.
+
+**Privacy note:** the existing journal feature (`CLAUDE_PROXY_JOURNAL=1`)
+already captures full request bodies, so adding aggregate counts is strictly
+less sensitive. Stats file is local-only and not transmitted anywhere.
+
+**Won't track:** request latency (separate file?), thinking-token counts vs
+content-token counts (deferred), per-session attribution (no session-id field
+in the dispatched events).
+
+**[benchmarks] Keep model benchmark data fresh via daily fetch + proxy reload**
+On c-thru startup, do a daily-debounced fetch of the upstream benchmark JSON
+and `SIGHUP` the proxy so it picks up fresh data. The proxy reads `BENCHMARK`
+once at module load (`tools/claude-proxy` ~L267), so updates need a reload to
+take effect.
+
+**Origin discovery at script start (NOT hardcoded):**
+Resolve the upstream benchmark URL dynamically each run from the c-thru repo's
+own git config — this way forks, mirrors, and self-hosted clones all get the
+right source without env-var configuration.
+
+```sh
+# Discover origin URL of the c-thru repo (the script knows its own location)
+remote=$(git -C "$ROUTER_REPO_ROOT" config --get remote.origin.url)
+# Normalize to https form (handle git@github.com:foo/bar.git → https://github.com/foo/bar)
+case "$remote" in
+  git@github.com:*) https="https://github.com/${remote#git@github.com:}"; https="${https%.git}" ;;
+  https://*) https="${remote%.git}" ;;
+  *) echo "c-thru: unsupported remote scheme '$remote' — skipping benchmark refresh" >&2; exit 0 ;;
+esac
+# raw.githubusercontent.com/<owner>/<repo>/<branch>/docs/benchmark.json
+branch=$(git -C "$ROUTER_REPO_ROOT" rev-parse --abbrev-ref HEAD)
+raw_url="${https/github.com/raw.githubusercontent.com}/${branch}/docs/benchmark.json"
+```
+
+This means the discovered URL will track whatever fork/branch the user
+installed from. If origin is GitLab/Bitbucket, add cases or fall back to a
+shallow `git fetch` of just the benchmark path.
+
+**Implementation sketch — `tools/c-thru-benchmarks-update.sh`** (or extend
+`tools/c-thru-self-update.sh`):
+1. Stat `$CLAUDE_PROFILE_DIR/.benchmarks-stamp`. If <24h old, skip silently.
+2. Discover raw URL as above.
+3. `curl -fsSL --max-time 5 "$raw_url" -o /tmp/benchmark.json.new` —
+   fail-soft (best-effort, never blocks startup on network issues).
+4. Validate JSON: `node -e 'JSON.parse(fs.readFileSync(...))'` — drop on parse error.
+5. **Compare hashes** of `/tmp/benchmark.json.new` and the current
+   `$ROUTER_REPO_ROOT/docs/benchmark.json` (e.g. `shasum -a 256` on each, or
+   `cmp -s` for byte-equality). Two paths:
+   - **Identical** → discard the temp file, touch the stamp file, exit silently.
+     **Do not signal the proxy.**
+   - **Different** → atomic `mv` over the existing file, touch the stamp,
+     `c-thru reload` to SIGHUP the proxy. Log a single line summarizing the
+     diff (e.g. "benchmarks refreshed: +3 models, -1 model").
+6. Extend `reloadConfigFromDisk` in `tools/claude-proxy` to also re-read
+   `docs/benchmark.json` on SIGHUP (one extra `JSON.parse(fs.readFileSync(...))`
+   block — currently it only re-reads model-map).
+7. Opt-out via `CLAUDE_ROUTER_NO_BENCHMARK_UPDATE=1` (mirrors existing
+   `CLAUDE_ROUTER_NO_UPDATE` pattern).
+
+**Why hash-gate the reload:** SIGHUP forces the proxy to reparse model-map +
+benchmark.json + reset internal state. If the upstream JSON is unchanged
+(common case — benchmarks change weekly at most), there's no benefit to
+disrupting in-flight requests or invalidating any cached resolution state.
+Touch the stamp regardless so we don't re-fetch for 24h, but only trigger
+reload when the data actually changed.
+
+Why fetch-a-single-file instead of `git pull`: surgical, avoids touching
+working-tree state if the user has uncommitted changes in the repo.
+
+Why dynamic discovery: forks, mirrors, branches, and contributor checkouts
+all get correct upstream tracking without env vars. The script's own location
+is the source of truth.
+
+**[setup] Audit installer / setup paths for stale "self-contained" violations**
+The repo is meant to be self-contained — only user-chosen config writes should
+land in profile (`~/.claude/`) or project (`<cwd>/.claude/`) directories;
+everything else must live inside the repo. Audit:
+- `install.sh`: are any persistent files written outside the symlinks +
+  `~/.claude/model-map.overrides.json`? Anything stale from earlier iterations?
+- `tools/c-thru-self-update.sh`: does it touch state outside the repo?
+- `tools/model-map-config.js` `profileClaudeDir()` discovery: confirm it only
+  *reads* from non-profile paths and never *writes*.
+- Any `~/.claude/.*-stamp-*` or cache files: are they all justified, documented,
+  and cleanable?
+- Hooks registered in `~/.claude/settings.json`: do any contain absolute paths
+  that drift if the repo moves? (`tools/c-thru-self-update.sh` should validate at
+  startup.)
+Goal: a fresh user should be able to clone the repo, run `install.sh`, and have
+exactly two persistent files in `~/.claude/` outside of vendor stuff:
+`model-map.overrides.json` and `model-map.system.json` (system is install-time
+seeded). Everything else should be derived/cached/symlinked.
+
+**[git] Commit and push all session work**
+Outstanding uncommitted changes from this session: timeout fixes, proxy
+simplification (remove warmup machinery), forwardAnthropic path fix,
+content-length scrub, observability layer (req_id + ctxLog/ctxDebug + new events),
+mode-conditional `model_routes` schema extension, Anthropic-fidelity SSE rewrite
+(unique IDs, event prefixes, ping keepalives, stop_reason mapping, thinking
+blocks, cache_*_tokens fields, error shape consistency, mid-stream watchdog,
+client-disconnect timer cleanup, recursion cycle detection, validator hardening,
+pgrep precision fix). Run `git add -p` to stage selectively, write a coherent
+commit message that lists the major axes, push to main.
+
+**[ollama] Investigate Ollama process-per-model architecture & decouple from proxy lifecycle**
+Question: does Ollama strictly require one runner process per loaded model, or is there a
+shared/embedded mode? Today `ollama serve` is a long-running daemon and spawns one
+`ollama runner` child per loaded model — that's already independent of c-thru. Goal: ensure
+Ollama runs as its own daemon (started/managed independently, e.g. via the Ollama macOS
+app or `launchctl`) while the proxy lives strictly as a child of `c-thru`. Verify:
+1. The proxy never spawns or kills ollama runners (confirmed: `ensure_ollama_running` lives
+   in `tools/c-thru` bash, not in `claude-proxy`).
+2. The proxy connects to `OLLAMA_BASE_URL` (default `http://localhost:11434`) and assumes
+   it's externally managed.
+3. `c-thru` startup detects whether Ollama is reachable and (a) starts it if `CLAUDE_ROUTER_OLLAMA_AUTOSTART=1`,
+   or (b) warns and continues if not.
+4. When `c-thru` exits, the proxy child exits with it; Ollama persists.
+Document the boundary in CLAUDE.md so future contributors don't conflate the two.
+
 **[node-guard] Node version warning fires on every re-install**
 The Node version warning is intentional on first install but noisy on idempotent re-runs where
 the user already knows about the version. No action needed unless it becomes a pain point —

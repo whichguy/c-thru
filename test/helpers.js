@@ -365,6 +365,77 @@ function streamingStubBackend(events) {
   });
 }
 
+// ── Ollama stub backend ────────────────────────────────────────────────────
+// Stub that mimics Ollama's /api/chat endpoint: emits the supplied ndjson
+// chunks one per line with a small inter-chunk delay (so streaming behaviour
+// is observable end-to-end). Records every incoming request body for
+// assertions. Use to test the proxy's Ollama→Anthropic SSE translation.
+//
+//   const stub = await ollamaStubBackend([
+//     { message: { content: '', thinking: 'Considering...' } },
+//     { message: { content: 'Hi', thinking: '' } },
+//     { done: true, done_reason: 'stop', prompt_eval_count: 4, eval_count: 2 },
+//   ]);
+function ollamaStubBackend(ndjsonChunks, opts = {}) {
+  const interChunkMs = opts.interChunkMs || 5;
+  const requests = [];
+  // Track active per-request timers so we can clear them if close() races
+  // mid-stream. Otherwise the recursive setTimeout keeps the test event loop
+  // alive and may write to a destroyed socket.
+  const activeTimers = new Set();
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      let body = null;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+      requests.push({ method: req.method, path: req.url, body, model_used: body?.model || null });
+      res.writeHead(200, {
+        'Content-Type': 'application/x-ndjson',
+        'Transfer-Encoding': 'chunked',
+      });
+      let i = 0;
+      let timer = null;
+      const cancelTimer = () => {
+        if (timer) { clearTimeout(timer); activeTimers.delete(timer); timer = null; }
+      };
+      const tick = () => {
+        cancelTimer();
+        if (!res.writable) return;
+        if (i < ndjsonChunks.length) {
+          res.write(JSON.stringify(ndjsonChunks[i++]) + '\n');
+          timer = setTimeout(tick, interChunkMs);
+          activeTimers.add(timer);
+        } else {
+          res.end();
+        }
+      };
+      // Cancel pending timer if the client (proxy) gives up mid-stream.
+      res.on('close', cancelTimer);
+      tick();
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        server,
+        port: server.address().port,
+        requests,
+        lastRequest: () => requests[requests.length - 1] || null,
+        close: () => new Promise(r => {
+          // Cancel any in-flight chunk timers before closing the server,
+          // otherwise close() waits for in-flight requests to drain and the
+          // timers race against socket destruction.
+          for (const t of activeTimers) clearTimeout(t);
+          activeTimers.clear();
+          server.close(r);
+        }),
+      });
+    });
+    server.on('error', reject);
+  });
+}
+
 // ── Classifier stub (Phase A dynamic classifier) ──────────────────────────
 // Mimics Ollama's /api/generate endpoint, returning a JSON response object
 // shaped as {response: '<json string>', done: true}. The classifier in
@@ -573,6 +644,7 @@ module.exports = {
   collectStderr,
   stubBackend,
   streamingStubBackend,
+  ollamaStubBackend,
   classifierStub,
   httpStream,
   parseStatusBlock,

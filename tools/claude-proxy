@@ -25,6 +25,50 @@ const {
   pickBenchmarkBest,
 } = require('./model-map-resolve.js');
 
+// CLI flag parsing — flags are aliases for env vars, set before any consumers
+// read them. Documented in CLAUDE.md ("Proxy CLI Flags"). Supported forms:
+//   --flag value      (space-separated)
+//   --flag=value      (= form)
+// Unknown flags are recorded for diagnostic logging once the logger is
+// available; we don't fail-hard so a typo doesn't take the proxy down, but
+// silent-ignore would let typos like `--prfile` no-op invisibly.
+const FLAG_ENV_MAP = {
+  '--config':      'CLAUDE_MODEL_MAP_PATH',
+  '--profile':     'CLAUDE_LLM_PROFILE',
+  '--mode':        'CLAUDE_LLM_MODE',
+  '--port':        'CLAUDE_PROXY_PORT',
+  '--hooks-port':  'CLAUDE_PROXY_HOOKS_PORT',
+};
+const UNRECOGNIZED_CLI_FLAGS = [];
+function parseCliFlags(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    let flag = arg, value;
+    // --flag=value form
+    const eq = arg.indexOf('=');
+    if (arg.startsWith('--') && eq !== -1) {
+      flag = arg.slice(0, eq);
+      value = arg.slice(eq + 1);
+    }
+    if (!Object.prototype.hasOwnProperty.call(FLAG_ENV_MAP, flag)) {
+      if (arg.startsWith('--')) UNRECOGNIZED_CLI_FLAGS.push(arg);
+      continue;
+    }
+    // --flag value form (consume next argv slot if it's not itself a flag)
+    if (value === undefined) {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('--')) {
+        UNRECOGNIZED_CLI_FLAGS.push(`${flag} (missing value)`);
+        continue;
+      }
+      value = next;
+      i++;
+    }
+    process.env[FLAG_ENV_MAP[flag]] = value;
+  }
+}
+parseCliFlags(process.argv.slice(2));
+
 const INITIAL_PORT = numberFromEnv('CLAUDE_PROXY_PORT', 9997);
 const HOOKS_PORT = numberFromEnv('CLAUDE_PROXY_HOOKS_PORT', 9998);
 const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_DEBUG', 0));
@@ -66,10 +110,35 @@ function proxyLog(event, fields = {}) {
   }
 }
 
-function traceLog(direction, method, url, headers, body) {
+// Request-correlated logging — gives every event in one request's lifecycle a
+// shared req_id and elapsed_ms, so concurrent traffic stays grep-friendly.
+function newRequestContext() {
+  return {
+    id: crypto.randomBytes(2).toString('hex'),  // 4-hex-char id, e.g. "a3f9"
+    started: Date.now(),
+  };
+}
+
+function ctxLog(ctx, event, fields = {}) {
+  proxyLog(event, {
+    req_id: ctx.id,
+    elapsed_ms: Date.now() - ctx.started,
+    ...fields,
+  });
+}
+
+function ctxDebug(ctx, event, fields = {}) {
+  debugLog(event, {
+    req_id: ctx.id,
+    elapsed_ms: Date.now() - ctx.started,
+    ...fields,
+  });
+}
+
+function traceLog(ctx, direction, method, url, headers, body) {
   if (DEBUG < 2) return;
   const scrubbed = scrubHeaders(headers);
-  proxyLog(`trace.${direction}`, {
+  ctxDebug(ctx, `trace.${direction}`, {
     method,
     url,
     headers: scrubbed,
@@ -186,24 +255,46 @@ function profileAliasKey(alias) {
   return alias.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
 }
 
-function resolveBackend(model, cfg, tier, mode) {
+function resolveBackend(model, cfg, tier, mode, _seen) {
   const backends = cfg.backends || {};
   const modelRoutes = cfg.model_routes || {};
-  
-  let id = modelRoutes[model];
-  if (id) {
-    if (backends[id]) return { backend: { id, ...backends[id] }, effectiveModel: model, terminalLabel: model, routingKey: model };
-    return { error: `backend '${id}' defined for model '${model}' not found in 'backends' config`, status: 400 };
-  }
+  // Cycle/depth guard: model_routes can chain (target = another model name that
+  // recurses through resolveRouteTarget → resolveBackend). A misconfigured map
+  // like {"a":"b","b":"a"} would otherwise stack-overflow. Track visited model
+  // names and bail with a clean 400 if we revisit one or exceed depth 8.
+  const seen = _seen || new Set();
+  if (seen.has(model)) return { error: `model_routes resolution cycle detected at '${model}'`, status: 400 };
+  if (seen.size >= 8) return { error: `model_routes resolution depth exceeded at '${model}' (chain too long)`, status: 400 };
+  seen.add(model);
 
-  for (const [pattern, backendId] of Object.entries(modelRoutes)) {
+  // Resolve a route target. Targets can be:
+  //   string  — either a backend id (terminal) or another model name (recurse).
+  //   object  — mode-conditional: { connected: <target>, offline: <target>, ... }.
+  //             Picks active mode, falls back to `connected`, then any value.
+  //             Allows mixing backend ids and model names per mode (e.g. claude-* → "anthropic"
+  //             when connected, → "qwen3.6@ollama_local" when offline).
+  const resolveRouteTarget = (target, routingKey) => {
+    if (target && typeof target === 'object' && !Array.isArray(target)) {
+      target = target[mode] || target.connected || target.default || Object.values(target)[0];
+      if (!target) return { error: `model_routes['${model}'] has no target for mode '${mode}' or 'connected' fallback`, status: 400 };
+    }
+    if (typeof target !== 'string' || !target) {
+      return { error: `model_routes['${model}'] target must be a string or mode-keyed object`, status: 400 };
+    }
+    if (backends[target]) {
+      return { backend: { id: target, ...backends[target] }, effectiveModel: model, terminalLabel: model, routingKey };
+    }
+    // Not a backend id — treat as a model name and recurse (handles sigil syntax + further model_routes).
+    return resolveBackend(target, cfg, tier, mode, seen);
+  };
+
+  let id = modelRoutes[model];
+  if (id !== undefined) return resolveRouteTarget(id, model);
+
+  for (const [pattern, target] of Object.entries(modelRoutes)) {
     if (!pattern.startsWith('re:')) continue;
     try {
-      if (new RegExp(pattern.slice(3)).test(model)) {
-        id = backendId;
-        if (backends[id]) return { backend: { id, ...backends[id] }, effectiveModel: model, terminalLabel: model, routingKey: pattern };
-        return { error: `backend '${id}' defined for pattern '${pattern}' not found in 'backends' config`, status: 400 };
-      }
+      if (new RegExp(pattern.slice(3)).test(model)) return resolveRouteTarget(target, pattern);
     } catch {}
   }
 
@@ -220,7 +311,7 @@ function resolveBackend(model, cfg, tier, mode) {
     if (entry) {
       const resolved = resolveProfileModel(entry, mode);
       if (resolved) {
-        const nested = resolveBackend(resolved, cfg, tier, mode);
+        const nested = resolveBackend(resolved, cfg, tier, mode, seen);
         if (nested.error) return nested; // Propagate the error
         return { ...nested, logicalRole: capAlias, capability: capAlias };
       }
@@ -266,6 +357,62 @@ function send(res, code, obj) {
   res.end(body);
 }
 
+// ── Anthropic-fidelity helpers ───────────────────────────────────────────
+// Make our Ollama→Anthropic-translated responses indistinguishable from real
+// api.anthropic.com responses. These are used by forwardOllama only; the
+// forwardAnthropic path passes upstream output through verbatim.
+
+function anthropicMessageId() {
+  // api.anthropic.com produces ids like "msg_01XXX..." — 24-char alphanumeric
+  // after the prefix. We emit a hex-ish id of similar shape; clients dedupe by
+  // exact match, so just-be-unique-per-response is the requirement.
+  return 'msg_' + crypto.randomBytes(12).toString('hex');
+}
+
+// Map Ollama's `done_reason` to Anthropic's `stop_reason` enum.
+// Anthropic values: end_turn | max_tokens | stop_sequence | tool_use | refusal
+// Ollama values:   stop | length | load | unload (others bubble through)
+function mapStopReason(ollamaDoneReason) {
+  switch (ollamaDoneReason) {
+    case 'length': return 'max_tokens';
+    case 'stop':
+    case undefined:
+    case null:
+      return 'end_turn';
+    default: return 'end_turn';  // unknown — be safe, claim natural end
+  }
+}
+
+// Map an HTTP status code to Anthropic's error-type taxonomy.
+function anthropicErrorType(statusCode) {
+  if (statusCode === 400) return 'invalid_request_error';
+  if (statusCode === 401) return 'authentication_error';
+  if (statusCode === 403) return 'permission_error';
+  if (statusCode === 404) return 'not_found_error';
+  if (statusCode === 413) return 'request_too_large';
+  if (statusCode === 429) return 'rate_limit_error';
+  if (statusCode === 504) return 'timeout_error';
+  if (statusCode === 529) return 'overloaded_error';
+  return 'api_error';
+}
+
+// Send an Anthropic-shaped error response on a non-streaming connection.
+// Wraps `send()` so we get the same logging + headers-sent guard.
+function sendAnthropicError(res, code, message) {
+  send(res, code, {
+    type: 'error',
+    error: { type: anthropicErrorType(code), message },
+  });
+}
+
+// Write a single SSE frame with event + data lines. Anthropic always emits
+// both lines on every event; the original code relied on data-only deltas
+// which is technically valid SSE but stricter clients reject it.
+function sseWrite(res, event, data) {
+  if (!res.writable) return;
+  res.write(`event: ${event}\ndata: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`);
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -273,57 +420,6 @@ function readBody(req) {
     req.on('error', reject);
     req.on('end', () => resolve(Buffer.concat(chunks)));
   });
-}
-
-async function ollamaPs(backendUrl) {
-  return new Promise(resolve => {
-    try {
-      http.get(backendUrl.replace(/\/$/, '') + '/api/ps', res => {
-        const chunks = [];
-        res.on('data', c => chunks.push(c));
-        res.on('end', () => {
-          try { resolve(JSON.parse(Buffer.concat(chunks).toString()).models || []); } catch { resolve([]); }
-        });
-      }).on('error', () => resolve([]));
-    } catch { resolve([]); }
-  });
-}
-
-async function ollamaLoad(backendUrl, model, options = {}) {
-  const url = backendUrl.replace(/\/$/, '') + '/api/generate';
-  const body = JSON.stringify({ model, prompt: '', keep_alive: options.keepAlive || '60m', options: { num_ctx: options.numCtx || 65536 } });
-  return new Promise((resolve, reject) => {
-    const req = http.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
-      res.on('data', () => {});
-      res.on('end', () => resolve());
-    });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
-}
-
-async function ensureOllamaReadyOrSend(model, backendUrl, logicalRole, res) {
-  debugLog('proxy.ollama.prepare.start', { model, backend_url: backendUrl, logical_role: logicalRole });
-  const numCtx = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
-  try {
-    await ollamaLoad(backendUrl, model, { numCtx });
-    const maxWaitMs = 120000;
-    const start = Date.now();
-    while (Date.now() - start < maxWaitMs) {
-      const active = await ollamaPs(backendUrl);
-      if (active.some(m => m.name === model || m.name === model + ':latest')) {
-        debugLog('proxy.ollama.prepare.ready', { model, backend_url: backendUrl });
-        return true;
-      }
-      await new Promise(r => setTimeout(r, 1000));
-    }
-    throw new Error(`warming timeout for '${model}' after ${maxWaitMs}ms`);
-  } catch (e) {
-    proxyLog('ollama.warm.failure', { model, backend_url: backendUrl, error: e.message });
-    send(res, 502, { error: `Ollama warming failed for '${model}': ${e.message}` });
-    return false;
-  }
 }
 
 function flattenMessagesForOllama(body) {
@@ -342,10 +438,20 @@ function flattenMessagesForOllama(body) {
   });
 }
 
+// Scrub headers on the REQUEST side only (client → upstream). The response side
+// either writes its own headers (streaming SSE, non-streaming JSON) or pipes
+// upstream headers verbatim with an unmodified body, so no scrub is needed there.
 function scrubCthruHeaders(headers) {
   const out = { ...headers };
   delete out.host;
   delete out.connection;
+  // Drop content-length: the proxy rewrites the request body before forwarding —
+  // model name swap, message flattening, keep_alive injection — so the original
+  // length is wrong by some non-deterministic delta. Even a one-byte model-name
+  // change (e.g. "claude-sonnet-4-6" → "qwen3.6:35b-a3b-coding-nvfp4") shifts it.
+  // Forwarding the stale length causes upstream 400s when the new body is
+  // shorter, or hangs when longer. Removing it lets Node recompute.
+  delete out['content-length'];
   // Remove any x-c-thru specific headers if they exist
   for (const k of Object.keys(out)) {
     if (k.toLowerCase().startsWith('x-c-thru-')) delete out[k];
@@ -353,69 +459,238 @@ function scrubCthruHeaders(headers) {
   return out;
 }
 
-async function forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta) {
+async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
   const authKey = backend.auth_env ? process.env[backend.auth_env] : '';
-  
+
   const headers = scrubCthruHeaders(req.headers);
   if (authKey) headers['x-api-key'] = authKey;
-  
+
+  // Combine the backend's optional base path with the client's request path.
+  // - Anthropic backend url=https://api.anthropic.com → pathname='/' → use req.url verbatim ("/v1/messages?beta=true")
+  // - OpenRouter backend url=https://openrouter.ai/api/v1 → pathname='/api/v1' → prefix req.url ("/api/v1/v1/messages?beta=true")
+  // Treating backend.url as origin+optional-prefix (rather than full endpoint) handles both cases.
+  const basePrefix = (targetUrl.pathname === '/' ? '' : targetUrl.pathname.replace(/\/$/, ''));
+  const forwardedPath = basePrefix + req.url;
   const options = {
     hostname: targetUrl.hostname,
     port: targetUrl.port || (isHttps ? 443 : 80),
-    path: targetUrl.pathname + targetUrl.search + (req.url.includes('?') ? '?' + req.url.split('?')[1] : ''),
+    path: forwardedPath,
     method: req.method,
     headers
   };
+  ctxDebug(ctx, 'anthropic.request.path', { backend: backend.id, target: `${targetUrl.origin}${forwardedPath}` });
 
   const up = lib.request(options, upRes => {
-    proxyLog('backend_response', { backend: backend.id, statusCode: upRes.statusCode });
+    ctxLog(ctx, 'backend_response', { backend: backend.id, statusCode: upRes.statusCode });
     res.writeHead(upRes.statusCode, upRes.headers);
     upRes.pipe(res);
   });
+  up.on('socket', socket => {
+    socket.on('connect', () => ctxDebug(ctx, 'upstream.socket.connected', { backend: backend.id }));
+    socket.on('close', hadError => ctxDebug(ctx, 'upstream.socket.closed', { backend: backend.id, had_error: hadError }));
+  });
   up.on('error', e => {
-    proxyLog('backend_error', { backend: backend.id, kind: 'anthropic', error: e.message });
-    send(res, 502, { error: `backend anthropic at ${targetUrl.origin} error: ${e.message}` });
+    ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'anthropic', error: e.message });
+    sendAnthropicError(res, 502, `backend anthropic at ${targetUrl.origin} error: ${e.message}`);
   });
   if (body) up.write(JSON.stringify(body));
   up.end();
 }
 
-async function forwardOllama(req, res, body, backend, effectiveModel, requestMeta) {
+async function forwardOllama(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   const url = backend.url.replace(/\/$/, '') + '/api/chat';
   const headers = scrubCthruHeaders(req.headers);
   headers['content-type'] = 'application/json';
-  
+
+  // Outer-scope hook for the streaming branch's interval cleanup. Defaults to
+  // a no-op for the non-streaming path; reassigned inside the streaming branch.
+  // Lifted out so up.on('error') can call it on connection failures regardless
+  // of whether streaming had started.
+  let stopStreamTimers = () => {};
+
   const options = {
     method: 'POST',
     headers
   };
 
   const isStream = !!body.stream;
+  const inBytes = (requestMeta && requestMeta.inBytes) || 0;
 
+  ctxLog(ctx, 'ollama.request', { backend: backend.id, url, model: effectiveModel, stream: isStream });
+  const upTimeoutMs = 300000; // 5 min — Ollama can be slow to start generating
+  const requestStartedAt = Date.now();
   const up = http.request(url, options, upRes => {
-    proxyLog('backend_response', { backend: backend.id, statusCode: upRes.statusCode });
+    const ttftMs = Date.now() - requestStartedAt;
+    ctxLog(ctx, 'ollama.response', { backend: backend.id, status: upRes.statusCode, model: effectiveModel, ttft_ms: ttftMs });
     if (upRes.statusCode !== 200) {
-      res.writeHead(upRes.statusCode, upRes.headers);
-      return upRes.pipe(res);
+      // Re-shape Ollama's native errors (e.g. {"error":"model 'X' not found"})
+      // into Anthropic's {type:"error", error:{type:"...", message:"..."}} shape
+      // so clients see a consistent error contract regardless of backend.
+      let errBody = '';
+      upRes.on('data', c => errBody += c.toString());
+      upRes.on('end', () => {
+        let message = errBody;
+        try {
+          const parsed = JSON.parse(errBody);
+          if (parsed.error) {
+            message = typeof parsed.error === 'string' ? parsed.error : (parsed.error.message || JSON.stringify(parsed.error));
+          }
+        } catch {}
+        sendAnthropicError(res, upRes.statusCode, message || `upstream returned ${upRes.statusCode}`);
+      });
+      return;
     }
 
     if (isStream) {
       res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
+        'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive'
+        'Connection': 'keep-alive',
+        // Match real Anthropic — anti-buffering hint for nginx & Cloudflare.
+        'X-Accel-Buffering': 'no',
       });
 
-      // Anthropic requires message_start and content_block_start at the beginning of the stream
-      res.write('event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_ollama", "type": "message", "role": "assistant", "content": [], "model": "' + effectiveModel + '", "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 0, "output_tokens": 0}}}\n\n');
-      res.write('event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}\n\n');
+      const messageId = anthropicMessageId();
 
+      // Emit Anthropic-shape message_start. Real Anthropic includes input_tokens
+      // here, but Ollama doesn't tell us prompt_eval_count until the final chunk;
+      // we update those numbers in message_delta at the end. cache_*_input_tokens
+      // are always 0 (Ollama has no caching layer) but we include the fields so
+      // SDKs that probe their existence don't warn.
+      sseWrite(res, 'message_start', {
+        type: 'message_start',
+        message: {
+          id: messageId,
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: effectiveModel,
+          stop_reason: null,
+          stop_sequence: null,
+          usage: {
+            input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            output_tokens: 0,
+          },
+        },
+      });
+
+      // Block state machine. Real Anthropic emits content_block_start when a
+      // block begins, content_block_delta(s) for tokens, content_block_stop on
+      // close. Thinking-mode models produce a thinking block first (index 0)
+      // then a text block (index 1); pure-text models produce only a text block.
+      // We don't open block 0 up-front anymore — we wait for the first
+      // content/thinking token to know which type to start.
       let buffer = '';
+      let firstChunk = true;
+      let bytesOut = 0;
+      let lastChunkAt = Date.now();
+      let stalled = false;
+      let promptTokens = 0;
+      let outputTokens = 0;
+      let stopReason = 'end_turn';
+      let stopSequence = null;
+      let blockIndex = -1;          // -1 = no block open yet
+      let currentBlockType = null;  // 'thinking' | 'text' | null
+      let messageClosed = false;    // tracks whether message_delta+message_stop were emitted
+      const streamStart = Date.now();
+      // Hard-fail watchdog threshold for mid-stream stalls. After upstream goes
+      // idle this long, abort. The 5-min `up.setTimeout` rearms on socket activity,
+      // so it won't fire if Ollama trickles bytes very slowly — this is the safety net.
+      const STREAM_STALL_HARDFAIL_MS = 120000;
+
+      const openBlock = (type) => {
+        blockIndex++;
+        currentBlockType = type;
+        const empty = type === 'thinking' ? { type: 'thinking', thinking: '' } : { type: 'text', text: '' };
+        sseWrite(res, 'content_block_start', { type: 'content_block_start', index: blockIndex, content_block: empty });
+      };
+      const closeBlock = () => {
+        if (currentBlockType === null) return;
+        sseWrite(res, 'content_block_stop', { type: 'content_block_stop', index: blockIndex });
+        currentBlockType = null;
+      };
+
+      // Emit terminal frames (message_delta + message_stop). Idempotent — guarded
+      // by `messageClosed` so we never double-emit if both `done:true` arrives AND
+      // upstream `end` fires after.
+      const closeMessage = () => {
+        if (messageClosed) return;
+        closeBlock();
+        sseWrite(res, 'message_delta', {
+          type: 'message_delta',
+          delta: { stop_reason: stopReason, stop_sequence: stopSequence },
+          usage: {
+            input_tokens: promptTokens,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            output_tokens: outputTokens,
+          },
+        });
+        sseWrite(res, 'message_stop', { type: 'message_stop' });
+        messageClosed = true;
+      };
+
+      // Idle watchdog — log at >=5s, hard-fail at >=120s. The 5-min `up.setTimeout`
+      // rearms on socket activity so it can't catch a slow trickle. This watchdog
+      // does. Hard-fail destroys the upstream and emits an Anthropic-shape error
+      // SSE frame so the client sees a structured failure instead of a silent hang.
+      // Ping keepalive (15s): emits `event: ping` while streaming so long generations
+      // survive idle-connection killers in intermediate proxies (nginx, CF, corp middleboxes).
+      const stallCheck = setInterval(() => {
+        if (!res.writable) { stopTimers(); return; }
+        const idle = Date.now() - lastChunkAt;
+        if (idle >= STREAM_STALL_HARDFAIL_MS) {
+          stopTimers();
+          ctxLog(ctx, 'ollama.stream.hard_stall', { idle_ms: idle, backend: backend.id });
+          // We deliberately skip closeMessage() here. The Anthropic SSE error
+          // event is itself a terminal frame — clients treat it as "stream is
+          // over, no more events coming" and emitting message_delta+message_stop
+          // after an error frame would be inconsistent with the failure semantics.
+          sseWrite(res, 'error', {
+            type: 'error',
+            error: { type: 'timeout_error', message: `upstream stalled for ${idle}ms — aborting` },
+          });
+          if (!up.destroyed) up.destroy(new Error(`upstream mid-stream stall ${idle}ms`));
+          if (res.writable) res.end();
+          return;
+        }
+        if (idle >= 5000 && !stalled) {
+          stalled = true;
+          ctxLog(ctx, 'ollama.stream.stall', { idle_ms: idle, backend: backend.id });
+        } else if (idle < 5000 && stalled) {
+          stalled = false;
+        }
+      }, 1000);
+      const pingTick = setInterval(() => {
+        if (!res.writable) { stopTimers(); return; }
+        sseWrite(res, 'ping', { type: 'ping' });
+      }, 15000);
+      const stopTimers = () => { clearInterval(stallCheck); clearInterval(pingTick); };
+      stopStreamTimers = stopTimers;  // expose to outer-scope error handlers
+
+      // Client disconnected mid-stream: the request-level `res.on('close')` fires.
+      // We need to clear our intervals (otherwise they retain `res`/`upRes` refs
+      // and burn CPU writing to a dead socket) AND tear down the upstream so Ollama
+      // stops generating tokens we'll never deliver.
+      res.on('close', () => {
+        if (messageClosed) return;  // normal completion path
+        stopTimers();
+        if (!up.destroyed) up.destroy(new Error('client disconnected mid-stream'));
+      });
+
       upRes.on('data', chunk => {
         if (!res.writable) return;
+        if (firstChunk) {
+          firstChunk = false;
+          ctxLog(ctx, 'ollama.stream.first_chunk', { ttft_ms: Date.now() - requestStartedAt, backend: backend.id });
+        }
+        bytesOut += chunk.length;
+        lastChunkAt = Date.now();
         buffer += chunk.toString();
         let lines = buffer.split('\n');
         buffer = lines.pop();
@@ -425,42 +700,107 @@ async function forwardOllama(req, res, body, backend, effectiveModel, requestMet
           try {
             const ollamaJson = JSON.parse(line);
             if (ollamaJson.done) {
-              res.write('event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n');
-              res.write('event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": null}, "usage": {"output_tokens": 0}}\n\n');
-              res.write('event: message_stop\ndata: {"type": "message_stop"}\n\n');
-            } else {
-              const anthropicEvent = {
-                type: 'content_block_delta',
-                index: 0,
-                delta: { type: 'text_delta', text: ollamaJson.message?.content || '' }
-              };
-              res.write(`data: ${JSON.stringify(anthropicEvent)}\n\n`);
+              promptTokens = ollamaJson.prompt_eval_count || 0;
+              outputTokens = ollamaJson.eval_count || 0;
+              stopReason = mapStopReason(ollamaJson.done_reason);
+              closeMessage();
+              continue;
             }
+            const msg = ollamaJson.message || {};
+            const thinkingDelta = msg.thinking;
+            const textDelta = msg.content;
+            // Thinking tokens: open thinking block lazily, stream as thinking_delta.
+            if (thinkingDelta) {
+              if (currentBlockType !== 'thinking') {
+                if (currentBlockType === 'text') closeBlock();  // shouldn't happen — text rarely precedes thinking
+                openBlock('thinking');
+              }
+              sseWrite(res, 'content_block_delta', {
+                type: 'content_block_delta',
+                index: blockIndex,
+                delta: { type: 'thinking_delta', thinking: thinkingDelta },
+              });
+            }
+            // Text tokens: open text block lazily; if a thinking block is open,
+            // close it first so we transition cleanly to a new block index.
+            if (textDelta) {
+              if (currentBlockType !== 'text') {
+                if (currentBlockType === 'thinking') closeBlock();
+                openBlock('text');
+              }
+              sseWrite(res, 'content_block_delta', {
+                type: 'content_block_delta',
+                index: blockIndex,
+                delta: { type: 'text_delta', text: textDelta },
+              });
+            }
+            // If both empty (pure heartbeat chunk), drop silently.
           } catch (e) {
-            proxyLog('ollama.stream.parse_error', { line, error: e.message });
+            ctxLog(ctx, 'ollama.stream.parse_error', { line, error: e.message });
           }
         }
       });
-      upRes.on('end', () => { if (res.writable) res.end(); });
+      upRes.on('end', () => {
+        stopTimers();
+        // ALWAYS close the message — covers both normal completion (no-op via
+        // messageClosed guard since `done:true` already called closeMessage) AND
+        // half-open streams where upstream ended without sending `done` or sent
+        // zero ndjson lines. Without this, clients see message_start with no
+        // matching message_stop and hang.
+        closeMessage();
+        ctxLog(ctx, 'ollama.stream.done', {
+          backend: backend.id,
+          model: effectiveModel,
+          duration_ms: Date.now() - streamStart,
+          bytes_out: bytesOut,
+          prompt_tokens: promptTokens,
+          output_tokens: outputTokens,
+          stop_reason: stopReason,
+        });
+        if (res.writable) res.end();
+      });
       upRes.on('error', e => {
-        proxyLog('ollama.stream.backend_error', { error: e.message });
+        stopTimers();
+        ctxLog(ctx, 'ollama.stream.backend_error', { error: e.message, backend: backend.id });
+        // Mid-stream upstream error — emit Anthropic-shape error event so
+        // clients see a structured failure instead of an abrupt close.
+        sseWrite(res, 'error', {
+          type: 'error',
+          error: { type: 'api_error', message: `upstream Ollama error: ${e.message}` },
+        });
         if (res.writable) res.end();
       });
     } else {
       let fullBody = '';
-      upRes.on('data', chunk => fullBody += chunk.toString());
+      let bytesOut = 0;
+      const nonStreamStart = Date.now();
+      upRes.on('data', chunk => { bytesOut += chunk.length; fullBody += chunk.toString(); });
       upRes.on('end', () => {
         try {
           const ollamaJson = JSON.parse(fullBody);
+          const promptTokens = ollamaJson.prompt_eval_count || 0;
+          const outputTokens = ollamaJson.eval_count || 0;
+          const stopReason = mapStopReason(ollamaJson.done_reason);
+          const msg = ollamaJson.message || {};
+          // Build Anthropic-shape content array — thinking block (if present)
+          // first, then text block. Mirrors what the streaming path emits.
+          const content = [];
+          if (msg.thinking) content.push({ type: 'thinking', thinking: msg.thinking });
+          content.push({ type: 'text', text: msg.content || '' });
           const anthropicJson = {
-            id: `msg_ollama_${Date.now()}`,
+            id: anthropicMessageId(),
             type: 'message',
             role: 'assistant',
             model: effectiveModel,
-            content: [{ type: 'text', text: ollamaJson.message?.content || '' }],
-            stop_reason: 'end_turn',
+            content,
+            stop_reason: stopReason,
             stop_sequence: null,
-            usage: { input_tokens: 0, output_tokens: 0 }
+            usage: {
+              input_tokens: promptTokens,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              output_tokens: outputTokens,
+            },
           };
           const respBody = JSON.stringify(anthropicJson);
           res.writeHead(200, {
@@ -468,23 +808,72 @@ async function forwardOllama(req, res, body, backend, effectiveModel, requestMet
             'Content-Length': Buffer.byteLength(respBody)
           });
           res.end(respBody);
+          ctxLog(ctx, 'ollama.nonstream.done', {
+            backend: backend.id,
+            model: effectiveModel,
+            duration_ms: Date.now() - nonStreamStart,
+            bytes_out: bytesOut,
+            prompt_tokens: promptTokens,
+            output_tokens: outputTokens,
+            stop_reason: stopReason,
+          });
         } catch (e) {
-          send(res, 502, { error: `failed to parse Ollama response: ${e.message}` });
+          sendAnthropicError(res, 502, `failed to parse Ollama response: ${e.message}`);
         }
       });
     }
   });
 
-  up.on('error', e => {
-    proxyLog('backend_error', { backend: backend.id, kind: 'ollama', error: e.message });
-    send(res, 502, { error: `backend ollama at ${backend.url} error: ${e.message}` });
+  up.on('socket', socket => {
+    socket.on('connect', () => ctxDebug(ctx, 'upstream.socket.connected', { backend: backend.id }));
+    socket.on('close', hadError => ctxDebug(ctx, 'upstream.socket.closed', { backend: backend.id, had_error: hadError }));
   });
-  up.write(JSON.stringify({
+
+  up.setTimeout(upTimeoutMs, () => {
+    ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'ollama', error: `upstream timeout after ${upTimeoutMs}ms` });
+    up.destroy(new Error(`upstream timeout after ${upTimeoutMs}ms`));
+  });
+  up.on('error', e => {
+    ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'ollama', error: e.message });
+    const statusCode = e.message.startsWith('upstream timeout') ? 504 : 502;
+    // If the stream already started writing to the client, headers are sent and
+    // sendAnthropicError() will be a no-op. Switch to an SSE `event: error`
+    // frame so the client sees a structured terminal frame instead of a silent
+    // socket close. Always stop interval timers first to avoid the leak.
+    stopStreamTimers();
+    if (res.headersSent) {
+      if (res.writable) {
+        sseWrite(res, 'error', {
+          type: 'error',
+          error: { type: anthropicErrorType(statusCode), message: `backend ollama at ${backend.url} error: ${e.message}` },
+        });
+        res.end();
+      }
+    } else {
+      sendAnthropicError(res, statusCode, `backend ollama at ${backend.url} error: ${e.message}`);
+    }
+  });
+  const numCtx = body.num_ctx || (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
+  const ollamaBody = JSON.stringify({
     model: effectiveModel,
     messages: flattenMessagesForOllama(body),
     stream: isStream,
-    options: { temperature: body.temperature || 0, num_ctx: body.num_ctx || 65536 }
-  }));
+    keep_alive: '60m',
+    options: { temperature: body.temperature || 0, num_ctx: numCtx }
+  });
+  ctxLog(ctx, 'body.rewrite', {
+    bytes_in: inBytes,
+    bytes_out: ollamaBody.length,
+    model_swap: body.model !== effectiveModel,
+    incoming_model: body.model,
+    resolved_model: effectiveModel,
+  });
+  ctxDebug(ctx, 'trace.body.rewrite_diff', {
+    in_preview: JSON.stringify(body).slice(0, 300),
+    out_preview: ollamaBody.slice(0, 300),
+    headers_dropped: ['host', 'connection', 'content-length'],
+  });
+  up.write(ollamaBody);
   up.end();
 }
 
@@ -534,20 +923,34 @@ function refreshConfigIfChanged() {
 
 // ── Main Server ──────────────────────────────────────────────────────
 loadConfig();
+if (UNRECOGNIZED_CLI_FLAGS.length) {
+  proxyLog('cli.unrecognized_flags', { flags: UNRECOGNIZED_CLI_FLAGS });
+}
 
 let activeRequests = 0;
 const server = http.createServer((req, res) => {
   activeRequests++;
   const snapshot = GLOBAL_CONFIG;
   configStorage.run(snapshot, async () => {
+    const ctx = newRequestContext();
     try {
       refreshConfigIfChanged();
-      proxyLog('request', { method: req.method, url: req.url });
-      traceLog('in.client', req.method, req.url, req.headers);
-      
+      ctxLog(ctx, 'request', {
+        method: req.method,
+        url: req.url,
+        bytes_in: Number(req.headers['content-length']) || 0,
+        client: req.headers['user-agent'] || '',
+      });
+      traceLog(ctx, 'in.client', req.method, req.url, req.headers);
+
       const finalize = () => { activeRequests--; };
       res.on('finish', finalize);
-      res.on('close', () => { if (!res.writableFinished) finalize(); });
+      res.on('close', () => {
+        if (!res.writableFinished) {
+          ctxLog(ctx, 'client.disconnect', { received_ms: Date.now() - ctx.started });
+          finalize();
+        }
+      });
 
       if (req.url === '/ping') return send(res, 200, { ok: true, pid: process.pid, config_path: CONFIG_PATH, active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG) });
 
@@ -567,7 +970,7 @@ const server = http.createServer((req, res) => {
         const buf = await readBody(req);
         let payload; try { payload = JSON.parse(buf.toString()); } catch {}
         const mode = payload?.mode;
-        if (!mode || !LLM_MODE_ENUM.has(mode)) return send(res, 400, { error: 'invalid mode' });
+        if (!mode || !LLM_MODE_ENUM.has(mode)) return sendAnthropicError(res, 400, 'invalid mode');
         process.env.CLAUDE_LLM_MODE = mode;
         proxyLog('mode-switch', { new_mode: mode, source: 'control-channel' });
         return send(res, 200, { ok: true, new_mode: mode, message: `Mode switched to ${mode}` });
@@ -596,17 +999,17 @@ const server = http.createServer((req, res) => {
         const body = JSON.parse(buf.toString());
         const hwTier = resolveActiveTier(CONFIG);
         const activeMode = resolveLlmMode(CONFIG);
-        
+
         let resolved = resolveBackend(body.model, CONFIG, hwTier, activeMode);
         if (resolved.error) {
-          proxyLog('routing_error', { incoming_model: body.model, error: resolved.error });
-          return send(res, 400, { error: resolved.error });
+          ctxLog(ctx, 'routing_error', { incoming_model: body.model, error: resolved.error });
+          return sendAnthropicError(res, resolved.status || 400, resolved.error);
         }
-        
+
         // ── Phase 3 ranking ──
-        const RANK_MODES = { 
-          'fastest-possible': 'fastest', 
-          'smallest-possible': 'smallest', 
+        const RANK_MODES = {
+          'fastest-possible': 'fastest',
+          'smallest-possible': 'smallest',
           'best-opensource': 'best-opensource',
           'best-opensource-cloud': 'best-opensource-cloud',
           'best-opensource-local': 'best-opensource-local'
@@ -621,7 +1024,7 @@ const server = http.createServer((req, res) => {
             if (best && best !== resolved.effectiveModel) {
               const replaced = resolveBackend(best, CONFIG, hwTier, activeMode);
               if (!replaced.error) {
-                proxyLog('ranking_promotion', { criterion, role, old_model: resolved.effectiveModel, new_model: replaced.effectiveModel });
+                ctxLog(ctx, 'ranking_promotion', { criterion, role, old_model: resolved.effectiveModel, new_model: replaced.effectiveModel });
                 resolved = replaced;
               }
             }
@@ -629,9 +1032,9 @@ const server = http.createServer((req, res) => {
         }
 
         const { backend, effectiveModel, logicalRole } = resolved;
-        const requestMeta = { capability: logicalRole, stream: !!body.stream };
-        
-        proxyLog('dispatch', {
+        const requestMeta = { capability: logicalRole, stream: !!body.stream, inBytes: buf.length };
+
+        ctxLog(ctx, 'dispatch', {
           incoming_model: body.model,
           resolved_model: effectiveModel,
           backend_id: backend.id,
@@ -642,16 +1045,15 @@ const server = http.createServer((req, res) => {
         });
 
         if (backend.kind === 'ollama') {
-          if (!(await ensureOllamaReadyOrSend(effectiveModel, backend.url, logicalRole, res))) return;
-          return forwardOllama(req, res, body, backend, effectiveModel, requestMeta);
+          return forwardOllama(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
-        return forwardAnthropic(req, res, body, backend, effectiveModel, requestMeta);
+        return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
       }
 
-      send(res, 404, { error: 'not found' });
+      sendAnthropicError(res, 404, `not found: ${req.method} ${req.url}`);
     } catch (err) {
       proxyLog('fatal_error', { error: err.message, stack: err.stack });
-      send(res, 500, { error: 'internal error' });
+      sendAnthropicError(res, 500, 'internal error');
     }
   });
 });
