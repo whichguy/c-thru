@@ -1128,7 +1128,7 @@ function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
 //   pingTick (SSE_PING_INTERVAL_MS) — keep intermediate proxies alive
 //   Both are cleared on: res.close, upRes.end, upRes.error, stallCheck hard-fail,
 //   and via timerControls.stop() for pre-stream errors in up.on('error').
-function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, up, requestStartedAt, timerControls, upRes) {
+function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, up, requestStartedAt, timerControls, upRes, body) {
   const streamHeaders = {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache',
@@ -1360,6 +1360,26 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
     });
     recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
     clearBackendCooldown(backend.id);
+    if (shouldJournal(requestMeta.capability)) {
+      writeJournalEntry({
+        schema_version: 1,
+        id: 'j_' + crypto.randomBytes(6).toString('hex'),
+        ts_iso: new Date().toISOString(),
+        capability: requestMeta.capability || null,
+        mode: requestMeta.activeMode,
+        served_by: effectiveModel,
+        endpoint: req.url,
+        latency_ms: Date.now() - (requestMeta.startedAt || requestStartedAt || Date.now()),
+        stream: true,
+        stream_events: [],
+        stream_events_truncated: false,
+        request: Object.assign({}, body, {
+          _headers: scrubHeaders(req.headers),
+          model: requestMeta.originalModel,
+        }),
+        response: null,
+      });
+    }
     if (res.writable) res.end();
   });
   upRes.on('error', e => {
@@ -1492,7 +1512,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
       return;
     }
     if (isStream) {
-      setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, up, requestStartedAt, timerControls, upRes);
+      setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, up, requestStartedAt, timerControls, upRes, body);
     } else {
       handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, upRes);
     }
