@@ -1076,7 +1076,7 @@ function buildOllamaRequestBody(body, effectiveModel) {
   return JSON.stringify({
     model: effectiveModel,
     messages: flattenMessagesForOllama(body),
-    stream: body.stream,
+    stream: !!body.stream,
     keep_alive: OLLAMA_KEEP_ALIVE,
     options: ollamaOptions,
   });
@@ -1399,7 +1399,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
 // Ollama JSON, and re-shapes it into an Anthropic Messages response object.
 // Mirrors the content array structure of the streaming path (thinking first,
 // then text) so callers get a consistent shape regardless of stream mode.
-function handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, upRes) {
+function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, requestMeta, upRes) {
   let fullBody = '';
   let bytesOut = 0;
   const nonStreamStart = Date.now();
@@ -1463,6 +1463,26 @@ function handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, u
       });
       recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
       clearBackendCooldown(backend.id);
+      if (shouldJournal(requestMeta.capability)) {
+        let parsedResponse = null;
+        try { parsedResponse = JSON.parse(respBody); } catch {}
+        writeJournalEntry({
+          schema_version: 1,
+          id: 'j_' + crypto.randomBytes(6).toString('hex'),
+          ts_iso: new Date().toISOString(),
+          capability: requestMeta.capability || null,
+          mode: requestMeta.activeMode,
+          served_by: effectiveModel,
+          endpoint: req.url,
+          latency_ms: Date.now() - (requestMeta.startedAt || nonStreamStart),
+          stream: false,
+          request: Object.assign({}, body, {
+            _headers: scrubHeaders(req.headers),
+            model: requestMeta.originalModel,
+          }),
+          response: parsedResponse,
+        });
+      }
     } catch (e) {
       sendAnthropicError(res, 502, `failed to parse Ollama response: ${e.message}`);
     }
@@ -1514,7 +1534,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
     if (isStream) {
       setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, up, requestStartedAt, timerControls, upRes, body);
     } else {
-      handleOllamaNonStream(ctx, res, backend, effectiveModel, requestMeta, upRes);
+      handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, requestMeta, upRes);
     }
   });
 
