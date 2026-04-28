@@ -1279,6 +1279,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
   let wallTimer = null;
   if (STREAM_WALL_MS > 0) {
     wallTimer = setTimeout(() => {
+      if (messageClosed) return;
       stopTimers();
       ctxLog(ctx, 'ollama.stream.wall_timeout', { elapsed_ms: STREAM_WALL_MS, backend: backend.id });
       sseWrite(res, 'error', {
