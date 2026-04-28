@@ -8,6 +8,7 @@
 // Run: node test/proxy-streaming-ollama.test.js
 
 const fs   = require('fs');
+const http = require('http');
 const os   = require('os');
 const path = require('path');
 
@@ -233,6 +234,58 @@ async function main() {
           }
         });
       } finally { await stub.close().catch(() => {}); }
+    }
+
+    // ── Test 7: wall-clock timeout hard-aborts a trickle stream ─────────────
+    console.log('\n7. wall-clock timeout fires and emits SSE error event');
+    {
+      const stubServer = await new Promise((resolve, reject) => {
+        const s = http.createServer((req, res) => {
+          res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Transfer-Encoding': 'chunked' });
+          let i = 0;
+          const t = setInterval(() => {
+            if (!res.writable) { clearInterval(t); return; }
+            res.write(JSON.stringify({ message: { content: `tok${i++}`, thinking: '' } }) + '\n');
+          }, 20);
+          res.on('close', () => clearInterval(t));
+        });
+        s.listen(0, '127.0.0.1', () => resolve(s));
+        s.on('error', reject);
+      });
+      const stubPort = stubServer.address().port;
+      const configPath = writeConfig(tmpDir, {
+        backends: { trickle_stub: { kind: 'ollama', url: `http://127.0.0.1:${stubPort}` } },
+        model_routes: { 'trickle-model': 'trickle_stub' },
+        llm_profiles: {
+          '128gb': {
+            workhorse: { connected_model: 'trickle-model', disconnect_model: 'trickle-model' },
+          },
+        },
+      });
+      try {
+        await withProxy({
+          configPath,
+          profile: '128gb',
+          mode: 'connected',
+          env: { CLAUDE_PROXY_STREAM_WALL_MS: '300', CLAUDE_PROXY_STREAM_STALL_MS: '60000' },
+        }, async ({ port }) => {
+          const r = await httpStream(port, 'POST', '/v1/messages', {
+            model: 'trickle-model', stream: true,
+            messages: [{ role: 'user', content: 'hi' }],
+            max_tokens: 9999,
+          }, {}, 5000);
+          assertEq(r.status, 200, 'status 200');
+          const errEvent = r.events.find(e => e.event === 'error');
+          assert(errEvent !== undefined, 'SSE error event received');
+          assertEq(errEvent.data.error.type, 'timeout_error', 'error.type is timeout_error');
+          assert(
+            errEvent.data.error.message.includes('wall-clock'),
+            `error.message contains 'wall-clock' (got: ${errEvent.data.error.message})`,
+          );
+        });
+      } finally {
+        await new Promise(r => stubServer.close(r));
+      }
     }
 
   } finally {
