@@ -201,7 +201,7 @@ async function main() {
       ]);
       try {
         const ollamaConfig = {
-          backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaStub.port}` } },
+          backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaStub.port}`, legacy_ollama_chat: true } },
           model_routes: { 'ollama-model': 'stub_ollama' },
           llm_profiles: {
             '128gb': {
@@ -245,7 +245,7 @@ async function main() {
       ]);
       try {
         const ollamaStreamConfig = {
-          backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaStreamStub.port}` } },
+          backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaStreamStub.port}`, legacy_ollama_chat: true } },
           model_routes: { 'ollama-stream-model': 'stub_ollama' },
           llm_profiles: {
             '128gb': {

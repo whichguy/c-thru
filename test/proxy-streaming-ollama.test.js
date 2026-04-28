@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 'use strict';
 // SSE fidelity tests for the Ollama → Anthropic translation path.
-// Verifies the state machine in forwardOllama (claude-proxy) emits the right
-// event sequence for thinking-mode models, lazy block opening, mode-conditional
-// route resolution, and proper terminal frames on edge cases.
+// Verifies the state machine in forwardOllamaLegacy (claude-proxy) emits the
+// right event sequence for thinking-mode models, lazy block opening, mode-
+// conditional route resolution, and proper terminal frames on edge cases.
+//
+// This test exercises the legacy /api/chat translation path explicitly via
+// `legacy_ollama_chat: true`. The default Ollama backend path is now pass-
+// through to /v1/messages (no translation); pass-through coverage lives in
+// proxy-ollama-passthrough.test.js.
 //
 // Run: node test/proxy-streaming-ollama.test.js
 
@@ -21,7 +26,11 @@ console.log('proxy streaming (Ollama → Anthropic SSE) tests\n');
 
 function buildConfig(stubPort) {
   return {
-    backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${stubPort}` } },
+    // legacy_ollama_chat: true forces the /api/chat translation path. This
+    // test validates that path's NDJSON → Anthropic-SSE state machine; the
+    // default pass-through path doesn't translate and is covered separately
+    // in proxy-ollama-passthrough.test.js.
+    backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${stubPort}`, legacy_ollama_chat: true } },
     model_routes: { 'test-model': 'stub_ollama' },
     llm_profiles: {
       '128gb': {
@@ -254,7 +263,7 @@ async function main() {
       });
       const stubPort = stubServer.address().port;
       const configPath = writeConfig(tmpDir, {
-        backends: { trickle_stub: { kind: 'ollama', url: `http://127.0.0.1:${stubPort}` } },
+        backends: { trickle_stub: { kind: 'ollama', url: `http://127.0.0.1:${stubPort}`, legacy_ollama_chat: true } },
         model_routes: { 'trickle-model': 'trickle_stub' },
         llm_profiles: {
           '128gb': {

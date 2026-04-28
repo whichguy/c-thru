@@ -141,7 +141,7 @@ async function main() {
       const ollama = await slowOllamaStub({ chunkDelayMs: 100, totalChunks: 50 });
       try {
         const cfg = {
-          backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollama.port}` } },
+          backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollama.port}`, legacy_ollama_chat: true } },
           model_routes: { 'test-model': 'stub_ollama' },
           llm_profiles: {
             '64gb': { workhorse: { connected_model: 'test-model', disconnect_model: 'test-model' } },
@@ -187,7 +187,7 @@ async function main() {
       const ollama = await slowOllamaStub({ chunkDelayMs: 50, totalChunks: 100 });
       try {
         const cfg = {
-          backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollama.port}` } },
+          backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollama.port}`, legacy_ollama_chat: true } },
           model_routes: { 'test-model': 'stub_ollama' },
           llm_profiles: {
             '64gb': { workhorse: { connected_model: 'test-model', disconnect_model: 'test-model' } },

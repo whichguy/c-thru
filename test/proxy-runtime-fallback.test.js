@@ -29,7 +29,7 @@ function buildConfig(cloudPort, ollamaPort, opts = {}) {
         url: `http://127.0.0.1:${cloudPort}`,
         ...(opts.fallback_to !== undefined ? { fallback_to: opts.fallback_to } : {}),
       },
-      stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaPort}` },
+      stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaPort}`, legacy_ollama_chat: true },
     },
     model_routes: {
       'fallback-test-model': 'cloud',
@@ -180,8 +180,9 @@ async function main() {
               kind: 'ollama',
               url: `http://127.0.0.1:${ollamaPrimary.port}`,
               fallback_to: 'fallback-target',
+              legacy_ollama_chat: true,
             },
-            healthy_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaHealthy.port}` },
+            healthy_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaHealthy.port}`, legacy_ollama_chat: true },
           },
           model_routes: { 'primary-model': 'primary_ollama', 'fallback-target': 'healthy_ollama' },
           llm_profiles: {
@@ -225,8 +226,9 @@ async function main() {
               kind: 'ollama',
               url: `http://127.0.0.1:${hangSrv.address().port}`,
               fallback_to: 'fallback-target',
+              legacy_ollama_chat: true,
             },
-            healthy_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaHealthy.port}` },
+            healthy_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaHealthy.port}`, legacy_ollama_chat: true },
           },
           model_routes: { 'primary-model': 'hung_ollama', 'fallback-target': 'healthy_ollama' },
           llm_profiles: {
@@ -266,7 +268,7 @@ async function main() {
           backends: {
             primary_be:   { kind: 'anthropic', url: `http://127.0.0.1:${primary.port}`,   fallback_to: 'secondary-target' },
             secondary_be: { kind: 'anthropic', url: `http://127.0.0.1:${secondary.port}`, fallback_to: 'tertiary-target' },
-            tertiary_be:  { kind: 'ollama',    url: `http://127.0.0.1:${tertiary.port}` },
+            tertiary_be:  { kind: 'ollama',    url: `http://127.0.0.1:${tertiary.port}`, legacy_ollama_chat: true },
           },
           model_routes: {
             'primary-model':     'primary_be',
@@ -310,7 +312,7 @@ async function main() {
           backends: {
             A_be: { kind: 'anthropic', url: `http://127.0.0.1:${A.port}`, fallback_to: 'B-target' },
             B_be: { kind: 'anthropic', url: `http://127.0.0.1:${B.port}`, fallback_to: 'C-target' },
-            C_be: { kind: 'ollama', url: `http://127.0.0.1:${C.port}` },
+            C_be: { kind: 'ollama', url: `http://127.0.0.1:${C.port}`, legacy_ollama_chat: true },
           },
           model_routes: { 'A-model': 'A_be', 'B-target': 'B_be', 'C-target': 'C_be' },
           llm_profiles: { '128gb': { workhorse: { connected_model: 'A-model', disconnect_model: 'A-model' } } },
@@ -364,7 +366,7 @@ async function main() {
           backends: {
             A_be: { kind: 'anthropic', url: `http://127.0.0.1:${A.port}`, fallback_to: 'B-target' },
             B_be: { kind: 'anthropic', url: `http://127.0.0.1:${B.port}`, fallback_to: 'C-target' },
-            C_be: { kind: 'ollama', url: `http://127.0.0.1:${C.port}` },
+            C_be: { kind: 'ollama', url: `http://127.0.0.1:${C.port}`, legacy_ollama_chat: true },
           },
           model_routes: { 'A-model': 'A_be', 'B-target': 'B_be', 'C-target': 'C_be' },
           llm_profiles: { '128gb': { workhorse: { connected_model: 'A-model', disconnect_model: 'A-model' } } },
@@ -454,7 +456,7 @@ async function main() {
         const cfg = {
           backends: {
             primary_be: { kind: 'anthropic', url: `http://127.0.0.1:${primary.port}` },  // no fallback_to
-            default_be: { kind: 'ollama', url: `http://127.0.0.1:${defaultBackend.port}` },
+            default_be: { kind: 'ollama', url: `http://127.0.0.1:${defaultBackend.port}`, legacy_ollama_chat: true },
           },
           routes: { default: 'default-target' },
           model_routes: { 'primary-model': 'primary_be', 'default-target': 'default_be' },
@@ -487,7 +489,7 @@ async function main() {
         const cfg = {
           backends: {
             A_be: { kind: 'anthropic', url: `http://127.0.0.1:${A.port}`, fallback_to: 'C-target' },
-            C_be: { kind: 'ollama', url: `http://127.0.0.1:${C.port}` },
+            C_be: { kind: 'ollama', url: `http://127.0.0.1:${C.port}`, legacy_ollama_chat: true },
           },
           routes: { default: 'C-target' },
           model_routes: { 'A-model': 'A_be', 'C-target': 'C_be' },
@@ -594,7 +596,7 @@ async function main() {
       try {
         const cfg = {
           backends: {
-            ollama_local: { kind: 'ollama', url: `http://127.0.0.1:${upstream.address().port}` },
+            ollama_local: { kind: 'ollama', url: `http://127.0.0.1:${upstream.address().port}`, legacy_ollama_chat: true },
           },
           model_routes: {
             'deepseek-v4-flash:cloud': 'ollama_local',
@@ -654,7 +656,7 @@ async function main() {
       try {
         const cfg = {
           backends: {
-            ollama_local: { kind: 'ollama', url: `http://127.0.0.1:${upstream.address().port}` },
+            ollama_local: { kind: 'ollama', url: `http://127.0.0.1:${upstream.address().port}`, legacy_ollama_chat: true },
           },
           model_routes: { 'glm-5.1:cloud': 'ollama_local' },
           llm_profiles: {
