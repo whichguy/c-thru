@@ -369,7 +369,7 @@ function flushPersistentUsageNowSync() {
   try {
     fs.mkdirSync(path.dirname(USAGE_STATS_FILE), { recursive: true });
     fs.writeFileSync(USAGE_STATS_FILE, JSON.stringify(persistentUsage, null, 2));
-  } catch {}
+  } catch (e) { console.error('c-thru: failed to write usage stats:', e.message); }
 }
 
 function checkRotateProxyLog() {
@@ -557,7 +557,7 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
     if (!pattern.startsWith('re:')) continue;
     try {
       if (new RegExp(pattern.slice(3)).test(model)) return resolveRouteTarget(target, pattern);
-    } catch {}
+    } catch (e) { console.error(`c-thru: invalid regex in model_routes key '${pattern}': ${e.message}`); }
   }
 
   const sigilMatch = model.match(BACKEND_SIGIL_RE);
@@ -1865,7 +1865,7 @@ function resolveConfigSelectionForReload() {
   // Tier 1: explicit override path (same as resolveSelectedConfigPath).
   const override = process.env.CLAUDE_MODEL_MAP_PATH;
   if (override) {
-    try { return { path: fs.realpathSync(override), source: 'override' }; } catch {}
+    try { return { path: fs.realpathSync(override), source: 'override' }; } catch (e) { console.error(`c-thru: CLAUDE_MODEL_MAP_PATH '${override}' could not be resolved: ${e.message}`); }
   }
 
   // Tier 2: project-local .claude/model-map.json walked from cwd.
@@ -1971,7 +1971,7 @@ const server = http.createServer((req, res) => {
 
       if (req.method === 'POST' && (req.url === '/c-thru/mode' || req.url === '/c-thru/mode/')) {
         const buf = await readBody(req);
-        let payload; try { payload = JSON.parse(buf.toString()); } catch {}
+        let payload; try { payload = JSON.parse(buf.toString()); } catch (e) { return sendAnthropicError(res, 400, `invalid JSON body: ${e.message}`); }
         const mode = payload?.mode;
         if (!mode || !LLM_MODE_ENUM.has(mode)) return sendAnthropicError(res, 400, 'invalid mode');
         process.env.CLAUDE_LLM_MODE = mode;

@@ -291,7 +291,8 @@ setup_ephemeral_session() {
         fs.readdirSync(agentsDir).forEach(file => {
           if (!file.endsWith(".md")) return;
           const name = file.replace(".md", "");
-          const content = fs.readFileSync(path.join(agentsDir, file), "utf8");
+          let content;
+          try { content = fs.readFileSync(path.join(agentsDir, file), "utf8"); } catch (e) { process.stderr.write("c-thru: skipping unreadable agent file " + file + ": " + e.message + "\n"); return; }
           const m = content.match(/^---\r?\n([\s\S]*?)\n---\r?\n/);
           let description = "";
           let prompt = content;
@@ -3174,22 +3175,30 @@ get_system_info_summary() {
   local profile="" llm_mode=""
   profile="$(resolve_llm_profile_name 2>/dev/null || true)"
   llm_mode="$(resolve_llm_mode 2>/dev/null || true)"
-  
-  local plan_parts=()
+
+  # self_model is the concrete model name this LLM session is actually running as.
+  local self_model="${default_override}"
+  local -a cap_parts=()
   local slot model _rec
   while IFS=$'\t' read -r slot model _rec; do
     [[ -n "$slot" && -n "$model" ]] || continue
-    plan_parts+=("$slot=$model")
+    if [[ "$slot" == "default" && -z "$self_model" ]]; then
+      self_model="$model"
+    else
+      cap_parts+=("${slot}=${model}")
+    fi
   done < <(collect_active_profile_capability_assignments "$default_override" 2>/dev/null || true)
 
-  local joined_plan=""
-  if (( ${#plan_parts[@]} > 0 )); then
-    printf -v joined_plan '%s, ' "${plan_parts[@]}"
-    joined_plan="${joined_plan%, }"
+  local caps_str="none"
+  if (( ${#cap_parts[@]} > 0 )); then
+    printf -v caps_str '%s, ' "${cap_parts[@]}"
+    caps_str="${caps_str%, }"
   fi
 
-  printf "c-thru routing active. Profile: %s, Mode: %s. Capabilities: %s." \
-    "${profile:-unknown}" "${llm_mode:-unknown}" "${joined_plan:-none}"
+  printf '%s\n%s\n%s' \
+    "YOUR MODEL IS: ${self_model:-unknown}. Do NOT assume you are Claude Sonnet, Claude Opus, or any other model — your actual model name is stated above. Refer to yourself only by that exact name." \
+    "c-thru routing active. Profile: ${profile:-unknown}. Mode: ${llm_mode:-unknown}." \
+    "Available models by capability: ${caps_str}."
 }
 
 # When C_THRU_DEBUG is 1 or 2, print routing env to stderr (secrets masked).
