@@ -1595,6 +1595,30 @@
         { "model": "deepseek-v4-flash:cloud", "quality_score": 87, "speed_score": 80 },
         { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 65 },
         { "model": "devstral-small-2:24b", "quality_score": 79, "speed_score": 85 }
+      ],
+      "judge-strict": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "qwen3-coder-next:cloud", "quality_score": 86, "speed_score": 75 },
+        { "model": "phi4-reasoning:latest", "quality_score": 80, "speed_score": 50 },
+        { "model": "qwen3.6:27b-coding-nvfp4", "quality_score": 72, "speed_score": 85 }
+      ],
+      "vision": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "deepseek-v4-flash:cloud", "quality_score": 87, "speed_score": 80 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 65 },
+        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+      ],
+      "pdf": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "deepseek-v4-flash:cloud", "quality_score": 87, "speed_score": 80 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 65 },
+        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+      ],
+      "image-analyst": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "deepseek-v4-flash:cloud", "quality_score": 87, "speed_score": 80 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 65 },
+        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
       ]
     },
     "48gb": {
@@ -1745,6 +1769,18 @@
         { "model": "qwen3-coder-next:cloud", "quality_score": 86, "speed_score": 75 },
         { "model": "devstral-small-2:24b", "quality_score": 79, "speed_score": 85 },
         { "model": "qwen3.6:27b-coding-nvfp4", "quality_score": 72, "speed_score": 85 }
+      ],
+      "judge-strict": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "qwen3-coder-next:cloud", "quality_score": 86, "speed_score": 75 },
+        { "model": "phi4-reasoning:latest", "quality_score": 80, "speed_score": 50 },
+        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 72, "speed_score": 75 }
+      ],
+      "implementer-heavy": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "qwen3-coder-next:cloud", "quality_score": 86, "speed_score": 75 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 65 },
+        { "model": "qwen3.6:27b-coding-nvfp4", "quality_score": 82, "speed_score": 85 }
       ]
     },
     "64gb": {
@@ -1882,6 +1918,18 @@
         { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
         { "model": "qwen3-coder-next:cloud", "quality_score": 86, "speed_score": 75 },
         { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 }
+      ],
+      "judge-strict": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "qwen3-coder-next:cloud", "quality_score": 86, "speed_score": 75 },
+        { "model": "phi4-reasoning:plus", "quality_score": 83, "speed_score": 43 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 82, "speed_score": 100 }
+      ],
+      "implementer-heavy": [
+        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
+        { "model": "qwen3-coder-next:cloud", "quality_score": 86, "speed_score": 75 },
+        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
+        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 }
       ]
     },
     "128gb": {
@@ -1982,6 +2030,12 @@
         { "model": "qwen3-coder-next:cloud", "quality_score": 86, "speed_score": 75 },
         { "model": "qwen3.6:35b-a3b-coding-mxfp8", "quality_score": 84, "speed_score": 85 },
         { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+      ],
+      "judge-strict": [
+        { "model": "claude-opus-4-6", "quality_score": 100, "speed_score": 50 },
+        { "model": "deepseek-v4-flash:cloud", "quality_score": 87, "speed_score": 80 },
+        { "model": "phi4-reasoning:plus", "quality_score": 85, "speed_score": 43 },
+        { "model": "qwen3.6:35b-a3b-mlx-bf16", "quality_score": 83, "speed_score": 7 }
       ]
     }
   },

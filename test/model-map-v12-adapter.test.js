@@ -230,5 +230,122 @@ console.log('\n7. llm_connectivity_mode: "disconnect" still validates (back-comp
   assert(errs.length === 0, 'llm_connectivity_mode: "disconnect" validates without errors (back-compat)');
 }
 
+// ── Test 8: fallback chains — proprietary → cloud-oss → local ─────────
+console.log('\n8. Every proprietary connected_model has a cloud-oss step before local in fallback_chains');
+{
+  const shippedPath = path.join(__dirname, '..', 'config', 'model-map.json');
+  try {
+    const shipped = JSON.parse(fs.readFileSync(shippedPath, 'utf8'));
+    const profiles = shipped.llm_profiles || {};
+    const chains = shipped.fallback_chains || {};
+
+    // Models that are "local-only" — never intended as cloud-oss intermediates.
+    // We detect them by: no ':cloud' suffix AND not starting with 'claude-' AND
+    // not a known cloud-oss provider pattern (openrouter, together, etc.).
+    function isLocalModel(name) {
+      if (!name) return false;
+      if (name.includes(':cloud')) return false;
+      if (name.startsWith('claude-')) return false;
+      // openrouter-style models contain '/'
+      if (name.includes('/')) return false;
+      return true;
+    }
+
+    function hasCloudOssBeforeLocal(chain) {
+      // Returns true if chain contains a ':cloud' model that appears
+      // at a lower index than the first local-only model.
+      let cloudOssIdx = -1;
+      let firstLocalIdx = -1;
+      for (let i = 0; i < chain.length; i++) {
+        const m = chain[i].model || '';
+        if (m.includes(':cloud') && cloudOssIdx === -1) cloudOssIdx = i;
+        if (isLocalModel(m) && firstLocalIdx === -1) firstLocalIdx = i;
+      }
+      // If there is no local model at all, the chain ends in cloud — acceptable.
+      if (firstLocalIdx === -1) return true;
+      return cloudOssIdx !== -1 && cloudOssIdx < firstLocalIdx;
+    }
+
+    let missingChain = [];
+    let missingCloudOss = [];
+
+    for (const [tier, capMap] of Object.entries(profiles)) {
+      for (const [cap, entry] of Object.entries(capMap)) {
+        const connected = entry.connected_model || '';
+        if (!connected.startsWith('claude-')) continue;
+        // This is a proprietary primary — check fallback coverage.
+        const chain = (chains[tier] || {})[cap];
+        if (!Array.isArray(chain) || chain.length === 0) {
+          missingChain.push(`${tier}.${cap}`);
+        } else if (!hasCloudOssBeforeLocal(chain)) {
+          missingCloudOss.push(`${tier}.${cap}`);
+        }
+      }
+    }
+
+    assert(
+      missingChain.length === 0,
+      `all proprietary-primary capabilities have fallback_chains: missing=[${missingChain.join(', ')}]`
+    );
+    assert(
+      missingCloudOss.length === 0,
+      `all fallback chains contain cloud-oss before local: missing=[${missingCloudOss.join(', ')}]`
+    );
+  } catch (e) {
+    assert(false, `fallback-chain coverage test failed: ${e.message}`);
+  }
+}
+
+// ── Test 9: cloud-oss models in chains have a local terminal ──────────
+console.log('\n9. Every :cloud model in fallback_chains has a local terminal after it');
+{
+  const shippedPath = path.join(__dirname, '..', 'config', 'model-map.json');
+  try {
+    const shipped = JSON.parse(fs.readFileSync(shippedPath, 'utf8'));
+    const chains = shipped.fallback_chains || {};
+    const profiles = shipped.llm_profiles || {};
+
+    function hasLocalTerminal(chain) {
+      // Returns true if there is at least one non-cloud, non-proprietary model
+      // after the last ':cloud' entry.
+      let lastCloudIdx = -1;
+      for (let i = 0; i < chain.length; i++) {
+        if ((chain[i].model || '').includes(':cloud')) lastCloudIdx = i;
+      }
+      if (lastCloudIdx === -1) return true; // no cloud entry — N/A
+      for (let i = lastCloudIdx + 1; i < chain.length; i++) {
+        const m = chain[i].model || '';
+        if (!m.includes(':cloud') && !m.startsWith('claude-') && !m.includes('/')) return true;
+      }
+      return false;
+    }
+
+    let missingLocal = [];
+
+    for (const [tier, capChains] of Object.entries(chains)) {
+      for (const [cap, chain] of Object.entries(capChains)) {
+        if (!Array.isArray(chain) || chain.length === 0) continue;
+        // Only apply this check to chains where the capability tier is a local tier
+        // (i.e., the profile's disconnect_model is a local model).
+        const entry = (profiles[tier] || {})[cap];
+        if (!entry) continue;
+        const disconnect = entry.disconnect_model || '';
+        const isLocalTier = !disconnect.includes(':cloud') && !disconnect.startsWith('claude-');
+        if (!isLocalTier) continue;
+        if (!hasLocalTerminal(chain)) {
+          missingLocal.push(`${tier}.${cap}`);
+        }
+      }
+    }
+
+    assert(
+      missingLocal.length === 0,
+      `all local-tier chains have a local terminal after cloud-oss: missing=[${missingLocal.join(', ')}]`
+    );
+  } catch (e) {
+    assert(false, `cloud-oss local-terminal test failed: ${e.message}`);
+  }
+}
+
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
