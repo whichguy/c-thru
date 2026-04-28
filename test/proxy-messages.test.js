@@ -55,7 +55,7 @@ function buildConfig(stubPort) {
 
 // Request body — mirrors proxy-e2e.test.js so mocked and real tests are comparable.
 const MSG_BODY = {
-  messages: [{ role: 'user', content: 'what is your model name, model id and who made you?' }],
+  messages: [{ role: 'user', content: 'what is your model name, where were you born, model id and who is your maker?' }],
   max_tokens: 50,
 };
 

@@ -28,7 +28,7 @@ const E2E_MODEL    = 'qwen3:1.7b';    // smallest available; already pulled
 const E2E_TIMEOUT  = 60_000;          // real inference can take up to 60s
 
 // Minimal body that gets a text response from qwen3 without burning tokens on thinking.
-const IDENTITY_PROMPT = 'what is your model name, model id and who made you?';
+const IDENTITY_PROMPT = 'what is your model name, where were you born, model id and who is your maker?';
 const MSG_BODY = {
   messages: [{ role: 'user', content: IDENTITY_PROMPT }],
   max_tokens: 2000,

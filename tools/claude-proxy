@@ -1419,7 +1419,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
   });
 }
 
-const PROBE_QUESTION = 'What is your model name, model id, where were you born, and who made you?';
+const PROBE_QUESTION = 'What is your model name, where were you born, model id and who is your maker?';
 
 async function handleProbeLlm(req, res) {
   const tier = resolveActiveTier(CONFIG);

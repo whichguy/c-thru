@@ -60,7 +60,7 @@ function buildConfig(stubPort) {
 }
 
 const MSG_BODY = {
-  messages: [{ role: 'user', content: 'what is your model name, model id and who made you?' }],
+  messages: [{ role: 'user', content: 'what is your model name, where were you born, model id and who is your maker?' }],
   max_tokens: 10,
 };
 
