@@ -49,7 +49,7 @@ tools/
   c-thru-map-changed.sh   # FileChanged/PostToolUse hook — validates model-map.json on edit
   c-thru-classify.sh      # UserPromptSubmit hook — sends prompt to /hooks/context on the proxy for classify_intent context injection
   c-thru-ollama-gc.sh     # GC tool — tracks c-thru-pulled Ollama tags; sweeps unreferenced ones. Subcommands: init|record|sweep|purge
-  c-thru-self-update.sh   # startup self-update: best-effort git ff-merge with 1s grace; opt-out via CLAUDE_ROUTER_NO_UPDATE=1
+  c-thru-self-update.sh   # startup self-update: best-effort git ff-merge with 1s grace; opt-out via C_THRU_NO_UPDATE=1
   hw-profile.js             # shared 5-tier hardware detection (tierForGb); used by router and proxy
   model-map-apply-recommendations.js  # merges config/recommended-mappings.json as lowest-precedence tier
 config/
@@ -140,16 +140,16 @@ were not available to the agent.
 | `--bypass-proxy` | `CLAUDE_PROXY_BYPASS=1` | Skip proxy entirely |
 | `--journal` | `CLAUDE_PROXY_JOURNAL=1` | Enable per-request journaling |
 | `--proxy-debug [N]` | `CLAUDE_PROXY_DEBUG=N` | Proxy verbose logs (default 1, accepts 1\|2) |
-| `--router-debug [N]` | `CLAUDE_ROUTER_DEBUG=N` | Router verbose logs |
-| `--no-update` | `CLAUDE_ROUTER_NO_UPDATE=1` | Skip git self-update |
+| `--router-debug [N]` | `C_THRU_DEBUG=N` | c-thru script verbose logs |
+| `--no-update` | `C_THRU_NO_UPDATE=1` | Skip git self-update |
 
 ## Key Environment Variables
 
 | Variable | Effect |
 |---|---|
 | `CLAUDE_PROXY_BYPASS=1` | Skip proxy entirely — use transparent Anthropic path |
-| `CLAUDE_ROUTER_DEBUG=1` | Print resolved env to stderr |
-| `CLAUDE_ROUTER_DEBUG=2` | + proxy port, OLLAMA vars, route keys |
+| `C_THRU_DEBUG=1` | Print resolved env to stderr |
+| `C_THRU_DEBUG=2` | + proxy port, OLLAMA vars, route keys |
 | `CLAUDE_PROXY_DEBUG=1/2` | Proxy-side verbose logs |
 | `CLAUDE_PROFILE_DIR` | Override `~/.claude` location |
 | `CLAUDE_MODEL_MAP_DEFAULTS_PATH` | Override shipped `config/model-map.json` path |
@@ -166,8 +166,8 @@ were not available to the agent.
 | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection (positive integer GB). Malformed values fall through to `os.totalmem()`. |
 | `CLAUDE_LLM_MODE` | Override connectivity / routing mode (16 modes): `connected` | `offline` | `local-only` | `semi-offload` | `cloud-judge-only` | `cloud-thinking` | `local-review` | `cloud-best-quality` | `local-best-quality` | `cloud-only` | `claude-only` | `opensource-only` | `fastest-possible` | `smallest-possible` | `best-opensource` | `best-opensource-cloud`. See `docs/connectivity-modes.md` for full reference. Replaces `CLAUDE_CONNECTIVITY_MODE` (legacy alias still accepted). |
 
-| `CLAUDE_ROUTER_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). Also settable via `/map-model update off` (writes `self_update: false` to model-map.overrides.json). |
-| `CLAUDE_ROUTER_UPDATE_INTERVAL` | Seconds between self-update fetches (default `3600`). Debounced via `.git/FETCH_HEAD` mtime. |
+| `C_THRU_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). Also settable via `/map-model update off` (writes `self_update: false` to model-map.overrides.json). |
+| `C_THRU_UPDATE_INTERVAL` | Seconds between self-update fetches (default `3600`). Debounced via `.git/FETCH_HEAD` mtime. |
 | `C_THRU_BEHAVIORAL_TESTS=1` | Enable behavioral contract tests (`agent-contract-behavioral.test.js`). Requires a running proxy. |
 | `BEHAVIORAL_ONLY` | Comma-separated agent name filter for behavioral test suite (e.g. `auditor,planner`). |
 | `C_THRU_JUDGE=1` | Enable cloud-judge semantic validation in behavioral tests. Requires `ANTHROPIC_API_KEY`. Each agent response is evaluated by `judge-evaluator` (cloud tier); VERDICT=FAIL is a hard failure. |
@@ -200,16 +200,16 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 | `c-thru check-deps [--fix]` | Audit system dependencies (node, jq, curl, ollama, etc.); `--fix` runs `brew install` for missing optional tools on macOS. |
 | `/c-thru-config reload` | Skill equivalent of `c-thru reload` — usable from a Claude session. |
 | `/c-thru-status fix` | Apply recommended mappings, reload proxy, show current status. |
-| `/c-thru-config planning [...]` | Toggle the `EnterPlanMode` advisory hint suggesting `/c-thru-plan`. On by default; fires in all Claude Code sessions on the machine. Natural-language args — e.g. "turn off", "disable", "what's the status". Opt-out env: `CLAUDE_ROUTER_PLANNER_HINT=0`. |
+| `/c-thru-config planning [...]` | Toggle the `EnterPlanMode` advisory hint suggesting `/c-thru-plan`. On by default; fires in all Claude Code sessions on the machine. Natural-language args — e.g. "turn off", "disable", "what's the status". Opt-out env: `C_THRU_PLANNER_HINT=0`. |
 | `/cplan <intent>` | 4-letter shortcut for `/c-thru-plan <intent>` — wave-based agentic planner. |
 
-**Ollama defaults (changed):** `CLAUDE_ROUTER_OLLAMA_AUTOSTART` now defaults to `1` — Ollama is started automatically when unreachable. Opt out with `CLAUDE_ROUTER_OLLAMA_AUTOSTART=0`.
+**Ollama defaults (changed):** `C_THRU_OLLAMA_AUTOSTART` now defaults to `1` — Ollama is started automatically when unreachable. Opt out with `C_THRU_OLLAMA_AUTOSTART=0`.
 
 **Bulk pre-pull:** On each router invocation, `ensure_active_tier_prepulled()` runs all active-tier local Ollama models through `ensure_ollama_running` in the background. Guarded by a stamp file at `$CLAUDE_PROFILE_DIR/.prepull-stamp-<tier>` invalidated on `model-map.json` mtime change. Set `C_THRU_SKIP_PREPULL=1` to disable (CI/tests).
 
 **Ollama / proxy lifecycle boundary:** Ollama is an independent daemon; `claude-proxy` is a child of `c-thru`. The boundary:
 1. `claude-proxy` never spawns or kills Ollama runners — it only connects to `OLLAMA_BASE_URL` (default `http://localhost:11434`), trusting external management.
-2. `c-thru` (bash) is responsible for Ollama reachability: when `CLAUDE_ROUTER_OLLAMA_AUTOSTART=1` (default) and Ollama is unreachable, `c-thru` runs `nohup ollama serve` in a detached subprocess, then retries once.
+2. `c-thru` (bash) is responsible for Ollama reachability: when `C_THRU_OLLAMA_AUTOSTART=1` (default) and Ollama is unreachable, `c-thru` runs `nohup ollama serve` in a detached subprocess, then retries once.
 3. When `c-thru` exits, the proxy child process exits with it. Ollama persists — it was detached (`nohup`) and is not a child of the proxy.
 4. Prefer running Ollama as a persistent system daemon (macOS app or `launchctl`). The `AUTOSTART` path is a convenience fallback, not a primary lifecycle mechanism.
 

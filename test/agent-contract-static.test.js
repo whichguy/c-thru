@@ -53,12 +53,12 @@ const VALID_RECOMMEND = new Set([...KNOWN_AGENTS, 'judge']);
 const ROSTER = {
   // ── Full-contract worker agents ──────────────────────────────────────────────
   'implementer':       { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'uplift-decider',  extraFields: ['LINT_ITERATIONS'] },
-  'implementer-cloud': { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'judge',            extraFields: ['LINT_ITERATIONS'] },
-  'wave-reviewer':     { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer-cloud', extraFields: ['ITERATIONS'] },
-  'test-writer':       { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'test-writer-cloud' },
-  'test-writer-cloud': { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'judge' },
+  'implementer-heavy': { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'judge',            extraFields: ['LINT_ITERATIONS'] },
+  'wave-reviewer':     { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer-heavy', extraFields: ['ITERATIONS'] },
+  'test-writer':       { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'test-writer-heavy' },
+  'test-writer-heavy': { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'judge' },
   'scaffolder':        { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer' },
-  'converger':         { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer-cloud' },
+  'converger':         { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer-heavy' },
 
   // ── Spec-gap agents: STATUS required, RECUSE not yet declared ────────────────
   'integrator':       { needsStatus: true, needsRecuse: 'warn' },

@@ -213,7 +213,7 @@ function validateRecuse(r) {
     'STATUS: RECUSE',
     'ATTEMPTED: yes',
     'RECUSAL_REASON: cannot verify output satisfies criteria without integration environment',
-    'RECOMMEND: implementer-cloud',
+    'RECOMMEND: implementer-heavy',
     'PARTIAL_OUTPUT: waves/001/outputs/item-a.md',
     'SUMMARY: partial work done, escalating to cloud tier',
   ].join('\n');
@@ -322,19 +322,19 @@ console.log('\n7. converger STATUS — base contract applies');
 }
 
 {
-  // converger RECUSE → implementer-cloud (unresolvable conflict)
+  // converger RECUSE → implementer-heavy (unresolvable conflict)
   const raw = [
     'STATUS: RECUSE',
     'ATTEMPTED: yes',
     'RECUSAL_REASON: parallel outputs have unresolvable architectural conflict',
-    'RECOMMEND: implementer-cloud',
+    'RECOMMEND: implementer-heavy',
     'SUMMARY: conflict requires redesign, escalating',
   ].join('\n');
   const r = parseStatusBlock(raw);
   const errs = validateRecuse(r);
   errs.length === 0
-    ? ok('converger RECUSE → implementer-cloud passes')
-    : fail('converger RECUSE → implementer-cloud passes', errs.join('; '));
+    ? ok('converger RECUSE → implementer-heavy passes')
+    : fail('converger RECUSE → implementer-heavy passes', errs.join('; '));
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────

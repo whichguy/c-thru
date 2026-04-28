@@ -601,8 +601,8 @@ function parseStatusBlock(text) {
 const TIER_TIMEOUTS_MS = {
   'judge':              600_000,
   'judge-strict':       600_000,
-  'deep-coder-cloud':   300_000,
-  'code-analyst-cloud': 300_000,
+  'implementer-heavy':   300_000,
+  'test-writer-heavy': 300_000,
   'code-analyst':      300_000,
   'deep-coder':        300_000,
   'pattern-coder':     600_000,

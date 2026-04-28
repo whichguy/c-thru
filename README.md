@@ -499,8 +499,8 @@ These are stripped before forwarding to the real `claude` binary:
 | `--bypass-proxy` | `CLAUDE_PROXY_BYPASS=1` | Skip proxy entirely (transparent Anthropic) |
 | `--journal` | `CLAUDE_PROXY_JOURNAL=1` | Enable per-request journaling |
 | `--proxy-debug [N]` | `CLAUDE_PROXY_DEBUG=N` | Proxy verbose logs (1 or 2) |
-| `--router-debug [N]` | `CLAUDE_ROUTER_DEBUG=N` | Router verbose logs (1 or 2) |
-| `--no-update` | `CLAUDE_ROUTER_NO_UPDATE=1` | Skip git self-update |
+| `--router-debug [N]` | `C_THRU_DEBUG=N` | Router verbose logs (1 or 2) |
+| `--no-update` | `C_THRU_NO_UPDATE=1` | Skip git self-update |
 
 ### c-thru subcommands
 
@@ -526,8 +526,8 @@ c-thru check-deps [--fix]             # audit system deps; --fix runs brew insta
 | `CLAUDE_PROFILE_DIR` | Override `~/.claude` location |
 | `CLAUDE_PROXY_STREAM_STALL_MS` | Idle stream timeout (default 300s) |
 | `CLAUDE_PROXY_STREAM_WALL_MS` | Wall-clock stream timeout (default 2100s) |
-| `CLAUDE_ROUTER_NO_UPDATE=1` | Skip git self-update at startup |
-| `CLAUDE_ROUTER_OLLAMA_AUTOSTART=1` | Auto-start Ollama if unreachable (default on) |
+| `C_THRU_NO_UPDATE=1` | Skip git self-update at startup |
+| `C_THRU_OLLAMA_AUTOSTART=1` | Auto-start Ollama if unreachable (default on) |
 | `C_THRU_SKIP_PREPULL=1` | Skip background model pre-pull (CI/tests) |
 
 ---

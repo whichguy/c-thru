@@ -11,7 +11,7 @@ const PROFILE_KEYS = ['default', 'classifier', 'explorer', 'reviewer', 'workhors
   'reasoner', 'fast-scout', 'code-analyst-light', 'deep-coder-precise', 'agentic-coder',
   'fast-coder',
   // agent-named aliases (1:1 routing — agent name == capability key)
-  'deep-code-debugger', 'fast-code-debugger', 'debugger',
+  'deep-code-debugger', 'fast-code-debugger',
   'generalist', 'vision', 'pdf', 'fast-generalist', 'large-general',
   'long-context', 'context-manager', 'edge', 'refactor',
   'image-analyst', 'writer'];

@@ -63,7 +63,7 @@ let skippedUnexpected = 0;
 const advisory = [];
 
 // Cloud/judge tiers where 401/403 is expected when ANTHROPIC_API_KEY is absent.
-const CLOUD_TIERS = new Set(['judge', 'judge-strict', 'deep-coder-cloud', 'code-analyst-cloud']);
+const CLOUD_TIERS = new Set(['judge', 'judge-strict', 'implementer-heavy', 'test-writer-heavy']);
 
 // Tiers served by Qwen3 models that need /no_think in the system prompt.
 // judge/judge-strict cascade to qwen3.6:35b without ANTHROPIC_API_KEY;
@@ -940,10 +940,10 @@ Write only to \`${docMd}\`. Read \`${addJs}\` to understand actual behavior.`;
     },
   },
 
-  // 13. implementer-cloud: cloud tier — same task as implementer, skip on 401
+  // 13. implementer-heavy: cloud tier — same task as implementer, skip on 401
   {
-    name: 'implementer-cloud',
-    expectedCapability: 'deep-coder-cloud',
+    name: 'implementer-heavy',
+    expectedCapability: 'implementer-heavy',
     maxTokens: 4000,
     judgeQuery: "(a) STATUS in {COMPLETE, PARTIAL}; (b) response mentions 'behavioral-test-marker'; (c) SUMMARY present",
     buildMessage(tmpDir) {
@@ -966,7 +966,7 @@ Success criteria:
 
 ## Constraints
 Only modify \`${helloJs}\`.`;
-      return buildWorkerDigest(tmpDir, 'implementer-cloud', 'item-behavioral-001', [helloJs], taskBody);
+      return buildWorkerDigest(tmpDir, 'implementer-heavy', 'item-behavioral-001', [helloJs], taskBody);
     },
     validate(name, block, text) {
       if (!validateBase(name, block)) return;
@@ -981,10 +981,10 @@ Only modify \`${helloJs}\`.`;
     },
   },
 
-  // 14. test-writer-cloud: cloud tier — same task as test-writer, skip on 401
+  // 14. test-writer-heavy: cloud tier — same task as test-writer, skip on 401
   {
-    name: 'test-writer-cloud',
-    expectedCapability: 'code-analyst-cloud',
+    name: 'test-writer-heavy',
+    expectedCapability: 'test-writer-heavy',
     maxTokens: 4000,
     judgeQuery: "(a) STATUS=COMPLETE; (b) response mentions 'add(1' test; (c) SUMMARY present",
     buildMessage(tmpDir) {
@@ -1008,7 +1008,7 @@ Success criteria:
 
 ## Constraints
 Write only to \`${testJs}\`.`;
-      return buildWorkerDigest(tmpDir, 'test-writer-cloud', 'item-behavioral-001', [testJs], taskBody);
+      return buildWorkerDigest(tmpDir, 'test-writer-heavy', 'item-behavioral-001', [testJs], taskBody);
     },
     validate(name, block, text) {
       if (!validateBase(name, block)) return;

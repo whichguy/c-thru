@@ -376,7 +376,7 @@ SUMMARY: pre-execution recusal, no partial output`;
 
 // 3. RECOMMEND field present and non-empty
 {
-  const raw = `STATUS: RECUSE\nATTEMPTED: no\nRECUSAL_REASON: missing pattern\nRECOMMEND: implementer-cloud\nSUMMARY: recused`;
+  const raw = `STATUS: RECUSE\nATTEMPTED: no\nRECUSAL_REASON: missing pattern\nRECOMMEND: implementer-heavy\nSUMMARY: recused`;
   const r = parseWorkerStatus(raw);
   (r.RECOMMEND && r.RECOMMEND.length > 0)
     ? ok('RECOMMEND field non-empty')
@@ -420,10 +420,10 @@ about what to do
 STATUS: RECUSE
 ATTEMPTED: no
 RECUSAL_REASON: cannot verify output satisfies criteria
-RECOMMEND: test-writer-cloud
+RECOMMEND: test-writer-heavy
 SUMMARY: recused after thinking`;
   const r = parseWorkerStatus(raw);
-  (r.STATUS === 'RECUSE' && r.RECOMMEND === 'test-writer-cloud')
+  (r.STATUS === 'RECUSE' && r.RECOMMEND === 'test-writer-heavy')
     ? ok('think-tag stripped before STATUS parse')
     : fail('think-tag stripped before STATUS parse', JSON.stringify(r));
 }
@@ -447,8 +447,8 @@ SUMMARY: recused after thinking`;
 //    Simulate orchestrator logic: RECOMMEND resolves to judge tier → blocked
 {
   const AGENT_TO_CAPABILITY = {
-    'implementer-cloud': 'deep-coder-cloud',
-    'test-writer-cloud': 'code-analyst-cloud',
+    'implementer-heavy': 'implementer-heavy',
+    'test-writer-heavy': 'test-writer-heavy',
     'uplift-decider': 'judge',
     'planner': 'judge',
     'auditor': 'judge',
@@ -457,14 +457,14 @@ SUMMARY: recused after thinking`;
     if (recommend === 'judge') return true;
     return AGENT_TO_CAPABILITY[recommend] === 'judge';
   }
-  (isJudgeTier('judge') && isJudgeTier('uplift-decider') && !isJudgeTier('implementer-cloud') && !isJudgeTier('test-writer-cloud'))
+  (isJudgeTier('judge') && isJudgeTier('uplift-decider') && !isJudgeTier('implementer-heavy') && !isJudgeTier('test-writer-heavy'))
     ? ok('isJudgeTier sentinel: "judge" and judge-mapped agents detected correctly')
     : fail('isJudgeTier sentinel: unexpected result');
 }
 
 // 10. RECOMMEND: judge at depth=1 → orchestrator should block before depth cap (depth cap is 3)
 {
-  const raw = `STATUS: RECUSE\nATTEMPTED: yes\nRECUSAL_REASON: task requires security domain knowledge beyond verification ability\nRECOMMEND: judge\nPARTIAL_OUTPUT: waves/001/outputs/implementer-cloud-item-Z.md\nSUMMARY: cloud tier recused, judge-tier sentinel`;
+  const raw = `STATUS: RECUSE\nATTEMPTED: yes\nRECUSAL_REASON: task requires security domain knowledge beyond verification ability\nRECOMMEND: judge\nPARTIAL_OUTPUT: waves/001/outputs/implementer-heavy-item-Z.md\nSUMMARY: cloud tier recused, judge-tier sentinel`;
   const r = parseWorkerStatus(raw);
   const escalationDepth = 1; // depth=1, well below cap of 3
   const AGENT_TO_CAPABILITY = { 'judge': 'judge', 'uplift-decider': 'judge' };
@@ -484,7 +484,7 @@ SUMMARY: recused after thinking`;
     escalation_log: [
       { agent: 'implementer', tier: 'deep-coder', attempted: false, recusal_reason: 'r1', partial_output: null },
       { agent: 'uplift-decider', tier: 'judge', attempted: false, recusal_reason: 'r2', partial_output: null },
-      { agent: 'implementer-cloud', tier: 'deep-coder-cloud', attempted: true, recusal_reason: 'r3', partial_output: 'waves/001/outputs/implementer-cloud-item-D.md' }
+      { agent: 'implementer-heavy', tier: 'implementer-heavy', attempted: true, recusal_reason: 'r3', partial_output: 'waves/001/outputs/implementer-heavy-item-D.md' }
     ]
   };
   const depthCapHit = item.escalation_depth >= 3;
@@ -549,7 +549,7 @@ SUMMARY: local output accepted without cloud dispatch`;
     : fail('VERDICT=accept — promote partial output, mark COMPLETE', JSON.stringify(r));
 }
 
-// 14. VERDICT: uplift — orchestrator dispatches implementer-cloud with escalation context
+// 14. VERDICT: uplift — orchestrator dispatches implementer-heavy with escalation context
 {
   const raw = `STATUS: COMPLETE
 VERDICT: uplift
@@ -560,11 +560,11 @@ SUMMARY: partial output viable; cloud should extend not rewrite`;
   const r = parseUpliftDeciderResponse(raw);
   const action = classifyUpliftVerdict(r);
   (action === 'uplift' && r.PATCH_SCOPE && r.PATCH_SCOPE.length > 0)
-    ? ok('VERDICT=uplift — dispatch implementer-cloud with uplift context')
-    : fail('VERDICT=uplift — dispatch implementer-cloud with uplift context', JSON.stringify(r));
+    ? ok('VERDICT=uplift — dispatch implementer-heavy with uplift context')
+    : fail('VERDICT=uplift — dispatch implementer-heavy with uplift context', JSON.stringify(r));
 }
 
-// 15. VERDICT: restart — orchestrator dispatches implementer-cloud with clean original digest
+// 15. VERDICT: restart — orchestrator dispatches implementer-heavy with clean original digest
 {
   const raw = `STATUS: COMPLETE
 VERDICT: restart

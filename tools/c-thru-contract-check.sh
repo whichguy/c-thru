@@ -524,9 +524,9 @@ while IFS='|' read -r agent keys; do
 done < "$tmpblocks"
 
 # ---------------------------------------------------------------------------
-# Check 8 — Restart-mode anchor presence in cloud agent files
+# Check 8 — Restart-mode anchor presence in heavy agent files
 #
-# Static check: agents/implementer-cloud.md and agents/test-writer-cloud.md
+# Static check: agents/implementer-heavy.md and agents/test-writer-heavy.md
 # must contain a <!-- mode: restart --> anchor in their restart-mode branch.
 # This anchor guards against anchoring-grep false positives from terms like
 # "prior", "previous", or "attempt" bleeding into restart-mode sections.
@@ -534,9 +534,9 @@ done < "$tmpblocks"
 # (test/c-thru-plan-harness.test.js), not here.
 # Reference: wiki/entities/uplift-cascade-pattern.md
 # ---------------------------------------------------------------------------
-echo "8/13  Restart-mode anchor check in cloud agents..."
+echo "8/13  Restart-mode anchor check in heavy agents..."
 
-CLOUD_AGENTS=("$AGENTS_DIR/implementer-cloud.md" "$AGENTS_DIR/test-writer-cloud.md")
+CLOUD_AGENTS=("$AGENTS_DIR/implementer-heavy.md" "$AGENTS_DIR/test-writer-heavy.md")
 for cloud_agent in "${CLOUD_AGENTS[@]}"; do
     [ -f "$cloud_agent" ] || continue
     agent_base=$(basename "$cloud_agent")

@@ -24,7 +24,7 @@ const MAX_TOKENS = 2000;
 const PER_AGENT_TIMEOUT_MS = 120_000;
 
 // Cloud/judge tiers where 401/403 is expected when ANTHROPIC_API_KEY is absent.
-const CLOUD_TIERS = new Set(['judge', 'judge-strict', 'deep-coder-cloud', 'code-analyst-cloud']);
+const CLOUD_TIERS = new Set(['judge', 'judge-strict', 'implementer-heavy', 'test-writer-heavy']);
 
 // Tiers served by Qwen3 models that need /no_think in the system prompt.
 // judge/judge-strict cascade to qwen3.6:35b without ANTHROPIC_API_KEY;
@@ -145,8 +145,8 @@ const LIVE_ROSTER = [
     },
   },
   {
-    name: 'implementer-cloud',
-    expectedCapability: 'deep-coder-cloud',
+    name: 'implementer-heavy',
+    expectedCapability: 'implementer-heavy',
     userMessage: "Digest: TASK: Append a comment '// hello' to an empty file. TARGET: /tmp/test.js. SCOPE: 1 line add.",
     extraChecks(r) {
       if (r.LINT_ITERATIONS !== undefined && !/^\d+$/.test(r.LINT_ITERATIONS))
@@ -171,8 +171,8 @@ const LIVE_ROSTER = [
     userMessage: 'Write one test for: function add(a,b){return a+b}',
   },
   {
-    name: 'test-writer-cloud',
-    expectedCapability: 'code-analyst-cloud',
+    name: 'test-writer-heavy',
+    expectedCapability: 'test-writer-heavy',
     userMessage: 'Write one test for: function add(a,b){return a+b}',
   },
   {

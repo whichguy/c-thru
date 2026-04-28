@@ -606,12 +606,12 @@ console.log('\n7. update-marker — [~] → [x] with produced: appended');
   assert(wd.items.get('item-1').escalation_log[0].agent === 'implementer', 'log entry agent correct');
   assert(wd.items.get('item-1').escalation_depth === 1, 'escalation_depth updated to 1');
 
-  const entry2 = { agent: 'implementer-cloud', tier: 'deep-coder-cloud', attempted: true, recusal_reason: 'judge sentinel', partial_output: null };
+  const entry2 = { agent: 'implementer-heavy', tier: 'implementer-heavy', attempted: true, recusal_reason: 'judge sentinel', partial_output: null };
   runHarness(['update-marker', '--wave-md', wMd, '--item', 'item-1', '--status', '!',
     '--escal-log-append', JSON.stringify(entry2), '--escal-depth', '2']);
   wd = parseWaveMd(fs.readFileSync(wMd, 'utf8'));
   assert(wd.items.get('item-1').escalation_log.length === 2, 'second escal-log-append: 2 entries');
-  assert(wd.items.get('item-1').escalation_log[1].agent === 'implementer-cloud', 'second log entry agent correct');
+  assert(wd.items.get('item-1').escalation_log[1].agent === 'implementer-heavy', 'second log entry agent correct');
   assert(wd.items.get('item-1').status === 'blocked', 'status updated to blocked');
 }
 

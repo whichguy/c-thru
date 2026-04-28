@@ -132,11 +132,6 @@
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
       },
-      "debugger": {
-        "connected_model": "deepseek-r1:14b",
-        "disconnect_model": "deepseek-r1:14b",
-        "on_failure": "cascade"
-      },
       "generalist": {
         "connected_model": "qwen3:1.7b",
         "disconnect_model": "qwen3:1.7b",
@@ -343,11 +338,6 @@
       "fast-coder": {
         "connected_model": "devstral-small-2:24b-cloud",
         "disconnect_model": "devstral-small-2:24b",
-        "on_failure": "cascade"
-      },
-      "debugger": {
-        "connected_model": "deepseek-r1:14b",
-        "disconnect_model": "deepseek-r1:14b",
         "on_failure": "cascade"
       },
       "generalist": {
@@ -593,11 +583,6 @@
       "fast-coder": {
         "connected_model": "devstral-small-2:24b-cloud",
         "disconnect_model": "devstral-small-2:24b",
-        "on_failure": "cascade"
-      },
-      "debugger": {
-        "connected_model": "deepseek-r1:32b",
-        "disconnect_model": "deepseek-r1:32b",
         "on_failure": "cascade"
       },
       "generalist": {
@@ -846,11 +831,6 @@
       "fast-coder": {
         "connected_model": "devstral-small-2:24b-cloud",
         "disconnect_model": "devstral-small-2:24b",
-        "on_failure": "cascade"
-      },
-      "debugger": {
-        "connected_model": "deepseek-r1:32b",
-        "disconnect_model": "deepseek-r1:32b",
         "on_failure": "cascade"
       },
       "generalist": {
@@ -1103,12 +1083,6 @@
         "connected_model": "devstral-small-2:24b-cloud",
         "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
-      },
-      "debugger": {
-        "connected_model": "deepseek-r1:32b",
-        "disconnect_model": "deepseek-r1:32b",
-        "on_failure": "cascade",
-        "local_best_model": "deepseek-r1:32b"
       },
       "generalist": {
         "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",

@@ -23,8 +23,8 @@
 #   ANTHROPIC_AUTH_TOKEN=ollama
 #   ANTHROPIC_API_KEY=""
 # Mixed-backend transparent configs still fall back to the legacy placeholder-key behavior.
-# Debug: CLAUDE_ROUTER_DEBUG=1 — print resolved env to stderr (transparent and routed).
-#          CLAUDE_ROUTER_DEBUG=2 — same plus proxy port, OLLAMA_*, placeholder flag, route keys sample.
+# Debug: C_THRU_DEBUG=1 — print resolved env to stderr (transparent and routed).
+#          C_THRU_DEBUG=2 — same plus proxy port, OLLAMA_*, placeholder flag, route keys sample.
 #          CLAUDE_PROXY_DEBUG=1/2 — enable proxy-side debug logs (router forwards inherited env when spawning the proxy).
 set -eo pipefail
 
@@ -52,34 +52,42 @@ OLLAMA_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
 # shell.  Set CLAUDE_PROXY_PORT explicitly only when you need a fixed port
 # (e.g. c-thru reload, c-thru restart, or direct ANTHROPIC_BASE_URL targeting).
 export CLAUDE_PROXY_PORT
-ROUTER_STARTED_PROXY_PID=""
+# Backward-compat aliases: CLAUDE_ROUTER_* → C_THRU_* (deprecated names still accepted)
+[[ -n "${CLAUDE_ROUTER_DEBUG:-}"                ]] && C_THRU_DEBUG="${CLAUDE_ROUTER_DEBUG}"
+[[ -n "${CLAUDE_ROUTER_NO_UPDATE:-}"            ]] && C_THRU_NO_UPDATE="${CLAUDE_ROUTER_NO_UPDATE}"
+[[ -n "${CLAUDE_ROUTER_NO_COLOR:-}"             ]] && NO_COLOR="${CLAUDE_ROUTER_NO_COLOR}"
+[[ -n "${CLAUDE_ROUTER_UPDATE_INTERVAL:-}"      ]] && C_THRU_UPDATE_INTERVAL="${CLAUDE_ROUTER_UPDATE_INTERVAL}"
+[[ -n "${CLAUDE_ROUTER_OLLAMA_AUTOSTART:-}"     ]] && C_THRU_OLLAMA_AUTOSTART="${CLAUDE_ROUTER_OLLAMA_AUTOSTART}"
+[[ -n "${CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART:-}" ]] && C_THRU_SKIP_PROXY_AUTOSTART="${CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART}"
+
+PROXY_STARTED_PID=""
 CLAUDE_CHILD_PID=""
-ROUTER_CLEANUP_ARMED=0
-ROUTER_PROXY_PORT=""
+PROXY_CLEANUP_ARMED=0
+PROXY_PORT=""
 ENSURED_PROXY_HTTP_BASE=""
-ROUTER_PROXY_LOG_PATH=""
+PROXY_LOG_PATH=""
 OLLAMA_PREP_SWEEP_STARTED=0
-OLLAMA_PREP_STATE_FILE="${CLAUDE_ROUTER_OLLAMA_PREP_STATE_FILE:-$CLAUDE_PROFILE_DIR/ollama-prep-state.json}"
-OLLAMA_PREP_REFRESH_DAYS="${CLAUDE_ROUTER_OLLAMA_REFRESH_DAYS:-7}"
-OLLAMA_PREP_MIN_RETRY_SECONDS="${CLAUDE_ROUTER_OLLAMA_PREP_MIN_RETRY_SECONDS:-86400}"
-OLLAMA_INSTALL_MIN_RETRY_SECONDS="${CLAUDE_ROUTER_OLLAMA_INSTALL_MIN_RETRY_SECONDS:-86400}"
-OLLAMA_CLOUD_AUTH_TIMEOUT_SECONDS="${CLAUDE_ROUTER_OLLAMA_AUTH_TIMEOUT_SECONDS:-10}"
+OLLAMA_PREP_STATE_FILE="${C_THRU_OLLAMA_PREP_STATE_FILE:-$CLAUDE_PROFILE_DIR/ollama-prep-state.json}"
+OLLAMA_PREP_REFRESH_DAYS="${C_THRU_OLLAMA_REFRESH_DAYS:-7}"
+OLLAMA_PREP_MIN_RETRY_SECONDS="${C_THRU_OLLAMA_PREP_MIN_RETRY_SECONDS:-86400}"
+OLLAMA_INSTALL_MIN_RETRY_SECONDS="${C_THRU_OLLAMA_INSTALL_MIN_RETRY_SECONDS:-86400}"
+OLLAMA_CLOUD_AUTH_TIMEOUT_SECONDS="${C_THRU_OLLAMA_AUTH_TIMEOUT_SECONDS:-10}"
 OLLAMA_CLOUD_AUTH_VALIDATED=0
 OLLAMA_CLOUD_SIGNIN_ATTEMPTED=0
 LLM_PROFILE_CACHE_INITIALIZED=0
 LLM_PROFILE_CACHE_NAME=""
 LLM_PROFILE_CACHE_SOURCE=""
 LLM_PROFILE_CACHE_MEMORY_GB=""
-ROUTER_PROFILE_SUMMARY_LOGGED=0
+PROXY_PROFILE_SUMMARY_LOGGED=0
 EPHEMERAL_SESSION_DIR=""
 EPHEMERAL_SETTINGS_FILE=""
 EPHEMERAL_AGENTS_JSON=""
 
 # Canonical path of this script (for PATH walk — skip ourselves when installed as `claude`).
-ROUTER_SELF_REAL="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
-ROUTER_SELF_DIR="$(dirname "$ROUTER_SELF_REAL")"
-ROUTER_REPO_ROOT="$(cd "$ROUTER_SELF_DIR/.." 2>/dev/null && pwd -P || true)"
-MODEL_MAP_DEFAULTS_FILE="${CLAUDE_MODEL_MAP_DEFAULTS_PATH:-$ROUTER_REPO_ROOT/config/model-map.json}"
+CTHRU_SELF_REAL="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+CTHRU_SELF_DIR="$(dirname "$CTHRU_SELF_REAL")"
+CTHRU_REPO_ROOT="$(cd "$CTHRU_SELF_DIR/.." 2>/dev/null && pwd -P || true)"
+MODEL_MAP_DEFAULTS_FILE="${CLAUDE_MODEL_MAP_DEFAULTS_PATH:-$CTHRU_REPO_ROOT/config/model-map.json}"
 MODEL_MAP_OVERRIDES_FILE="${CLAUDE_MODEL_MAP_OVERRIDES_PATH:-$CLAUDE_PROFILE_DIR/model-map.overrides.json}"
 MODEL_MAP_SYNC_STATE_FILE="${CLAUDE_MODEL_MAP_SYNC_STATE_FILE:-$CLAUDE_PROFILE_DIR/model-map-defaults-sync.json}"
 MODEL_MAP_GIT_PULL_MIN_RETRY_SECONDS="${CLAUDE_MODEL_MAP_GIT_PULL_MIN_RETRY_SECONDS:-21600}"
@@ -110,17 +118,17 @@ maybe_refresh_model_map_defaults_from_git() {
 }
 
 sync_layered_profile_model_map() {
-  local sync_tool="$ROUTER_SELF_DIR/model-map-sync.js"
+  local sync_tool="$CTHRU_SELF_DIR/model-map-sync.js"
   [[ -f "$sync_tool" ]] || return 0
   command -v node >/dev/null 2>&1 || return 0
 
   # 3-Tier Sync: Defaults -> Global Overrides -> Project Overrides (stored in _discovered_project_config)
   node "$sync_tool" "$MODEL_MAP_DEFAULTS_FILE" "$MODEL_MAP_OVERRIDES_FILE" "${_discovered_project_config:-}" "$CLAUDE_PROFILE_DIR/model-map.json" >/dev/null
   # Apply recommended-mappings.json as lowest-precedence tier (no-op if absent)
-  local rec_tool="$ROUTER_SELF_DIR/model-map-apply-recommendations.js"
-  if [[ -f "$rec_tool" && -n "$ROUTER_REPO_ROOT" ]]; then
+  local rec_tool="$CTHRU_SELF_DIR/model-map-apply-recommendations.js"
+  if [[ -f "$rec_tool" && -n "$CTHRU_REPO_ROOT" ]]; then
     local _tmp="$CLAUDE_PROFILE_DIR/model-map.json.rec.$$"
-    if node "$rec_tool" "$ROUTER_REPO_ROOT" "$CLAUDE_PROFILE_DIR/model-map.json" > "$_tmp" 2>/dev/null; then
+    if node "$rec_tool" "$CTHRU_REPO_ROOT" "$CLAUDE_PROFILE_DIR/model-map.json" > "$_tmp" 2>/dev/null; then
       mv "$_tmp" "$CLAUDE_PROFILE_DIR/model-map.json"
     else
       rm -f "$_tmp"
@@ -192,7 +200,7 @@ resolve_model_map_config() {
   fi
 
   # Repo root fallback (for running directly from source)
-  local repo_config="$ROUTER_REPO_ROOT/config/model-map.json"
+  local repo_config="$CTHRU_REPO_ROOT/config/model-map.json"
   local repo_real
   repo_real="$(canonicalize_file "$repo_config" 2>/dev/null || true)"
   if [[ -n "$repo_real" ]]; then
@@ -246,8 +254,8 @@ setup_ephemeral_session() {
   fi
   # Link c-thru skills (additive, namespaced under c-thru)
   mkdir -p "$EPHEMERAL_SESSION_DIR/skills/c-thru"
-  if [[ -d "$ROUTER_REPO_ROOT/skills" ]]; then
-    for item in "$ROUTER_REPO_ROOT/skills"/*/; do
+  if [[ -d "$CTHRU_REPO_ROOT/skills" ]]; then
+    for item in "$CTHRU_REPO_ROOT/skills"/*/; do
       [ -d "$item" ] || continue
       ln -s "${item%/}" "$EPHEMERAL_SESSION_DIR/skills/c-thru/$(basename "$item")" 2>/dev/null || true
     done
@@ -266,8 +274,8 @@ setup_ephemeral_session() {
       done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" 2>/dev/null)
     fi
     # Link c-thru agents
-    if [[ -d "$ROUTER_REPO_ROOT/agents" ]]; then
-      for item in "$ROUTER_REPO_ROOT/agents"/*.md; do
+    if [[ -d "$CTHRU_REPO_ROOT/agents" ]]; then
+      for item in "$CTHRU_REPO_ROOT/agents"/*.md; do
         [ -f "$item" ] || continue
         ln -s "$item" "$EPHEMERAL_SESSION_DIR/agents/$(basename "$item")" 2>/dev/null || true
       done
@@ -329,14 +337,14 @@ cleanup_ephemeral_session() {
 }
 
 # Write (or rewrite) the ephemeral settings.json from scratch using the now-known proxy port.
-# Called after the proxy READY handshake so ROUTER_PROXY_PORT is set.
+# Called after the proxy READY handshake so PROXY_PORT is set.
 # No-op in bypass mode (EPHEMERAL_SETTINGS_FILE is empty).
-# If ROUTER_PROXY_PORT is empty (non-Ollama cloud path), writes settings without the
+# If PROXY_PORT is empty (non-Ollama cloud path), writes settings without the
 # SessionStart HTTP hook — command hooks still fire, proxy context injection is skipped.
 write_ephemeral_settings() {
   [[ -n "${EPHEMERAL_SETTINGS_FILE:-}" ]] || return 0
-  local port="${ROUTER_PROXY_PORT:-}"
-  local tools_dest="$ROUTER_SELF_DIR"
+  local port="${PROXY_PORT:-}"
+  local tools_dest="$CTHRU_SELF_DIR"
 
   # Resolve actual path for a tool (checks for .sh suffix too).
   find_tool_path() {
@@ -496,13 +504,13 @@ cmd_help() {
   echo "  --bypass-proxy            skip proxy entirely (= CLAUDE_PROXY_BYPASS=1)"
   echo "  --journal                 enable per-request journaling (= CLAUDE_PROXY_JOURNAL=1)"
   echo "  --proxy-debug [N]         proxy verbose logs (= CLAUDE_PROXY_DEBUG=N; default 1)"
-  echo "  --router-debug [N]        router verbose logs (= CLAUDE_ROUTER_DEBUG=N; default 1)"
-  echo "  --no-update               skip git self-update (= CLAUDE_ROUTER_NO_UPDATE=1)"
+  echo "  --router-debug [N]        router verbose logs (= C_THRU_DEBUG=N; default 1; CLAUDE_ROUTER_DEBUG still accepted)"
+  echo "  --no-update               skip git self-update (= C_THRU_NO_UPDATE=1)"
   echo "  --no-agents               skip agent injection (= NO_AGENTS=1)"
   echo ""
   echo -e "${BOLD}Key environment variables:${NC}"
   echo "  CLAUDE_PROXY_BYPASS=1         skip proxy entirely (direct Anthropic path)"
-  echo "  CLAUDE_ROUTER_DEBUG=1|2       verbose route resolution to stderr"
+  echo "  C_THRU_DEBUG=1|2       verbose route resolution to stderr"
   echo "  CLAUDE_PROXY_DEBUG=1|2        proxy-side verbose logs"
   echo -e "  CLAUDE_LLM_MODE=<mode>        where calls go and how models are selected"
   echo -e "  ${GRAY}    Connectivity:   connected|offline|local-only — cloud vs local routing${NC}"
@@ -511,7 +519,7 @@ cmd_help() {
   echo -e "  ${GRAY}    Provider filter:cloud-only|claude-only|opensource-only${NC}"
   echo -e "  ${GRAY}    Benchmark rank: fastest-possible|smallest-possible|best-opensource|best-opensource-cloud|best-opensource-local${NC}"
   echo "  CLAUDE_LLM_MEMORY_GB=<n>      override RAM detection for hw tier selection"
-  echo "  CLAUDE_ROUTER_NO_UPDATE=1     disable git self-update at startup"
+  echo "  C_THRU_NO_UPDATE=1     disable git self-update at startup"
   echo "  CLAUDE_PROXY_JOURNAL=1        record every request/response to ~/.claude/journal/"
   echo "  CLAUDE_PROXY_CLASSIFY=1       run small classifier on prompts (Phase A: observe-only)"
   echo "  CLAUDE_PROXY_CLASSIFY_MODEL   classifier model tag (default gemma4:e2b)"
@@ -719,27 +727,27 @@ fi
 if [[ "${1:-}" == "/c-thru-control" ]]; then
   shift
   # We need the config resolved to start the proxy
-  eval "$(CLAUDE_MODEL_MAP_LAUNCH_CWD="$LAUNCH_CWD" node "$ROUTER_SELF_DIR/model-map-config.js" --shell-env 2>/dev/null || true)"
+  eval "$(CLAUDE_MODEL_MAP_LAUNCH_CWD="$LAUNCH_CWD" node "$CTHRU_SELF_DIR/model-map-config.js" --shell-env 2>/dev/null || true)"
   sync_layered_profile_model_map >/dev/null 2>&1 || true
   CONFIG="$CLAUDE_MODEL_MAP_PATH"
   # Try to ensure proxy is running before control
   ensure_proxy_running >/dev/null 2>&1 || true
   # Propagate the OS-assigned port so c-thru-control can reach the proxy.
-  # ensure_proxy_running sets ROUTER_PROXY_PORT but not ANTHROPIC_BASE_URL.
-  [[ -z "${ANTHROPIC_BASE_URL:-}" && -n "${ROUTER_PROXY_PORT:-}" ]] && \
-    export ANTHROPIC_BASE_URL="http://127.0.0.1:$ROUTER_PROXY_PORT"
+  # ensure_proxy_running sets PROXY_PORT but not ANTHROPIC_BASE_URL.
+  [[ -z "${ANTHROPIC_BASE_URL:-}" && -n "${PROXY_PORT:-}" ]] && \
+    export ANTHROPIC_BASE_URL="http://127.0.0.1:$PROXY_PORT"
   # Do NOT use `exec` here — bash skips EXIT traps on exec, so the proxy would
   # survive after c-thru-control exits.  Run as a foreground child so that when
-  # c-thru exits normally (exit $?), the EXIT trap fires cleanup_router_children
+  # c-thru exits normally (exit $?), the EXIT trap fires cleanup_proxy_children
   # which kills the proxy.
-  "$ROUTER_SELF_DIR/c-thru-control" "$@"
+  "$CTHRU_SELF_DIR/c-thru-control" "$@"
   exit $?
 fi
 
-_self_update_script="$ROUTER_SELF_DIR/c-thru-self-update.sh"
+_self_update_script="$CTHRU_SELF_DIR/c-thru-self-update.sh"
 if [[ -x "$_self_update_script" ]]; then
   # Background and disown so it never blocks launch
-  ( ROUTER_REPO_ROOT="$ROUTER_REPO_ROOT" bash "$_self_update_script" 2>/dev/null ) &
+  ( CTHRU_REPO_ROOT="$CTHRU_REPO_ROOT" bash "$_self_update_script" 2>/dev/null ) &
   disown 2>/dev/null || true
 else
   ( maybe_refresh_model_map_defaults_from_git ) &
@@ -747,14 +755,14 @@ else
 fi
 # Daily debounced benchmarks fetch — pulls upstream docs/benchmark.json
 # and SIGHUPs the proxy if it changed. Soft-fail; never blocks launch.
-# Opt-out: CLAUDE_ROUTER_NO_BENCHMARK_UPDATE=1
-_benchmarks_update_script="$ROUTER_SELF_DIR/c-thru-benchmarks-update.sh"
+# Opt-out: C_THRU_NO_BENCHMARK_UPDATE=1
+_benchmarks_update_script="$CTHRU_SELF_DIR/c-thru-benchmarks-update.sh"
 if [[ -x "$_benchmarks_update_script" ]]; then
-  ( ROUTER_REPO_ROOT="$ROUTER_REPO_ROOT" bash "$_benchmarks_update_script" 2>/dev/null ) &
+  ( CTHRU_REPO_ROOT="$CTHRU_REPO_ROOT" bash "$_benchmarks_update_script" 2>/dev/null ) &
   disown 2>/dev/null || true
 fi
 # Discover paths and environment via Node helper (single source of truth)
-eval "$(CLAUDE_MODEL_MAP_LAUNCH_CWD="$LAUNCH_CWD" node "$ROUTER_SELF_DIR/model-map-config.js" --shell-env 2>/dev/null || true)"
+eval "$(CLAUDE_MODEL_MAP_LAUNCH_CWD="$LAUNCH_CWD" node "$CTHRU_SELF_DIR/model-map-config.js" --shell-env 2>/dev/null || true)"
 
 sync_layered_profile_model_map || {
   echo "c-thru: failed to build effective layered model-map config" >&2
@@ -776,7 +784,7 @@ export CLAUDE_MODEL_MAP_PATH="$CONFIG"
 
 validate_model_map_config() {
   [[ -n "$CONFIG" && -f "$CONFIG" ]] || return 0
-  local validator="$ROUTER_SELF_DIR/model-map-validate.js"
+  local validator="$CTHRU_SELF_DIR/model-map-validate.js"
   [[ -f "$validator" ]] || return 0
   if ! command -v node >/dev/null 2>&1; then
     return 0
@@ -957,7 +965,7 @@ collect_active_profile_capability_assignments() {
   llm_mode="$(resolve_llm_mode)"
 
   # rec_file path for (rec) suffix detection (bash 3.2-safe: no associative arrays)
-  local rec_file="$ROUTER_REPO_ROOT/config/recommended-mappings.json"
+  local rec_file="$CTHRU_REPO_ROOT/config/recommended-mappings.json"
 
   while IFS= read -r slot; do
     [[ -n "$slot" ]] || continue
@@ -1004,7 +1012,7 @@ profile_has_capability_assignments() {
 }
 
 log_llm_profile_selection() {
-  [[ "$ROUTER_PROFILE_SUMMARY_LOGGED" == "1" ]] && return 0
+  [[ "$PROXY_PROFILE_SUMMARY_LOGGED" == "1" ]] && return 0
   [[ -f "$CONFIG" ]] || return 0
   llm_profiles_defined || return 0
 
@@ -1052,7 +1060,7 @@ log_llm_profile_selection() {
     done < <(collect_active_profile_capability_assignments "$launch_model")
   fi
 
-  ROUTER_PROFILE_SUMMARY_LOGGED=1
+  PROXY_PROFILE_SUMMARY_LOGGED=1
 }
 
 detect_connectivity() {
@@ -1186,8 +1194,8 @@ proxy_port_is_explicit() {
 claude_proxy_listen_port() {
   if [[ -n "${CLAUDE_PROXY_PORT:-}" ]]; then
     printf '%s' "$CLAUDE_PROXY_PORT"
-  elif [[ -n "$ROUTER_PROXY_PORT" ]]; then
-    printf '%s' "$ROUTER_PROXY_PORT"
+  elif [[ -n "$PROXY_PORT" ]]; then
+    printf '%s' "$PROXY_PORT"
   elif [[ "${CLAUDE_PROXY_USE_OLLAMA_PORT:-0}" == "1" ]]; then
     printf '%s' "11434"
   fi
@@ -1211,7 +1219,7 @@ model_map_has_non_ollama_backend() {
 }
 
 proxy_placeholder_mode() {
-  local raw="${CLAUDE_ROUTER_PROXY_PLACEHOLDER_KEY:-}"
+  local raw="${C_THRU_PROXY_PLACEHOLDER_KEY:-}"
   if [[ -z "$raw" ]]; then
     printf '%s' "auto"
     return 0
@@ -1378,13 +1386,13 @@ find_real_claude() {
     local cand="$dir/claude"
     if [[ -x "$cand" ]]; then
       cand_real="$(readlink -f "$cand" 2>/dev/null || echo "$cand")"
-      [[ "$cand_real" == "$ROUTER_SELF_REAL" ]] && continue
+      [[ "$cand_real" == "$CTHRU_SELF_REAL" ]] && continue
       first_hit="$cand"
       break
     fi
   done
   if [[ -z "$first_hit" ]]; then
-    echo "c-thru: real claude binary not found in PATH (after $ROUTER_SELF_REAL)" >&2
+    echo "c-thru: real claude binary not found in PATH (after $CTHRU_SELF_REAL)" >&2
     exit 127
   fi
   printf '%s' "$first_hit"
@@ -1488,7 +1496,7 @@ proxy_listener_pid() {
 # `ps comm=` check verifies it's still node/claude-proxy (not a PID-
 # reuse impostor). Best-effort: failures fall through to the original
 # kill-and-ignore-errors behavior.
-router_pid_looks_like_proxy() {
+pid_looks_like_proxy() {
   local pid="$1"
   [[ -z "$pid" ]] && return 1
   kill -0 "$pid" 2>/dev/null || return 1
@@ -1504,7 +1512,7 @@ router_pid_looks_like_proxy() {
   esac
 }
 
-cleanup_router_children() {
+cleanup_proxy_children() {
   local ec="${1:-$?}"
   if [[ -n "${CLAUDE_CHILD_PID:-}" ]]; then
     if kill -0 "$CLAUDE_CHILD_PID" 2>/dev/null; then
@@ -1513,29 +1521,29 @@ cleanup_router_children() {
     fi
     CLAUDE_CHILD_PID=""
   fi
-  if [[ -n "${ROUTER_STARTED_PROXY_PID:-}" ]]; then
+  if [[ -n "${PROXY_STARTED_PID:-}" ]]; then
     if [[ "${C_THRU_KEEP_PROXY:-0}" == "1" ]]; then
-      if [[ -n "${CLAUDE_ROUTER_DEBUG:-}" && "$CLAUDE_ROUTER_DEBUG" != "0" ]]; then
-        echo "c-thru: leaving claude-proxy (pid $ROUTER_STARTED_PROXY_PID) running due to C_THRU_KEEP_PROXY=1" >&2
+      if [[ -n "${C_THRU_DEBUG:-}" && "$C_THRU_DEBUG" != "0" ]]; then
+        echo "c-thru: leaving claude-proxy (pid $PROXY_STARTED_PID) running due to C_THRU_KEEP_PROXY=1" >&2
       fi
-    elif router_pid_looks_like_proxy "$ROUTER_STARTED_PROXY_PID"; then
-      kill "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
-      wait "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
+    elif pid_looks_like_proxy "$PROXY_STARTED_PID"; then
+      kill "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
+      wait "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
     fi
-    ROUTER_STARTED_PROXY_PID=""
+    PROXY_STARTED_PID=""
   fi
   # NOTE: do not return "$ec" here.  When this function is called from the
-  # EXIT trap ("trap 'cleanup_router_children $?' EXIT"), the process exit code
+  # EXIT trap ("trap 'cleanup_proxy_children $?' EXIT"), the process exit code
   # is already determined by the shell before the trap fires; a return value
   # from a trap-invoked function is silently ignored and cannot change it.
-  # Signal-handler paths (router_signal_handler) work correctly because they
+  # Signal-handler paths (proxy_signal_handler) work correctly because they
   # call `exit` directly with the intended code rather than relying on return.
 }
 
-router_signal_handler() {
+proxy_signal_handler() {
   local sig="$1"
   trap - EXIT INT TERM HUP
-  cleanup_router_children 0
+  cleanup_proxy_children 0
   case "$sig" in
     INT)  exit 130 ;;
     TERM) exit 143 ;;
@@ -1544,16 +1552,16 @@ router_signal_handler() {
   esac
 }
 
-# ARCH: arm_router_child_cleanup — arms EXIT/signal traps exactly once after the proxy is spawned.
+# ARCH: arm_proxy_cleanup — arms EXIT/signal traps exactly once after the proxy is spawned.
 #   Idempotent because ensure_proxy_running can be called from both the routing path and the
 #   transparent path within the same session; double-arming would overwrite a live trap.
-arm_router_child_cleanup() {
-  [[ "$ROUTER_CLEANUP_ARMED" == "1" ]] && return 0
-  ROUTER_CLEANUP_ARMED=1
-  trap 'cleanup_router_children $?' EXIT
-  trap 'router_signal_handler INT' INT
-  trap 'router_signal_handler TERM' TERM
-  trap 'router_signal_handler HUP' HUP
+arm_proxy_cleanup() {
+  [[ "$PROXY_CLEANUP_ARMED" == "1" ]] && return 0
+  PROXY_CLEANUP_ARMED=1
+  trap 'cleanup_proxy_children $?' EXIT
+  trap 'proxy_signal_handler INT' INT
+  trap 'proxy_signal_handler TERM' TERM
+  trap 'proxy_signal_handler HUP' HUP
 }
 
 # Start claude-proxy when ANTHROPIC_BASE_URL targets it and /ping fails.
@@ -1620,11 +1628,11 @@ describe_proxy_log_target() {
 #   2. Otherwise, spawn claude-proxy as a foreground child (NOT disowned) so it dies
 #      when this shell exits. The proxy binds on port 0 (OS-assigned).
 #   3. Proxy writes "READY <port>" to a named FIFO (stdout); router blocks reading it
-#      (timeout=45s) and records the port in ROUTER_PROXY_PORT.
+#      (timeout=45s) and records the port in PROXY_PORT.
 #   4. Verifies /ping after READY — catches the race where the proxy crashes between
 #      printing READY and actually answering HTTP (e.g. config syntax error).
 ensure_proxy_running() {
-  [[ "${CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART:-0}" == "1" ]] && return 0
+  [[ "${C_THRU_SKIP_PROXY_AUTOSTART:-0}" == "1" ]] && return 0
 
   local base_url="$1"
   local port
@@ -1632,19 +1640,19 @@ ensure_proxy_running() {
   if ! proxy_port_is_explicit; then
     local proxy_js="$CLAUDE_PROFILE_DIR/tools/claude-proxy"
     if [[ ! -f "$proxy_js" ]]; then
-      proxy_js="$ROUTER_REPO_ROOT/tools/claude-proxy"
+      proxy_js="$CTHRU_REPO_ROOT/tools/claude-proxy"
     fi
     if [[ ! -f "$proxy_js" ]]; then
-      echo "c-thru: claude-proxy missing at both $CLAUDE_PROFILE_DIR/tools/claude-proxy and $ROUTER_REPO_ROOT/tools/claude-proxy — run install.sh or start the proxy" >&2
+      echo "c-thru: claude-proxy missing at both $CLAUDE_PROFILE_DIR/tools/claude-proxy and $CTHRU_REPO_ROOT/tools/claude-proxy — run install.sh or start the proxy" >&2
       return 1
     fi
 
-    if [[ -n "${ROUTER_STARTED_PROXY_PID:-}" ]]; then
-      [[ -n "${ROUTER_PROXY_PORT:-}" ]] && wait_proxy_ping_ready "$ROUTER_PROXY_PORT" 20 && return 0
-      kill "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
-      wait "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
-      ROUTER_STARTED_PROXY_PID=""
-      ROUTER_PROXY_PORT=""
+    if [[ -n "${PROXY_STARTED_PID:-}" ]]; then
+      [[ -n "${PROXY_PORT:-}" ]] && wait_proxy_ping_ready "$PROXY_PORT" 20 && return 0
+      kill "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
+      wait "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
+      PROXY_STARTED_PID=""
+      PROXY_PORT=""
     fi
 
     local startup_tag temp_log ready_pipe ready_line ready_timeout
@@ -1659,24 +1667,24 @@ ensure_proxy_running() {
     rm -f "$ready_pipe"
     mkfifo "$ready_pipe"
     printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} starting...\r" "proxy" >&2
-    CLAUDE_ROUTER_DEBUG="${CLAUDE_ROUTER_DEBUG:-}" \
+    C_THRU_DEBUG="${C_THRU_DEBUG:-}" \
     CLAUDE_MODEL_MAP_PATH="$CONFIG" \
       "$proxy_js" >"$ready_pipe" 2>"$temp_log" &
-    ROUTER_STARTED_PROXY_PID="$!"
-    arm_router_child_cleanup
+    PROXY_STARTED_PID="$!"
+    arm_proxy_cleanup
     local start_ec=0
     if ! IFS= read -r -t "$ready_timeout" ready_line <"$ready_pipe"; then
       start_ec=1
-      diagnose_proxy_startup_failure "$ROUTER_STARTED_PROXY_PID" "" "$temp_log" \
+      diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "" "$temp_log" \
         "timed out waiting for claude-proxy readiness line (after ${ready_timeout}s)"
     elif [[ ! "$ready_line" =~ ^READY\ ([0-9]+)$ ]]; then
       start_ec=1
-      diagnose_proxy_startup_failure "$ROUTER_STARTED_PROXY_PID" "" "$temp_log" \
+      diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "" "$temp_log" \
         "malformed claude-proxy readiness line '$ready_line'"
     else
-      ROUTER_PROXY_PORT="${BASH_REMATCH[1]}"
+      PROXY_PORT="${BASH_REMATCH[1]}"
       local final_log=""
-      final_log="$(proxy_log_final_path "$ROUTER_PROXY_PORT")"
+      final_log="$(proxy_log_final_path "$PROXY_PORT")"
       if [[ -n "$temp_log" ]]; then
         ensure_proxy_log_parent_dir "${final_log:-$temp_log}"
         if [[ -n "$final_log" && "$final_log" != "$temp_log" ]]; then
@@ -1688,37 +1696,37 @@ ensure_proxy_running() {
           final_log="$temp_log"
         fi
       fi
-      ROUTER_PROXY_LOG_PATH="$final_log"
+      PROXY_LOG_PATH="$final_log"
       # Defense-in-depth: between the proxy printing "READY <port>" and
       # actually answering /ping, it's running listen-loop init. If the
       # node process crashes here (config syntax error, missing module,
       # etc.) the port appears bound briefly then disappears. Catch that.
-      if ! kill -0 "$ROUTER_STARTED_PROXY_PID" 2>/dev/null; then
+      if ! kill -0 "$PROXY_STARTED_PID" 2>/dev/null; then
         start_ec=1
-        diagnose_proxy_startup_failure "$ROUTER_STARTED_PROXY_PID" "$ROUTER_PROXY_PORT" "$final_log" \
+        diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$PROXY_PORT" "$final_log" \
           "claude-proxy exited immediately after announcing READY (likely a config or runtime error)"
-      elif ! wait_proxy_ping_ready "$ROUTER_PROXY_PORT" 20; then
+      elif ! wait_proxy_ping_ready "$PROXY_PORT" 20; then
         start_ec=1
-        diagnose_proxy_startup_failure "$ROUTER_STARTED_PROXY_PID" "$ROUTER_PROXY_PORT" "$final_log" \
-          "claude-proxy did not answer /ping on :$ROUTER_PROXY_PORT within 2s"
-      elif ! verify_proxy_health "$ROUTER_PROXY_PORT"; then
+        diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$PROXY_PORT" "$final_log" \
+          "claude-proxy did not answer /ping on :$PROXY_PORT within 2s"
+      elif ! verify_proxy_health "$PROXY_PORT"; then
         # /ping returned something but it wasn't the expected {"ok":true,...}
         # shape — port was likely already bound by an unrelated process when
         # we tried to spawn (collision), or the proxy half-initialized.
         start_ec=1
-        diagnose_proxy_startup_failure "$ROUTER_STARTED_PROXY_PID" "$ROUTER_PROXY_PORT" "$final_log" \
+        diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$PROXY_PORT" "$final_log" \
           "claude-proxy /ping responded but body is not the expected shape (port collision or half-init?)"
       else
-        printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s${NC}\n" "proxy" "$ROUTER_PROXY_PORT" >&2
+        printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s${NC}\n" "proxy" "$PROXY_PORT" >&2
       fi
     fi
     rm -f "$ready_pipe"
     if [[ "$start_ec" -eq 1 ]]; then
-      kill "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
-      wait "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
-      ROUTER_STARTED_PROXY_PID=""
-      ROUTER_PROXY_PORT=""
-      ROUTER_PROXY_LOG_PATH=""
+      kill "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
+      wait "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
+      PROXY_STARTED_PID=""
+      PROXY_PORT=""
+      PROXY_LOG_PATH=""
       if [[ -n "$temp_log" ]] && ! proxy_logging_enabled; then
         rm -f "$temp_log"
       fi
@@ -1771,14 +1779,14 @@ ensure_proxy_running() {
 
   local proxy_js="$CLAUDE_PROFILE_DIR/tools/claude-proxy"
   if [[ ! -f "$proxy_js" ]]; then
-    proxy_js="$ROUTER_REPO_ROOT/tools/claude-proxy"
+    proxy_js="$CTHRU_REPO_ROOT/tools/claude-proxy"
   fi
   if [[ ! -f "$proxy_js" ]]; then
     # No local script — maybe you started claude-proxy manually from elsewhere.
     if wait_proxy_ping_ready "$port" 50; then
       return 0
     fi
-    echo "c-thru: claude-proxy not reachable on :$port and missing at both $CLAUDE_PROFILE_DIR/tools/claude-proxy and $ROUTER_REPO_ROOT/tools/claude-proxy — run install.sh or start the proxy" >&2
+    echo "c-thru: claude-proxy not reachable on :$port and missing at both $CLAUDE_PROFILE_DIR/tools/claude-proxy and $CTHRU_REPO_ROOT/tools/claude-proxy — run install.sh or start the proxy" >&2
     return 0
   fi
 
@@ -1851,20 +1859,20 @@ ensure_proxy_running() {
     local temp_log=""
     if [[ -n "$explicit_log" ]]; then
       ensure_proxy_log_parent_dir "$explicit_log"
-      CLAUDE_PROXY_PORT="$port" CLAUDE_ROUTER_DEBUG="${CLAUDE_ROUTER_DEBUG:-}" \
+      CLAUDE_PROXY_PORT="$port" C_THRU_DEBUG="${C_THRU_DEBUG:-}" \
       CLAUDE_MODEL_MAP_PATH="$CONFIG" \
         node "$proxy_js" >>"$explicit_log" 2>&1 &
-      ROUTER_PROXY_LOG_PATH="$explicit_log"
+      PROXY_LOG_PATH="$explicit_log"
     else
       temp_log="$(proxy_ephemeral_stderr_path "${$}.$port.$RANDOM")"
       ensure_proxy_log_parent_dir "$temp_log"
-      CLAUDE_PROXY_PORT="$port" CLAUDE_ROUTER_DEBUG="${CLAUDE_ROUTER_DEBUG:-}" \
+      CLAUDE_PROXY_PORT="$port" C_THRU_DEBUG="${C_THRU_DEBUG:-}" \
       CLAUDE_MODEL_MAP_PATH="$CONFIG" \
         node "$proxy_js" >/dev/null 2>"$temp_log" &
-      ROUTER_PROXY_LOG_PATH=""
+      PROXY_LOG_PATH=""
     fi
-    ROUTER_STARTED_PROXY_PID="$!"
-    arm_router_child_cleanup
+    PROXY_STARTED_PID="$!"
+    arm_proxy_cleanup
     if ! wait_proxy_ping_ready "$port" 50; then
       start_ec=1
       echo "c-thru: timed out waiting for claude-proxy to answer /ping on :$port" >&2
@@ -1876,12 +1884,12 @@ ensure_proxy_running() {
         tail -n 10 "$temp_log" | sed 's/^/  /' >&2
       fi
       # A7: only signal if the PID still belongs to our spawned node proxy.
-      if router_pid_looks_like_proxy "$ROUTER_STARTED_PROXY_PID"; then
-        kill "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
-        wait "$ROUTER_STARTED_PROXY_PID" >/dev/null 2>&1 || true
+      if pid_looks_like_proxy "$PROXY_STARTED_PID"; then
+        kill "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
+        wait "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
       fi
-      ROUTER_STARTED_PROXY_PID=""
-      ROUTER_PROXY_LOG_PATH=""
+      PROXY_STARTED_PID=""
+      PROXY_LOG_PATH=""
       # Do not remove temp_log on failure to aid troubleshooting
     elif [[ -n "$temp_log" ]]; then
       rm -f "$temp_log"
@@ -1895,7 +1903,7 @@ ensure_proxy_running() {
   fi
 
   if [[ "$start_ec" -eq 1 ]]; then
-    echo "c-thru: claude-proxy did not become ready on :$port$(describe_proxy_log_target "$ROUTER_PROXY_LOG_PATH")" >&2
+    echo "c-thru: claude-proxy did not become ready on :$port$(describe_proxy_log_target "$PROXY_LOG_PATH")" >&2
     echo "c-thru: check for port conflicts or invalid model-map config in $CONFIG" >&2
     return 1
   fi
@@ -1904,7 +1912,7 @@ ensure_proxy_running() {
 
 # ARCH: ensure_proxy_http_base — decides between explicit-port (CLAUDE_PROXY_PORT set) and
 #   dynamic-spawn paths; both call ensure_proxy_running and populate ENSURED_PROXY_HTTP_BASE.
-#   ROUTER_PROXY_PORT is normalized in both branches so write_ephemeral_settings and
+#   PROXY_PORT is normalized in both branches so write_ephemeral_settings and
 #   system-prompt injection always see the real port regardless of how the proxy was started.
 ensure_proxy_http_base() {
   if proxy_port_is_explicit; then
@@ -1915,8 +1923,8 @@ ensure_proxy_http_base() {
     }
     ensure_proxy_running "$explicit_base" || return 1
     ENSURED_PROXY_HTTP_BASE="$explicit_base"
-    # Normalize so both paths populate ROUTER_PROXY_PORT (used for system-prompt injection).
-    ROUTER_PROXY_PORT="${ROUTER_PROXY_PORT:-$CLAUDE_PROXY_PORT}"
+    # Normalize so both paths populate PROXY_PORT (used for system-prompt injection).
+    PROXY_PORT="${PROXY_PORT:-$CLAUDE_PROXY_PORT}"
     return 0
   fi
 
@@ -1981,8 +1989,8 @@ ollama_secret_from_backend_json() {
   return 0
 }
 
-claude_router_debug_event() {
-  local _dl="${CLAUDE_ROUTER_DEBUG:-0}"
+cthru_debug_event() {
+  local _dl="${C_THRU_DEBUG:-0}"
   [[ "$_dl" == "0" || "$_dl" == "false" ]] && return 0
   echo "c-thru debug: $*" >&2
 }
@@ -2115,11 +2123,11 @@ ollama_extract_age_text() {
 ensure_ollama_cli_available() {
   local mode="${1:-active}"
   if command -v ollama >/dev/null 2>&1; then
-    claude_router_debug_event "ollama requirements result mode=$mode cli=present"
+    cthru_debug_event "ollama requirements result mode=$mode cli=present"
     return 0
   fi
 
-  claude_router_debug_event "ollama requirements result mode=$mode cli=missing"
+  cthru_debug_event "ollama requirements result mode=$mode cli=missing"
   if ! command -v brew >/dev/null 2>&1; then
     echo "c-thru: 'ollama' CLI not found — install Ollama or Homebrew to enable local model prep" >&2
     return 1
@@ -2138,10 +2146,10 @@ ensure_ollama_cli_available() {
   (
     if brew install ollama >"$install_log" 2>&1; then
       ollama_prep_state_update "requirements" "ollama_cli" "install_success" "installed"
-      claude_router_debug_event "ollama requirements result mode=$mode install=success"
+      cthru_debug_event "ollama requirements result mode=$mode install=success"
     else
       ollama_prep_state_update "requirements" "ollama_cli" "install_failure" "install_failed"
-      claude_router_debug_event "ollama requirements result mode=$mode install=failure"
+      cthru_debug_event "ollama requirements result mode=$mode install=failure"
       if [[ -s "$install_log" ]]; then
         echo "c-thru: failed to install 'ollama' via Homebrew — continuing without local model prep (see $install_log)" >&2
       else
@@ -2150,7 +2158,7 @@ ensure_ollama_cli_available() {
     fi
   ) &
   local install_pid="$!"
-  local install_wait_steps="${CLAUDE_ROUTER_OLLAMA_INSTALL_WAIT_STEPS:-10}"
+  local install_wait_steps="${C_THRU_OLLAMA_INSTALL_WAIT_STEPS:-10}"
   [[ "$install_wait_steps" =~ ^[0-9]+$ ]] || install_wait_steps=10
   local install_step=0
   while kill -0 "$install_pid" >/dev/null 2>&1 && (( install_step < install_wait_steps )); do
@@ -2163,7 +2171,7 @@ ensure_ollama_cli_available() {
     wait "$install_pid" >/dev/null 2>&1 || true
     if command -v ollama >/dev/null 2>&1; then
       echo "c-thru: installed 'ollama' via Homebrew — continuing local model prep" >&2
-      claude_router_debug_event "ollama requirements result mode=$mode install=success continue=true"
+      cthru_debug_event "ollama requirements result mode=$mode install=success continue=true"
       return 0
     fi
   fi
@@ -2257,7 +2265,7 @@ collect_active_profile_local_ollama_models() {
   profile="$LLM_PROFILE_CACHE_NAME"
   [[ -n "$profile" ]] || return 0
   local llm_mode; llm_mode="$(resolve_llm_mode)"
-  claude_router_debug_event "ollama sweep profile profile=$profile mode=$llm_mode"
+  cthru_debug_event "ollama sweep profile profile=$profile mode=$llm_mode"
 
   local capability resolved _rec backend_data cli_host cli_key backend_id
   while IFS=$'\t' read -r capability resolved _rec; do
@@ -2328,10 +2336,10 @@ run_background_ollama_prep_sweep() {
   printf -v joined_sweep '%s; ' "${sweep_descriptions[@]}"
   joined_sweep="${joined_sweep%; }"
 
-  if [[ "${ROUTER_ACTIVE_MODEL_WARMED:-0}" == "0" ]]; then
+  if [[ "${PROXY_ACTIVE_MODEL_WARMED:-0}" == "0" ]]; then
     printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} warming $count model(s) in background...\n" "fleet" >&2
   fi
-  claude_router_debug_event "ollama sweep start count=$count models=$(printf '%s' "$grouped_sweep" | cut -f1 | paste -sd ',' -)"
+  cthru_debug_event "ollama sweep start count=$count models=$(printf '%s' "$grouped_sweep" | cut -f1 | paste -sd ',' -)"
   (
     local entry model cli_host cli_key backend_id capabilities
     while IFS=$'\t' read -r model cli_host cli_key backend_id capabilities; do
@@ -2339,7 +2347,7 @@ run_background_ollama_prep_sweep() {
       cli_key="$(tab_field_decode "$cli_key")"
       ensure_ollama_running "$model" "$cli_host" "$cli_key" "sweep" "$backend_id" "$capabilities"
     done <<< "$grouped_sweep"
-    claude_router_debug_event "ollama sweep result count=$count"
+    cthru_debug_event "ollama sweep result count=$count"
   ) >/dev/null 2>&1 &
   disown 2>/dev/null || true
 }
@@ -2460,7 +2468,7 @@ ensure_active_tier_prepulled() {
   count="$(printf '%s\n' "$lines" | sed '/^$/d' | wc -l | tr -d ' ')"
   [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )) || return 0
 
-  claude_router_debug_event "ollama prepull start tier=$tier count=$count"
+  cthru_debug_event "ollama prepull start tier=$tier count=$count"
   (
     local model cli_host cli_key backend_id
     while IFS=$'\t' read -r model cli_host cli_key backend_id _caps; do
@@ -2468,13 +2476,13 @@ ensure_active_tier_prepulled() {
       cli_key="$(tab_field_decode "$cli_key")"
       ensure_ollama_running "$model" "$cli_host" "$cli_key" "prepull" "$backend_id"
     done <<< "$lines"
-    claude_router_debug_event "ollama prepull done tier=$tier count=$count"
+    cthru_debug_event "ollama prepull done tier=$tier count=$count"
   ) >/dev/null 2>&1 &
   disown 2>/dev/null || true
 }
 
 ollama_router_is_interactive() {
-  [[ "${CLAUDE_ROUTER_FORCE_INTERACTIVE:-0}" == "1" ]] && return 0
+  [[ "${C_THRU_FORCE_INTERACTIVE:-0}" == "1" ]] && return 0
   [[ -t 0 && -t 1 ]]
 }
 
@@ -2482,11 +2490,11 @@ ollama_router_prompt_yes_no() {
   local prompt="$1"
   local reply=""
   local normalized_reply=""
-  if [[ "${CLAUDE_ROUTER_AUTO_CONFIRM_OLLAMA_SIGNIN:-0}" == "1" ]]; then
+  if [[ "${C_THRU_AUTO_CONFIRM_OLLAMA_SIGNIN:-0}" == "1" ]]; then
     printf '%s' "$prompt" >&2
     return 0
   fi
-  if [[ "${CLAUDE_ROUTER_FORCE_INTERACTIVE:-0}" == "1" ]]; then
+  if [[ "${C_THRU_FORCE_INTERACTIVE:-0}" == "1" ]]; then
     printf '%s' "$prompt" >&2
     IFS= read -r reply || return 1
   elif [[ -r /dev/tty && -w /dev/tty ]]; then
@@ -2536,7 +2544,7 @@ ollama_cloud_auth_probe() {
   # leaks, but any normal ERR/EXIT path removes the temp).
   trap 'rm -f "$stderr_file" 2>/dev/null || true' RETURN
   if output="$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama pull "$model" 2>"$stderr_file")"; then
-    claude_router_debug_event "ollama cloud auth probe model=$model host=$cli_host status=ok"
+    cthru_debug_event "ollama cloud auth probe model=$model host=$cli_host status=ok"
     rm -f "$stderr_file"
     printf 'ok\t\n'
     return 0
@@ -2554,18 +2562,18 @@ ollama_cloud_auth_probe() {
   lowered="$(printf '%s' "$combined" | tr '[:upper:]' '[:lower:]')"
 
   if [[ "$lowered" == *"sign in"* || "$lowered" == *"signin"* || "$lowered" == *"unauthorized"* || "$lowered" == *"forbidden"* || "$lowered" == *"authentication"* || "$lowered" == *"not logged in"* ]]; then
-    claude_router_debug_event "ollama cloud auth probe model=$model host=$cli_host status=auth_required"
+    cthru_debug_event "ollama cloud auth probe model=$model host=$cli_host status=auth_required"
     printf 'auth_required\t%s\n' "$summary"
     return 0
   fi
 
   if [[ "$status" -eq 124 || "$status" -eq 143 || "$lowered" == *"cannot connect"* || "$lowered" == *"connection refused"* || "$lowered" == *"timed out"* || "$lowered" == *"timeout"* || "$lowered" == *"no such host"* || "$lowered" == *"failed to connect"* || "$lowered" == *"cannot reach"* ]]; then
-    claude_router_debug_event "ollama cloud auth probe model=$model host=$cli_host status=transport_error"
+    cthru_debug_event "ollama cloud auth probe model=$model host=$cli_host status=transport_error"
     printf 'transport_error\t%s\n' "$summary"
     return 0
   fi
 
-  claude_router_debug_event "ollama cloud auth probe model=$model host=$cli_host status=unknown_error"
+  cthru_debug_event "ollama cloud auth probe model=$model host=$cli_host status=unknown_error"
   printf 'unknown_error\t%s\n' "$summary"
 }
 
@@ -2600,7 +2608,7 @@ ensure_ollama_cloud_login() {
     fi
 
     OLLAMA_CLOUD_SIGNIN_ATTEMPTED=1
-    if [[ "${CLAUDE_ROUTER_FORCE_INTERACTIVE:-0}" == "1" ]]; then
+    if [[ "${C_THRU_FORCE_INTERACTIVE:-0}" == "1" ]]; then
       ollama signin || {
         echo "c-thru: 'ollama signin' failed — aborting launch." >&2
         return 1
@@ -2677,7 +2685,7 @@ validate_ollama_cloud_auth_for_launch() {
       continue
     fi
     if [[ "$explicit_auth" == "1" ]]; then
-      claude_router_debug_event "ollama cloud auth skip model=$model host=$cli_host reason=explicit_auth"
+      cthru_debug_event "ollama cloud auth skip model=$model host=$cli_host reason=explicit_auth"
       continue
     fi
 
@@ -2730,13 +2738,13 @@ wait_for_concurrent_pull() {
   local max_wait="${6:-600}"
   CONCURRENT_PULL_CACHED=0
 
-  claude_router_debug_event "ollama prep pull wait mode=$mode model=$model host=$cli_host reason=concurrent_pull"
+  cthru_debug_event "ollama prep pull wait mode=$mode model=$model host=$cli_host reason=concurrent_pull"
   local wait_start=$SECONDS
   while pgrep -af 'ollama pull ' 2>/dev/null | awk '{$1=""; sub(/^ /,""); print}' | grep -Fxq "ollama pull $model"; do
     sleep 2
     if (( SECONDS - wait_start > max_wait )); then
       echo "c-thru: timed out waiting (${max_wait}s) for concurrent pull of '$model' — proceeding best-effort" >&2
-      claude_router_debug_event "ollama prep pull wait_timeout mode=$mode model=$model host=$cli_host elapsed=$((SECONDS - wait_start))"
+      cthru_debug_event "ollama prep pull wait_timeout mode=$mode model=$model host=$cli_host elapsed=$((SECONDS - wait_start))"
       return 0
     fi
   done
@@ -2746,16 +2754,16 @@ wait_for_concurrent_pull() {
   # caller retry with its own pull.
   local _post_list
   _post_list=$("${_wait_env_ref[@]}" "${_wait_to_ref[@]}" ollama list 2>/dev/null) || {
-    claude_router_debug_event "ollama prep pull wait_done mode=$mode model=$model host=$cli_host list_failed=true"
+    cthru_debug_event "ollama prep pull wait_done mode=$mode model=$model host=$cli_host list_failed=true"
     return 0
   }
   if echo "$_post_list" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
     CONCURRENT_PULL_CACHED=1
-    claude_router_debug_event "ollama prep pull wait_done mode=$mode model=$model host=$cli_host concurrent_pull_succeeded=true elapsed=$((SECONDS - wait_start))"
+    cthru_debug_event "ollama prep pull wait_done mode=$mode model=$model host=$cli_host concurrent_pull_succeeded=true elapsed=$((SECONDS - wait_start))"
     return 0
   fi
   echo "c-thru: concurrent pull of '$model' did not result in cached model — retrying" >&2
-  claude_router_debug_event "ollama prep pull wait_done mode=$mode model=$model host=$cli_host concurrent_pull_succeeded=false elapsed=$((SECONDS - wait_start))"
+  cthru_debug_event "ollama prep pull wait_done mode=$mode model=$model host=$cli_host concurrent_pull_succeeded=false elapsed=$((SECONDS - wait_start))"
   return 0
 }
 
@@ -2791,7 +2799,7 @@ ensure_ollama_running() {
   cli_host="$(ollama_cli_host "$host")"
   is_local_ollama_host "$cli_host" || return 0
 
-  claude_router_debug_event "ollama prep start mode=$mode model=$model host=$cli_host"
+  cthru_debug_event "ollama prep start mode=$mode model=$model host=$cli_host"
   ensure_ollama_cli_available "$mode" || return 0
 
   local -a ollama_cli_env=(env OLLAMA_HOST="$cli_host")
@@ -2799,7 +2807,7 @@ ensure_ollama_running() {
   local state_key=""
   state_key="$(ollama_model_state_key "$model" "$cli_host")"
 
-  local autostart="${CLAUDE_ROUTER_OLLAMA_AUTOSTART:-1}"
+  local autostart="${C_THRU_OLLAMA_AUTOSTART:-1}"
 
   # 3s timeout for ollama CLI calls (list, pull). curl uses --max-time directly.
   local -a timeout_cmd=()
@@ -2824,7 +2832,7 @@ ensure_ollama_running() {
     if [[ "$autostart" != "1" ]]; then
       [[ "$mode" == "active" ]] && _ollama_done "${RED}✗${NC}" "Ollama server" "unreachable — skipping"
       echo "c-thru: cannot reach Ollama on $cli_host — is 'ollama serve' running? Skipping warm-up." >&2
-      claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host reachable=false"
+      cthru_debug_event "ollama prep result mode=$mode model=$model host=$cli_host reachable=false"
       return 0
     fi
 
@@ -2862,7 +2870,7 @@ ensure_ollama_running() {
         sleep 0.5
         nohup ollama serve </dev/null >/dev/null 2>&1 &
         disown 2>/dev/null || true
-        claude_router_debug_event "ollama server zombie_kill pid=$port_pid port=$ollama_port host=$cli_host"
+        cthru_debug_event "ollama server zombie_kill pid=$port_pid port=$ollama_port host=$cli_host"
       fi
     fi
 
@@ -2877,13 +2885,13 @@ ensure_ollama_running() {
     if (( ! _alive )); then
       [[ "$mode" == "active" ]] && _ollama_done "${RED}✗${NC}" "Ollama server" "unreachable after spawn"
       echo "c-thru: cannot reach Ollama on $cli_host after spawn — skipping warm-up." >&2
-      claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host reachable=false"
+      cthru_debug_event "ollama prep result mode=$mode model=$model host=$cli_host reachable=false"
       return 0
     fi
   fi
 
   [[ "$mode" == "active" ]] && _ollama_done "${GREEN}✓${NC}" "Ollama server" "$cli_host"
-  claude_router_debug_event "ollama prep server_alive mode=$mode host=$cli_host"
+  cthru_debug_event "ollama prep server_alive mode=$mode host=$cli_host"
 
   # --- Probe 2: is the model already loaded in VRAM? ---
   # Use /api/ps REST endpoint — consistent with HTTP-only approach.
@@ -2893,10 +2901,10 @@ ensure_ollama_running() {
   if echo "$api_ps_json" | grep -qF "\"${model}\""; then
     model_loaded=1
     if [[ "$mode" != "sweep" ]]; then
-      claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host loaded=true"
+      cthru_debug_event "ollama prep result mode=$mode model=$model host=$cli_host loaded=true"
       if [[ "$mode" == "active" ]]; then
         _ollama_done "${GREEN}✓${NC}" "$model" "already resident"
-        ROUTER_ACTIVE_MODEL_WARMED=1
+        PROXY_ACTIVE_MODEL_WARMED=1
       fi
       return 0
     fi
@@ -2905,7 +2913,7 @@ ensure_ollama_running() {
   # --- Probe 3: is the model cached on disk? ---
   local list_output
   list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null) || {
-    claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host list_failed=true"
+    cthru_debug_event "ollama prep result mode=$mode model=$model host=$cli_host list_failed=true"
     return 0
   }
   local age_text=""
@@ -2930,29 +2938,29 @@ ensure_ollama_running() {
         echo "c-thru: '$model' not cached on $cli_host — pulling now..." >&2
       fi
       ollama_prep_state_update "models" "$state_key" "pull_attempt" "pulling"
-      claude_router_debug_event "ollama prep pull start mode=$mode model=$model host=$cli_host reason=missing"
+      cthru_debug_event "ollama prep pull start mode=$mode model=$model host=$cli_host reason=missing"
       if ! "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
         [[ "$mode" == "active" ]] && _ollama_done "${RED}✗${NC}" "$model" "pull failed (offline?)"
         echo "c-thru: failed to pull '$model' from $cli_host — try \`ollama pull $model\` manually (check network / disk space)" >&2
         ollama_prep_state_update "models" "$state_key" "pull_failure" "pull_failed"
-        claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=false"
+        cthru_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=false"
         return 0
       fi
       list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null) || {
-        claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true list_after_failed=true"
+        cthru_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true list_after_failed=true"
         return 0
       }
       if ! echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
         [[ "$mode" == "active" ]] && _ollama_done "${RED}✗${NC}" "$model" "pull silent failure"
         echo "c-thru: '$model' still unavailable after pull — try \`ollama pull $model\` manually" >&2
         ollama_prep_state_update "models" "$state_key" "pull_failure" "pull_silent_failure"
-        claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host cached=false after_pull=true"
+        cthru_debug_event "ollama prep result mode=$mode model=$model host=$cli_host cached=false after_pull=true"
         return 0
       fi
       [[ "$mode" == "active" ]] && _ollama_done "${GREEN}✓${NC}" "$model" "pulled"
       ollama_prep_state_update "models" "$state_key" "pull_success" "cached"
-      "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
-      claude_router_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true verified=true"
+      "$CTHRU_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
+      cthru_debug_event "ollama prep pull result mode=$mode model=$model host=$cli_host success=true verified=true"
       age_text="$(ollama_extract_age_text "$model" "$list_output" || true)"
     fi
   else
@@ -2969,41 +2977,41 @@ ensure_ollama_running() {
       if [[ "${CONCURRENT_PULL_CACHED:-0}" == "1" ]]; then
         ollama_prep_state_update "models" "$state_key" "pull_success" "refreshed" "$age_text"
         list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null || true)
-        claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=true via=concurrent_wait"
+        cthru_debug_event "ollama stale refresh result model=$model host=$cli_host success=true via=concurrent_wait"
       else
-        claude_router_debug_event "ollama stale refresh skip model=$model host=$cli_host reason=concurrent_pull_unverified"
+        cthru_debug_event "ollama stale refresh skip model=$model host=$cli_host reason=concurrent_pull_unverified"
       fi
       _refresh_skip=1
     fi
     if (( ! _refresh_skip )); then
       ollama_prep_state_update "models" "$state_key" "pull_attempt" "refreshing" "$age_text"
-      claude_router_debug_event "ollama stale refresh start model=$model host=$cli_host age=\"$age_text\""
+      cthru_debug_event "ollama stale refresh start model=$model host=$cli_host age=\"$age_text\""
       if [[ "$mode" == "active" ]]; then
         # Don't block the live request — refresh in background
         ( "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1 ) &
         disown $! 2>/dev/null || true
-        claude_router_debug_event "ollama stale refresh start mode=active model=$model host=$cli_host bg=true"
+        cthru_debug_event "ollama stale refresh start mode=active model=$model host=$cli_host bg=true"
       else
         if "${ollama_cli_env[@]}" ollama pull "$model" >/dev/null 2>&1; then
           list_output=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null || true)
           if echo "$list_output" | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
             ollama_prep_state_update "models" "$state_key" "pull_success" "refreshed" "$age_text"
-            "$ROUTER_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
-            claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=true verified=true"
+            "$CTHRU_REPO_ROOT/tools/c-thru-ollama-gc.sh" record "$model" router "$cli_host" >/dev/null 2>&1 || true
+            cthru_debug_event "ollama stale refresh result model=$model host=$cli_host success=true verified=true"
           else
             ollama_prep_state_update "models" "$state_key" "pull_failure" "refresh_silent_failure" "$age_text"
-            claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=false reason=not_in_list"
+            cthru_debug_event "ollama stale refresh result model=$model host=$cli_host success=false reason=not_in_list"
           fi
         else
           ollama_prep_state_update "models" "$state_key" "pull_failure" "refresh_failed" "$age_text"
-          claude_router_debug_event "ollama stale refresh result model=$model host=$cli_host success=false"
+          cthru_debug_event "ollama stale refresh result model=$model host=$cli_host success=false"
         fi
       fi
     fi
   fi
 
   if [[ -n "$warm_skip_reason" ]]; then
-    claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host warm_skipped=true reason=$warm_skip_reason"
+    cthru_debug_event "ollama prep result mode=$mode model=$model host=$cli_host warm_skipped=true reason=$warm_skip_reason"
     return 0
   fi
 
@@ -3013,7 +3021,7 @@ ensure_ollama_running() {
   elif [[ "$mode" != "active" ]]; then
     printf "  ${GRAY}•${NC} ${BOLD}%-18s${NC} warming %s (background)\n" "fleet" "$model" >&2
   fi
-  claude_router_debug_event "ollama prep warm start mode=$mode model=$model host=$cli_host"
+  cthru_debug_event "ollama prep warm start mode=$mode model=$model host=$cli_host"
 
   (
     curl -sf -X POST "$cli_host/api/generate" \
@@ -3021,7 +3029,7 @@ ensure_ollama_running() {
       >/dev/null 2>&1
   ) &
   disown $! 2>/dev/null || true
-  claude_router_debug_event "ollama prep result mode=$mode model=$model host=$cli_host warmed=true"
+  cthru_debug_event "ollama prep result mode=$mode model=$model host=$cli_host warmed=true"
 
   # --- Active mode: braille spinner until model appears in /api/ps ---
   if [[ "$mode" == "active" && "$model_loaded" == "0" ]]; then
@@ -3049,7 +3057,7 @@ ensure_ollama_running() {
         api_ps_json=$(curl -sf --max-time 3 "${cli_host}/api/ps" 2>/dev/null || true)
         if echo "$api_ps_json" | grep -qF "\"${model}\""; then
           _ollama_done "${GREEN}✓${NC}" "$model" "ready  ${GRAY}${model_size_str:+($model_size_str, }${time_str}${model_size_str:+)}${NC}"
-          ROUTER_ACTIVE_MODEL_WARMED=1
+          PROXY_ACTIVE_MODEL_WARMED=1
           return 0
         fi
       fi
@@ -3086,13 +3094,13 @@ get_system_info_summary() {
     "${profile:-unknown}" "${llm_mode:-unknown}" "${joined_plan:-none}"
 }
 
-# When CLAUDE_ROUTER_DEBUG is 1 or 2, print routing env to stderr (secrets masked).
+# When C_THRU_DEBUG is 1 or 2, print routing env to stderr (secrets masked).
 # $1: mode — transparent | routed
 claude_router_debug_dump() {
-  local _dl="${CLAUDE_ROUTER_DEBUG:-0}"
+  local _dl="${C_THRU_DEBUG:-0}"
   [[ "$_dl" == "0" || "$_dl" == "false" ]] && return 0
   local mode="$1"
-  echo "c-thru debug ($mode, CLAUDE_ROUTER_DEBUG=$_dl):" >&2
+  echo "c-thru debug ($mode, C_THRU_DEBUG=$_dl):" >&2
   if [[ "$mode" == "transparent" ]]; then
     echo "  MODEL=<unset; remapping is per-request in claude-proxy>" >&2
   else
@@ -3116,8 +3124,8 @@ claude_router_debug_dump() {
   echo "  CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset>}" >&2
   [[ -n "${REAL_CLAUDE:-}" ]] && echo "  REAL_CLAUDE=$REAL_CLAUDE" >&2
   local _pport=""
-  if [[ -n "${ROUTER_PROXY_PORT:-}" ]]; then
-    _pport="$ROUTER_PROXY_PORT"
+  if [[ -n "${PROXY_PORT:-}" ]]; then
+    _pport="$PROXY_PORT"
   elif [[ -n "${CLAUDE_PROXY_PORT:-}" ]]; then
     _pport="$CLAUDE_PROXY_PORT"
   elif [[ "${CLAUDE_PROXY_USE_OLLAMA_PORT:-0}" == "1" ]]; then
@@ -3127,7 +3135,7 @@ claude_router_debug_dump() {
   fi
   [[ -n "$_pport" ]] && echo "  CLAUDE_PROXY_PORT=${_pport}" >&2
   [[ -n "${ANTHROPIC_BASE_URL:-}" ]] && echo "  claude-proxy base=${ANTHROPIC_BASE_URL}" >&2
-  [[ -n "${ROUTER_PROXY_LOG_PATH:-}" ]] && echo "  claude-proxy log=${ROUTER_PROXY_LOG_PATH}" >&2
+  [[ -n "${PROXY_LOG_PATH:-}" ]] && echo "  claude-proxy log=${PROXY_LOG_PATH}" >&2
   if [[ "$_dl" == "2" ]]; then
     echo "  -- verbose --" >&2
     if [[ -n "$_pport" ]]; then
@@ -3135,8 +3143,8 @@ claude_router_debug_dump() {
     fi
     echo "  OLLAMA_URL=$OLLAMA_URL" >&2
     echo "  OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-<unset>}" >&2
-    echo "  CLAUDE_ROUTER_PROXY_PLACEHOLDER_KEY=${CLAUDE_ROUTER_PROXY_PLACEHOLDER_KEY:-0}" >&2
-    echo "  CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART=${CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART:-0}" >&2
+    echo "  C_THRU_PROXY_PLACEHOLDER_KEY=${C_THRU_PROXY_PLACEHOLDER_KEY:-0}" >&2
+    echo "  C_THRU_SKIP_PROXY_AUTOSTART=${C_THRU_SKIP_PROXY_AUTOSTART:-0}" >&2
     echo "  CLAUDE_PROXY_BYPASS=${CLAUDE_PROXY_BYPASS:-0}" >&2
     echo "  CLAUDE_PROXY_LOG_FILE=${CLAUDE_PROXY_LOG_FILE:-<unset>}" >&2
     echo "  CLAUDE_PROXY_LOG_DIR=${CLAUDE_PROXY_LOG_DIR:-<unset>}" >&2
@@ -3149,7 +3157,7 @@ claude_router_debug_dump() {
 }
 
 debug_print_final_claude_command() {
-  local _dl="${CLAUDE_ROUTER_DEBUG:-0}"
+  local _dl="${C_THRU_DEBUG:-0}"
   [[ "$_dl" == "0" || "$_dl" == "false" ]] && return 0
 
   local url="${ANTHROPIC_BASE_URL:-}"
@@ -3188,7 +3196,7 @@ run_real_claude() {
   local quiet_env_color="1"
 
   # We use env to set variables safely without eval for the array
-  if [[ -z "${ROUTER_STARTED_PROXY_PID:-}" ]]; then
+  if [[ -z "${PROXY_STARTED_PID:-}" ]]; then
     if [[ -n "$url" && -n "$tok" ]]; then
       exec env ANTHROPIC_BASE_URL="$url" \
                ANTHROPIC_AUTH_TOKEN="$tok" \
@@ -3202,7 +3210,7 @@ run_real_claude() {
     fi
   fi
 
-  arm_router_child_cleanup
+  arm_proxy_cleanup
   if [[ -n "$url" && -n "$tok" ]]; then
     env ANTHROPIC_BASE_URL="$url" \
         ANTHROPIC_AUTH_TOKEN="$tok" \
@@ -3308,7 +3316,7 @@ build_forwarded_args() {
     info_summary="$(get_system_info_summary "$model")"
     # Append proxy URL so agents that call the proxy directly (e.g. context-injection
     # hooks) know where it is without hard-coding a port.
-    [[ -n "${ROUTER_PROXY_PORT:-}" ]] && info_summary+=" Proxy: http://127.0.0.1:${ROUTER_PROXY_PORT}."
+    [[ -n "${PROXY_PORT:-}" ]] && info_summary+=" Proxy: http://127.0.0.1:${PROXY_PORT}."
     forwarded+=("--append-system-prompt" "/no_thinking $info_summary")
   fi
 
@@ -3386,7 +3394,7 @@ show_models() {
   echo "Any other model name is assumed to be available from local Ollama ($ollama_http_base)."
 
   # Update log footer
-  local update_log="$ROUTER_REPO_ROOT/.c-thru-update.log"
+  local update_log="$CTHRU_REPO_ROOT/.c-thru-update.log"
   if [[ -f "$update_log" ]]; then
     local last_update
     last_update="$(tail -1 "$update_log" 2>/dev/null || true)"
@@ -3656,9 +3664,9 @@ while [[ $i -lt $n ]]; do
     --offline)                 export CLAUDE_LLM_MODE="offline"; i=$((i + 1)) ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;
-    --no-update)        export CLAUDE_ROUTER_NO_UPDATE=1; i=$((i + 1)) ;;
+    --no-update)        export C_THRU_NO_UPDATE=1; i=$((i + 1)) ;;
     --no-agents)        export NO_AGENTS=1; i=$((i + 1)) ;;
-    --debug)            export CLAUDE_ROUTER_DEBUG=1; export CLAUDE_PROXY_DEBUG=1; i=$((i + 1)) ;;
+    --debug)            export C_THRU_DEBUG=1; export CLAUDE_PROXY_DEBUG=1; i=$((i + 1)) ;;
     --proxy-debug=*)    export CLAUDE_PROXY_DEBUG="${a#--proxy-debug=}"; i=$((i + 1)) ;;
     --proxy-debug)
       if [[ $((i + 1)) -lt $n && "${ORIG_ARGS[i+1]}" =~ ^[12]$ ]]; then
@@ -3667,12 +3675,12 @@ while [[ $i -lt $n ]]; do
         export CLAUDE_PROXY_DEBUG=1; i=$((i + 1))
       fi
       ;;
-    --router-debug=*)   export CLAUDE_ROUTER_DEBUG="${a#--router-debug=}"; i=$((i + 1)) ;;
+    --router-debug=*)   export C_THRU_DEBUG="${a#--router-debug=}"; i=$((i + 1)) ;;
     --router-debug)
       if [[ $((i + 1)) -lt $n && "${ORIG_ARGS[i+1]}" =~ ^[12]$ ]]; then
-        export CLAUDE_ROUTER_DEBUG="${ORIG_ARGS[i+1]}"; i=$((i + 2))
+        export C_THRU_DEBUG="${ORIG_ARGS[i+1]}"; i=$((i + 2))
       else
-        export CLAUDE_ROUTER_DEBUG=1; i=$((i + 1))
+        export C_THRU_DEBUG=1; i=$((i + 1))
       fi
       ;;
     --memory-gb=*)
@@ -3932,7 +3940,7 @@ while IFS= read -r -d '' arg; do
   FINAL_ARGS+=("$arg")
 done < <(build_forwarded_args "$FINAL_MODEL_ARG")
 debug_print_final_claude_command "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
-preflight_model_readiness "${ROUTER_PROXY_PORT:-}"
+preflight_model_readiness "${PROXY_PORT:-}"
 printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} launching session...\n" "status" >&2
 run_real_claude "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 exit $?
