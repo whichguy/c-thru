@@ -1189,9 +1189,12 @@ apply_background_model_overrides() {
   if [[ -z "${CLAUDE_CODE_SUBAGENT_MODEL:-}" && -n "$launch_model" ]]; then
     export CLAUDE_CODE_SUBAGENT_MODEL="$launch_model"
   fi
-  # Always clear ANTHROPIC_API_KEY: c-thru auth is via ANTHROPIC_AUTH_TOKEN or the proxy's
-  # own key; an ambient key in the environment would bypass that and leak to Anthropic.
-  export ANTHROPIC_API_KEY=""
+  # Clear ambient ANTHROPIC_API_KEY only on proxy-authenticated paths.
+  # apply_provider_block() sets ANTHROPIC_AUTH_TOKEN for proxy/Ollama backends
+  # but leaves it unset for direct-Anthropic backends (kind: "anthropic" with
+  # a real api_key). Clearing API_KEY there would 401 the request — see e.g.
+  # the longContext route → claude-sonnet-4-6 → anthropic backend chain.
+  [[ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]] && export ANTHROPIC_API_KEY=""
 
   local llm_mode
   llm_mode="$(resolve_llm_mode)"
