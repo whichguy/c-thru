@@ -181,7 +181,7 @@ function httpJson(port, method, urlPath, body, extraHeaders = {}, timeout = 3000
           const bodyText = Buffer.concat(chunks).toString('utf8');
           let json = null;
           try { json = JSON.parse(bodyText); } catch {}
-          resolve({ status: res.statusCode, headers: res.headers, json, bodyText });
+          resolve({ status: res.statusCode, headers: res.headers, json, body: json, bodyText });
         });
       }
     );

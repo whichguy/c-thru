@@ -1420,6 +1420,78 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
   });
 }
 
+const PROBE_QUESTION = 'What is your model name, model id, where were you born, and who made you?';
+
+async function handleProbeLlm(req, res) {
+  const tier = resolveActiveTier(CONFIG);
+  const mode = resolveLlmMode(CONFIG);
+
+  let modelParam = null;
+  try { modelParam = new URL(req.url, 'http://x').searchParams.get('model') || null; } catch {}
+
+  const modelName = modelParam || (CONFIG.routes && CONFIG.routes.default) || null;
+  if (!modelName) {
+    return send(res, 400, { ok: false, error: 'no model specified and no default route configured' });
+  }
+
+  const resolved = resolveBackend(modelName, CONFIG, tier, mode);
+  if (resolved.error) {
+    return send(res, 400, { ok: false, error: resolved.error });
+  }
+
+  const { backend, effectiveModel } = resolved;
+  if (backend._ollamaFallback) {
+    return send(res, 400, { ok: false, error: `'${modelName}' not found in model_routes; cannot probe an unknown model` });
+  }
+  if ((backend.kind || 'anthropic') !== 'ollama') {
+    return send(res, 400, { ok: false, error: `probe only supports ollama backends; '${backend.id}' is kind '${backend.kind || 'anthropic'}'` });
+  }
+
+  const ollamaBody = JSON.stringify({
+    model: effectiveModel,
+    messages: [{ role: 'user', content: PROBE_QUESTION }],
+    stream: false,
+    keep_alive: OLLAMA_KEEP_ALIVE,
+    options: { num_ctx: 4096 },
+  });
+
+  const startedAt = Date.now();
+  const url = backend.url.replace(/\/$/, '') + '/api/chat';
+
+  return new Promise(resolve => {
+    const up = http.request(url, { method: 'POST', headers: { 'content-type': 'application/json' } }, upRes => {
+      let body = '';
+      upRes.on('data', c => { body += c.toString(); });
+      upRes.on('end', () => {
+        if (upRes.statusCode !== 200) {
+          send(res, 502, { ok: false, error: `ollama returned ${upRes.statusCode}`, backend: backend.id });
+          return resolve();
+        }
+        let parsed;
+        try { parsed = JSON.parse(body); } catch {
+          send(res, 502, { ok: false, error: 'ollama returned invalid JSON', backend: backend.id });
+          return resolve();
+        }
+        send(res, 200, {
+          ok: true,
+          model_used: effectiveModel,
+          backend: backend.id,
+          response: (parsed.message && parsed.message.content) || '',
+          elapsed_ms: Date.now() - startedAt,
+        });
+        resolve();
+      });
+    });
+    up.setTimeout(15000, () => { up.destroy(new Error('probe timeout')); });
+    up.on('error', e => {
+      send(res, 502, { ok: false, error: `ollama unreachable: ${e.message}`, backend: backend.id });
+      resolve();
+    });
+    up.write(ollamaBody);
+    up.end();
+  });
+}
+
 // Handle a non-streaming Ollama response. Buffers the full body, parses the
 // Ollama JSON, and re-shapes it into an Anthropic Messages response object.
 // Mirrors the content array structure of the streaming path (thinking first,
@@ -1841,6 +1913,10 @@ const server = http.createServer((req, res) => {
           if (isLocal && !local_models.includes(base)) local_models.push(base);
         }
         return send(res, 200, { tier, mode, local_models, capabilities });
+      }
+
+      if (req.method === 'GET' && req.url.startsWith('/v1/probe-llm')) {
+        return handleProbeLlm(req, res);
       }
 
       if (req.method === 'POST' && req.url.startsWith('/v1/messages')) {
