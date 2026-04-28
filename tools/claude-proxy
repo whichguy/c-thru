@@ -296,7 +296,7 @@ const USAGE_STATS_FILE = process.env.CLAUDE_PROXY_USAGE_STATS_FILE || path.join(
 const PID_FILE = path.join(os.homedir(), '.claude', 'proxy.pid');
 
 // Persistent token-usage stats. Loaded at boot, mutated in-process by
-// recordUsage() (called from the dispatch-completion paths in forwardOllama
+// recordUsage() (called from the dispatch-completion paths in forwardOllamaLegacy
 // + forwardAnthropic), debounce-flushed to disk so the hot path doesn't pay
 // fs.writeFileSync latency per request. Sync-flushed on shutdown signals so
 // we don't lose the last debounce window.
@@ -543,7 +543,7 @@ function send(res, code, obj) {
 
 // ── Anthropic-fidelity helpers ───────────────────────────────────────────
 // Make our Ollama→Anthropic-translated responses indistinguishable from real
-// api.anthropic.com responses. These are used by forwardOllama only; the
+// api.anthropic.com responses. These are used by forwardOllamaLegacy only; the
 // forwardAnthropic path passes upstream output through verbatim.
 
 function anthropicMessageId() {
@@ -688,7 +688,7 @@ function tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta) 
     to_model: OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL,
   });
   body.model = OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL;
-  forwardOllama(ctx, req, res, body, backend, OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL, requestMeta);
+  dispatchOllamaBackend(ctx, req, res, body, backend, OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL, requestMeta);
   return true;
 }
 
@@ -734,7 +734,7 @@ function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
   requestMeta._fallbackFrom = requestMeta._fallbackFrom || termResolved.backend.id;
   body.model = termResolved.effectiveModel;
   ctxLog(ctx, 'fallback.local_terminal', { model: termModel, backend: termResolved.backend.id, capability: capKey });
-  forwardOllama(ctx, req, res, body, termResolved.backend, termResolved.effectiveModel, requestMeta);
+  dispatchOllamaBackend(ctx, req, res, body, termResolved.backend, termResolved.effectiveModel, requestMeta);
   return true;
 }
 
@@ -749,7 +749,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
 
   // Cycle / depth tracking across fallback hops. resolveBackend has its own
   // _seen Set for route-chain cycles within a single resolution; this Set
-  // tracks across DISPATCH hops (separate invocations of forwardOllama /
+  // tracks across DISPATCH hops (separate invocations of dispatchOllamaBackend /
   // forwardAnthropic).
   const chain = requestMeta._fallbackChain || (requestMeta._fallbackChain = new Set());
   if (chain.has(backend.id)) {
@@ -812,7 +812,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
     });
     body.model = resolved.effectiveModel;
     if (resolved.backend.kind === 'ollama') {
-      forwardOllama(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
+      dispatchOllamaBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
     } else {
       forwardAnthropic(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
     }
@@ -846,7 +846,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
       requestMeta._fallbackFrom = requestMeta._fallbackFrom || backend.id;
       body.model = candidateResolved.effectiveModel;
       if (candidateResolved.backend.kind === 'ollama') {
-        forwardOllama(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
+        dispatchOllamaBackend(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
       } else {
         forwardAnthropic(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
       }
@@ -888,7 +888,7 @@ function tryGlobalDefaultFallback(ctx, req, res, body, requestMeta) {
   chain.add(resolved.backend.id);
   body.model = resolved.effectiveModel;
   if (resolved.backend.kind === 'ollama') {
-    forwardOllama(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
+    dispatchOllamaBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
   } else {
     forwardAnthropic(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
   }
@@ -904,6 +904,26 @@ function shouldFallbackOnStatus(code) {
   return code >= 401 && code < 600;
 }
 
+// =============================================================================
+// OUTGOING WIRE FORMAT: Anthropic Messages API (/v1/messages)
+// =============================================================================
+// This forwarder handles ANY backend that speaks Anthropic's Messages API:
+//   - kind: "anthropic"  — api.anthropic.com (auth: x-api-key from auth_env)
+//   - kind: "openrouter" — openrouter.ai     (auth: x-api-key from auth_env)
+//   - kind: "ollama"     — Ollama 0.4+ Anthropic adapter at /v1/messages
+//                          (auth: Authorization: Bearer ollama, hardcoded)
+//
+// Body is forwarded VERBATIM — no flattening, no tool-block stripping, no
+// re-serialization. The only mutation made by callers is body.model (rewritten
+// to the resolved concrete model upstream of dispatch). Ollama and Anthropic
+// both consume the same dialect at /v1/messages: tool_use / tool_result /
+// thinking blocks all roundtrip natively.
+//
+// For older Ollama installs or LM Studio's Ollama-compat shim that lack
+// /v1/messages, opt the backend into forwardOllamaLegacy() with
+// `legacy_ollama_chat: true` in model-map.json — that path uses Ollama's
+// native /api/chat with the (lossy) flattenMessagesForOllama translation.
+// =============================================================================
 async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
@@ -911,7 +931,15 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   const authKey = backend.auth_env ? process.env[backend.auth_env] : '';
 
   const headers = scrubCthruHeaders(req.headers);
-  if (authKey) headers['x-api-key'] = authKey;
+  if (backend.kind === 'ollama') {
+    // Ollama's /v1/messages adapter accepts any non-empty bearer. Hardcode the
+    // value (overriding any incoming Authorization) so an ambient real
+    // Anthropic key in the client env can never leak to a local backend.
+    headers['authorization'] = 'Bearer ollama';
+    delete headers['x-api-key'];
+  } else if (authKey) {
+    headers['x-api-key'] = authKey;
+  }
 
   // Combine the backend's optional base path with the client's request path.
   // - Anthropic backend url=https://api.anthropic.com → pathname='/' → use req.url verbatim ("/v1/messages?beta=true")
@@ -1591,7 +1619,32 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
   });
 }
 
-async function forwardOllama(ctx, req, res, body, backend, effectiveModel, requestMeta) {
+// Dispatch an Ollama-kind backend to the right forwarder based on the
+// `legacy_ollama_chat` opt-in. The default is forwardAnthropic (verbatim
+// pass-through to <backend.url>/v1/messages) which preserves tool_use /
+// tool_result blocks. The legacy path is for Ollama < 0.4 or LM Studio.
+function dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta) {
+  if (backend.legacy_ollama_chat === true) {
+    return forwardOllamaLegacy(ctx, req, res, body, backend, effectiveModel, requestMeta);
+  }
+  return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
+}
+
+// =============================================================================
+// LEGACY WIRE FORMAT: Ollama native /api/chat (NOT Anthropic Messages API)
+// =============================================================================
+// Translates Anthropic-format requests to Ollama's native /api/chat shape via
+// flattenMessagesForOllama() + buildOllamaRequestBody(), and translates the
+// NDJSON response back to Anthropic SSE via setupOllamaStream().
+//
+// This path strips non-text content blocks (tool_use, tool_result, thinking)
+// during flattening — multi-turn tool conversations don't roundtrip cleanly.
+// Use only for backends without /v1/messages support (Ollama < 0.4, LM Studio's
+// Ollama-compat shim) by setting `legacy_ollama_chat: true` on the backend.
+// New deployments should leave the flag absent and use forwardAnthropic via
+// dispatchOllamaBackend.
+// =============================================================================
+async function forwardOllamaLegacy(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   const url = backend.url.replace(/\/$/, '') + '/api/chat';
   const headers = scrubCthruHeaders(req.headers);
   headers['content-type'] = 'application/json';
@@ -1673,7 +1726,7 @@ async function forwardOllama(ctx, req, res, body, backend, effectiveModel, reque
     // errors (ECONNREFUSED, ENOTFOUND), TTFT timeouts (upstream wedged on
     // headers), upstream timeouts (5min hard cap). Same machinery as
     // forwardAnthropic — re-resolves through the route graph and dispatches
-    // through forwardOllama or forwardAnthropic depending on the fallback
+    // through dispatchOllamaBackend or forwardAnthropic depending on the fallback
     // target's backend kind.
     //
     // Cloud→local rewrite first: if the failing model is :cloud-suffixed
@@ -2040,7 +2093,7 @@ const server = http.createServer((req, res) => {
 
         body.model = effectiveModel;
         if (backend.kind === 'ollama') {
-          return forwardOllama(ctx, req, res, body, backend, effectiveModel, requestMeta);
+          return dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
         return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
       }
