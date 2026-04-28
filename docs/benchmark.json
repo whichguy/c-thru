@@ -237,9 +237,20 @@
       "tokens_per_sec": 43,
       "quality_per_role": {
         "logic": 3.7,
+        "judge": 2
+      },
+      "notes": "DO NOT USE FOR JUDGE ROLES. Tournament: J1=q=1, J2=q=1, J4=q=5 (464–1137s per prompt). Extended thinking chains actively second-guess correct verdicts. Use phi4-reasoning:latest instead. Strong on raw logic (82.5% AIME 2025)."
+    },
+    "phi4-reasoning:latest": {
+      "display_name": "Phi-4-Reasoning",
+      "provider": "ollama_local",
+      "ram_gb": 9,
+      "tokens_per_sec": 50,
+      "quality_per_role": {
+        "logic": 3.5,
         "judge": 5
       },
-      "notes": "Best cross-role judge (q=5.0 on all four judge prompts). (:plus variant — 82.5% AIME 2025 vs 71.4% for :latest)"
+      "notes": "Best local judge model. Tournament: q=5 on ALL four judge prompts (J1–J4) — only model to achieve this. 20–38s per prompt. Preferred over :plus for all judge/evaluator/auditor roles."
     }
   },
   "role_minimums": {
@@ -274,19 +285,23 @@
     "coder": "coder",
     "deep-coder": "coder",
     "deep-coder-precise": "coder",
-    "deep-coder-cloud": "coder",
+    "implementer-heavy": "coder",
     "orchestrator": "orchestrator",
     "reviewer": "reviewer",
     "code-analyst": "code-analyst",
     "code-analyst-light": "code-analyst",
-    "code-analyst-cloud": "code-analyst",
+    "test-writer-heavy": "code-analyst",
     "pattern-coder": "pattern-coder",
     "classifier": "fast_generalist",
     "explorer": "explorer",
     "fast-scout": "fast_generalist",
     "reasoner": "debugger",
+    "deep-code-debugger": "debugger",
+    "fast-code-debugger": "fast_generalist",
     "local-planner": "orchestrator",
     "commit-message-generator": "fast_generalist",
+    "image-analyst": "vision",
+    "writer": "generalist",
     "default": "generalist"
   }
 }

@@ -305,6 +305,35 @@ The unsloth GGUF discussion #2 that was originally cited describes a **template 
 
 ---
 
+## phi4-reasoning (Judge / Logic Role)
+
+Microsoft Phi-4-Reasoning variants. c-thru uses `phi4-reasoning:latest` (not `:plus`) for all judge/evaluator roles.
+
+### Critical Finding: `:plus` regresses on judge calibration
+
+**Tournament result (2026-04-25, 507 runs):** `phi4-reasoning:latest` scored **q=5 on all four judge prompts (J1–J4)** — the only model to achieve this. `phi4-reasoning:plus` scored **q=1 on J1 and J2** (took 464–1137 seconds per prompt) and actively second-guessed correct scoring verdicts during its extended reasoning chain. Extended thinking is counterproductive for structured criterion-evaluation tasks.
+
+| Model | J1 | J2 | J4 | Time |
+|---|---|---|---|---|
+| phi4-reasoning:latest | 5 | 5 | 5 | 20–38s |
+| phi4-reasoning:plus | 1 | 1 | 5 | 464–1137s |
+
+**Conclusion:** Always use `:latest` for judge, evaluator, auditor, and final-reviewer roles. `:plus` is stronger for raw logic benchmarks (AIME 2025: 82.5% vs 71.4%) but is strictly worse for rubric-based evaluation.
+
+### System prompt behavior
+
+`phi4-reasoning:latest` bakes in a default system prompt via the Ollama Modelfile: *"You are Phi, a language model trained by Microsoft... respond in `<think>` (Thought) then `{Solution}` format."* A custom `system:` message in the request **fully replaces** (does not merge with) the baked-in prompt. The Thought/Solution two-section output format is the native contract — match it in any persona override: *"You are a code quality judge. Respond in `<think>` (reasoning) then a structured verdict."*
+
+### Sampling
+
+No official temperature recommendation published. Community standard: `0.6–0.8`. Start at `0.7` for evaluation tasks. Greedy (0.0) increases verbatim repetition.
+
+### Prompt injection posture
+
+More robust than deepseek-r1 and Qwen family for structured tasks. Main failure mode: `:plus` second-guesses correct conclusions via extended reasoning. Avoid `:plus` entirely for evaluation pipelines.
+
+---
+
 ## Authoritative Corrections & Disavowals
 
 Claims in this document and in the community that have been explicitly corrected, refuted, or qualified by model makers, Ollama maintainers, or cross-runtime isolation. Each entry cites the authority and the exact correction.

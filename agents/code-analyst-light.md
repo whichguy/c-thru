@@ -21,3 +21,5 @@ The **code-analyst-light** is a rapid-response specialist designed for high-freq
 ## Strategy
 
 Routes to `code-analyst-light`. 128gb: `gemma4:26b` (17GB, 102 t/s). 32–64gb: `gemma4:e2b` (very small, extremely fast). 16gb: `qwen3:1.7b`. Designed for high-frequency lightweight analysis — audit 10 files quickly rather than deeply analyzing one.
+
+**gemma4:26b MoE constraint:** System prompts >~500 chars may trigger empty responses (Ollama #15428, disputed). Keep task descriptions short. If empty responses occur at 128gb, use `code-analyst` (devstral-backed) instead.

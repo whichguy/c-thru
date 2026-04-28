@@ -18,6 +18,8 @@ The **explorer** is a deep-dive reconnaissance specialist designed to answer a s
 
 Routes to `explorer` capability. 128gb: `gemma4:26b` (17GB, 102 t/s — fast read-only scanning). Lower: `devstral-small-2:24b`. Explorer runs many times per plan; small fast models keep discovery cheap.
 
+**gemma4:26b MoE constraint:** System prompts >~500 chars can produce empty responses on the 26b MoE (Ollama #15428, disputed). This agent body is long — if empty responses occur at 128gb, the tier may be falling back silently. Dense variant (gemma4:31b) is the reliable alternative for long-prompt scenarios.
+
 # explorer
 
 Read-only discovery role. Do not write to any source files.

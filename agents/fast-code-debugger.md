@@ -21,3 +21,5 @@ The **fast-code-debugger** is a rapid-response triage specialist. It surfaces li
 ## Strategy
 
 Routes to `fast-code-debugger` capability with `hard_fail`. 32gb+: `gemma4:26b` (17GB, 102 t/s, q=4.5 debugger). 16gb: `deepseek-r1:14b`. Hard-fail prevents silent quality degradation. Escalate to `deep-code-debugger` when initial candidates don't pan out or you need a verified causal chain.
+
+**gemma4:26b MoE constraint:** System prompts exceeding ~500 characters can trigger empty responses on the 26b MoE (Ollama issue #15428, disputed). Keep requests focused; verbose preamble will fail silently. Dense variants (gemma4:31b) handle long prompts without issue.

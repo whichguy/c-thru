@@ -22,3 +22,5 @@ The **writer** is a prose specialist for high-quality long-form writing: technic
 ## Strategy
 
 Routes to `writer` capability. Connected 128gb: `claude-opus-4-6` — top prose quality for long-form documentation. Connected 32–64gb: `claude-sonnet-4-6`. Local: `mistral-small3.1:24b` (24GB, prose-capable). For code generation, use `coder` or `implementer` instead. Writer is optimized for human-readable long-form content, not machine-executable output.
+
+**mistral-small3.1:24b style guidance (local mode):** Use concrete style constraints rather than abstract adjectives — specify sentence length, tense, and structure instead of "write like Hemingway". Temperature 0.75 produces best prose output (0.15 default produces flat, generic output). Provide 2–3 specific style rules in the request ("short declarative sentences, present tense, no adverbs") for best results.

@@ -256,9 +256,9 @@
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:plus",
+        "disconnect_model": "phi4-reasoning:latest",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:plus",
+        "local_best_model": "phi4-reasoning:latest",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
@@ -269,9 +269,9 @@
       },
       "judge-strict": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:plus",
+        "disconnect_model": "phi4-reasoning:latest",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:plus",
+        "local_best_model": "phi4-reasoning:latest",
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
@@ -378,9 +378,9 @@
       },
       "large-general": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:plus",
+        "disconnect_model": "phi4-reasoning:latest",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:plus",
+        "local_best_model": "phi4-reasoning:latest",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
@@ -490,9 +490,9 @@
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:plus",
+        "disconnect_model": "phi4-reasoning:latest",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:plus",
+        "local_best_model": "phi4-reasoning:latest",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
@@ -504,9 +504,9 @@
       },
       "judge-strict": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:plus",
+        "disconnect_model": "phi4-reasoning:latest",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:plus",
+        "local_best_model": "phi4-reasoning:latest",
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
@@ -628,9 +628,9 @@
       },
       "large-general": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:plus",
+        "disconnect_model": "phi4-reasoning:latest",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:plus",
+        "local_best_model": "phi4-reasoning:latest",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
@@ -751,9 +751,9 @@
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:plus",
+        "disconnect_model": "phi4-reasoning:latest",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:plus",
+        "local_best_model": "phi4-reasoning:latest",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
@@ -765,9 +765,9 @@
       },
       "judge-strict": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:plus",
+        "disconnect_model": "phi4-reasoning:latest",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:plus",
+        "local_best_model": "phi4-reasoning:latest",
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
@@ -881,9 +881,9 @@
       },
       "large-general": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:plus",
+        "disconnect_model": "phi4-reasoning:latest",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:plus",
+        "local_best_model": "phi4-reasoning:latest",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
@@ -1257,7 +1257,8 @@
     "deepseek-r1:32b": "ollama_local",
     "qwen3.6:35b-a3b": "ollama_local",
     "qwen3.6:27b": "ollama_local",
-    "devstral-small-2:24b-cloud": "ollama_cloud"
+    "devstral-small-2:24b-cloud": "ollama_cloud",
+    "phi4-reasoning:latest": "ollama_local"
   },
   "routes": {
     "default": "workhorse",
