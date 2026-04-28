@@ -4,17 +4,30 @@
 const fs = require('fs');
 const path = require('path');
 
+// Hardcoded fallback for test fixtures that don't include llm_profiles.
+// Production validation uses deriveCapabilityAliases(config) instead — see below.
 const PROFILE_KEYS = ['default', 'classifier', 'explorer', 'reviewer', 'workhorse', 'coder',
   'judge', 'judge-strict', 'orchestrator', 'code-analyst', 'pattern-coder', 'deep-coder',
   'local-planner', 'commit-message-generator',
   'implementer-heavy', 'test-writer-heavy',
   'reasoner', 'fast-scout', 'code-analyst-light', 'deep-coder-precise', 'agentic-coder',
   'fast-coder',
-  // agent-named aliases (1:1 routing — agent name == capability key)
   'deep-code-debugger', 'fast-code-debugger',
   'generalist', 'vision', 'pdf', 'fast-generalist', 'large-general',
   'long-context', 'context-manager', 'edge', 'refactor',
   'image-analyst', 'writer'];
+
+// Returns the union of all capability-alias keys across every hw tier in llm_profiles.
+// Falls back to the hardcoded PROFILE_KEYS list when the config has no profiles (test fixtures).
+function deriveCapabilityAliases(config) {
+  const aliases = new Set();
+  if (isObject(config.llm_profiles)) {
+    for (const tier of Object.values(config.llm_profiles)) {
+      if (isObject(tier)) { for (const key of Object.keys(tier)) aliases.add(key); }
+    }
+  }
+  return aliases.size > 0 ? aliases : new Set(PROFILE_KEYS);
+}
 const CAPABILITY_KEYS = new Set([
   'default',
   'classify_intent',
@@ -333,7 +346,7 @@ function validateFallbackChains(chains, report, modelRoutes, backends) {
           const sigil = last.model.match(BACKEND_SIGIL_RE);
           const backendId = sigil ? sigil[1] : modelRoutes[last.model];
           const backend = backendId && backends[backendId];
-          const isLocal = backend && backend.kind === 'ollama' && !last.model.endsWith(':cloud');
+          const isLocal = backend && (backend.kind === 'ollama' || (backend.format === 'anthropic' && /localhost|127\.0\.0\.1/.test(backend.url || ''))) && !last.model.endsWith(':cloud');
           if (!isLocal) {
             report(
               `fallback_chains.${tier}.${cap}: terminal entry '${last.model}' must be a local ` +
@@ -430,9 +443,39 @@ function validateConfig(config, _errors, options) {
 
   if (!isObject(config)) { report('top-level config must be an object'); return; }
 
-  for (const key of ['backends', 'model_routes', 'routes']) {
+  for (const key of ['backends', 'endpoints', 'model_routes', 'routes']) {
     if (config[key] != null && !isObject(config[key])) {
       report(`'${key}' must be an object when present`);
+    }
+  }
+
+  const endpointsOrBackends = config.endpoints || config.backends;
+  const endpointsKey = config.endpoints ? 'endpoints' : 'backends';
+  const VALID_FORMATS = new Set(['anthropic', 'openai', 'ollama-legacy']);
+  if (endpointsOrBackends != null && isObject(endpointsOrBackends)) {
+    for (const [id, entry] of Object.entries(endpointsOrBackends)) {
+      if (!isObject(entry)) { report(`'${endpointsKey}.${id}' must be an object`); continue; }
+      if (entry.format != null && !VALID_FORMATS.has(entry.format)) {
+        report(`'${endpointsKey}.${id}.format' must be one of: ${[...VALID_FORMATS].join(', ')}`);
+      }
+      if (entry.auth != null && entry.auth !== 'none') {
+        if (typeof entry.auth !== 'object' || Array.isArray(entry.auth)) {
+          report(`'${endpointsKey}.${id}.auth' must be "none" or an object`);
+        } else {
+          if (entry.auth.env == null && entry.auth.literal == null) {
+            report(`'${endpointsKey}.${id}.auth' object must have 'env' or 'literal' field`);
+          }
+          if (entry.auth.header != null && (typeof entry.auth.header !== 'string' || !entry.auth.header.trim())) {
+            report(`'${endpointsKey}.${id}.auth.header' must be a non-empty string when present`);
+          }
+        }
+      }
+      if (entry.auth == null && entry.auth_env == null) {
+        const url = entry.url || '';
+        if (url && !/localhost|127\.0\.0\.1/.test(url)) {
+          console.warn(`model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming auth will be forwarded verbatim`);
+        }
+      }
     }
   }
 
@@ -467,21 +510,21 @@ function validateConfig(config, _errors, options) {
   if (profiles) {
     for (const [profileName, profileValue] of Object.entries(profiles)) {
       if (!isObject(profileValue)) { report(`'llm_profiles.${profileName}' must be an object`); continue; }
-      for (const aliasName of PROFILE_KEYS) {
-        if (profileValue[aliasName] != null) {
-          if (!isObject(profileValue[aliasName])) {
+      for (const [aliasName, aliasEntry] of Object.entries(profileValue)) {
+        if (aliasEntry != null) {
+          if (!isObject(aliasEntry)) {
             report(`'llm_profiles.${profileName}.${aliasName}' must be an object`);
           } else {
-            if (typeof profileValue[aliasName].connected_model !== 'string' || !profileValue[aliasName].connected_model.trim()) {
+            if (typeof aliasEntry.connected_model !== 'string' || !aliasEntry.connected_model.trim()) {
               report(`'llm_profiles.${profileName}.${aliasName}.connected_model' must be a non-empty string`);
             }
-            if (typeof profileValue[aliasName].disconnect_model !== 'string' || !profileValue[aliasName].disconnect_model.trim()) {
+            if (typeof aliasEntry.disconnect_model !== 'string' || !aliasEntry.disconnect_model.trim()) {
               report(`'llm_profiles.${profileName}.${aliasName}.disconnect_model' must be a non-empty string`);
             }
-            if (profileValue[aliasName].on_failure != null && !ON_FAILURE_VALUES.has(profileValue[aliasName].on_failure)) {
+            if (aliasEntry.on_failure != null && !ON_FAILURE_VALUES.has(aliasEntry.on_failure)) {
               report(`'llm_profiles.${profileName}.${aliasName}.on_failure' must be one of: ${[...ON_FAILURE_VALUES].join(', ')}`);
             }
-            const modesEntry = profileValue[aliasName].modes;
+            const modesEntry = aliasEntry.modes;
             if (modesEntry != null) {
               if (!isObject(modesEntry)) {
                 report(`'llm_profiles.${profileName}.${aliasName}.modes' must be an object`);
@@ -497,7 +540,7 @@ function validateConfig(config, _errors, options) {
               }
             }
             for (const optKey of ['cloud_best_model', 'local_best_model']) {
-              const v = profileValue[aliasName][optKey];
+              const v = aliasEntry[optKey];
               if (v != null && (typeof v !== 'string' || !v.trim())) {
                 report(`'llm_profiles.${profileName}.${aliasName}.${optKey}' must be a non-empty string when present`);
               }
@@ -535,8 +578,8 @@ function validateConfig(config, _errors, options) {
     try { validateFallbackGraph(config); } catch (e) { report(e.message); }
   }
 
-  if (config.model_routes != null && isObject(config.model_routes) && isObject(config.backends)) {
-    // A target value may be either a backend id (validated against config.backends), or a
+  if (config.model_routes != null && isObject(config.model_routes) && isObject(endpointsOrBackends)) {
+    // A target value may be either a backend id (validated against endpointsOrBackends), or a
     // model name (forwarded by resolveBackend — model_routes lookup, sigil parse, or fallback).
     // Since we don't have a closed list of valid model names, we only validate backend-id strings.
     const validateTarget = (modelKey, target, modeLabel = '') => {
@@ -552,10 +595,7 @@ function validateConfig(config, _errors, options) {
       //      simulating the full route graph, so we accept it here.
       //   3. Else → bare identifier that's neither a backend nor model-name-shaped.
       //      Almost certainly a typo (e.g. 'anthropi' for 'anthropic'). Report.
-      // The order matters: future backend ids could legitimately contain '.' or
-      // '_' (e.g. "ollama.local", "bedrock_us-east-1"), and checking backends
-      // first means a typo won't silently pass on those configs.
-      if (config.backends[target]) return;
+      if (endpointsOrBackends[target]) return;
       if (/[@.:]/.test(target)) return;
       report(`model_routes['${ctx}'] references unknown backend '${target}'`);
     };
@@ -563,15 +603,25 @@ function validateConfig(config, _errors, options) {
       const sigilMatch = modelKey.match(BACKEND_SIGIL_RE);
       if (sigilMatch) {
         const [, , backendId] = sigilMatch;
-        if (!config.backends[backendId]) {
+        if (!endpointsOrBackends[backendId]) {
           report(`model_routes key '${modelKey}' references @backend '${backendId}' which is not declared in backends`);
         }
       }
       const target = config.model_routes[modelKey];
-      // Object form: mode-conditional targets, e.g. { connected: "anthropic", offline: "qwen3.6@ollama_local" }
       if (target && typeof target === 'object' && !Array.isArray(target)) {
-        for (const [modeKey, modeTarget] of Object.entries(target)) {
-          validateTarget(modelKey, modeTarget, modeKey);
+        if (typeof target.endpoint === 'string') {
+          // v2 alias object form: { endpoint: "...", name: "..." }
+          if (!endpointsOrBackends[target.endpoint]) {
+            report(`model_routes['${modelKey}'].endpoint references unknown endpoint '${target.endpoint}'`);
+          }
+          if (typeof target.name !== 'string' || !target.name.trim()) {
+            report(`model_routes['${modelKey}'].name must be a non-empty string`);
+          }
+        } else {
+          // Mode-conditional targets, e.g. { connected: "anthropic", offline: "qwen3.6@ollama_local" }
+          for (const [modeKey, modeTarget] of Object.entries(target)) {
+            validateTarget(modelKey, modeTarget, modeKey);
+          }
         }
       } else {
         validateTarget(modelKey, target);
@@ -600,11 +650,11 @@ function validateConfig(config, _errors, options) {
   }
 
   if (config.fallback_chains != null) {
-    validateFallbackChains(config.fallback_chains, report, config.model_routes, config.backends);
+    validateFallbackChains(config.fallback_chains, report, config.model_routes, endpointsOrBackends);
   }
 
   if (config.targets != null) {
-    validateTargets(config.targets, config.routes, config.backends, report, opts);
+    validateTargets(config.targets, config.routes, endpointsOrBackends, report, opts);
   }
 
   // agent_to_capability: flat map of agent-name → capability-alias, used for 2-hop resolution.
@@ -612,7 +662,7 @@ function validateConfig(config, _errors, options) {
   // resolveCapabilityAlias can complete the 2-hop lookup without silently falling through
   // to a passthrough on a typo.
   if (config.agent_to_capability != null) {
-    const validCapAliases = new Set(PROFILE_KEYS);
+    const validCapAliases = deriveCapabilityAliases(config);
     if (!isObject(config.agent_to_capability)) {
       report("'agent_to_capability' must be an object when present");
     } else {
@@ -663,7 +713,7 @@ function validateRecommendedMappings(config, _errors) {
     report("'updated_at' must be a non-empty string");
   }
 
-  const validCaps = new Set(PROFILE_KEYS);
+  const validCaps = deriveCapabilityAliases(config);
   const recs = config.recommendations;
   if (recs != null) {
     if (!isObject(recs)) {

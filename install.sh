@@ -66,7 +66,7 @@ chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TO
 chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-apply-recommendations.js" "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-resolve.js" "$TOOLS_SRC/c-thru-resolve" 2>/dev/null || true
-chmod +x "$TOOLS_SRC/c-thru-enter-plan-hook.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-enter-plan-hook.sh" "$TOOLS_SRC/c-thru-agent-router-hook.sh" 2>/dev/null || true
 
 mkdir -p "$TOOLS_DEST"
 
@@ -132,6 +132,7 @@ link_tool c-thru-self-update.sh c-thru-self-update
 link_tool verify-lmstudio-ollama-compat.sh verify-lmstudio-ollama-compat
 link_tool c-thru-ollama-probe.sh c-thru-ollama-probe
 link_tool c-thru-enter-plan-hook.sh c-thru-enter-plan-hook
+link_tool c-thru-agent-router-hook.sh c-thru-agent-router-hook
 link_tool c-thru-postcompact-context.sh c-thru-postcompact-context
 
 # --- Migrate legacy providers schema ---

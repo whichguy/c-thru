@@ -369,7 +369,7 @@ function flushPersistentUsageNowSync() {
   try {
     fs.mkdirSync(path.dirname(USAGE_STATS_FILE), { recursive: true });
     fs.writeFileSync(USAGE_STATS_FILE, JSON.stringify(persistentUsage, null, 2));
-  } catch {}
+  } catch (e) { console.error('c-thru: failed to write usage stats:', e.message); }
 }
 
 function checkRotateProxyLog() {
@@ -447,8 +447,69 @@ function writeJournalEntry(entry) {
 // ── Model Resolution ─────────────────────────────────────────────────
 const BACKEND_SIGIL_RE = /^(.*)@([a-zA-Z0-9_-]+)$/;
 
+// Normalize a raw backend/endpoint entry to schema v2 shape.
+// Converts legacy kind:"ollama"→format:"anthropic"+auth:"none",
+// kind:"openai"→format:"openai". No-op when format is already set.
+function normalizeBackend(id, raw) {
+  const hasFormat = raw.format != null;
+  const format = hasFormat ? raw.format :
+    (raw.kind === 'openai' ? 'openai' : 'anthropic');
+  const result = { ...raw, id, format };
+  if (result.auth == null && raw.kind === 'ollama' && !hasFormat) {
+    result.auth = 'none';
+  }
+  return result;
+}
+
+// Returns true if this backend uses the legacy /api/chat translation path
+// (Ollama <0.4 or LM Studio shim).
+function isOllamaLegacy(backend) {
+  return backend.format === 'ollama-legacy' || backend.legacy_ollama_chat === true;
+}
+
+// Returns true if this backend is a local Ollama endpoint (either protocol).
+function isLocalBackend(backend) {
+  return backend.kind === 'ollama' ||
+    isOllamaLegacy(backend) ||
+    (backend.format === 'anthropic' && /localhost|127\.0\.0\.1/.test(backend.url || ''));
+}
+
+// Apply auth for an outbound request based on endpoint auth config.
+//   auth:"none"       → strip auth headers, inject nothing
+//   auth_env present  → inject Authorization: Bearer <env value>
+//   auth object       → use header/scheme/env fields
+//   (no auth config)  → passthrough: forward incoming auth verbatim
+function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders) {
+  const auth = backend.auth;
+  if (auth === 'none') {
+    delete outgoingHeaders['authorization'];
+    delete outgoingHeaders['x-api-key'];
+    return;
+  }
+  if (backend.auth_env) {
+    delete outgoingHeaders['authorization'];
+    delete outgoingHeaders['x-api-key'];
+    const value = process.env[backend.auth_env] || '';
+    if (value) outgoingHeaders['authorization'] = `Bearer ${value}`;
+    return;
+  }
+  if (auth && typeof auth === 'object') {
+    delete outgoingHeaders['authorization'];
+    delete outgoingHeaders['x-api-key'];
+    const header = (auth.header || 'Authorization').toLowerCase();
+    const schemeDefault = header === 'authorization' ? 'Bearer' : '';
+    const scheme = auth.scheme != null ? auth.scheme : schemeDefault;
+    const value = auth.literal != null ? auth.literal : (auth.env ? process.env[auth.env] || '' : '');
+    if (value) outgoingHeaders[header] = scheme ? `${scheme} ${value}` : value;
+    return;
+  }
+  // Passthrough: forward incoming Authorization/x-api-key verbatim
+  if (incomingHeaders['authorization']) outgoingHeaders['authorization'] = incomingHeaders['authorization'];
+  if (incomingHeaders['x-api-key']) outgoingHeaders['x-api-key'] = incomingHeaders['x-api-key'];
+}
+
 function resolveBackend(model, cfg, tier, mode, _seen) {
-  const backends = cfg.backends || {};
+  const endpointsOrBackends = cfg.endpoints || cfg.backends || {};
   const modelRoutes = cfg.model_routes || {};
   // Cycle/depth guard: model_routes can chain (target = another model name that
   // recurses through resolveRouteTarget → resolveBackend). A misconfigured map
@@ -473,27 +534,37 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
     if (typeof target !== 'string' || !target) {
       return { error: `model_routes['${model}'] target must be a string or mode-keyed object`, status: 400 };
     }
-    if (backends[target]) {
-      return { backend: { id: target, ...backends[target] }, effectiveModel: model, terminalLabel: model, routingKey };
+    const raw = endpointsOrBackends[target];
+    if (raw) {
+      return { backend: normalizeBackend(target, raw), effectiveModel: model, terminalLabel: model, routingKey };
     }
     // Not a backend id — treat as a model name and recurse (handles sigil syntax + further model_routes).
     return resolveBackend(target, cfg, tier, mode, seen);
   };
 
   let id = modelRoutes[model];
-  if (id !== undefined) return resolveRouteTarget(id, model);
+  if (id !== undefined) {
+    // v2 alias object form: { endpoint: "...", name: "..." }
+    if (id && typeof id === 'object' && typeof id.endpoint === 'string') {
+      const raw = endpointsOrBackends[id.endpoint];
+      if (!raw) return { error: `model_routes['${model}'].endpoint references unknown endpoint '${id.endpoint}'`, status: 400 };
+      return { backend: normalizeBackend(id.endpoint, raw), effectiveModel: id.name, terminalLabel: id.name, routingKey: model };
+    }
+    return resolveRouteTarget(id, model);
+  }
 
   for (const [pattern, target] of Object.entries(modelRoutes)) {
     if (!pattern.startsWith('re:')) continue;
     try {
       if (new RegExp(pattern.slice(3)).test(model)) return resolveRouteTarget(target, pattern);
-    } catch {}
+    } catch (e) { console.error(`c-thru: invalid regex in model_routes key '${pattern}': ${e.message}`); }
   }
 
   const sigilMatch = model.match(BACKEND_SIGIL_RE);
   if (sigilMatch) {
     const [, baseModel, backendId] = sigilMatch;
-    if (backends[backendId]) return { backend: { id: backendId, ...backends[backendId] }, effectiveModel: baseModel, terminalLabel: baseModel, routingKey: backendId };
+    const raw = endpointsOrBackends[backendId];
+    if (raw) return { backend: normalizeBackend(backendId, raw), effectiveModel: baseModel, terminalLabel: baseModel, routingKey: backendId };
   }
 
   const capAlias = resolveCapabilityAlias(model, cfg, tier);
@@ -515,7 +586,7 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
   }
   console.error(`c-thru: '${model}' not in model_routes — assuming local Ollama at ${DEFAULT_OLLAMA_URL}`);
   return {
-    backend: { id: '__ollama_fallback__', kind: 'ollama', url: DEFAULT_OLLAMA_URL, _ollamaFallback: true },
+    backend: { id: '__ollama_fallback__', format: 'anthropic', auth: 'none', url: DEFAULT_OLLAMA_URL, _ollamaFallback: true },
     effectiveModel: model,
     terminalLabel: model,
     routingKey: 'ollama-fallback'
@@ -636,6 +707,9 @@ function scrubCthruHeaders(headers) {
   // Forwarding the stale length causes upstream 400s when the new body is
   // shorter, or hangs when longer. Removing it lets Node recompute.
   delete out['content-length'];
+  // Cookie headers must never cross the proxy boundary regardless of auth config.
+  delete out['cookie'];
+  delete out['set-cookie'];
   // Remove any x-c-thru specific headers if they exist
   for (const k of Object.keys(out)) {
     if (k.toLowerCase().startsWith('x-c-thru-')) delete out[k];
@@ -729,7 +803,7 @@ function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
   const triedM = requestMeta._triedModels || new Set();
   if (triedM.has(termModel)) return false;
   const termResolved = resolveBackend(termModel, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
-  if (termResolved.error || termResolved.backend.kind !== 'ollama') return false;
+  if (termResolved.error || !isLocalBackend(termResolved.backend)) return false;
   requestMeta._localTerminalAppended = true;
   requestMeta._fallbackFrom = requestMeta._fallbackFrom || termResolved.backend.id;
   body.model = termResolved.effectiveModel;
@@ -811,7 +885,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
       hops_skipped_cooldown: hopsWalked,
     });
     body.model = resolved.effectiveModel;
-    if (resolved.backend.kind === 'ollama') {
+    if (isOllamaLegacy(resolved.backend)) {
       dispatchOllamaBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
     } else {
       forwardAnthropic(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
@@ -845,7 +919,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
       });
       requestMeta._fallbackFrom = requestMeta._fallbackFrom || backend.id;
       body.model = candidateResolved.effectiveModel;
-      if (candidateResolved.backend.kind === 'ollama') {
+      if (isOllamaLegacy(candidateResolved.backend)) {
         dispatchOllamaBackend(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
       } else {
         forwardAnthropic(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
@@ -887,7 +961,7 @@ function tryGlobalDefaultFallback(ctx, req, res, body, requestMeta) {
   });
   chain.add(resolved.backend.id);
   body.model = resolved.effectiveModel;
-  if (resolved.backend.kind === 'ollama') {
+  if (isOllamaLegacy(resolved.backend)) {
     dispatchOllamaBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
   } else {
     forwardAnthropic(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
@@ -928,18 +1002,9 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
-  const authKey = backend.auth_env ? process.env[backend.auth_env] : '';
 
   const headers = scrubCthruHeaders(req.headers);
-  if (backend.kind === 'ollama') {
-    // Ollama's /v1/messages adapter accepts any non-empty bearer. Hardcode the
-    // value (overriding any incoming Authorization) so an ambient real
-    // Anthropic key in the client env can never leak to a local backend.
-    headers['authorization'] = 'Bearer ollama';
-    delete headers['x-api-key'];
-  } else if (authKey) {
-    headers['x-api-key'] = authKey;
-  }
+  applyOutboundAuth(backend, req.headers, headers);
 
   // Combine the backend's optional base path with the client's request path.
   // - Anthropic backend url=https://api.anthropic.com → pathname='/' → use req.url verbatim ("/v1/messages?beta=true")
@@ -1473,8 +1538,8 @@ async function handleProbeLlm(req, res) {
   if (backend._ollamaFallback) {
     return send(res, 400, { ok: false, error: `'${modelName}' not found in model_routes; cannot probe an unknown model` });
   }
-  if ((backend.kind || 'anthropic') !== 'ollama') {
-    return send(res, 400, { ok: false, error: `probe only supports ollama backends; '${backend.id}' is kind '${backend.kind || 'anthropic'}'` });
+  if (!isLocalBackend(backend)) {
+    return send(res, 400, { ok: false, error: `probe only supports local Ollama backends; '${backend.id}' is format '${backend.format || 'anthropic'}'` });
   }
 
   const ollamaBody = JSON.stringify({
@@ -1624,7 +1689,7 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
 // pass-through to <backend.url>/v1/messages) which preserves tool_use /
 // tool_result blocks. The legacy path is for Ollama < 0.4 or LM Studio.
 function dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta) {
-  if (backend.legacy_ollama_chat === true) {
+  if (backend.format === 'ollama-legacy' || backend.legacy_ollama_chat === true) {
     return forwardOllamaLegacy(ctx, req, res, body, backend, effectiveModel, requestMeta);
   }
   return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
@@ -1800,7 +1865,7 @@ function resolveConfigSelectionForReload() {
   // Tier 1: explicit override path (same as resolveSelectedConfigPath).
   const override = process.env.CLAUDE_MODEL_MAP_PATH;
   if (override) {
-    try { return { path: fs.realpathSync(override), source: 'override' }; } catch {}
+    try { return { path: fs.realpathSync(override), source: 'override' }; } catch (e) { console.error(`c-thru: CLAUDE_MODEL_MAP_PATH '${override}' could not be resolved: ${e.message}`); }
   }
 
   // Tier 2: project-local .claude/model-map.json walked from cwd.
@@ -1906,7 +1971,7 @@ const server = http.createServer((req, res) => {
 
       if (req.method === 'POST' && (req.url === '/c-thru/mode' || req.url === '/c-thru/mode/')) {
         const buf = await readBody(req);
-        let payload; try { payload = JSON.parse(buf.toString()); } catch {}
+        let payload; try { payload = JSON.parse(buf.toString()); } catch (e) { return sendAnthropicError(res, 400, `invalid JSON body: ${e.message}`); }
         const mode = payload?.mode;
         if (!mode || !LLM_MODE_ENUM.has(mode)) return sendAnthropicError(res, 400, 'invalid mode');
         process.env.CLAUDE_LLM_MODE = mode;
@@ -1946,15 +2011,19 @@ const server = http.createServer((req, res) => {
           // Determine locality: explicit @sigil → check backend kind; bare model →
           // check backends dict, then route target name (ollama* = local, else cloud).
           let isLocal = false;
+          const epOrBk = CONFIG.endpoints || CONFIG.backends;
           if (sigilMatch) {
-            const bk = CONFIG.backends?.[sigilMatch[2]];
-            isLocal = bk ? bk.kind === 'ollama' : false;
+            const bk = epOrBk?.[sigilMatch[2]];
+            isLocal = bk ? isLocalBackend(normalizeBackend(sigilMatch[2], bk)) : false;
           } else {
-            const routeTarget = (CONFIG.model_routes || {})[base];
-            if (routeTarget) {
-              const bk = CONFIG.backends?.[routeTarget];
+            const routeEntry = (CONFIG.model_routes || {})[base];
+            const routeTarget = routeEntry && typeof routeEntry === 'object' && typeof routeEntry.endpoint === 'string'
+              ? routeEntry.endpoint
+              : routeEntry;
+            if (routeTarget && typeof routeTarget === 'string') {
+              const bk = epOrBk?.[routeTarget];
               if (bk) {
-                isLocal = bk.kind === 'ollama';
+                isLocal = isLocalBackend(normalizeBackend(routeTarget, bk));
               } else {
                 // Backend not in dict; infer from name convention: ollama* = local, cloud/anthropic/openai = not local
                 const rt = routeTarget.toLowerCase();
@@ -1964,7 +2033,7 @@ const server = http.createServer((req, res) => {
             // No route found: fall through to resolveBackend (handles sigil/capability aliases)
             if (!routeTarget) {
               const resolved = resolveBackend(m, CONFIG, tier, mode);
-              isLocal = !resolved.error && resolved.backend.kind === 'ollama' && !resolved.backend._ollamaFallback;
+              isLocal = !resolved.error && isLocalBackend(resolved.backend) && !resolved.backend._ollamaFallback;
             }
           }
           capabilities.push({ capability: alias, model: base, local: isLocal });
@@ -2025,7 +2094,7 @@ const server = http.createServer((req, res) => {
           const role = capKey ? BENCHMARK.capability_to_role?.[capKey] : null;
           if (role) {
             const candidates = Object.keys(CONFIG.model_routes || {}).filter(k => !k.startsWith('re:'));
-            const best = pickBenchmarkBest(criterion, candidates, BENCHMARK, role, CONFIG.model_routes || {}, CONFIG.backends || {});
+            const best = pickBenchmarkBest(criterion, candidates, BENCHMARK, role, CONFIG.model_routes || {}, CONFIG.endpoints || CONFIG.backends || {});
             if (best && best !== resolved.effectiveModel) {
               const replaced = resolveBackend(best, CONFIG, hwTier, activeMode);
               if (!replaced.error) {
@@ -2051,7 +2120,7 @@ const server = http.createServer((req, res) => {
           const chainModels = capChain.map(c => (typeof c === 'string' ? c : c.model)).filter(Boolean);
           const filteredModel = applyModeFilter(
             activeMode, effectiveModel, chainModels,
-            CONFIG.model_routes || {}, CONFIG.backends || {}
+            CONFIG.model_routes || {}, CONFIG.endpoints || CONFIG.backends || {}
           );
           if (filteredModel === null) {
             ctxLog(ctx, 'mode_filter.reject_all', { mode: activeMode, capability: capKey });
@@ -2085,15 +2154,18 @@ const server = http.createServer((req, res) => {
           incoming_model: body.model,
           resolved_model: effectiveModel,
           backend_id: backend.id,
-          backend_kind: backend.kind,
+          backend_format: backend.format || backend.kind,
           logical_role: logicalRole || 'none',
           tier: hwTier,
           mode: activeMode
         });
 
         body.model = effectiveModel;
-        if (backend.kind === 'ollama') {
+        if (isOllamaLegacy(backend)) {
           return dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
+        }
+        if (backend.format === 'openai') {
+          return sendAnthropicError(res, 501, 'openai format not yet implemented — use a gateway');
         }
         return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
       }

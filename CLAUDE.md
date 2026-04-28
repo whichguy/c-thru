@@ -89,23 +89,25 @@ c-thru (bash)
 
 ### Ollama backend wire format
 
-For backends with `kind: "ollama"`, the proxy POSTs to `<backend.url>/v1/messages` (Ollama's Anthropic-format adapter, available since Ollama 0.4) with the client's body forwarded **verbatim** except for the resolved `model` field. `tool_use`, `tool_result`, and `thinking` content blocks roundtrip natively — no flattening, no translation. Authorization is hardcoded to `Bearer ollama` and `x-api-key` is stripped, so an ambient real Anthropic key in the client environment can never leak to a local backend.
+For endpoints with `format: "anthropic"` and a localhost URL (local Ollama), the proxy POSTs to `<endpoint.url>/v1/messages` (Ollama's Anthropic-format adapter, available since Ollama 0.4) with the client's body forwarded **verbatim** except for the resolved `model` field. `tool_use`, `tool_result`, and `thinking` content blocks roundtrip natively — no flattening, no translation. Auth is set to `"none"` so an ambient real Anthropic key in the client environment can never leak to a local backend.
 
-**Legacy escape hatch.** Backends without `/v1/messages` (Ollama < 0.4, LM Studio's Ollama-compat shim) opt into the older Anthropic→`/api/chat` translation path with `legacy_ollama_chat: true` on the backend entry. The legacy path still runs `flattenMessagesForOllama`, which strips non-text content blocks — multi-turn tool conversations don't roundtrip cleanly through it. Use only when `/v1/messages` is genuinely unavailable.
+**Legacy escape hatch.** Backends without `/v1/messages` (Ollama < 0.4, LM Studio's Ollama-compat shim) opt into the older Anthropic→`/api/chat` translation path with `legacy_ollama_chat: true` (or `format: "ollama-legacy"`) on the endpoint entry. The legacy path still runs `flattenMessagesForOllama`, which strips non-text content blocks — multi-turn tool conversations don't roundtrip cleanly through it. Use only when `/v1/messages` is genuinely unavailable.
 
 ```json
 {
-  "backends": {
-    "ollama_local":  { "kind": "ollama", "url": "http://localhost:11434" },
-    "lm_studio":     { "kind": "ollama", "url": "http://localhost:1234", "legacy_ollama_chat": true }
+  "endpoints": {
+    "ollama_local":  { "format": "anthropic", "url": "http://localhost:11434", "auth": "none" },
+    "lm_studio":     { "format": "anthropic", "url": "http://localhost:1234",  "auth": "none", "legacy_ollama_chat": true }
   }
 }
 ```
 
 ### model-map.json schema
 
-Top-level keys: `backends`, `routes`, `models` (models is sparse — most resolution is done via backends + routes).
-- `backends`: connection metadata (kind, url, auth strategy). `kind` defaults to `anthropic` when absent. For `kind: "ollama"`, set `legacy_ollama_chat: true` to opt into the older `/api/chat` translation path (LM Studio compatibility).
+Top-level keys: `endpoints` (or legacy `backends`), `routes`, `models` (models is sparse — most resolution is done via endpoints + routes).
+- `endpoints`: connection metadata (format, url, auth). `format` defaults to `"anthropic"` when absent; valid values: `"anthropic"`, `"openai"`, `"ollama-legacy"`. Legacy `backends` key accepted as alias. For local Ollama, set `"auth": "none"`.
+- `auth` field: `"none"` (strip all auth), absent (passthrough — forward client's Authorization/x-api-key verbatim), `"auth_env": "KEY_NAME"` shorthand (inject `Authorization: Bearer $KEY_NAME`), or full object `{"header": "...", "scheme": "...", "env": "KEY_NAME"}`. Scheme defaults to `"Bearer"` when header is `"Authorization"`, empty otherwise.
+- `model_routes` entries: string `"backend-id"`, mode-conditional object `{"connected": "anthropic", "offline": "..."}`, or v2 alias object `{"endpoint": "anthropic", "name": "claude-opus-4-7"}` for model name aliasing.
 - `routes`: named presets → `{model, backend, env, …}`. `routes.default` is used when no flag is passed.
 - `model_overrides` (optional): flat `{"concrete-model": "replacement"}` map applied before route/alias resolution. Example: `{"gemma4:26b": "gemma4:31b"}` redirects all uses of the 26b model. Unconditional — covers primary requests and fallback candidates.
 - Model resolution order: `--route` flag → `routes.default` → `--model` flag → Ollama passthrough.
@@ -200,7 +202,7 @@ were not available to the agent.
 
 Per-profile `on_failure` field in `llm_profiles[hw][profile]`: `"cascade"` (default) walks the fallback chain; `"hard_fail"` returns null immediately so the proxy returns a clean error instead of a non-equivalent substitute.
 
-Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3) `Authorization` header, (4) SSE `usage` injection, (5) protocol translation (gated on `kind: "openai"`), (6) `x-c-thru-resolved-via` response header, (7) `model_overrides` unconditional name substitution before route graph traversal, (8) `@<backend>` sigil stripping — suffix stripped before forwarding so the provider only sees the base model name.
+Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3) auth headers (via `applyOutboundAuth` — strips or injects based on endpoint `auth`/`auth_env` config; absent = passthrough), (4) SSE `usage` injection, (5) protocol translation (gated on `format: "openai"` — 501 stub until implemented), (6) `x-c-thru-resolved-via` response header, (7) `model_overrides` unconditional name substitution before route graph traversal, (8) `@<backend>` sigil stripping — suffix stripped before forwarding so the provider only sees the base model name.
 
 ## Proxy Lifecycle
 

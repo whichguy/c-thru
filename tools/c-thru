@@ -261,9 +261,7 @@ setup_ephemeral_session() {
     done
   fi
 
-  # 3. Additive Agents: link c-thru agents (namespaced)
-  # Linking is more reliable than --agents flag for preserving frontmatter (like "model:")
-  # But we also populate --agents JSON for agents that Claude Code might not find via filesystem
+  # 3. Additive Agents: link c-thru agents (namespaced) and build --agents JSON.
   if [[ "${NO_AGENTS:-0}" != "1" ]]; then
     mkdir -p "$EPHEMERAL_SESSION_DIR/agents"
     # Link user's existing agents first
@@ -281,7 +279,6 @@ setup_ephemeral_session() {
       done
     fi
 
-    # Generate --agents JSON for robust discovery
     EPHEMERAL_AGENTS_JSON=$(node -e '
       const fs = require("fs");
       const path = require("path");
@@ -291,32 +288,24 @@ setup_ephemeral_session() {
         fs.readdirSync(agentsDir).forEach(file => {
           if (!file.endsWith(".md")) return;
           const name = file.replace(".md", "");
-          const content = fs.readFileSync(path.join(agentsDir, file), "utf8");
+          let content;
+          try { content = fs.readFileSync(path.join(agentsDir, file), "utf8"); } catch (e) { process.stderr.write("c-thru: skipping unreadable agent file " + file + ": " + e.message + "\n"); return; }
           const m = content.match(/^---\r?\n([\s\S]*?)\n---\r?\n/);
           let description = "";
           let prompt = content;
           let model = name;
           let tier_budget = 999999;
-          
           if (m) {
             const frontmatter = m[1];
             const descMatch = frontmatter.match(/^description:\s*(.*)$/m);
             if (descMatch) description = descMatch[1].trim();
-            
             const modelMatch = frontmatter.match(/^model:\s*(.*)$/m);
             if (modelMatch) model = modelMatch[1].trim();
-
             const budgetMatch = frontmatter.match(/^tier_budget:\s*(.*)$/m);
             if (budgetMatch) tier_budget = parseInt(budgetMatch[1].trim(), 10);
-
             prompt = content.slice(m[0].length).trim();
           }
-          agents[name] = { 
-            description, 
-            prompt,
-            model,
-            tier_budget
-          };
+          agents[name] = { description, prompt, model, tier_budget };
         });
       }
       console.log(JSON.stringify(agents));
@@ -354,13 +343,14 @@ write_ephemeral_settings() {
     else echo "$tools_dest/$base"; fi
   }
 
-  local session_cmd health_cmd classify_cmd map_changed_cmd postcompact_cmd planner_hint_cmd mcp_js
+  local session_cmd health_cmd classify_cmd map_changed_cmd postcompact_cmd planner_hint_cmd agent_router_cmd mcp_js
   session_cmd="$(find_tool_path c-thru-session-start)"
   health_cmd="$(find_tool_path c-thru-proxy-health)"
   classify_cmd="$(find_tool_path c-thru-classify)"
   map_changed_cmd="$(find_tool_path c-thru-map-changed)"
   postcompact_cmd="$(find_tool_path c-thru-postcompact-context)"
   planner_hint_cmd="$(find_tool_path c-thru-enter-plan-hook)"
+  agent_router_cmd="$(find_tool_path c-thru-agent-router-hook)"
   mcp_js="$(find_tool_path llm-capabilities-mcp.js)"
 
   # Hook inventory — every hook registered per session. To add a hook:
@@ -376,6 +366,8 @@ write_ephemeral_settings() {
   # UserPromptSubmit *               c-thru-proxy-health       asyncRewake if proxy down
   # UserPromptSubmit *               c-thru-classify           classify_intent tagging
   # PostToolUse      *               c-thru-map-changed        validate model-map.json on edit
+  # PreToolUse       Agent|WebSearch|c-thru-agent-router-hook  resolve capability for tool calls
+  #                   WebFetch|Monitor|Plan
   # PreToolUse       EnterPlanMode   c-thru-enter-plan-hook    advisory hint for /c-thru-plan
 
   if [[ -n "$port" ]]; then
@@ -397,7 +389,7 @@ write_ephemeral_settings() {
       {"matcher": "*", "hooks": [{"type": "command", "command": "$classify_cmd", "timeout": 5, "async": true}]}
     ],
     "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "$map_changed_cmd", "timeout": 5}]}],
-    "PreToolUse": [{"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
+    "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebSearch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebFetch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Monitor", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Plan", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
   },
   "permissions": {
     "allow": ["mcp__llm-capabilities__*"]
@@ -423,7 +415,7 @@ EOF
       {"matcher": "*", "hooks": [{"type": "command", "command": "$classify_cmd", "timeout": 5, "async": true}]}
     ],
     "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "$map_changed_cmd", "timeout": 5}]}],
-    "PreToolUse": [{"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
+    "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebSearch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebFetch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Monitor", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Plan", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
   },
   "permissions": {
     "allow": ["mcp__llm-capabilities__*"]
@@ -501,6 +493,12 @@ cmd_help() {
   echo "  --profile <tier>          force hardware tier (16gb|32gb|48gb|64gb|128gb)"
   echo "  --memory-gb <n>           override RAM detection (= CLAUDE_LLM_MEMORY_GB)"
   echo "  --debug                   enable router and proxy debug logs"
+  echo "  --thinking                enable extended thinking on Anthropic models (= C_THRU_THINKING=1)"
+  echo -e "  ${GRAY}    Default: /no_thinking injected → extended thinking OFF (saves tokens/latency)${NC}"
+  echo -e "  ${GRAY}    With --thinking: /no_thinking removed → Claude uses a <think> block before responding${NC}"
+  echo -e "  ${GRAY}    Only affects Anthropic models; local reasoning models (DeepSeek-R1, Qwen3 thinking,${NC}"
+  echo -e "  ${GRAY}    phi4-reasoning) always reason internally — no flag needed.${NC}"
+  echo -e "  ${GRAY}    cloud-thinking mode routes judge/planner caps to a cloud thinking-capable model.${NC}"
   echo "  --bypass-proxy            skip proxy entirely (= CLAUDE_PROXY_BYPASS=1)"
   echo "  --journal                 enable per-request journaling (= CLAUDE_PROXY_JOURNAL=1)"
   echo "  --proxy-debug [N]         proxy verbose logs (= CLAUDE_PROXY_DEBUG=N; default 1)"
@@ -524,6 +522,25 @@ cmd_help() {
   echo "  CLAUDE_PROXY_CLASSIFY=1       run small classifier on prompts (Phase A: observe-only)"
   echo "  CLAUDE_PROXY_CLASSIFY_MODEL   classifier model tag (default gemma4:e2b)"
   echo "  NO_COLOR=1                    disable colored output"
+  echo ""
+  echo -e "${BOLD}Thinking & reasoning models:${NC}"
+  echo "  Anthropic models (claude-opus-*, claude-sonnet-*)"
+  echo "    Default: extended thinking OFF (/no_thinking injected into system prompt)"
+  echo "    Enable:  c-thru --thinking   or   C_THRU_THINKING=1"
+  echo "    Mode:    --mode cloud-thinking  routes judge/planner caps to cloud thinking model"
+  echo ""
+  echo "  Local reasoning models — always reason internally, no flag required:"
+  echo "    DeepSeek-R1 (7b/14b/32b)  temperature 0.6, top_p 0.95 (official); no system prompt"
+  echo "    Qwen3 thinking variants    temperature 0.6 (coding) / 1.0 (open); top_k 20"
+  echo "    phi4-reasoning             temperature 0.6–0.8; num_ctx 16384–32768"
+  echo ""
+  echo "  Known quirks:"
+  echo "    Qwen3: /no_think tag unreliable in Ollama — use non-thinking instruct variant instead"
+  echo "    Qwen3: thinking + tools = empty output; disable thinking when passing tool defs"
+  echo "    Qwen3: empty <think></think> tags emitted even in no-think mode — strip at consumer"
+  echo "    DeepSeek-R1: temperature=0 skips reasoning entirely; keep >= 0.5"
+  echo "    DeepSeek-R1: add <think>\n as assistant prefix to force reasoning engagement"
+  echo "    All reasoning models: presence_penalty preferred over repeat_penalty for Qwen3"
   echo ""
   echo -e "${BOLD}Config:${NC}"
   echo "  ~/.claude/model-map.overrides.json   user customizations (never overwritten on upgrade)"
@@ -1223,27 +1240,6 @@ apply_background_model_overrides() {
   esac
 }
 
-# Prepend each enabled Claude Code plugin's bin/ directory to PATH so plugin-
-# provided binaries are visible to the session and any spawned subagents.
-# Mirrors `ollama launch claude` (which reads ~/.claude/installed_plugins.json
-# and prepends plugin bin/ dirs). We use `claude plugin list --json` as the
-# canonical source to avoid filesystem-walk drift across plugin format changes.
-# Idempotent: paths already present are skipped via the case-insensitive ":${PATH}:"
-# substring guard so repeated invocations don't grow PATH unbounded.
-inject_plugin_bin_paths() {
-  command -v claude >/dev/null 2>&1 || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-  local dir
-  while IFS= read -r dir; do
-    [[ -n "$dir" && -d "$dir" ]] || continue
-    case ":${PATH}:" in
-      *":${dir}:"*) ;;  # already on PATH — skip
-      *) PATH="${dir}:${PATH}" ;;
-    esac
-  done < <(claude plugin list --json 2>/dev/null \
-    | jq -r '.[] | select(.enabled == true) | .installPath + "/bin"' 2>/dev/null)
-  export PATH
-}
 
 backend_local_prep_skip_reason() {
   local backend_id="$1"
@@ -1256,7 +1252,7 @@ try:
         data = json.load(fh)
 except Exception:
     sys.exit(1)
-backend = ((data.get('backends') or {}).get(backend_id) or {})
+backend = ((data.get('endpoints') or data.get('backends') or {}).get(backend_id) or {})
 if not isinstance(backend, dict):
     sys.exit(1)
 prep_policy = backend.get('prep_policy')
@@ -1306,9 +1302,9 @@ claude_proxy_http_base() {
 model_map_has_non_ollama_backend() {
   [[ -f "$CONFIG" ]] || return 1
   jq -e '
-    (.backends // {}) as $b |
+    (.endpoints // .backends // {}) as $b |
     ($b | length > 0) and
-    ($b | to_entries | map(.value.kind // "anthropic") | any(. != "ollama"))
+    ($b | to_entries | map((.value.url // "") | test("localhost|127\\.0\\.0\\.1") | not) | any)
   ' "$CONFIG" >/dev/null 2>&1
 }
 
@@ -1402,12 +1398,13 @@ resolve_target_backend_for_model() {
 pick_anthropic_backend_id() {
   [[ ! -f "$CONFIG" ]] && return 0
   jq -r '
-    (.backends // {}) as $b |
-    if ($b.anthropic.kind // "") == "anthropic" then
+    (.endpoints // .backends // {}) as $b |
+    def isCloudAnthropicEndpoint: (.format // .kind // "anthropic") == "anthropic" and ((.url // "") | test("localhost|127\\.0\\.0\\.1") | not);
+    if $b.anthropic != null and ($b.anthropic | isCloudAnthropicEndpoint) then
       "anthropic"
     else
       (
-        $b | to_entries | map(select((.value.kind // "anthropic") == "anthropic")) | .[0].key // empty
+        $b | to_entries | map(select(.value | isCloudAnthropicEndpoint)) | .[0].key // empty
       )
     end
   ' "$CONFIG" 2>/dev/null
@@ -2288,13 +2285,16 @@ resolve_ollama_backend_for_model() {
   [[ -n "$backend_id" ]] || return 1
 
   local backend=""
-  backend="$(jq -c --arg id "$backend_id" '.backends[$id] // empty' "$CONFIG" 2>/dev/null || true)"
+  backend="$(jq -c --arg id "$backend_id" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null || true)"
   [[ -n "$backend" && "$backend" != "null" ]] || return 1
 
   local kind base_url cli_host api_key explicit_auth local_flag
-  kind="$(jq -r '.kind // "anthropic"' <<< "$backend" 2>/dev/null)"
-  [[ "$kind" == "ollama" ]] || return 1
+  kind="$(jq -r '.format // .kind // "anthropic"' <<< "$backend" 2>/dev/null)"
   base_url="$(jq -r '.url // empty' <<< "$backend" 2>/dev/null)"
+  # Accept old-schema kind=="ollama" or v2 format=="anthropic"+localhost URL
+  if [[ "$kind" != "ollama" ]]; then
+    echo "$base_url" | grep -qE '(localhost|127\.0\.0\.1)' || return 1
+  fi
   cli_host="$(ollama_cli_host "$base_url")"
   api_key="$(ollama_secret_from_backend_json "$backend")"
   if [[ -z "$api_key" && -n "${OLLAMA_API_KEY:-}" ]]; then
@@ -3170,22 +3170,41 @@ get_system_info_summary() {
   local profile="" llm_mode=""
   profile="$(resolve_llm_profile_name 2>/dev/null || true)"
   llm_mode="$(resolve_llm_mode 2>/dev/null || true)"
-  
-  local plan_parts=()
+
+  # self_model is the concrete model name this LLM session is actually running as.
+  local self_model="${default_override}"
+  local -a cap_parts=()
   local slot model _rec
   while IFS=$'\t' read -r slot model _rec; do
     [[ -n "$slot" && -n "$model" ]] || continue
-    plan_parts+=("$slot=$model")
+    if [[ "$slot" == "default" && -z "$self_model" ]]; then
+      self_model="$model"
+    else
+      cap_parts+=("${slot}=${model}")
+    fi
   done < <(collect_active_profile_capability_assignments "$default_override" 2>/dev/null || true)
 
-  local joined_plan=""
-  if (( ${#plan_parts[@]} > 0 )); then
-    printf -v joined_plan '%s, ' "${plan_parts[@]}"
-    joined_plan="${joined_plan%, }"
+  local caps_str="none"
+  if (( ${#cap_parts[@]} > 0 )); then
+    printf -v caps_str '%s, ' "${cap_parts[@]}"
+    caps_str="${caps_str%, }"
   fi
 
-  printf "c-thru routing active. Profile: %s, Mode: %s. Capabilities: %s." \
-    "${profile:-unknown}" "${llm_mode:-unknown}" "${joined_plan:-none}"
+  printf '%s\n%s\n%s\n\n%s' \
+    "YOUR MODEL IS: ${self_model:-unknown}. Do NOT assume you are Claude Sonnet, Claude Opus, or any other model — your actual model name is stated above. Refer to yourself only by that exact name." \
+    "c-thru routing active. Profile: ${profile:-unknown}. Mode: ${llm_mode:-unknown}." \
+    "Available models by capability: ${caps_str}." \
+    "Use specialized agents aggressively.
+
+For any non-trivial task, assume suitable agents exist. Identify them by their descriptions and delegate matching work before proceeding directly.
+
+Prefer delegation over doing specialized work in the main thread. Do not skip delegation when an agent could apply. Prefer multiple focused delegations over one large direct solution.
+
+When useful, use agents across phases such as planning, execution, and verification.
+
+Keep each delegated task explicit and self-contained. Do not rely on shared context.
+
+Agents act as transparent workers: accept the task, perform the work, and return results directly without unnecessary transformation."
 }
 
 # When C_THRU_DEBUG is 1 or 2, print routing env to stderr (secrets masked).
@@ -3349,11 +3368,11 @@ build_forwarded_args() {
         i=$((i + 2))
         continue
         ;;
-      --mode=* | --profile=* | --memory-gb=* | --proxy-debug=* | --router-debug=*)
+      --mode=* | --profile=* | --memory-gb=* | --proxy-debug=* | --router-debug=* | --thinking=*)
         i=$((i + 1))
         continue
         ;;
-      --bypass-proxy | --journal | --no-update | --no-agents | --debug | \
+      --bypass-proxy | --journal | --no-update | --no-agents | --debug | --thinking | \
       --local-only | --best-cloud | --best-opensource-cloud | --best-opensource-local | \
       --best-opensource | --fastest | --smallest | --offline)
         i=$((i + 1))
@@ -3408,10 +3427,24 @@ build_forwarded_args() {
   if [[ "${CLAUDE_PROXY_BYPASS:-0}" != "1" && "${C_THRU_SKIP_INFO_INJECTION:-0}" != "1" ]]; then
     local info_summary
     info_summary="$(get_system_info_summary "$model")"
-    # Append proxy URL so agents that call the proxy directly (e.g. context-injection
-    # hooks) know where it is without hard-coding a port.
-    [[ -n "${PROXY_PORT:-}" ]] && info_summary+=" Proxy: http://127.0.0.1:${PROXY_PORT}."
-    forwarded+=("--append-system-prompt" "/no_thinking $info_summary")
+    # Append proxy control-plane URL. This is the only in-band path to the proxy
+    # from within a session — there is no other mechanism to reach it.
+    if [[ -n "${PROXY_PORT:-}" ]]; then
+      info_summary+="
+
+c-thru proxy control plane: http://127.0.0.1:${PROXY_PORT}
+Use curl from Bash to interact. Key endpoints:
+  GET  /c-thru/status   — active mode, hw tier, per-capability model map, cooldown backends
+  POST /c-thru/mode     — switch routing mode live: {\"mode\":\"<m>\"} (connected|offline|cloud-only|…)
+  POST /c-thru/reload   — reload config from disk after editing model-map.json
+  GET  /v1/active-models — list of currently active local + cloud models
+  GET  /ping            — health check"
+    fi
+    if [[ "${C_THRU_THINKING:-0}" == "1" ]]; then
+      forwarded+=("--append-system-prompt" "$info_summary")
+    else
+      forwarded+=("--append-system-prompt" "/no_thinking $info_summary")
+    fi
   fi
 
   # ── Per-Process Ephemeral Injection ──────────────────────────────────────
@@ -3421,7 +3454,6 @@ build_forwarded_args() {
   if [[ -n "$EPHEMERAL_AGENTS_JSON" && "$EPHEMERAL_AGENTS_JSON" != "{}" ]]; then
     forwarded+=("--agents" "$EPHEMERAL_AGENTS_JSON")
   fi
-
   printf '%s\0' "${forwarded[@]}"
 }
 
@@ -3757,6 +3789,8 @@ while [[ $i -lt $n ]]; do
     --smallest)                export CLAUDE_LLM_MODE="smallest-possible"; i=$((i + 1)) ;;
     --offline)                 export CLAUDE_LLM_MODE="offline"; i=$((i + 1)) ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
+    --thinking)         export C_THRU_THINKING=1; i=$((i + 1)) ;;
+    --thinking=*)       echo "c-thru: --thinking is a boolean flag and takes no value (use --thinking alone)" >&2; exit 1 ;;
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;
     --no-update)        export C_THRU_NO_UPDATE=1; i=$((i + 1)) ;;
     --no-agents)        export NO_AGENTS=1; i=$((i + 1)) ;;
@@ -3839,7 +3873,6 @@ if [[ -z "$MODEL" ]]; then
   if [[ "${CLAUDE_PROXY_BYPASS:-}" == "1" ]]; then
     claude_router_debug_dump transparent
     apply_background_model_overrides "${MODEL:-}"
-    inject_plugin_bin_paths
     run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
     exit $?
   fi
@@ -3854,7 +3887,6 @@ if [[ -z "$MODEL" ]]; then
   fi
   claude_router_debug_dump transparent
   apply_background_model_overrides "${MODEL:-}"
-  inject_plugin_bin_paths
   run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
   exit $?
 fi
@@ -3923,10 +3955,11 @@ apply_proxy_fallback_client_block() {
 apply_resolved_backend() {
   local backend_json="$1" effective_model="$2" backend_id="$3"
   local KIND BASE_URL AUTH_ENV API_KEY
-  KIND=$(jq -r '.kind // "anthropic"' <<< "$backend_json")
+  KIND=$(jq -r '.format // .kind // "anthropic"' <<< "$backend_json")
   BASE_URL=$(jq -r '.url // empty' <<< "$backend_json")
   AUTH_ENV=$(jq -r '.auth_env // empty' <<< "$backend_json")
-  if [[ "$KIND" == "ollama" ]]; then
+  # Ollama: old-schema kind=="ollama" or v2 format=="anthropic"+localhost URL
+  if [[ "$KIND" == "ollama" ]] || { [[ "$KIND" == "anthropic" ]] && echo "$BASE_URL" | grep -qE '(localhost|127\.0\.0\.1)'; }; then
     OLLAMA_BACKEND_URL="$BASE_URL"
     ensure_proxy_http_base || exit 1
     apply_ollama_client_block "$ENSURED_PROXY_HTTP_BASE" "" "{}"
@@ -3964,13 +3997,16 @@ fi
 
 if [[ -n "$TARGET_BACKEND_ID" ]]; then
   BACKEND_ID="$TARGET_BACKEND_ID"
-  BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
+  BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for target '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
   fi
   if [[ "$TARGET_FORCE_PROXY" == "1" ]]; then
-    if jq -e --arg id "$BACKEND_ID" '.backends[$id].kind // "anthropic" | . == "ollama"' "$CONFIG" >/dev/null 2>&1; then
+    local _bk_fmt _bk_url
+    _bk_fmt=$(jq -r '.format // .kind // "anthropic"' <<< "$BACKEND" 2>/dev/null)
+    _bk_url=$(jq -r '.url // empty' <<< "$BACKEND" 2>/dev/null)
+    if [[ "$_bk_fmt" == "ollama" ]] || { [[ "$_bk_fmt" == "anthropic" ]] && echo "$_bk_url" | grep -qE '(localhost|127\.0\.0\.1)'; }; then
       apply_resolved_backend "$BACKEND" "$TARGET_PROVIDER_MODEL" "$BACKEND_ID"
     else
       apply_proxy_fallback_client_block "" "{}"
@@ -3979,9 +4015,21 @@ if [[ -n "$TARGET_BACKEND_ID" ]]; then
     apply_resolved_backend "$BACKEND" "$TARGET_PROVIDER_MODEL" "$BACKEND_ID"
   fi
 
-elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE_MODEL" '.model_routes[$m] // empty' "$CONFIG" 2>/dev/null) && [[ -n "$BACKEND_ID" ]]; then
-  # 1b) New schema: .model_routes[$EFFECTIVE_MODEL] → .backends[$id]
-  BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
+elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE_MODEL" '
+  .model_routes[$m] as $r |
+  if $r == null then empty
+  elif ($r | type) == "object" then ($r.endpoint // empty)
+  else $r
+  end
+' "$CONFIG" 2>/dev/null) && [[ -n "$BACKEND_ID" ]]; then
+  # 1b) model_routes exact match → endpoints/backends lookup
+  # v2 alias object form: update EFFECTIVE_MODEL to the canonical name
+  _ALIAS_MODEL=$(jq -r --arg m "$EFFECTIVE_MODEL" '
+    .model_routes[$m] as $r |
+    if ($r | type) == "object" and $r.name then $r.name else $m end
+  ' "$CONFIG" 2>/dev/null)
+  [[ -n "$_ALIAS_MODEL" ]] && EFFECTIVE_MODEL="$_ALIAS_MODEL"
+  BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
@@ -3989,7 +4037,7 @@ elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE
   apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
 
 elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID="$(lookup_model_pattern_value "model_routes" "$EFFECTIVE_MODEL")" && [[ -n "$BACKEND_ID" ]]; then
-  BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
+  BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
@@ -3997,7 +4045,7 @@ elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID="$(lookup_model_pattern_val
   apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
 
 elif [[ "$EFFECTIVE_MODEL" == claude-* ]] && [[ -f "$CONFIG" ]] && BACKEND_ID="$(pick_anthropic_backend_id)" && [[ -n "$BACKEND_ID" ]]; then
-  BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
+  BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
@@ -4040,7 +4088,6 @@ done < <(build_forwarded_args "$FINAL_MODEL_ARG")
 debug_print_final_claude_command "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 preflight_model_readiness "${PROXY_PORT:-}"
 apply_background_model_overrides "${FINAL_MODEL_ARG:-}"
-inject_plugin_bin_paths
 printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} launching session...\n" "status" >&2
 run_real_claude "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 exit $?
