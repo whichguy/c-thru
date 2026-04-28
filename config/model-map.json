@@ -654,10 +654,10 @@
         "local_best_model": "deepseek-r1:14b"
       },
       "deep-coder": {
-        "connected_model": "qwen3-coder:30b",
-        "disconnect_model": "qwen3-coder:30b",
+        "connected_model": "qwen3.6:35b-a3b-coding-mxfp8",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-mxfp8",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3-coder:30b",
+        "local_best_model": "qwen3.6:35b-a3b-coding-mxfp8",
         "on_failure": "cascade"
       },
       "agentic-coder": {
@@ -725,7 +725,6 @@
     "qwen3.5:27b": "ollama_local",
     "qwen3.5:9b": "ollama_local",
     "qwen3.5:1.7b": "ollama_local",
-    "qwen3.5:35b-a3b-coding-nvfp4": "ollama_local",
     "gpt-oss:20b": "ollama_local",
     "devstral-small:2": "ollama_local",
     "devstral-2": "ollama_local",
@@ -1111,7 +1110,9 @@
       ]
     }
   },
-  "model_overrides": {},
+  "model_overrides": {
+    "qwen3.5:35b-a3b-coding-nvfp4": "qwen3.6:35b-a3b-coding-nvfp4"
+  },
   "agent_to_capability": {
     "planner": "judge",
     "planner-local": "local-planner",

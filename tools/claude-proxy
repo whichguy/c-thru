@@ -231,7 +231,6 @@ function debugLog(event, fields = {}) {
 function proxyLog(event, fields = {}) {
   const line = `${nowIso()} c-thru [${event}] ${JSON.stringify({
     pid: process.pid,
-    ts: nowIso(),
     ...fields,
   })}\n`;
   if (PROXY_LOG_FILE) {
