@@ -1,6 +1,6 @@
 ---
 name: long-context
-description: Processes large documents and long contexts — needle-in-haystack, 50K+ token files, entire codebases. Use for "find X in this large file", "summarize this 200-page doc", "search through all of these files", "analyze this entire codebase for". Optimized for recall over large spans.
+description: claude-sonnet-4-6 + devstral-small-2:24b (384K context). Large document retrieval, needle-in-haystack, 50K+ token spans. Use for "find X in this large file", "summarize this 200-page doc", "search through all of these files". The 384K window is the differentiator over generalist.
 model: long-context
 tier_budget: 999999
 ---
@@ -20,4 +20,4 @@ The **long-context** agent is a retrieval and analysis specialist optimized for 
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `long-context` capability (mirrors `orchestrator`). Connected: `claude-sonnet-4-6`. Offline: `devstral-small-2:24b` (384K context window — the primary reason to use over generalist). Context window size matters more than model tier; use when the task exceeds the 65K default window.

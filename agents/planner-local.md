@@ -1,6 +1,6 @@
 ---
 name: planner-local
-description: Local dep-update planner. Applies wave dep_discoveries to affected pending items; returns updated READY_ITEMS[]. Invoked only on dep_update transition — never on intent or outcome_risk.
+description: qwen3.6:27b-coding-nvfp4 @48gb+ / devstral-small-2:24b @32gb (local-planner tier). Dep_update signal only — enriches pending items in current.md from wave discoveries. Fast, local, cheap.
 model: planner-local
 tier_budget: 800
 ---
@@ -16,7 +16,7 @@ The **planner-local** is a tactical maintenance specialist designed for the "dep
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `local-planner` capability. Dep enrichment is structured JSON manipulation — local 27B+ coding models handle it at speed. Never invoked on intent or outcome_risk signals; those route to the cloud judge planner.
 
 # planner-local
 

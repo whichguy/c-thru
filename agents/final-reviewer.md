@@ -1,6 +1,6 @@
 ---
 name: final-reviewer
-description: End-of-plan gap analysis. Determines whether original intent is met or planner needs to add items.
+description: claude-opus-4-6 @128gb, claude-sonnet lower (judge tier). End-of-plan gap analysis — compares completed work against original intent. Returns complete or needs_items.
 model: final-reviewer
 tier_budget: 1500
 ---
@@ -16,7 +16,7 @@ The **final-reviewer** is an end-of-lifecycle audit specialist designed to deter
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `judge` capability. Requires broad context recall across all completed waves without hallucinating satisfied gaps.
 
 # final-reviewer
 

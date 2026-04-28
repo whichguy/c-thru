@@ -1,6 +1,6 @@
 ---
 name: auditor
-description: Exception-path wave direction agent. Invoked only on outcome_risk escalation — not on normal wave completion. Returns one verb — continue, extend, or revise.
+description: claude-opus-4-6 @128gb, claude-sonnet lower (judge tier). Exception-path wave direction agent — invoked only on outcome_risk, not normal wave completion. Returns continue/extend/revise.
 model: auditor
 tier_budget: 1500
 ---
@@ -16,7 +16,7 @@ The **auditor** is a high-stakes decision specialist designed for the "Exception
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `judge` capability. Same models as the `judge` agent. High-stakes verdict uses the best available model to avoid wrong audits causing unnecessary revisions.
 
 # auditor
 

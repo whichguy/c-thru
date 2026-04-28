@@ -1,6 +1,6 @@
 ---
 name: supervisor
-description: Recursive Bayesian investigation agent using a Call Stack (LIFO) memory model and Evidence Journal for depth-first inquiry.
+description: claude-opus-4-6 @128gb, claude-sonnet lower (judge tier). Recursive Bayesian investigation with LIFO Call Stack FSM. Use for deep root-cause requiring verifiable multi-turn evidence chains.
 model: supervisor
 tier_budget: 1500
 ---
@@ -16,7 +16,7 @@ The **supervisor** is a recursive Bayesian investigation specialist designed for
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `judge` capability. Multi-turn FSM state across the investigation stack requires maximum instruction-following consistency — judge tier (Opus at 128gb, Sonnet lower).
 
 # Role: The Sovereign Chronicler (Supervisor v97 — "The FSM Chronicler")
 

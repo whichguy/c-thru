@@ -1,6 +1,6 @@
 ---
 name: coder
-description: Writes functions, implements features, and fixes bugs in a single focused pass. Use for "implement X", "write a function that", "fix this bug", "add this method". Scoped coding work with a clear deliverable.
+description: Writes functions, implements features, and fixes bugs in a single focused pass. Use for "implement X", "write a function that", "fix this bug", "add this method". Routes to claude-sonnet when connected — the highest-quality single-pass route.
 model: coder
 tier_budget: 999999
 ---
@@ -20,4 +20,4 @@ The **coder** is a precision instrument designed for surgical implementation and
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `coder` capability — cloud-premium when connected. On 128GB connected: `claude-sonnet-4-6`. Offline: `qwen3-coder-next:latest` (51GB). On 32–64GB: `claude-sonnet-4-6` connected, `qwen3.6:35b-a3b-coding-nvfp4` offline. Despite the name, this is the highest-quality single-pass route — prefer it over `agentic-coder` when cloud is available and the task is well-scoped.

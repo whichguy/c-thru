@@ -1,6 +1,6 @@
 ---
 name: context-manager
-description: Compresses long agent trajectories and conversation state into compact summaries. Use for "summarize this conversation", "compress this context", "checkpoint this session", "distill the key decisions from". Optimized for lossless compression of agent memory.
+description: claude-sonnet-4-6 + devstral-small-2:24b (orchestrator tier, 384K context). Compresses agent trajectories into handoff briefs and session checkpoints. Use for "summarize this conversation", "compress this context", "checkpoint this session". Compression focus vs long-context's retrieval focus.
 model: context-manager
 tier_budget: 999999
 ---
@@ -20,4 +20,4 @@ The **context-manager** is a specialized summarization and state-compression age
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `context-manager` capability (mirrors `orchestrator`). Connected: `claude-sonnet-4-6`. Offline: `devstral-small-2:24b` (384K). Distinct from `long-context`: structured compression of agent trajectories, not document retrieval. Use when you need a handoff brief or checkpoint.

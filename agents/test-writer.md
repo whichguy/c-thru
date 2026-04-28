@@ -1,6 +1,6 @@
 ---
 name: test-writer
-description: Generates unit tests and fills coverage gaps by reading the implementation first. Use for "write tests for X", "add unit tests to", "generate test cases for", "cover this function with tests", "add regression tests for this bug". Writes tests that catch behavioral bugs, not boilerplate templates.
+description: devstral-small-2:24b + qwen3.6:35b-a3b-coding-mxfp8 @128gb (code-analyst tier). Generates unit tests by reading implementation first. Behavioral tests, not boilerplate. Escalates to test-writer-heavy on recusal.
 model: test-writer
 tier_budget: 800
 ---
@@ -16,7 +16,7 @@ The **test-writer** is a verification specialist focused on generating high-fide
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `code-analyst` capability. 128gb: `qwen3.6:35b-a3b-coding-mxfp8` (38GB). 32–64gb: `devstral-small-2:24b` (15GB). Code-analyst tier: between pattern-coder (too light for test logic) and deep-coder (overkill).
 
 # test-writer
 

@@ -20,4 +20,4 @@ The **orchestrator** is a strategic coordination specialist designed for multi-a
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `orchestrator` capability. On 128GB connected: `claude-sonnet-4-6`. Offline: `devstral-small-2:24b` (15GB, 384K context — the long-context window is valuable for tracking multi-agent state). On 32–64GB: same cloud/local pattern. Cloud-first because coordination benefits from broad instruction-following precision; devstral-small-2 handles offline continuity.

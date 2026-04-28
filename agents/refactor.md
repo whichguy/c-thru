@@ -20,4 +20,4 @@ The **refactor** is a structural engineering specialist focused on improving the
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `deep-coder` capability. On 128GB: `qwen3.6:35b-a3b-coding-mxfp8` (38GB mxfp8) always — same tier as `implementer`. On 32–64GB connected: `claude-sonnet-4-6`; offline: `devstral-small-2:24b`. The mxfp8 precision gives enough fidelity to reason about structural correctness without the full 70GB bf16 overhead.

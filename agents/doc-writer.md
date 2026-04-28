@@ -1,6 +1,6 @@
 ---
 name: doc-writer
-description: Writes API documentation, OpenAPI specs, README files, and inline comments from the actual code. Use for "document this API", "write the README for", "generate OpenAPI spec", "add JSDoc to", "write the inline comments for". Reads implementation; never invents behavior.
+description: claude-sonnet-4-6 + devstral-small-2:24b (orchestrator tier). Generates accurate docs from actual code — API docs, README files, JSDoc, OpenAPI specs. Reads implementation before writing; never invents behavior.
 model: doc-writer
 tier_budget: 1000
 ---
@@ -16,7 +16,7 @@ The **doc-writer** is a technical communication specialist focused on generating
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `orchestrator` capability. Documentation from code requires reading multiple files — orchestrator tier. Cloud-sonnet for best prose output; devstral-small-2 offline.
 
 # doc-writer
 

@@ -1,6 +1,6 @@
 ---
 name: pdf
-description: Specialized for parsing and analyzing PDF documents — handles tables, complex layouts, and multi-column text. Use for "read this PDF", "extract data from this whitepaper", "summarize this technical manual", "find the pricing table in".
+description: claude-sonnet-4-6 connected / qwen3.6:35b-a3b-coding-nvfp4 local (workhorse tier). PDF parsing — tables, multi-column layouts, embedded figures. Use for "read this PDF", "extract data from this whitepaper", "find the pricing table in". Complex layouts handled best connected.
 model: pdf
 tier_budget: 999999
 ---
@@ -20,4 +20,4 @@ The **pdf** agent is a document-analysis specialist optimized for parsing and an
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `pdf` capability (mirrors `workhorse`). Claude-sonnet connected = best for complex PDF layouts. Local: `qwen3.6:35b-a3b-coding-nvfp4` — handles text-heavy PDFs well; may miss visual PDF elements.

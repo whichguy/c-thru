@@ -1,6 +1,6 @@
 ---
 name: code-analyst-light
-description: Lightweight code analysis — pattern matching, structure review, quick linting feedback. Use for "scan this for patterns", "quickly review this function", "spot obvious issues in", "check style of". Faster and cheaper than full code-analyst.
+description: gemma4:26b @128gb, gemma4:e2b @32-64gb. Fast pattern recognition, style checks, light code scanning. Use for "scan for patterns", "quickly review this function", "spot obvious issues in". 102 t/s at 128gb. No deep architectural reasoning — use reviewer for that.
 model: code-analyst-light
 tier_budget: 999999
 ---
@@ -20,4 +20,4 @@ The **code-analyst-light** is a rapid-response specialist designed for high-freq
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `code-analyst-light`. 128gb: `gemma4:26b` (17GB, 102 t/s). 32–64gb: `gemma4:e2b` (very small, extremely fast). 16gb: `qwen3:1.7b`. Designed for high-frequency lightweight analysis — audit 10 files quickly rather than deeply analyzing one.

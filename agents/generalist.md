@@ -1,6 +1,6 @@
 ---
 name: generalist
-description: Handles everyday questions, triage, trade-off analysis, and open-ended exploration. Use for "help me think through X", "what are the trade-offs of", "explain this error", "quick answer on". The default choice when no specialized role fits.
+description: claude-sonnet-4-6 (connected) / qwen3.6:35b-a3b-coding-nvfp4 local (workhorse tier). Broad instruction-following, trade-off analysis, open-ended Q&A. Use when no specialist fits — "help me think through X", "what are the trade-offs of", "explain this". Best all-rounder at each tier.
 model: generalist
 tier_budget: 999999
 ---
@@ -20,4 +20,4 @@ The **generalist** is a versatile all-rounder designed for everyday questions, t
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `workhorse` capability. Connected 32–64gb: `claude-sonnet-4-6`. 128gb always local: `qwen3.6:35b-a3b-coding-nvfp4` (21GB nvfp4). Same backing as `vision` and `pdf`. Use when no specialist role fits and you need a capable all-rounder.

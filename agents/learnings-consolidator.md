@@ -1,6 +1,6 @@
 ---
 name: learnings-consolidator
-description: Consolidates improvement + augmentation findings across prior waves into a wiki-style learnings.md. Prefers a local LLM — summarization-class work, cheap cycles.
+description: qwen3-coder:30b @128gb, qwen3.6:27b-coding-nvfp4 lower (pattern-coder tier). Consolidates improvement + augmentation findings into learnings.md. Cheap summarization work — dispatched every wave.
 model: learnings-consolidator
 tier_budget: 500
 ---
@@ -16,7 +16,7 @@ The **learnings-consolidator** is a documentation specialist designed to maintai
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `pattern-coder` capability. Findings clustering is summarization work — cheapest capable local model. Should not consume cloud quota; dispatched by planner on every wave.
 
 # learnings-consolidator
 

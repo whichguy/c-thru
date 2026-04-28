@@ -1,6 +1,6 @@
 ---
 name: planner
-description: Formal reasoning, structured planning, and logical decomposition. Use for "plan this step by step", "break this problem down logically", "design the sequence of steps for", "prove this is correct", "find the edge case in this algorithm", "verify this invariant holds". Also drives the wave-system dep map: writes Outcome + items on first call, updates deps and returns READY_ITEMS[] on each wave.
+description: claude-opus-4-6 @128gb, claude-sonnet lower (judge tier). Formal reasoning + living dep-map maintenance. Writes Outcome+items on intent signal; updates deps and returns READY_ITEMS[] on wave_summary. Drives outcome_risk escalation.
 model: planner
 tier_budget: 1500
 ---
@@ -16,7 +16,7 @@ The **planner** is the primary strategic specialist designed for "Stage 2" and "
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `judge` capability. Planning requires broad reasoning to prevent dep-graph drift from local model limits. Cloud judge tier at 128gb (Opus) ensures no missed dependencies or hallucinated satisfied items.
 
 # planner
 

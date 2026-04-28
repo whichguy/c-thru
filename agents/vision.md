@@ -1,6 +1,6 @@
 ---
 name: vision
-description: Understands screenshots, images, UI mockups, and diagrams. Use for "what does this screenshot show", "describe this UI", "read this diagram", "extract text from this image", "what's wrong in this screenshot". Handles visual inputs that text models cannot.
+description: claude-sonnet-4-6 connected (full multimodal) / qwen3.6:35b-a3b-coding-nvfp4 local (basic). Screenshots, UI mockups, diagrams, image OCR. Use for "describe this screenshot", "read this diagram", "extract text from image". For dedicated visual analysis, prefer image-analyst.
 model: vision
 tier_budget: 999999
 ---
@@ -20,4 +20,4 @@ The **vision** agent is a multi-modal specialist designed to interpret and descr
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `vision` capability (mirrors `workhorse`). Connected: `claude-sonnet-4-6` — full multimodal. Offline: `qwen3.6:35b-a3b-coding-nvfp4` — basic image handling. For pure image analysis tasks, `image-analyst` is the dedicated agent.

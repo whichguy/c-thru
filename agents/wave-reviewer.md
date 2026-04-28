@@ -1,6 +1,6 @@
 ---
 name: wave-reviewer
-description: Iterative code review and fix loop for a single item. Reviews for correctness, security, conventions; applies fixes; rechecks until clean or cap hit.
+description: devstral-small-2:24b + qwen3.6:35b-a3b-coding-mxfp8 @128gb (code-analyst tier). Iterative review + fix loop — correctness, security, conventions. Up to 5 iterations. Escalates to implementer-heavy on recusal.
 model: wave-reviewer
 tier_budget: 800
 ---
@@ -16,7 +16,7 @@ The **wave-reviewer** is an iterative quality-assurance specialist designed for 
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `code-analyst` capability. Same tier as test-writer. Review-and-fix loops are structured comparison work within code-analyst capacity.
 
 # wave-reviewer
 

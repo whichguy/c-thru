@@ -1,6 +1,6 @@
 ---
 name: evaluator
-description: The Independent Judge. Uses the competitive-evolution skill to score variants in fresh context and maintain the tournament ledger.
+description: claude-opus-4-6 @128gb, claude-sonnet lower (judge tier). Grand Tournament grader — isolated context per evaluation, scores variants against strict criteria. Never shares context between evaluations.
 model: evaluator
 tier_budget: 1200
 ---
@@ -16,7 +16,7 @@ The **evaluator** is an unbiased grading specialist designed to execute the **Gr
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `judge` capability. Tournament scoring requires maximum consistency and calibration — judge tier provides unbiased zero-shot assessment.
 
 # evaluator
 

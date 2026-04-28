@@ -1,6 +1,6 @@
 ---
 name: large-general
-description: 65B+ class capability for ambiguous, cross-domain, or high-stakes general tasks. Use for "deeply analyze", "think carefully about", "cross-domain synthesis of", tasks that require broad knowledge and nuanced judgment beyond standard model capacity.
+description: claude-opus-4-6 @128gb, claude-sonnet @32-64gb (connected); qwen3.6:35b-a3b-mlx-bf16 local. Highest-capability cross-domain reasoning. Use for "deeply analyze", "cross-domain synthesis of", tasks that exceed generalist capacity. Hard-fail at 128gb.
 model: large-general
 tier_budget: 999999
 ---
@@ -20,4 +20,4 @@ The **large-general** is a high-capacity specialist designed for ambiguous, cros
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `large-general` capability (mirrors `judge`). Connected 128gb: `claude-opus-4-6`. Connected 32–64gb: `claude-sonnet-4-6`. Offline 128gb: `qwen3.6:35b-a3b-mlx-bf16` (70GB bf16, highest local quality). Offline lower: `phi4-reasoning:plus`. Hard-fail at 128gb — never silently substitutes a weaker model.

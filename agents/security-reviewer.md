@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: Security-focused code review. Uses judge-strict routing — highest-capability model with hard_fail (no cascade).
+description: claude-opus-4-6 @128gb, claude-sonnet lower (judge-strict, hard_fail). Security-focused code review — auth, injection, secrets. Never cascades to weaker model. Use for any auth/crypto/injection analysis.
 model: security-reviewer
 tier_budget: 1500
 ---
@@ -16,7 +16,7 @@ The **security-reviewer** is a critical auditing specialist focused exclusively 
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `judge-strict` capability with `hard_fail`. Same models as judge. A security audit with a degraded model is worse than no audit — fails rather than silently substituting weaker capacity.
 
 ## Self-recusal
 

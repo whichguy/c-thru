@@ -7,8 +7,14 @@ const path = require('path');
 const PROFILE_KEYS = ['default', 'classifier', 'explorer', 'reviewer', 'workhorse', 'coder',
   'judge', 'judge-strict', 'orchestrator', 'code-analyst', 'pattern-coder', 'deep-coder',
   'local-planner', 'commit-message-generator',
-  'deep-coder-cloud', 'code-analyst-cloud',
-  'reasoner', 'fast-scout', 'code-analyst-light', 'deep-coder-precise', 'agentic-coder'];
+  'implementer-heavy', 'test-writer-heavy',
+  'reasoner', 'fast-scout', 'code-analyst-light', 'deep-coder-precise', 'agentic-coder',
+  'fast-coder',
+  // agent-named aliases (1:1 routing — agent name == capability key)
+  'deep-code-debugger', 'fast-code-debugger', 'debugger',
+  'generalist', 'vision', 'pdf', 'fast-generalist', 'large-general',
+  'long-context', 'context-manager', 'edge', 'refactor',
+  'image-analyst', 'writer'];
 const CAPABILITY_KEYS = new Set([
   'default',
   'classify_intent',

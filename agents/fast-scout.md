@@ -20,4 +20,4 @@ The **fast-scout** is an agile reconnaissance specialist designed for rapid, rea
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `fast-scout` capability. On all tiers ≥32GB: `qwen3.6:27b-coding-nvfp4` (19GB, fast nvfp4). The nvfp4 quantization maximizes tokens/sec for read-only scanning where the precision of mxfp8/bf16 is unnecessary.

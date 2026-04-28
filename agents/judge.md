@@ -22,4 +22,4 @@ The **judge** is a critical evaluator and high-stakes planner designed for tasks
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `judge` capability with `hard_fail` — no degraded substitute. On 128GB connected: `claude-opus-4-6`. Offline: `qwen3.6:35b-a3b-mlx-bf16` (70GB, MLX-native bf16). On 32–64GB: `claude-sonnet-4-6` connected, `phi4-reasoning:plus` (11GB, top reasoning benchmarks) offline. If the judge model is unavailable, the request fails rather than silently substituting a weaker evaluator.

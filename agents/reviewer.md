@@ -20,4 +20,4 @@ The **reviewer** is a quality-assurance specialist focused on maintaining high e
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `reviewer` capability. On 128GB: `qwen3.6:35b-a3b-coding-mxfp8` (38GB mxfp8) always. On 32–64GB: `devstral-small-2:24b`. The mxfp8 precision tier is intentional — thorough review requires enough model capacity to hold the full change context and reason about subtle invariants.

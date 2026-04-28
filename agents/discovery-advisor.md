@@ -1,6 +1,6 @@
 ---
 name: discovery-advisor
-description: Pre-exploration advisor. Reads a reconnaissance summary and produces a prioritized list of gap questions for explorer agents to answer.
+description: qwen3-coder:30b @128gb, qwen3.6:27b-coding-nvfp4 lower (pattern-coder tier). Pre-exploration advisor — reads recon summary, produces prioritized gap questions for explorer agents. Read-only.
 model: discovery-advisor
 tier_budget: 800
 ---
@@ -16,7 +16,7 @@ The **discovery-advisor** is a pre-planning specialist designed to identify miss
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `pattern-coder` capability. Gap identification from a recon summary is structured analysis — local 27B+ coding models handle it without cloud overhead.
 
 # discovery-advisor
 

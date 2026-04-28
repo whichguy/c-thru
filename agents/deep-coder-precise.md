@@ -20,4 +20,4 @@ The **deep-coder-precise** is a quality-focused engineering specialist designed 
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `deep-coder-precise` capability — full-precision local model at every tier. On 128GB: `qwen3.6:35b-a3b-mlx-bf16` (70GB, MLX-native bf16 on Apple Silicon). On 64GB: `qwen3.6:35b-a3b-coding-mxfp8` (38GB mxfp8). On 48GB: `qwen3.6:35b-a3b-coding-nvfp4`. Trades throughput for output fidelity — use when correctness matters more than latency.

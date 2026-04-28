@@ -1,13 +1,13 @@
 ---
-name: test-writer-cloud
-description: Cloud-tier test writer. Escalation target for test-writer recusals. Same role, cloud tier. Returns CONFIDENCE.
-model: test-writer-cloud
+name: test-writer-heavy
+description: claude-sonnet-4-6 + gpt-oss:20b @128gb (hard_fail). Heavy-tier test generation for complex implementations. Escalation target for test-writer recusals. Hard-fail prevents quality degradation. Returns CONFIDENCE.
+model: test-writer-heavy
 tier_budget: 800
 ---
 
 # Agent: Cloud Test Writer
 
-The **test-writer-cloud** is a high-stakes verification specialist designed for tasks requiring maximum logical fidelity and subtle bug detection. It serves as the primary escalation target for local `test-writer` recusals. It utilizes cloud-tier models to analyze complex implementations and generate high-fidelity unit tests that capture edge cases and error paths that might elude a local model. It is the agent of choice for verifying core infrastructure, security logic, and mission-critical algorithms.
+The **test-writer-heavy** is a high-stakes verification specialist designed for tasks requiring maximum logical fidelity and subtle bug detection. It serves as the primary escalation target for local `test-writer` recusals. It utilizes cloud-tier models to analyze complex implementations and generate high-fidelity unit tests that capture edge cases and error paths that might elude a local model. It is the agent of choice for verifying core infrastructure, security logic, and mission-critical algorithms.
 
 ## When to Invoke
 *   **Infrastructure Verification:** "Escalated from local: Write unit tests for the per-request `AsyncLocalStorage` logic. Ensure the tests specifically exercise the concurrent configuration reload race condition."
@@ -16,9 +16,9 @@ The **test-writer-cloud** is a high-stakes verification specialist designed for 
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `test-writer-heavy` capability with `hard_fail`. Connected: `claude-sonnet-4-6` at all tiers. Offline 128gb: `gpt-oss:20b`. Offline lower: `devstral-small-2:24b`. Escalation-only — let the wave system route here via test-writer recusal.
 
-# test-writer-cloud
+# test-writer-heavy
 
 Input: digest path (assembled by orchestrator with escalation context section). Read it.
 

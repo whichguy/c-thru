@@ -1,6 +1,6 @@
 ---
 name: agentic-coder
-description: Handles multi-step autonomous coding loops — reads codebase, plans changes, implements across multiple files. Use for "build this feature end-to-end", "refactor across the module", "implement the full X system". Runs multiple tool calls per response.
+description: Handles multi-step autonomous coding loops — reads codebase, plans changes, implements across multiple files. Use for "build this feature end-to-end", "refactor across the module", "implement the full X system". Always routes local — never cloud — so it remains available even when disconnected.
 model: agentic-coder
 tier_budget: 999999
 ---
@@ -20,4 +20,4 @@ The **agentic-coder** is a high-autonomy specialist designed for complex, multi-
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `agentic-coder` capability — always local, never cloud. On 128GB: `qwen3.6:35b-a3b-coding-nvfp4` (21GB, fast nvfp4). On 32–64GB: `devstral-small-2:24b` (15GB, 68% SWE-bench). The local-first constraint keeps this agent available in offline/fleet environments and leaves cloud quota for judge and orchestrator.

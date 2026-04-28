@@ -1,6 +1,6 @@
 ---
 name: integrator
-description: Wires completed implementation together — routes, registrations, exports, DI. Writes integration glue only.
+description: claude-sonnet-4-6 + devstral-small-2:24b (orchestrator tier). Wires completed implementations together — routes, exports, DI, index files. Glue code only, no business logic.
 model: integrator
 tier_budget: 1000
 ---
@@ -16,7 +16,7 @@ The **integrator** is a system-level specialist focused on wiring disparate code
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `orchestrator` capability. Integration work requires reading multiple modules — orchestrator context window handles cross-file wiring without deep-coder overhead.
 
 # integrator
 

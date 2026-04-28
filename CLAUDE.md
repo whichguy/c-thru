@@ -240,30 +240,64 @@ Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`.
 
 ### Capability aliases
 
-Wave-system internal agents and user-facing role agents both route through the same
-capability aliases.
+Wave-system internal agents route through shared capability tiers. User-facing role agents
+each have a self-named capability that mirrors the same tier — making `agent_to_capability`
+a 1:1 map for all user-facing agents (agent name == capability key).
 
-| Alias | Cognitive tier | Wave-system agents | User-facing role agents |
-|---|---|---|---|
-| `judge` | 4–5 | planner, auditor, review-plan, final-reviewer, journal-digester, evaluator, supervisor | judge, large-general, debugger, planner |
-| `judge-strict` | 4–5, hard_fail | security-reviewer | — |
-| `orchestrator` | 2 | plan-orchestrator, integrator, doc-writer | orchestrator, long-context, doc-writer, context-manager |
-| `local-planner` | 2–3 local | planner-local (dep_update signal only) | — |
-| `code-analyst` | 2–3 | test-writer, wave-reviewer, wave-synthesizer, converger | test-writer |
-| `code-analyst-light` | 1–2 (light) | — | code-analyst-light |
-| `code-analyst-cloud` | 4 cloud | test-writer-cloud | — |
-| `pattern-coder` | 1 | scaffolder, discovery-advisor, learnings-consolidator | edge |
-| `deep-coder` | 3 | implementer | agentic-coder, refactor |
-| `deep-coder-cloud` | 4 cloud | implementer-cloud | — |
-| `deep-coder-precise` | 3 (mxfp8/BF16) | — | deep-coder-precise |
-| `coder` | 2 | — | coder |
-| `workhorse` | 2 (general) | — | generalist, vision, pdf |
-| `classifier` | 1 (fast) | — | fast-generalist |
-| `reviewer` | 2 (review) | — | reviewer |
-| `reasoner` | 3 (reasoning) | — | reasoner |
-| `explorer` | 1 (discovery) | — | explorer |
-| `fast-scout` | 1 (latency-optimised) | — | fast-scout |
-| `commit-message-generator` | 1 local | (deterministic pre-processor — clean-wave path) | — |
+**Shared capability tiers (wave-internal agents):**
+
+| Alias | Cognitive tier | Wave-system agents |
+|---|---|---|
+| `judge` | 4–5 | planner, auditor, review-plan, final-reviewer, journal-digester, evaluator, supervisor, supervisor-debug, uplift-decider |
+| `judge-strict` | 4–5, hard_fail | security-reviewer |
+| `orchestrator` | 2 | plan-orchestrator, integrator, doc-writer |
+| `local-planner` | 2–3 local | planner-local (dep_update signal only) |
+| `code-analyst` | 2–3 | test-writer, wave-reviewer, wave-synthesizer, converger |
+| `test-writer-heavy` | 4 heavy | test-writer-heavy |
+| `pattern-coder` | 1 | scaffolder, discovery-advisor, learnings-consolidator |
+| `deep-coder` | 3 | implementer |
+| `implementer-heavy` | 4 heavy | implementer-heavy |
+| `commit-message-generator` | 1 local | (deterministic pre-processor — clean-wave path) |
+
+**User-facing role agents (self-named capabilities — agent name == capability key):**
+
+| Agent / Capability | Cognitive tier | Backing capability (models copied from) |
+|---|---|---|
+| `judge` | 4–5 | — (canonical) |
+| `large-general` | 4–5 | judge |
+| `planner` | 4–5 | judge |
+| `deep-code-debugger` | 3 (reasoning) | reasoner |
+| `fast-code-debugger` | 2 (fast-debug) | fast-code-debugger |
+| `reasoner` | 3 (reasoning) | — (canonical) |
+| `orchestrator` | 2 | — (canonical) |
+| `long-context` | 2 | orchestrator |
+| `context-manager` | 2 | orchestrator |
+| `agentic-coder` | 3 | — (canonical) |
+| `implementer-heavy` | 4 heavy | — (canonical, was deep-coder-cloud) |
+| `fast-coder` | 3 cloud / local | — (canonical) |
+| `refactor` | 3 | deep-coder |
+| `deep-coder-precise` | 3 (mxfp8/BF16) | — (canonical) |
+| `coder` | 2 | — (canonical) |
+| `reviewer` | 2 (review) | — (canonical) |
+| `code-analyst-light` | 1–2 (light) | — (canonical) |
+| `test-writer-heavy` | 4 heavy | — (canonical, was code-analyst-cloud) |
+| `generalist` | 2 (general) | workhorse |
+| `vision` | 2 (general) | workhorse |
+| `image-analyst` | 2 (general) | workhorse |
+| `pdf` | 2 (general) | workhorse |
+| `fast-generalist` | 1 (fast) | classifier |
+| `edge` | 1 | pattern-coder |
+| `writer` | 2–4 (prose) | writer |
+| `explorer` | 1 (discovery) | — (canonical) |
+| `fast-scout` | 1 (latency-optimised) | — (canonical) |
+
+**Internal capability tier definitions (not directly agent-named):**
+
+| Alias | Purpose |
+|---|---|
+| `workhorse` | Backing tier for generalist/vision/pdf |
+| `classifier` | Backing tier for fast-generalist |
+| `default` | Fallback for unresolved requests |
 
 ### agent_to_capability resolution
 

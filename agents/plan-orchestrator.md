@@ -1,6 +1,6 @@
 ---
 name: plan-orchestrator
-description: Pure wave executor. Receives READY_ITEMS[] + commit_message from driver; runs topo-sort → batch → progressive injection → workers → verify → commit. Returns compact STATUS block.
+description: claude-sonnet-4-6 + devstral-small-2:24b (orchestrator tier, 384K context). Pure mechanical wave executor — topo-sort → batch → workers → verify → commit. No LLM reasoning about wave content.
 model: plan-orchestrator
 tier_budget: 1000
 ---
@@ -16,7 +16,7 @@ The **plan-orchestrator** is a purely mechanical execution specialist designed f
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `orchestrator` capability. Mechanical execution with 384K context (devstral-small-2) for tracking multi-item state across waves. Cloud-first for reliability; devstral-small-2 when offline.
 
 # plan-orchestrator
 

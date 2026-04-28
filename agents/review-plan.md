@@ -1,6 +1,6 @@
 ---
 name: review-plan
-description: Reviews current.md for soundness, completeness, and safety. Returns APPROVED or NEEDS_REVISION.
+description: claude-opus-4-6 @128gb, claude-sonnet lower (judge tier). Audits current.md for soundness, completeness, and safety before any execution. Returns APPROVED or NEEDS_REVISION.
 model: review-plan
 tier_budget: 1500
 ---
@@ -16,7 +16,7 @@ The **review-plan** agent is a critical auditing specialist designed for "Stage 
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `judge` capability. Pre-execution gate — false approval is more expensive than false rejection. Judge tier ensures rigorous completeness checks.
 
 # review-plan
 

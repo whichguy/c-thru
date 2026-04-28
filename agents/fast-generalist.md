@@ -1,6 +1,6 @@
 ---
 name: fast-generalist
-description: Latency-optimized generalist — Q&A, triage, quick answers at speed. Use when you need a fast response: "quick: what is", "tl;dr of", "one-line answer", "fast check on". Trades depth for speed.
+description: gemma4:26b — 102 t/s, 17GB, hard_fail. Fastest generalist across all 32gb+ tiers (connected and offline same model). Use for "quick: what is", "tl;dr of", "one-line answer", "fast check on". Not for multi-step reasoning — use generalist instead.
 model: fast-generalist
 tier_budget: 999999
 ---
@@ -20,4 +20,4 @@ The **fast-generalist** is a high-speed all-rounder designed for rapid responses
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `fast-generalist` capability (mirrors `classifier`) with `hard_fail`. `gemma4:26b` (17GB, 102 t/s) on all 32gb+ tiers — same model connected and offline. Falls to `qwen3:1.7b` at 16gb. Fails hard rather than cascading to a slower model; the contract is speed.

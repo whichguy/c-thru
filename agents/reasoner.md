@@ -20,4 +20,4 @@ The **reasoner** is a high-end specialist focused on formal logic, multi-step de
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `reasoner` capability — a reasoning-specialized model, not a coding model. On 128GB: `deepseek-r1:32b` (19GB) always. On 32–64GB connected: `deepseek-r1:32b`; offline: `phi4-reasoning:plus` (11GB, 82.5% AIME 2025 — rivals 70B-class reasoning distillations). Use for chain-of-thought verification and formal logic, not code generation.

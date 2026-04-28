@@ -1,6 +1,6 @@
 ---
 name: scaffolder
-description: Mechanical file/directory scaffolding — stubs, boilerplate, index files. Template-following only, no novel logic.
+description: qwen3-coder:30b @128gb, qwen3.6:27b-coding-nvfp4 lower (pattern-coder tier, 124 t/s). Mechanical file/directory scaffolding — stubs, boilerplate, index files. Template-following only, no novel logic.
 model: scaffolder
 tier_budget: 500
 ---
@@ -16,7 +16,7 @@ The **scaffolder** is a mechanical implementation specialist focused on generati
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `pattern-coder` capability. Scaffolding is pattern-matching work — qwen3-coder:30b (18GB MoE, 124 t/s at 128gb) handles it fast. Throughput is the priority; no reasoning depth needed.
 
 # scaffolder
 

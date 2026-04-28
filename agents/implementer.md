@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: Produces core business logic within a wave. Multi-file aware, follows existing patterns, production code only.
+description: claude-sonnet-4-6 + qwen3.6:35b-a3b-coding-mxfp8 @128gb (deep-coder tier). Core business logic within a wave — multi-file aware, follows existing patterns, production code only. Escalates to implementer-heavy on recusal.
 model: implementer
 tier_budget: 800
 ---
@@ -16,7 +16,7 @@ The **implementer** is a production engineering specialist focused on writing co
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `deep-coder` capability. Connected 32–64gb: `claude-sonnet-4-6`. 128gb always local: `qwen3.6:35b-a3b-coding-mxfp8` (38GB). Offline lower tiers: `devstral-small-2:24b`. Deep-coder tier between pattern-coder (cheap) and implementer-heavy (cloud-premium escalation).
 
 # implementer
 

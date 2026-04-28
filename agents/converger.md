@@ -1,6 +1,6 @@
 ---
 name: converger
-description: Aggregates parallel explorer/implementer outputs into a single coherent synthesis. Resolves conflicts, deduplicates findings, and produces one unified output file.
+description: devstral-small-2:24b + qwen3.6:35b-a3b-coding-mxfp8 @128gb (code-analyst tier). Aggregates parallel worker outputs — resolves conflicts, deduplicates findings, produces coherent synthesis.
 model: converger
 tier_budget: 800
 ---
@@ -16,7 +16,7 @@ The **converger** is a synthesis specialist designed for "Wave-2" operations whe
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `code-analyst` capability. Conflict resolution between parallel outputs is structured comparison work within code-analyst capacity.
 
 # converger
 

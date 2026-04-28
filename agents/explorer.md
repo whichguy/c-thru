@@ -1,6 +1,6 @@
 ---
 name: explorer
-description: Read-only discovery agent. Answers a single gap question by reading the codebase, wiki, and existing plan state. Writes a concise markdown summary.
+description: gemma4:26b @128gb, devstral-small-2:24b lower (explorer tier). Read-only discovery — answers a single gap question from codebase/wiki/plan state. Writes one markdown summary. Never speculates.
 model: explorer
 tier_budget: 500
 ---
@@ -16,7 +16,7 @@ The **explorer** is a deep-dive reconnaissance specialist designed to answer a s
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `explorer` capability. 128gb: `gemma4:26b` (17GB, 102 t/s — fast read-only scanning). Lower: `devstral-small-2:24b`. Explorer runs many times per plan; small fast models keep discovery cheap.
 
 # explorer
 

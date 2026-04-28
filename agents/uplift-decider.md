@@ -1,6 +1,6 @@
 ---
 name: uplift-decider
-description: Routing judge: reads local worker partial output and decides accept|uplift|restart. Emits CLOUD_CONFIDENCE estimate. Judge tier — routing errors propagate silently so expensive triage beats wrong escalation.
+description: claude-opus-4-6 @128gb, claude-sonnet lower (judge tier). Routes local worker output to accept/uplift/restart. Wrong routing costs a full cloud re-implementation — uses judge tier to minimize misrouting.
 model: uplift-decider
 tier_budget: 1500
 ---
@@ -16,7 +16,7 @@ The **uplift-decider** is a critical routing judge designed for "Wave-2" operati
 
 ## Strategy
 
-Optimized for the best-in-class local model for this role.
+Routes to `judge` capability. Routing accuracy matters more than speed — an incorrect accept ships broken code, an incorrect restart wastes cloud budget. Opus at 128gb minimizes both failure modes.
 
 # uplift-decider
 

@@ -25,7 +25,7 @@
   "llm_profiles": {
     "16gb": {
       "default": {
-        "connected_model": "glm-5.1:cloud",
+        "connected_model": "deepseek-v4-flash:cloud",
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
       },
@@ -57,12 +57,20 @@
       "judge": {
         "connected_model": "qwen3:1.7b",
         "disconnect_model": "qwen3:1.7b",
-        "on_failure": "hard_fail"
+        "on_failure": "hard_fail",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "deepseek-r1:14b"
+        }
       },
       "judge-strict": {
         "connected_model": "qwen3:1.7b",
         "disconnect_model": "qwen3:1.7b",
-        "on_failure": "hard_fail"
+        "on_failure": "hard_fail",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "deepseek-r1:14b"
+        }
       },
       "orchestrator": {
         "connected_model": "qwen3:1.7b",
@@ -94,16 +102,6 @@
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
       },
-      "deep-coder-cloud": {
-        "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b",
-        "on_failure": "hard_fail"
-      },
-      "code-analyst-cloud": {
-        "connected_model": "qwen3:1.7b",
-        "disconnect_model": "qwen3:1.7b",
-        "on_failure": "hard_fail"
-      },
       "reasoner": {
         "connected_model": "deepseek-r1:14b",
         "disconnect_model": "deepseek-r1:14b",
@@ -127,30 +125,119 @@
       "agentic-coder": {
         "connected_model": "qwen3.5:1.7b",
         "disconnect_model": "qwen3.5:1.7b",
+        "on_failure": "cascade"
+      },
+      "fast-coder": {
+        "connected_model": "devstral-small-2:24b-cloud",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "debugger": {
+        "connected_model": "deepseek-r1:14b",
+        "disconnect_model": "deepseek-r1:14b",
+        "on_failure": "cascade"
+      },
+      "generalist": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "vision": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "pdf": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "fast-generalist": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "large-general": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "hard_fail",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "deepseek-r1:14b"
+        }
+      },
+      "long-context": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "context-manager": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "edge": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "refactor": {
+        "connected_model": "qwen3.5:1.7b",
+        "disconnect_model": "qwen3.5:1.7b",
+        "on_failure": "cascade"
+      },
+      "implementer-heavy": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "hard_fail"
+      },
+      "test-writer-heavy": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "hard_fail"
+      },
+      "deep-code-debugger": {
+        "connected_model": "deepseek-r1:14b",
+        "disconnect_model": "deepseek-r1:14b",
+        "on_failure": "cascade"
+      },
+      "fast-code-debugger": {
+        "connected_model": "deepseek-r1:14b",
+        "disconnect_model": "deepseek-r1:14b",
+        "on_failure": "hard_fail"
+      },
+      "image-analyst": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
+        "on_failure": "cascade"
+      },
+      "writer": {
+        "connected_model": "qwen3:1.7b",
+        "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
       }
     },
     "32gb": {
       "default": {
-        "connected_model": "glm-5.1:cloud",
+        "connected_model": "deepseek-v4-flash:cloud",
         "disconnect_model": "gpt-oss:20b",
-        "cloud_best_model": "glm-5.1:cloud",
+        "cloud_best_model": "deepseek-v4-flash:cloud",
         "local_best_model": "gpt-oss:20b",
         "on_failure": "cascade"
       },
       "classifier": {
-        "connected_model": "gemma4:26b-a4b",
-        "disconnect_model": "gemma4:26b-a4b",
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
         "on_failure": "hard_fail"
       },
       "explorer": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "reviewer": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "workhorse": {
@@ -169,24 +256,28 @@
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:latest",
+        "disconnect_model": "phi4-reasoning:plus",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:latest",
+        "local_best_model": "phi4-reasoning:plus",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
-          "cloud-judge-only": "claude-sonnet-4-6"
+          "cloud-judge-only": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:27b-coding-nvfp4"
         }
       },
       "judge-strict": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:latest",
+        "disconnect_model": "phi4-reasoning:plus",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:latest",
+        "local_best_model": "phi4-reasoning:plus",
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
-          "cloud-judge-only": "claude-sonnet-4-6"
+          "cloud-judge-only": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:27b-coding-nvfp4"
         }
       },
       "orchestrator": {
@@ -200,36 +291,24 @@
         }
       },
       "code-analyst": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "pattern-coder": {
-        "connected_model": "qwen3.5:9b",
-        "disconnect_model": "qwen3.5:9b",
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "deep-coder": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "devstral-small:2",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "commit-message-generator": {
         "connected_model": "qwen3:1.7b",
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
-      },
-      "deep-coder-cloud": {
-        "connected_model": "gpt-oss:20b",
-        "disconnect_model": "gpt-oss:20b",
-        "on_failure": "hard_fail"
-      },
-      "code-analyst-cloud": {
-        "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "devstral-small:2",
-        "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "devstral-small:2",
-        "on_failure": "hard_fail"
       },
       "reasoner": {
         "connected_model": "deepseek-r1:14b",
@@ -242,8 +321,8 @@
         "on_failure": "cascade"
       },
       "deep-coder-precise": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "fast-scout": {
@@ -252,32 +331,147 @@
         "on_failure": "cascade"
       },
       "agentic-coder": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "local-planner": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
+        "on_failure": "cascade"
+      },
+      "fast-coder": {
+        "connected_model": "devstral-small-2:24b-cloud",
+        "disconnect_model": "devstral-small-2:24b",
+        "on_failure": "cascade"
+      },
+      "debugger": {
+        "connected_model": "deepseek-r1:14b",
+        "disconnect_model": "deepseek-r1:14b",
+        "on_failure": "cascade"
+      },
+      "generalist": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "vision": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "pdf": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "fast-generalist": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "hard_fail"
+      },
+      "large-general": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "phi4-reasoning:plus",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "phi4-reasoning:plus",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6",
+          "cloud-judge-only": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:27b-coding-nvfp4"
+        }
+      },
+      "long-context": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "context-manager": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "edge": {
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "refactor": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "devstral-small-2:24b",
+        "on_failure": "cascade"
+      },
+      "implementer-heavy": {
+        "connected_model": "gpt-oss:20b",
+        "disconnect_model": "gpt-oss:20b",
+        "on_failure": "hard_fail"
+      },
+      "test-writer-heavy": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "devstral-small-2:24b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "devstral-small-2:24b",
+        "on_failure": "hard_fail"
+      },
+      "deep-code-debugger": {
+        "connected_model": "deepseek-r1:14b",
+        "disconnect_model": "deepseek-r1:14b",
+        "on_failure": "cascade"
+      },
+      "fast-code-debugger": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "hard_fail"
+      },
+      "image-analyst": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "writer": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "mistral-small3.1:24b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "mistral-small3.1:24b",
         "on_failure": "cascade"
       }
     },
     "48gb": {
       "default": {
-        "connected_model": "glm-5.1:cloud",
+        "connected_model": "deepseek-v4-flash:cloud",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
-        "cloud_best_model": "glm-5.1:cloud",
+        "cloud_best_model": "deepseek-v4-flash:cloud",
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "classifier": {
-        "connected_model": "gemma4:26b-a4b",
-        "disconnect_model": "gemma4:26b-a4b",
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
         "on_failure": "hard_fail"
       },
       "explorer": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "workhorse": {
@@ -296,26 +490,30 @@
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:latest",
+        "disconnect_model": "phi4-reasoning:plus",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:latest",
+        "local_best_model": "phi4-reasoning:plus",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
           "cloud-judge-only": "claude-sonnet-4-6",
-          "cloud-thinking": "claude-sonnet-4-6"
+          "cloud-thinking": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:35b-a3b-coding-nvfp4"
         }
       },
       "judge-strict": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:latest",
+        "disconnect_model": "phi4-reasoning:plus",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:latest",
+        "local_best_model": "phi4-reasoning:plus",
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
           "cloud-judge-only": "claude-sonnet-4-6",
-          "cloud-thinking": "claude-sonnet-4-6"
+          "cloud-thinking": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:35b-a3b-coding-nvfp4"
         }
       },
       "orchestrator": {
@@ -329,11 +527,11 @@
         }
       },
       "code-analyst": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade",
         "modes": {
-          "local-review": "devstral-small:2"
+          "local-review": "devstral-small-2:24b"
         }
       },
       "pattern-coder": {
@@ -343,7 +541,7 @@
       },
       "deep-coder": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "devstral-small:2",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "local-planner": {
@@ -358,20 +556,6 @@
         "connected_model": "qwen3.6:27b-coding-nvfp4",
         "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "cascade"
-      },
-      "deep-coder-cloud": {
-        "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "qwen3-coder:30b",
-        "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3-coder:30b",
-        "on_failure": "hard_fail"
-      },
-      "code-analyst-cloud": {
-        "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "devstral-small:2",
-        "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "devstral-small:2",
-        "on_failure": "hard_fail"
       },
       "reasoner": {
         "connected_model": "deepseek-r1:32b",
@@ -394,43 +578,161 @@
         "on_failure": "cascade"
       },
       "reviewer": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade",
         "modes": {
-          "local-review": "devstral-small:2"
+          "local-review": "devstral-small-2:24b"
         }
       },
       "agentic-coder": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
+        "on_failure": "cascade"
+      },
+      "fast-coder": {
+        "connected_model": "devstral-small-2:24b-cloud",
+        "disconnect_model": "devstral-small-2:24b",
+        "on_failure": "cascade"
+      },
+      "debugger": {
+        "connected_model": "deepseek-r1:32b",
+        "disconnect_model": "deepseek-r1:32b",
+        "on_failure": "cascade"
+      },
+      "generalist": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "vision": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "pdf": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "fast-generalist": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "hard_fail"
+      },
+      "large-general": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "phi4-reasoning:plus",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "phi4-reasoning:plus",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6",
+          "cloud-judge-only": "claude-sonnet-4-6",
+          "cloud-thinking": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:35b-a3b-coding-nvfp4"
+        }
+      },
+      "long-context": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "gpt-oss:20b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "gpt-oss:20b",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "context-manager": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "gpt-oss:20b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "gpt-oss:20b",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "edge": {
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "refactor": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "devstral-small-2:24b",
+        "on_failure": "cascade"
+      },
+      "implementer-heavy": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3-coder:30b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3-coder:30b",
+        "on_failure": "hard_fail"
+      },
+      "test-writer-heavy": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "devstral-small-2:24b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "devstral-small-2:24b",
+        "on_failure": "hard_fail"
+      },
+      "deep-code-debugger": {
+        "connected_model": "deepseek-r1:32b",
+        "disconnect_model": "deepseek-r1:32b",
+        "on_failure": "cascade"
+      },
+      "fast-code-debugger": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "hard_fail"
+      },
+      "image-analyst": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "writer": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "mistral-small3.1:24b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "mistral-small3.1:24b",
         "on_failure": "cascade"
       }
     },
     "64gb": {
       "reviewer": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade",
         "modes": {
-          "local-review": "devstral-small:2"
+          "local-review": "devstral-small-2:24b"
         }
       },
       "default": {
-        "connected_model": "glm-5.1:cloud",
+        "connected_model": "deepseek-v4-flash:cloud",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
-        "cloud_best_model": "glm-5.1:cloud",
+        "cloud_best_model": "deepseek-v4-flash:cloud",
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "classifier": {
-        "connected_model": "gemma4:26b-a4b",
-        "disconnect_model": "gemma4:26b-a4b",
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
         "on_failure": "hard_fail"
       },
       "explorer": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "workhorse": {
@@ -449,26 +751,30 @@
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:latest",
+        "disconnect_model": "phi4-reasoning:plus",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:latest",
+        "local_best_model": "phi4-reasoning:plus",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
           "cloud-judge-only": "claude-sonnet-4-6",
-          "cloud-thinking": "claude-sonnet-4-6"
+          "cloud-thinking": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:35b-a3b-coding-mxfp8"
         }
       },
       "judge-strict": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "phi4-reasoning:latest",
+        "disconnect_model": "phi4-reasoning:plus",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "phi4-reasoning:latest",
+        "local_best_model": "phi4-reasoning:plus",
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-sonnet-4-6",
           "cloud-judge-only": "claude-sonnet-4-6",
-          "cloud-thinking": "claude-sonnet-4-6"
+          "cloud-thinking": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:35b-a3b-coding-mxfp8"
         }
       },
       "orchestrator": {
@@ -482,11 +788,11 @@
         }
       },
       "code-analyst": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade",
         "modes": {
-          "local-review": "devstral-small:2"
+          "local-review": "devstral-small-2:24b"
         }
       },
       "pattern-coder": {
@@ -496,7 +802,7 @@
       },
       "deep-coder": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "devstral-small:2",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "local-planner": {
@@ -511,20 +817,6 @@
         "connected_model": "qwen3:1.7b",
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
-      },
-      "deep-coder-cloud": {
-        "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "qwen3-coder:30b",
-        "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3-coder:30b",
-        "on_failure": "hard_fail"
-      },
-      "code-analyst-cloud": {
-        "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "devstral-small:2",
-        "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "devstral-small:2",
-        "on_failure": "hard_fail"
       },
       "reasoner": {
         "connected_model": "deepseek-r1:32b",
@@ -542,116 +834,238 @@
         "on_failure": "hard_fail"
       },
       "agentic-coder": {
-        "connected_model": "devstral-small:2",
-        "disconnect_model": "devstral-small:2",
+        "connected_model": "devstral-small-2:24b",
+        "disconnect_model": "devstral-small-2:24b",
         "on_failure": "cascade"
       },
       "fast-scout": {
         "connected_model": "gemma4:e2b",
         "disconnect_model": "gemma4:e2b",
         "on_failure": "cascade"
+      },
+      "fast-coder": {
+        "connected_model": "devstral-small-2:24b-cloud",
+        "disconnect_model": "devstral-small-2:24b",
+        "on_failure": "cascade"
+      },
+      "debugger": {
+        "connected_model": "deepseek-r1:32b",
+        "disconnect_model": "deepseek-r1:32b",
+        "on_failure": "cascade"
+      },
+      "generalist": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "vision": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "pdf": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "fast-generalist": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "hard_fail"
+      },
+      "large-general": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "phi4-reasoning:plus",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "phi4-reasoning:plus",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6",
+          "cloud-judge-only": "claude-sonnet-4-6",
+          "cloud-thinking": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:35b-a3b-coding-mxfp8"
+        }
+      },
+      "long-context": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "gpt-oss:20b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "gpt-oss:20b",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "context-manager": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "gpt-oss:20b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "gpt-oss:20b",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "edge": {
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
+        "on_failure": "cascade"
+      },
+      "refactor": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "devstral-small-2:24b",
+        "on_failure": "cascade"
+      },
+      "implementer-heavy": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3-coder:30b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3-coder:30b",
+        "on_failure": "hard_fail"
+      },
+      "test-writer-heavy": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "devstral-small-2:24b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "devstral-small-2:24b",
+        "on_failure": "hard_fail"
+      },
+      "deep-code-debugger": {
+        "connected_model": "deepseek-r1:32b",
+        "disconnect_model": "deepseek-r1:32b",
+        "on_failure": "cascade"
+      },
+      "fast-code-debugger": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "hard_fail"
+      },
+      "image-analyst": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "writer": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "mistral-small3.1:24b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "mistral-small3.1:24b",
+        "on_failure": "cascade"
       }
     },
     "128gb": {
       "default": {
-        "connected_model": "glm-5.1:cloud",
+        "connected_model": "deepseek-v4-flash:cloud",
         "disconnect_model": "gemma4:26b",
-        "cloud_best_model": "glm-5.1:cloud",
-        "local_best_model": "qwen3.6:35b-a3b",
+        "cloud_best_model": "deepseek-v4-flash:cloud",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "classifier": {
-        "connected_model": "gemma4:26b-a4b",
-        "disconnect_model": "gemma4:26b-a4b",
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
         "on_failure": "hard_fail"
       },
       "explorer": {
-        "connected_model": "gemma4:26b-a4b",
-        "disconnect_model": "gemma4:26b-a4b",
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
         "on_failure": "cascade"
       },
       "reviewer": {
-        "connected_model": "phi4-reasoning:latest",
-        "disconnect_model": "phi4-reasoning:latest",
+        "connected_model": "qwen3.6:35b-a3b-coding-mxfp8",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-mxfp8",
         "on_failure": "cascade",
         "modes": {
-          "local-review": "phi4-reasoning:latest"
+          "local-review": "qwen3.6:35b-a3b-coding-mxfp8"
         }
       },
       "workhorse": {
-        "connected_model": "qwen3.6:35b-a3b",
-        "disconnect_model": "qwen3.6:35b-a3b",
+        "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "coder": {
-        "connected_model": "qwen3-coder:30b",
-        "disconnect_model": "qwen3-coder:30b",
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "qwen3-coder-next:latest",
         "on_failure": "cascade"
       },
       "judge": {
         "connected_model": "claude-opus-4-6",
-        "disconnect_model": "phi4-reasoning:latest",
+        "disconnect_model": "qwen3.6:35b-a3b-mlx-bf16",
         "cloud_best_model": "claude-opus-4-6",
-        "local_best_model": "phi4-reasoning:latest",
+        "local_best_model": "qwen3.6:35b-a3b-mlx-bf16",
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-opus-4-6",
           "cloud-judge-only": "claude-opus-4-6",
-          "cloud-thinking": "claude-opus-4-6"
+          "cloud-thinking": "claude-opus-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:35b-a3b-coding-mxfp8"
         }
       },
       "judge-strict": {
         "connected_model": "claude-opus-4-6",
-        "disconnect_model": "phi4-reasoning:latest",
+        "disconnect_model": "qwen3.6:35b-a3b-mlx-bf16",
         "cloud_best_model": "claude-opus-4-6",
-        "local_best_model": "phi4-reasoning:latest",
+        "local_best_model": "qwen3.6:35b-a3b-mlx-bf16",
         "on_failure": "hard_fail",
         "modes": {
           "semi-offload": "claude-opus-4-6",
           "cloud-judge-only": "claude-opus-4-6",
-          "cloud-thinking": "claude-opus-4-6"
+          "cloud-thinking": "claude-opus-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:35b-a3b-coding-mxfp8"
         }
       },
       "orchestrator": {
         "connected_model": "claude-sonnet-4-6",
-        "disconnect_model": "devstral-small:2",
+        "disconnect_model": "devstral-small-2:24b",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "devstral-small:2",
+        "local_best_model": "devstral-small-2:24b",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6"
         }
       },
       "code-analyst": {
-        "connected_model": "phi4-reasoning:latest",
-        "disconnect_model": "phi4-reasoning:latest",
+        "connected_model": "qwen3.6:35b-a3b-coding-mxfp8",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-mxfp8",
         "on_failure": "cascade",
         "modes": {
-          "local-review": "phi4-reasoning:latest"
+          "local-review": "qwen3.6:35b-a3b-coding-mxfp8"
         }
       },
       "code-analyst-light": {
-        "connected_model": "gemma4:26b-a4b",
-        "disconnect_model": "gemma4:26b-a4b",
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
         "on_failure": "cascade"
       },
       "deep-coder-precise": {
-        "connected_model": "phi4-reasoning:latest",
-        "disconnect_model": "phi4-reasoning:latest",
+        "connected_model": "qwen3.6:35b-a3b-mlx-bf16",
+        "disconnect_model": "qwen3.6:35b-a3b-mlx-bf16",
         "on_failure": "cascade"
       },
       "fast-scout": {
-        "connected_model": "qwen3.6:35b-a3b",
-        "disconnect_model": "qwen3.6:35b-a3b",
+        "connected_model": "qwen3.6:27b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:27b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "reasoner": {
         "connected_model": "deepseek-r1:32b",
-        "disconnect_model": "deepseek-r1:14b",
+        "disconnect_model": "deepseek-r1:32b",
         "on_failure": "cascade",
-        "local_best_model": "deepseek-r1:14b"
+        "local_best_model": "deepseek-r1:32b"
       },
       "deep-coder": {
         "connected_model": "qwen3.6:35b-a3b-coding-mxfp8",
@@ -661,15 +1075,15 @@
         "on_failure": "cascade"
       },
       "agentic-coder": {
-        "connected_model": "phi4-reasoning:latest",
-        "disconnect_model": "phi4-reasoning:latest",
+        "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade"
       },
       "local-planner": {
-        "connected_model": "qwen3.6:35b-a3b",
-        "disconnect_model": "qwen3.6:35b-a3b",
+        "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "modes": {
           "semi-offload": "claude-sonnet-4-6"
@@ -680,23 +1094,131 @@
         "disconnect_model": "qwen3:1.7b",
         "on_failure": "cascade"
       },
-      "deep-coder-cloud": {
+      "pattern-coder": {
+        "connected_model": "qwen3-coder:30b",
+        "disconnect_model": "qwen3-coder:30b",
+        "on_failure": "cascade"
+      },
+      "fast-coder": {
+        "connected_model": "devstral-small-2:24b-cloud",
+        "disconnect_model": "devstral-small-2:24b",
+        "on_failure": "cascade"
+      },
+      "debugger": {
+        "connected_model": "deepseek-r1:32b",
+        "disconnect_model": "deepseek-r1:32b",
+        "on_failure": "cascade",
+        "local_best_model": "deepseek-r1:32b"
+      },
+      "generalist": {
+        "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "vision": {
+        "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "pdf": {
+        "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "fast-generalist": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "hard_fail"
+      },
+      "large-general": {
+        "connected_model": "claude-opus-4-6",
+        "disconnect_model": "qwen3.6:35b-a3b-mlx-bf16",
+        "cloud_best_model": "claude-opus-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-mlx-bf16",
+        "on_failure": "hard_fail",
+        "modes": {
+          "semi-offload": "claude-opus-4-6",
+          "cloud-judge-only": "claude-opus-4-6",
+          "cloud-thinking": "claude-opus-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud",
+          "best-opensource-local": "qwen3.6:35b-a3b-coding-mxfp8"
+        }
+      },
+      "long-context": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "devstral-small-2:24b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "devstral-small-2:24b",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "context-manager": {
+        "connected_model": "claude-sonnet-4-6",
+        "disconnect_model": "devstral-small-2:24b",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "devstral-small-2:24b",
+        "on_failure": "cascade",
+        "modes": {
+          "semi-offload": "claude-sonnet-4-6"
+        }
+      },
+      "edge": {
+        "connected_model": "qwen3-coder:30b",
+        "disconnect_model": "qwen3-coder:30b",
+        "on_failure": "cascade"
+      },
+      "refactor": {
+        "connected_model": "qwen3.6:35b-a3b-coding-mxfp8",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-mxfp8",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-mxfp8",
+        "on_failure": "cascade"
+      },
+      "implementer-heavy": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3-coder:30b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3-coder:30b",
         "on_failure": "hard_fail"
       },
-      "code-analyst-cloud": {
+      "test-writer-heavy": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "gpt-oss:20b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "gpt-oss:20b",
         "on_failure": "hard_fail"
       },
-      "pattern-coder": {
-        "connected_model": "qwen3-coder:30b",
-        "disconnect_model": "qwen3-coder:30b",
+      "deep-code-debugger": {
+        "connected_model": "deepseek-r1:32b",
+        "disconnect_model": "deepseek-r1:32b",
+        "on_failure": "cascade",
+        "local_best_model": "deepseek-r1:32b"
+      },
+      "fast-code-debugger": {
+        "connected_model": "gemma4:26b",
+        "disconnect_model": "gemma4:26b",
+        "on_failure": "hard_fail"
+      },
+      "image-analyst": {
+        "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "on_failure": "cascade",
+        "cloud_best_model": "claude-sonnet-4-6",
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+      },
+      "writer": {
+        "connected_model": "claude-opus-4-6",
+        "disconnect_model": "mistral-small3.1:24b",
+        "cloud_best_model": "claude-opus-4-6",
+        "local_best_model": "mistral-small3.1:24b",
         "on_failure": "cascade"
       }
     }
@@ -706,7 +1228,7 @@
     "claude-sonnet-4-6": "anthropic",
     "claude-opus-4-6": "anthropic",
     "re:^claude-.*$": "anthropic",
-    "glm-5.1:cloud": "ollama_cloud",
+    "deepseek-v4-flash:cloud": "ollama_cloud",
     "qwen3:1.7b": "ollama_local",
     "gemma4:e2b": "ollama_local",
     "mistral-small3.1:24b": "ollama_local",
@@ -716,30 +1238,29 @@
     "qwen3-coder:480b-cloud": "ollama_cloud",
     "deepseek/deepseek-v3": "openrouter",
     "qwen3-coder-next:cloud": "ollama_cloud",
-    "gemma4:26b-a4b": "ollama_local",
     "gemma4:26b-mxfp8": "ollama_local",
     "gemma4:e4b": "ollama_local",
     "gemma4:31b": "ollama_local",
     "qwen3.6:35b": "ollama_local",
-    "qwen3.5:122b": "ollama_local",
-    "qwen3.5:9b": "ollama_local",
     "qwen3.5:1.7b": "ollama_local",
     "gpt-oss:20b": "ollama_local",
-    "devstral-small:2": "ollama_local",
+    "devstral-small-2:24b": "ollama_local",
     "devstral-2": "ollama_local",
     "qwen3.6:27b-coding-mxfp8": "ollama_local",
+    "qwen3.6:27b-mlx-bf16": "ollama_local",
     "qwen3.6:35b-a3b-coding-nvfp4": "ollama_local",
     "qwen3.6:35b-a3b-coding-mxfp8": "ollama_local",
-    "qwen3.6:35b-a3b-coding-bf16": "ollama_local",
+    "qwen3.6:35b-a3b-mlx-bf16": "ollama_local",
+    "qwen3-coder-next:latest": "ollama_local",
     "qwen3-coder-next:q8_0": "ollama_local",
     "phi4-reasoning:plus": "ollama_local",
     "deepseek-r1:32b": "ollama_local",
     "qwen3.6:35b-a3b": "ollama_local",
     "qwen3.6:27b": "ollama_local",
-    "phi4-reasoning:latest": "ollama_local"
+    "devstral-small-2:24b-cloud": "ollama_cloud"
   },
   "routes": {
-    "default": "qwen3:1.7b",
+    "default": "workhorse",
     "medium-model": "workhorse",
     "high-model": "workhorse",
     "background": "workhorse",
@@ -821,31 +1342,32 @@
   },
   "models": [
     {
-      "name": "glm-5.1:cloud",
+      "name": "deepseek-v4-flash:cloud",
       "equivalents": [
-        "gemma4:26b-mxfp8"
+        "gemma4:26b-mxfp8",
+        "qwen3.6:35b-a3b-mlx-bf16"
       ]
     },
     {
       "name": "claude-sonnet-4-6",
       "equivalents": [
-        "glm-5.1:cloud",
+        "deepseek-v4-flash:cloud",
         "gemma4:26b-mxfp8"
       ]
     },
     {
       "name": "claude-opus-4-6",
       "equivalents": [
-        "qwen3.6:35b-a3b",
+        "qwen3.6:35b-a3b-coding-nvfp4",
         "devstral-2",
-        "phi4-reasoning:latest"
+        "phi4-reasoning:plus"
       ]
     },
     {
       "name": "devstral-2",
       "equivalents": [
-        "devstral-small:2",
-        "qwen3.6:27b"
+        "devstral-small-2:24b",
+        "qwen3.6:27b-coding-nvfp4"
       ]
     }
   ],
@@ -872,14 +1394,14 @@
           "speed_score": 90
         },
         {
-          "model": "glm-5.1:cloud",
+          "model": "deepseek-v4-flash:cloud",
           "quality_score": 72,
           "speed_score": 80
         },
         {
-          "model": "qwen3.5:9b",
-          "quality_score": 55,
-          "speed_score": 95
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 72,
+          "speed_score": 85
         }
       ],
       "judge": [
@@ -889,6 +1411,11 @@
           "speed_score": 50
         },
         {
+          "model": "deepseek-v4-flash:cloud",
+          "quality_score": 87,
+          "speed_score": 80
+        },
+        {
           "model": "qwen3.6:35b-a3b-coding-nvfp4",
           "quality_score": 85,
           "speed_score": 65
@@ -904,9 +1431,9 @@
           "speed_score": 90
         },
         {
-          "model": "qwen3.5:9b",
-          "quality_score": 55,
-          "speed_score": 95
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 72,
+          "speed_score": 85
         }
       ],
       "orchestrator": [
@@ -931,9 +1458,9 @@
           "speed_score": 90
         },
         {
-          "model": "qwen3.5:9b",
-          "quality_score": 55,
-          "speed_score": 95
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 72,
+          "speed_score": 85
         }
       ],
       "deep-coder": [
@@ -953,9 +1480,9 @@
           "speed_score": 90
         },
         {
-          "model": "qwen3.5:9b",
-          "quality_score": 55,
-          "speed_score": 95
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 72,
+          "speed_score": 85
         }
       ],
       "local-planner": [
@@ -980,9 +1507,9 @@
           "speed_score": 90
         },
         {
-          "model": "qwen3.5:9b",
-          "quality_score": 55,
-          "speed_score": 95
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 72,
+          "speed_score": 85
         }
       ],
       "coder": [
@@ -1002,9 +1529,9 @@
           "speed_score": 90
         },
         {
-          "model": "qwen3.5:9b",
-          "quality_score": 55,
-          "speed_score": 95
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 72,
+          "speed_score": 85
         }
       ],
       "workhorse": [
@@ -1029,89 +1556,265 @@
           "speed_score": 90
         },
         {
-          "model": "qwen3.5:9b",
-          "quality_score": 55,
-          "speed_score": 95
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 72,
+          "speed_score": 85
         }
       ]
     },
     "64gb": {
       "default": [
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
-        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
-        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 },
-        { "model": "qwen3.5:9b", "quality_score": 55, "speed_score": 95 }
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 100
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3.6:27b-coding-nvfp4",
+          "quality_score": 72,
+          "speed_score": 85
+        }
       ],
       "judge": [
-        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
-        { "model": "phi4-reasoning:latest", "quality_score": 85, "speed_score": 43 },
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
-        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "deepseek-v4-flash:cloud",
+          "quality_score": 87,
+          "speed_score": 80
+        },
+        {
+          "model": "phi4-reasoning:plus",
+          "quality_score": 85,
+          "speed_score": 43
+        },
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 100
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ],
       "orchestrator": [
-        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
-        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 100
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ],
       "deep-coder": [
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
-        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
-        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 100
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ],
       "local-planner": [
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
-        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
-        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 100
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ],
       "coder": [
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
-        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
-        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 100
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ],
       "workhorse": [
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 },
-        { "model": "qwen3.6:27b-coding-mxfp8", "quality_score": 84, "speed_score": 75 },
-        { "model": "gpt-oss:20b", "quality_score": 75, "speed_score": 90 }
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 100
+        },
+        {
+          "model": "qwen3.6:27b-coding-mxfp8",
+          "quality_score": 84,
+          "speed_score": 75
+        },
+        {
+          "model": "gpt-oss:20b",
+          "quality_score": 75,
+          "speed_score": 90
+        }
       ]
     },
     "128gb": {
       "default": [
-        { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 },
-        { "model": "gemma4:26b", "quality_score": 72, "speed_score": 80 }
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 89,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3-coder:30b",
+          "quality_score": 88,
+          "speed_score": 100
+        },
+        {
+          "model": "gemma4:26b",
+          "quality_score": 72,
+          "speed_score": 80
+        }
       ],
       "judge": [
-        { "model": "claude-opus-4-6", "quality_score": 100, "speed_score": 50 },
-        { "model": "phi4-reasoning:latest", "quality_score": 85, "speed_score": 43 },
-        { "model": "devstral-2", "quality_score": 84, "speed_score": 7 }
+        {
+          "model": "claude-opus-4-6",
+          "quality_score": 100,
+          "speed_score": 50
+        },
+        {
+          "model": "deepseek-v4-flash:cloud",
+          "quality_score": 87,
+          "speed_score": 80
+        },
+        {
+          "model": "phi4-reasoning:plus",
+          "quality_score": 85,
+          "speed_score": 43
+        },
+        {
+          "model": "devstral-2",
+          "quality_score": 84,
+          "speed_score": 7
+        }
       ],
       "orchestrator": [
-        { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
-        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 }
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 89,
+          "speed_score": 90
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3-coder:30b",
+          "quality_score": 88,
+          "speed_score": 100
+        }
       ],
       "deep-coder": [
-        { "model": "claude-sonnet-4-6", "quality_score": 88, "speed_score": 70 },
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 },
-        { "model": "devstral-2", "quality_score": 84, "speed_score": 7 }
+        {
+          "model": "claude-sonnet-4-6",
+          "quality_score": 88,
+          "speed_score": 70
+        },
+        {
+          "model": "qwen3-coder:30b",
+          "quality_score": 88,
+          "speed_score": 100
+        },
+        {
+          "model": "devstral-2",
+          "quality_score": 84,
+          "speed_score": 7
+        }
       ],
       "local-planner": [
-        { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 }
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 89,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3-coder:30b",
+          "quality_score": 88,
+          "speed_score": 100
+        }
       ],
       "coder": [
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 },
-        { "model": "qwen3.6:35b-a3b-coding-nvfp4", "quality_score": 85, "speed_score": 100 }
+        {
+          "model": "qwen3-coder:30b",
+          "quality_score": 88,
+          "speed_score": 100
+        },
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 85,
+          "speed_score": 100
+        }
       ],
       "workhorse": [
-        { "model": "qwen3.6:35b-a3b", "quality_score": 90, "speed_score": 60 },
-        { "model": "qwen3-coder:30b", "quality_score": 88, "speed_score": 100 }
+        {
+          "model": "qwen3.6:35b-a3b-coding-nvfp4",
+          "quality_score": 89,
+          "speed_score": 90
+        },
+        {
+          "model": "qwen3-coder:30b",
+          "quality_score": 88,
+          "speed_score": 100
+        }
       ]
     }
   },
   "model_overrides": {
     "qwen3.5:35b-a3b-coding-nvfp4": "qwen3.6:35b-a3b-coding-nvfp4",
-    "qwen3.5:27b": "qwen3.6:27b"
+    "qwen3.5:27b": "qwen3.6:27b-coding-nvfp4",
+    "qwen3.5:9b": "qwen3.6:27b-coding-nvfp4",
+    "qwen3.5:122b": "qwen3.6:35b"
   },
   "agent_to_capability": {
     "planner": "judge",
@@ -1133,31 +1836,35 @@
     "explorer": "explorer",
     "discovery-advisor": "pattern-coder",
     "uplift-decider": "judge",
-    "implementer-cloud": "deep-coder-cloud",
-    "test-writer-cloud": "code-analyst-cloud",
     "converger": "code-analyst",
     "judge-evaluator": "judge",
     "evaluator": "judge",
     "supervisor": "judge",
     "supervisor-debug": "judge",
-    "generalist": "workhorse",
+    "generalist": "generalist",
     "coder": "coder",
     "agentic-coder": "agentic-coder",
-    "debugger": "reasoner",
-    "long-context": "orchestrator",
-    "fast-generalist": "classifier",
-    "vision": "workhorse",
-    "pdf": "workhorse",
-    "large-general": "judge",
-    "edge": "pattern-coder",
+    "long-context": "long-context",
+    "fast-generalist": "fast-generalist",
+    "vision": "vision",
+    "pdf": "pdf",
+    "large-general": "large-general",
+    "edge": "edge",
     "judge": "judge",
     "reviewer": "reviewer",
-    "refactor": "deep-coder",
-    "context-manager": "orchestrator",
+    "refactor": "refactor",
+    "context-manager": "context-manager",
     "reasoner": "reasoner",
     "fast-scout": "fast-scout",
     "code-analyst-light": "code-analyst-light",
     "deep-coder-precise": "deep-coder-precise",
-    "orchestrator": "orchestrator"
+    "orchestrator": "orchestrator",
+    "fast-coder": "fast-coder",
+    "implementer-heavy": "implementer-heavy",
+    "test-writer-heavy": "test-writer-heavy",
+    "deep-code-debugger": "deep-code-debugger",
+    "fast-code-debugger": "fast-code-debugger",
+    "image-analyst": "image-analyst",
+    "writer": "writer"
   }
 }
