@@ -1256,7 +1256,7 @@ try:
         data = json.load(fh)
 except Exception:
     sys.exit(1)
-backend = ((data.get('backends') or {}).get(backend_id) or {})
+backend = ((data.get('endpoints') or data.get('backends') or {}).get(backend_id) or {})
 if not isinstance(backend, dict):
     sys.exit(1)
 prep_policy = backend.get('prep_policy')
@@ -1306,9 +1306,9 @@ claude_proxy_http_base() {
 model_map_has_non_ollama_backend() {
   [[ -f "$CONFIG" ]] || return 1
   jq -e '
-    (.backends // {}) as $b |
+    (.endpoints // .backends // {}) as $b |
     ($b | length > 0) and
-    ($b | to_entries | map(.value.kind // "anthropic") | any(. != "ollama"))
+    ($b | to_entries | map((.value.url // "") | test("localhost|127\\.0\\.0\\.1") | not) | any)
   ' "$CONFIG" >/dev/null 2>&1
 }
 
@@ -1402,12 +1402,13 @@ resolve_target_backend_for_model() {
 pick_anthropic_backend_id() {
   [[ ! -f "$CONFIG" ]] && return 0
   jq -r '
-    (.backends // {}) as $b |
-    if ($b.anthropic.kind // "") == "anthropic" then
+    (.endpoints // .backends // {}) as $b |
+    def isCloudAnthropicEndpoint: (.format // .kind // "anthropic") == "anthropic" and ((.url // "") | test("localhost|127\\.0\\.0\\.1") | not);
+    if $b.anthropic != null and ($b.anthropic | isCloudAnthropicEndpoint) then
       "anthropic"
     else
       (
-        $b | to_entries | map(select((.value.kind // "anthropic") == "anthropic")) | .[0].key // empty
+        $b | to_entries | map(select(.value | isCloudAnthropicEndpoint)) | .[0].key // empty
       )
     end
   ' "$CONFIG" 2>/dev/null
@@ -2288,13 +2289,16 @@ resolve_ollama_backend_for_model() {
   [[ -n "$backend_id" ]] || return 1
 
   local backend=""
-  backend="$(jq -c --arg id "$backend_id" '.backends[$id] // empty' "$CONFIG" 2>/dev/null || true)"
+  backend="$(jq -c --arg id "$backend_id" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null || true)"
   [[ -n "$backend" && "$backend" != "null" ]] || return 1
 
   local kind base_url cli_host api_key explicit_auth local_flag
-  kind="$(jq -r '.kind // "anthropic"' <<< "$backend" 2>/dev/null)"
-  [[ "$kind" == "ollama" ]] || return 1
+  kind="$(jq -r '.format // .kind // "anthropic"' <<< "$backend" 2>/dev/null)"
   base_url="$(jq -r '.url // empty' <<< "$backend" 2>/dev/null)"
+  # Accept old-schema kind=="ollama" or v2 format=="anthropic"+localhost URL
+  if [[ "$kind" != "ollama" ]]; then
+    echo "$base_url" | grep -qE '(localhost|127\.0\.0\.1)' || return 1
+  fi
   cli_host="$(ollama_cli_host "$base_url")"
   api_key="$(ollama_secret_from_backend_json "$backend")"
   if [[ -z "$api_key" && -n "${OLLAMA_API_KEY:-}" ]]; then
@@ -3923,10 +3927,11 @@ apply_proxy_fallback_client_block() {
 apply_resolved_backend() {
   local backend_json="$1" effective_model="$2" backend_id="$3"
   local KIND BASE_URL AUTH_ENV API_KEY
-  KIND=$(jq -r '.kind // "anthropic"' <<< "$backend_json")
+  KIND=$(jq -r '.format // .kind // "anthropic"' <<< "$backend_json")
   BASE_URL=$(jq -r '.url // empty' <<< "$backend_json")
   AUTH_ENV=$(jq -r '.auth_env // empty' <<< "$backend_json")
-  if [[ "$KIND" == "ollama" ]]; then
+  # Ollama: old-schema kind=="ollama" or v2 format=="anthropic"+localhost URL
+  if [[ "$KIND" == "ollama" ]] || { [[ "$KIND" == "anthropic" ]] && echo "$BASE_URL" | grep -qE '(localhost|127\.0\.0\.1)'; }; then
     OLLAMA_BACKEND_URL="$BASE_URL"
     ensure_proxy_http_base || exit 1
     apply_ollama_client_block "$ENSURED_PROXY_HTTP_BASE" "" "{}"
@@ -3964,13 +3969,16 @@ fi
 
 if [[ -n "$TARGET_BACKEND_ID" ]]; then
   BACKEND_ID="$TARGET_BACKEND_ID"
-  BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
+  BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for target '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
   fi
   if [[ "$TARGET_FORCE_PROXY" == "1" ]]; then
-    if jq -e --arg id "$BACKEND_ID" '.backends[$id].kind // "anthropic" | . == "ollama"' "$CONFIG" >/dev/null 2>&1; then
+    local _bk_fmt _bk_url
+    _bk_fmt=$(jq -r '.format // .kind // "anthropic"' <<< "$BACKEND" 2>/dev/null)
+    _bk_url=$(jq -r '.url // empty' <<< "$BACKEND" 2>/dev/null)
+    if [[ "$_bk_fmt" == "ollama" ]] || { [[ "$_bk_fmt" == "anthropic" ]] && echo "$_bk_url" | grep -qE '(localhost|127\.0\.0\.1)'; }; then
       apply_resolved_backend "$BACKEND" "$TARGET_PROVIDER_MODEL" "$BACKEND_ID"
     else
       apply_proxy_fallback_client_block "" "{}"
@@ -3979,9 +3987,21 @@ if [[ -n "$TARGET_BACKEND_ID" ]]; then
     apply_resolved_backend "$BACKEND" "$TARGET_PROVIDER_MODEL" "$BACKEND_ID"
   fi
 
-elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE_MODEL" '.model_routes[$m] // empty' "$CONFIG" 2>/dev/null) && [[ -n "$BACKEND_ID" ]]; then
-  # 1b) New schema: .model_routes[$EFFECTIVE_MODEL] → .backends[$id]
-  BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
+elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE_MODEL" '
+  .model_routes[$m] as $r |
+  if $r == null then empty
+  elif ($r | type) == "object" then ($r.endpoint // empty)
+  else $r
+  end
+' "$CONFIG" 2>/dev/null) && [[ -n "$BACKEND_ID" ]]; then
+  # 1b) model_routes exact match → endpoints/backends lookup
+  # v2 alias object form: update EFFECTIVE_MODEL to the canonical name
+  _ALIAS_MODEL=$(jq -r --arg m "$EFFECTIVE_MODEL" '
+    .model_routes[$m] as $r |
+    if ($r | type) == "object" and $r.name then $r.name else $m end
+  ' "$CONFIG" 2>/dev/null)
+  [[ -n "$_ALIAS_MODEL" ]] && EFFECTIVE_MODEL="$_ALIAS_MODEL"
+  BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
@@ -3989,7 +4009,7 @@ elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE
   apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
 
 elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID="$(lookup_model_pattern_value "model_routes" "$EFFECTIVE_MODEL")" && [[ -n "$BACKEND_ID" ]]; then
-  BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
+  BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
@@ -3997,7 +4017,7 @@ elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID="$(lookup_model_pattern_val
   apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
 
 elif [[ "$EFFECTIVE_MODEL" == claude-* ]] && [[ -f "$CONFIG" ]] && BACKEND_ID="$(pick_anthropic_backend_id)" && [[ -n "$BACKEND_ID" ]]; then
-  BACKEND=$(jq -c --arg id "$BACKEND_ID" '.backends[$id] // empty' "$CONFIG" 2>/dev/null)
+  BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
