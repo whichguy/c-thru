@@ -144,6 +144,8 @@ run_suite "proxy-mode-overrides (mode override precedence)" \
   node "$REPO_DIR/test/proxy-mode-overrides.test.js"
 run_suite "proxy-mode-ranking (mode-aware quality ranking)" \
   node "$REPO_DIR/test/proxy-mode-ranking.test.js"
+run_suite "proxy-probe-llm (/v1/probe-llm endpoint)" \
+  node "$REPO_DIR/test/proxy-probe-llm.test.js"
 run_suite "proxy-resolution-matrix (full resolution matrix)" \
   node "$REPO_DIR/test/proxy-resolution-matrix.test.js"
 run_suite "proxy-streaming-ollama (SSE streaming to Ollama)" \
