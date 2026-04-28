@@ -76,7 +76,9 @@ c-thru (bash)
   ├─ selects active model-map (override path → project/.claude/ → ~/.claude/model-map.json)
   ├─ resolves route → backend → env vars
   ├─ for Ollama backends: spawns/reuses claude-proxy (HTTP server on a free port)
-  │    claude-proxy translates Anthropic Messages API → Ollama/OpenRouter/LiteLLM
+  │    claude-proxy default: pass-through to Ollama's /v1/messages adapter
+  │    claude-proxy legacy:  Anthropic → Ollama /api/chat translation
+  │    (other backends — Anthropic, OpenRouter — always pass-through to /v1/messages)
   └─ exec's the real claude binary with ephemeral session injection:
        - ANTHROPIC_BASE_URL=http://127.0.0.1:<proxy_port>
        - ANTHROPIC_AUTH_TOKEN="ollama" (for local/spoofed backends)
@@ -85,10 +87,25 @@ c-thru (bash)
        - --append-system-prompt "..." (injects fleet awareness)
 ```
 
+### Ollama backend wire format
+
+For backends with `kind: "ollama"`, the proxy POSTs to `<backend.url>/v1/messages` (Ollama's Anthropic-format adapter, available since Ollama 0.4) with the client's body forwarded **verbatim** except for the resolved `model` field. `tool_use`, `tool_result`, and `thinking` content blocks roundtrip natively — no flattening, no translation. Authorization is hardcoded to `Bearer ollama` and `x-api-key` is stripped, so an ambient real Anthropic key in the client environment can never leak to a local backend.
+
+**Legacy escape hatch.** Backends without `/v1/messages` (Ollama < 0.4, LM Studio's Ollama-compat shim) opt into the older Anthropic→`/api/chat` translation path with `legacy_ollama_chat: true` on the backend entry. The legacy path still runs `flattenMessagesForOllama`, which strips non-text content blocks — multi-turn tool conversations don't roundtrip cleanly through it. Use only when `/v1/messages` is genuinely unavailable.
+
+```json
+{
+  "backends": {
+    "ollama_local":  { "kind": "ollama", "url": "http://localhost:11434" },
+    "lm_studio":     { "kind": "ollama", "url": "http://localhost:1234", "legacy_ollama_chat": true }
+  }
+}
+```
+
 ### model-map.json schema
 
 Top-level keys: `backends`, `routes`, `models` (models is sparse — most resolution is done via backends + routes).
-- `backends`: connection metadata (kind, url, auth strategy). `kind` defaults to `anthropic` when absent.
+- `backends`: connection metadata (kind, url, auth strategy). `kind` defaults to `anthropic` when absent. For `kind: "ollama"`, set `legacy_ollama_chat: true` to opt into the older `/api/chat` translation path (LM Studio compatibility).
 - `routes`: named presets → `{model, backend, env, …}`. `routes.default` is used when no flag is passed.
 - `model_overrides` (optional): flat `{"concrete-model": "replacement"}` map applied before route/alias resolution. Example: `{"gemma4:26b": "gemma4:31b"}` redirects all uses of the 26b model. Unconditional — covers primary requests and fallback candidates.
 - Model resolution order: `--route` flag → `routes.default` → `--model` flag → Ollama passthrough.
