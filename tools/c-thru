@@ -1189,14 +1189,14 @@ apply_background_model_overrides() {
   if [[ -z "${CLAUDE_CODE_SUBAGENT_MODEL:-}" && -n "$launch_model" ]]; then
     export CLAUDE_CODE_SUBAGENT_MODEL="$launch_model"
   fi
+  # Always clear ANTHROPIC_API_KEY: c-thru auth is via ANTHROPIC_AUTH_TOKEN or the proxy's
+  # own key; an ambient key in the environment would bypass that and leak to Anthropic.
+  export ANTHROPIC_API_KEY=""
 
   local llm_mode
   llm_mode="$(resolve_llm_mode)"
   case "$llm_mode" in
     offline|local-only|best-opensource-local|best-opensource|opensource-only|local-best-quality|semi-offload|cloud-judge-only)
-      # Explicit empty API key: auth is via ANTHROPIC_AUTH_TOKEN=ollama; ensure no
-      # accidentally-present Anthropic key leaks to the proxy or Claude CLI.
-      [[ -z "${ANTHROPIC_API_KEY:-}" || "${ANTHROPIC_API_KEY:-}" == claude-* ]] && export ANTHROPIC_API_KEY=""
       # fast-generalist → gemma4:26b (local, 102 t/s) — appropriate for Haiku-tier background work
       if [[ -z "${ANTHROPIC_SMALL_FAST_MODEL:-}" || "${ANTHROPIC_SMALL_FAST_MODEL:-}" == claude-* ]]; then
         export ANTHROPIC_SMALL_FAST_MODEL="fast-generalist"
