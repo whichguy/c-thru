@@ -613,7 +613,7 @@ function flattenMessagesForOllama(body) {
     let systemContent = '';
     if (typeof body.system === 'string') systemContent = body.system;
     else if (Array.isArray(body.system)) systemContent = body.system.filter(c => c.type === 'text').map(c => c.text).join('\n');
-    if (systemContent) messages.unshift({ role: 'system', content: systemContent });
+    if (systemContent) messages.unshift({ role: 'system', content: '/no_thinking ' + systemContent });
   }
   return messages.map(msg => {
     let content = '';
