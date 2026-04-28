@@ -1186,6 +1186,10 @@ apply_background_model_overrides() {
   # Always: suppress attribution header; subagent uses the same model as the main session
   # so agents spawned by Claude Code see the same backend without a second routing decision.
   [[ -z "${CLAUDE_CODE_ATTRIBUTION_HEADER:-}" ]] && export CLAUDE_CODE_ATTRIBUTION_HEADER=0
+  # Prevent interactive git editors (rebase, commit message) from blocking
+  # Claude Code's automated git operations. /usr/bin/true exits 0 immediately.
+  # Mirrors `ollama launch claude` behavior (cmd/config/claude.go).
+  [[ -z "${GIT_EDITOR:-}" ]] && export GIT_EDITOR="true"
   if [[ -z "${CLAUDE_CODE_SUBAGENT_MODEL:-}" && -n "$launch_model" ]]; then
     export CLAUDE_CODE_SUBAGENT_MODEL="$launch_model"
   fi
@@ -1217,6 +1221,28 @@ apply_background_model_overrides() {
       fi
       ;;
   esac
+}
+
+# Prepend each enabled Claude Code plugin's bin/ directory to PATH so plugin-
+# provided binaries are visible to the session and any spawned subagents.
+# Mirrors `ollama launch claude` (which reads ~/.claude/installed_plugins.json
+# and prepends plugin bin/ dirs). We use `claude plugin list --json` as the
+# canonical source to avoid filesystem-walk drift across plugin format changes.
+# Idempotent: paths already present are skipped via the case-insensitive ":${PATH}:"
+# substring guard so repeated invocations don't grow PATH unbounded.
+inject_plugin_bin_paths() {
+  command -v claude >/dev/null 2>&1 || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  local dir
+  while IFS= read -r dir; do
+    [[ -n "$dir" && -d "$dir" ]] || continue
+    case ":${PATH}:" in
+      *":${dir}:"*) ;;  # already on PATH — skip
+      *) PATH="${dir}:${PATH}" ;;
+    esac
+  done < <(claude plugin list --json 2>/dev/null \
+    | jq -r '.[] | select(.enabled == true) | .installPath + "/bin"' 2>/dev/null)
+  export PATH
 }
 
 backend_local_prep_skip_reason() {
@@ -3813,6 +3839,7 @@ if [[ -z "$MODEL" ]]; then
   if [[ "${CLAUDE_PROXY_BYPASS:-}" == "1" ]]; then
     claude_router_debug_dump transparent
     apply_background_model_overrides "${MODEL:-}"
+    inject_plugin_bin_paths
     run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
     exit $?
   fi
@@ -3827,6 +3854,7 @@ if [[ -z "$MODEL" ]]; then
   fi
   claude_router_debug_dump transparent
   apply_background_model_overrides "${MODEL:-}"
+  inject_plugin_bin_paths
   run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
   exit $?
 fi
@@ -4012,6 +4040,7 @@ done < <(build_forwarded_args "$FINAL_MODEL_ARG")
 debug_print_final_claude_command "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 preflight_model_readiness "${PROXY_PORT:-}"
 apply_background_model_overrides "${FINAL_MODEL_ARG:-}"
+inject_plugin_bin_paths
 printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} launching session...\n" "status" >&2
 run_real_claude "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 exit $?
