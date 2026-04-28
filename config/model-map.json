@@ -408,6 +408,14 @@
       }
     },
     "64gb": {
+      "reviewer": {
+        "connected_model": "devstral-small:2",
+        "disconnect_model": "devstral-small:2",
+        "on_failure": "cascade",
+        "modes": {
+          "local-review": "devstral-small:2"
+        }
+      },
       "default": {
         "connected_model": "glm-5.1:cloud",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",

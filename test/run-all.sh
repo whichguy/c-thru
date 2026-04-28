@@ -94,6 +94,68 @@ run_suite "proxy-cli-flags (parseCliFlags edge cases)" \
   node "$REPO_DIR/test/proxy-cli-flags.test.js"
 run_suite "proxy-usage-stats (recordUsage debounce + SIGTERM flush)" \
   node "$REPO_DIR/test/proxy-usage-stats.test.js"
+run_suite "agent-contract-static (agent/skill static contracts)" \
+  node "$REPO_DIR/test/agent-contract-static.test.js"
+run_suite "agent-status-schema (STATUS block schema)" \
+  node "$REPO_DIR/test/agent-status-schema.test.js"
+run_suite "c-thru-config-helpers (config helper functions)" \
+  node "$REPO_DIR/test/c-thru-config-helpers.test.js"
+run_suite "c-thru-explain (explain command resolution)" \
+  node "$REPO_DIR/test/c-thru-explain.test.js"
+run_suite "c-thru-plan-harness (plan harness utilities)" \
+  node "$REPO_DIR/test/c-thru-plan-harness.test.js"
+run_suite "c-thru-target-launch (target launch helpers)" \
+  node "$REPO_DIR/test/c-thru-target-launch.test.js"
+run_suite "cli-e2e-flags (CLI flag forwarding e2e)" \
+  node "$REPO_DIR/test/cli-e2e-flags.test.js"
+run_suite "compile-prompts (agent prompt compilation)" \
+  node "$REPO_DIR/test/compile-prompts.test.js"
+run_suite "llm-capabilities-mcp (MCP server tools)" \
+  node "$REPO_DIR/test/llm-capabilities-mcp.test.js"
+run_suite "model-map-pollution (config isolation / no cross-test leak)" \
+  node "$REPO_DIR/test/model-map-pollution.test.js"
+run_suite "model-map-validate (schema validator unit)" \
+  node "$REPO_DIR/test/model-map-validate.test.js"
+run_suite "planner-return-schema (planner output schema)" \
+  node "$REPO_DIR/test/planner-return-schema.test.js"
+run_suite "proxy-active-models (/v1/active-models endpoint)" \
+  node "$REPO_DIR/test/proxy-active-models.test.js"
+run_suite "proxy-autodetect (backend auto-detection)" \
+  node "$REPO_DIR/test/proxy-autodetect.test.js"
+run_suite "proxy-concurrent (concurrent request handling)" \
+  node "$REPO_DIR/test/proxy-concurrent.test.js"
+run_suite "proxy-config-reload (SIGHUP config reload)" \
+  node "$REPO_DIR/test/proxy-config-reload.test.js"
+run_suite "proxy-e2e (end-to-end proxy request flow)" \
+  node "$REPO_DIR/test/proxy-e2e.test.js"
+run_suite "proxy-fallback-cascade (fallback chain cascade)" \
+  node "$REPO_DIR/test/proxy-fallback-cascade.test.js"
+run_suite "proxy-form-factor (form factor detection)" \
+  node "$REPO_DIR/test/proxy-form-factor.test.js"
+run_suite "proxy-journal (journaling JSONL output)" \
+  node "$REPO_DIR/test/proxy-journal.test.js"
+run_suite "proxy-messages (messages API translation)" \
+  node "$REPO_DIR/test/proxy-messages.test.js"
+run_suite "proxy-mode-filters (mode-based request filtering)" \
+  node "$REPO_DIR/test/proxy-mode-filters.test.js"
+run_suite "proxy-mode-multi-backend (multi-backend mode routing)" \
+  node "$REPO_DIR/test/proxy-mode-multi-backend.test.js"
+run_suite "proxy-mode-overrides (mode override precedence)" \
+  node "$REPO_DIR/test/proxy-mode-overrides.test.js"
+run_suite "proxy-mode-ranking (mode-aware quality ranking)" \
+  node "$REPO_DIR/test/proxy-mode-ranking.test.js"
+run_suite "proxy-resolution-matrix (full resolution matrix)" \
+  node "$REPO_DIR/test/proxy-resolution-matrix.test.js"
+run_suite "proxy-streaming-ollama (SSE streaming to Ollama)" \
+  node "$REPO_DIR/test/proxy-streaming-ollama.test.js"
+run_suite "proxy-streaming (SSE streaming)" \
+  node "$REPO_DIR/test/proxy-streaming.test.js"
+run_suite "proxy-tier-resolution (hw-tier model resolution)" \
+  node "$REPO_DIR/test/proxy-tier-resolution.test.js"
+run_suite "proxy-translation (Anthropic→provider translation)" \
+  node "$REPO_DIR/test/proxy-translation.test.js"
+run_suite "resolution-coverage (full resolution coverage)" \
+  node "$REPO_DIR/test/resolution-coverage.test.js"
 
 # EXCLUDED (currently failing — do not wire until fixed):
 # benchmark-coverage.test.js: coverage-map mismatch / fixture drift (run manually to diagnose)
