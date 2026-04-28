@@ -261,9 +261,7 @@ setup_ephemeral_session() {
     done
   fi
 
-  # 3. Additive Agents: link c-thru agents (namespaced)
-  # Linking is more reliable than --agents flag for preserving frontmatter (like "model:")
-  # But we also populate --agents JSON for agents that Claude Code might not find via filesystem
+  # 3. Additive Agents: link c-thru agents (namespaced) and build --agents JSON.
   if [[ "${NO_AGENTS:-0}" != "1" ]]; then
     mkdir -p "$EPHEMERAL_SESSION_DIR/agents"
     # Link user's existing agents first
@@ -281,7 +279,6 @@ setup_ephemeral_session() {
       done
     fi
 
-    # Generate --agents JSON for robust discovery
     EPHEMERAL_AGENTS_JSON=$(node -e '
       const fs = require("fs");
       const path = require("path");
@@ -298,26 +295,17 @@ setup_ephemeral_session() {
           let prompt = content;
           let model = name;
           let tier_budget = 999999;
-          
           if (m) {
             const frontmatter = m[1];
             const descMatch = frontmatter.match(/^description:\s*(.*)$/m);
             if (descMatch) description = descMatch[1].trim();
-            
             const modelMatch = frontmatter.match(/^model:\s*(.*)$/m);
             if (modelMatch) model = modelMatch[1].trim();
-
             const budgetMatch = frontmatter.match(/^tier_budget:\s*(.*)$/m);
             if (budgetMatch) tier_budget = parseInt(budgetMatch[1].trim(), 10);
-
             prompt = content.slice(m[0].length).trim();
           }
-          agents[name] = { 
-            description, 
-            prompt,
-            model,
-            tier_budget
-          };
+          agents[name] = { description, prompt, model, tier_budget };
         });
       }
       console.log(JSON.stringify(agents));
@@ -502,6 +490,7 @@ cmd_help() {
   echo "  --profile <tier>          force hardware tier (16gb|32gb|48gb|64gb|128gb)"
   echo "  --memory-gb <n>           override RAM detection (= CLAUDE_LLM_MEMORY_GB)"
   echo "  --debug                   enable router and proxy debug logs"
+  echo "  --thinking                enable extended thinking (removes /no_thinking from system prompt; = C_THRU_THINKING=1)"
   echo "  --bypass-proxy            skip proxy entirely (= CLAUDE_PROXY_BYPASS=1)"
   echo "  --journal                 enable per-request journaling (= CLAUDE_PROXY_JOURNAL=1)"
   echo "  --proxy-debug [N]         proxy verbose logs (= CLAUDE_PROXY_DEBUG=N; default 1)"
@@ -1224,27 +1213,6 @@ apply_background_model_overrides() {
   esac
 }
 
-# Prepend each enabled Claude Code plugin's bin/ directory to PATH so plugin-
-# provided binaries are visible to the session and any spawned subagents.
-# Mirrors `ollama launch claude` (which reads ~/.claude/installed_plugins.json
-# and prepends plugin bin/ dirs). We use `claude plugin list --json` as the
-# canonical source to avoid filesystem-walk drift across plugin format changes.
-# Idempotent: paths already present are skipped via the case-insensitive ":${PATH}:"
-# substring guard so repeated invocations don't grow PATH unbounded.
-inject_plugin_bin_paths() {
-  command -v claude >/dev/null 2>&1 || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-  local dir
-  while IFS= read -r dir; do
-    [[ -n "$dir" && -d "$dir" ]] || continue
-    case ":${PATH}:" in
-      *":${dir}:"*) ;;  # already on PATH — skip
-      *) PATH="${dir}:${PATH}" ;;
-    esac
-  done < <(claude plugin list --json 2>/dev/null \
-    | jq -r '.[] | select(.enabled == true) | .installPath + "/bin"' 2>/dev/null)
-  export PATH
-}
 
 backend_local_prep_skip_reason() {
   local backend_id="$1"
@@ -3195,10 +3163,21 @@ get_system_info_summary() {
     caps_str="${caps_str%, }"
   fi
 
-  printf '%s\n%s\n%s' \
+  printf '%s\n%s\n%s\n\n%s' \
     "YOUR MODEL IS: ${self_model:-unknown}. Do NOT assume you are Claude Sonnet, Claude Opus, or any other model — your actual model name is stated above. Refer to yourself only by that exact name." \
     "c-thru routing active. Profile: ${profile:-unknown}. Mode: ${llm_mode:-unknown}." \
-    "Available models by capability: ${caps_str}."
+    "Available models by capability: ${caps_str}." \
+    "Use specialized agents aggressively.
+
+For any non-trivial task, assume suitable agents exist. Identify them by their descriptions and delegate matching work before proceeding directly.
+
+Prefer delegation over doing specialized work in the main thread. Do not skip delegation when an agent could apply. Prefer multiple focused delegations over one large direct solution.
+
+When useful, use agents across phases such as planning, execution, and verification.
+
+Keep each delegated task explicit and self-contained. Do not rely on shared context.
+
+Agents act as transparent workers: accept the task, perform the work, and return results directly without unnecessary transformation."
 }
 
 # When C_THRU_DEBUG is 1 or 2, print routing env to stderr (secrets masked).
@@ -3366,7 +3345,7 @@ build_forwarded_args() {
         i=$((i + 1))
         continue
         ;;
-      --bypass-proxy | --journal | --no-update | --no-agents | --debug | \
+      --bypass-proxy | --journal | --no-update | --no-agents | --debug | --thinking | \
       --local-only | --best-cloud | --best-opensource-cloud | --best-opensource-local | \
       --best-opensource | --fastest | --smallest | --offline)
         i=$((i + 1))
@@ -3424,7 +3403,11 @@ build_forwarded_args() {
     # Append proxy URL so agents that call the proxy directly (e.g. context-injection
     # hooks) know where it is without hard-coding a port.
     [[ -n "${PROXY_PORT:-}" ]] && info_summary+=" Proxy: http://127.0.0.1:${PROXY_PORT}."
-    forwarded+=("--append-system-prompt" "/no_thinking $info_summary")
+    if [[ "${C_THRU_THINKING:-0}" == "1" ]]; then
+      forwarded+=("--append-system-prompt" "$info_summary")
+    else
+      forwarded+=("--append-system-prompt" "/no_thinking $info_summary")
+    fi
   fi
 
   # ── Per-Process Ephemeral Injection ──────────────────────────────────────
@@ -3434,7 +3417,6 @@ build_forwarded_args() {
   if [[ -n "$EPHEMERAL_AGENTS_JSON" && "$EPHEMERAL_AGENTS_JSON" != "{}" ]]; then
     forwarded+=("--agents" "$EPHEMERAL_AGENTS_JSON")
   fi
-
   printf '%s\0' "${forwarded[@]}"
 }
 
@@ -3770,6 +3752,7 @@ while [[ $i -lt $n ]]; do
     --smallest)                export CLAUDE_LLM_MODE="smallest-possible"; i=$((i + 1)) ;;
     --offline)                 export CLAUDE_LLM_MODE="offline"; i=$((i + 1)) ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
+    --thinking)         export C_THRU_THINKING=1; i=$((i + 1)) ;;
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;
     --no-update)        export C_THRU_NO_UPDATE=1; i=$((i + 1)) ;;
     --no-agents)        export NO_AGENTS=1; i=$((i + 1)) ;;
@@ -3852,7 +3835,6 @@ if [[ -z "$MODEL" ]]; then
   if [[ "${CLAUDE_PROXY_BYPASS:-}" == "1" ]]; then
     claude_router_debug_dump transparent
     apply_background_model_overrides "${MODEL:-}"
-    inject_plugin_bin_paths
     run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
     exit $?
   fi
@@ -3867,7 +3849,6 @@ if [[ -z "$MODEL" ]]; then
   fi
   claude_router_debug_dump transparent
   apply_background_model_overrides "${MODEL:-}"
-  inject_plugin_bin_paths
   run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
   exit $?
 fi
@@ -4069,7 +4050,6 @@ done < <(build_forwarded_args "$FINAL_MODEL_ARG")
 debug_print_final_claude_command "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 preflight_model_readiness "${PROXY_PORT:-}"
 apply_background_model_overrides "${FINAL_MODEL_ARG:-}"
-inject_plugin_bin_paths
 printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} launching session...\n" "status" >&2
 run_real_claude "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 exit $?
