@@ -240,14 +240,20 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "coder": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
@@ -282,7 +288,8 @@
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "code-analyst": {
@@ -298,7 +305,10 @@
       "deep-coder": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "devstral-small-2:24b",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "commit-message-generator": {
         "connected_model": "qwen3:1.7b",
@@ -345,21 +355,30 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "vision": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "pdf": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "fast-generalist": {
         "connected_model": "gemma4:26b",
@@ -386,7 +405,8 @@
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "context-manager": {
@@ -396,7 +416,8 @@
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "edge": {
@@ -407,7 +428,10 @@
       "refactor": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "devstral-small-2:24b",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "implementer-heavy": {
         "connected_model": "gpt-oss:20b",
@@ -419,7 +443,10 @@
         "disconnect_model": "devstral-small-2:24b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "devstral-small-2:24b",
-        "on_failure": "hard_fail"
+        "on_failure": "hard_fail",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "deep-code-debugger": {
         "connected_model": "deepseek-r1:14b",
@@ -436,14 +463,20 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "writer": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "mistral-small3.1:24b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "mistral-small3.1:24b",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       }
     },
     "48gb": {
@@ -469,14 +502,20 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "coder": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
@@ -513,7 +552,8 @@
         "local_best_model": "gpt-oss:20b",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "code-analyst": {
@@ -532,7 +572,10 @@
       "deep-coder": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "devstral-small-2:24b",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "local-planner": {
         "connected_model": "qwen3.6:27b-coding-nvfp4",
@@ -590,21 +633,30 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "vision": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "pdf": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "fast-generalist": {
         "connected_model": "gemma4:26b",
@@ -632,7 +684,8 @@
         "local_best_model": "gpt-oss:20b",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "context-manager": {
@@ -642,7 +695,8 @@
         "local_best_model": "gpt-oss:20b",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "edge": {
@@ -653,21 +707,30 @@
       "refactor": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "devstral-small-2:24b",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "implementer-heavy": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3-coder:30b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3-coder:30b",
-        "on_failure": "hard_fail"
+        "on_failure": "hard_fail",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "test-writer-heavy": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "devstral-small-2:24b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "devstral-small-2:24b",
-        "on_failure": "hard_fail"
+        "on_failure": "hard_fail",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "deep-code-debugger": {
         "connected_model": "deepseek-r1:32b",
@@ -684,14 +747,20 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "writer": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "mistral-small3.1:24b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "mistral-small3.1:24b",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       }
     },
     "64gb": {
@@ -725,14 +794,20 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "coder": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "judge": {
         "connected_model": "claude-sonnet-4-6",
@@ -769,7 +844,8 @@
         "local_best_model": "gpt-oss:20b",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "code-analyst": {
@@ -788,7 +864,10 @@
       "deep-coder": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "devstral-small-2:24b",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "local-planner": {
         "connected_model": "qwen3.6:27b-coding-nvfp4",
@@ -838,21 +917,30 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "vision": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "pdf": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "fast-generalist": {
         "connected_model": "gemma4:26b",
@@ -880,7 +968,8 @@
         "local_best_model": "gpt-oss:20b",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "context-manager": {
@@ -890,7 +979,8 @@
         "local_best_model": "gpt-oss:20b",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "edge": {
@@ -901,21 +991,30 @@
       "refactor": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "devstral-small-2:24b",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "implementer-heavy": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3-coder:30b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3-coder:30b",
-        "on_failure": "hard_fail"
+        "on_failure": "hard_fail",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "test-writer-heavy": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "devstral-small-2:24b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "devstral-small-2:24b",
-        "on_failure": "hard_fail"
+        "on_failure": "hard_fail",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "deep-code-debugger": {
         "connected_model": "deepseek-r1:32b",
@@ -932,14 +1031,20 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "writer": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "mistral-small3.1:24b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "mistral-small3.1:24b",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       }
     },
     "128gb": {
@@ -973,12 +1078,18 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "coder": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3-coder-next:latest",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "judge": {
         "connected_model": "claude-opus-4-6",
@@ -1015,7 +1126,8 @@
         "local_best_model": "devstral-small-2:24b",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "code-analyst": {
@@ -1052,7 +1164,10 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-mxfp8",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3.6:35b-a3b-coding-mxfp8",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "agentic-coder": {
         "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",
@@ -1066,7 +1181,8 @@
         "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "commit-message-generator": {
@@ -1089,21 +1205,30 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "vision": {
         "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "pdf": {
         "connected_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "fast-generalist": {
         "connected_model": "gemma4:26b",
@@ -1131,7 +1256,8 @@
         "local_best_model": "devstral-small-2:24b",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "context-manager": {
@@ -1141,7 +1267,8 @@
         "local_best_model": "devstral-small-2:24b",
         "on_failure": "cascade",
         "modes": {
-          "semi-offload": "claude-sonnet-4-6"
+          "semi-offload": "claude-sonnet-4-6",
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
         }
       },
       "edge": {
@@ -1154,21 +1281,30 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-mxfp8",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3.6:35b-a3b-coding-mxfp8",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "implementer-heavy": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "qwen3-coder:30b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "qwen3-coder:30b",
-        "on_failure": "hard_fail"
+        "on_failure": "hard_fail",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "test-writer-heavy": {
         "connected_model": "claude-sonnet-4-6",
         "disconnect_model": "gpt-oss:20b",
         "cloud_best_model": "claude-sonnet-4-6",
         "local_best_model": "gpt-oss:20b",
-        "on_failure": "hard_fail"
+        "on_failure": "hard_fail",
+        "modes": {
+          "best-opensource-cloud": "qwen3-coder-next:cloud"
+        }
       },
       "deep-code-debugger": {
         "connected_model": "deepseek-r1:32b",
@@ -1186,14 +1322,20 @@
         "disconnect_model": "qwen3.6:35b-a3b-coding-nvfp4",
         "on_failure": "cascade",
         "cloud_best_model": "claude-sonnet-4-6",
-        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4"
+        "local_best_model": "qwen3.6:35b-a3b-coding-nvfp4",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       },
       "writer": {
         "connected_model": "claude-opus-4-6",
         "disconnect_model": "mistral-small3.1:24b",
         "cloud_best_model": "claude-opus-4-6",
         "local_best_model": "mistral-small3.1:24b",
-        "on_failure": "cascade"
+        "on_failure": "cascade",
+        "modes": {
+          "best-opensource-cloud": "deepseek-v4-flash:cloud"
+        }
       }
     }
   },
@@ -1347,7 +1489,8 @@
     }
   ],
   "ollama_defaults": {
-    "num_ctx": 65536
+    "num_ctx": 65536,
+    "temperature": 0.7
   },
   "quality_tolerance_pct": 5,
   "fallback_chains": {

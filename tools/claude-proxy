@@ -1072,11 +1072,14 @@ function buildOllamaRequestBody(body, effectiveModel) {
   const numCtx = body.num_ctx || (CONFIG.ollama_defaults && CONFIG.ollama_defaults.num_ctx) || 65536;
   // Use ?? not || for temperature: a caller-provided `0` is a valid request
   // (deterministic generation), and `||` would misinterpret it as "unset"
-  // and replace with our default. If caller didn't specify, omit the field
-  // entirely so Ollama uses the modelfile default rather than forcing 0.
+  // and replace with our default.
+  const defaultTemp = (CONFIG.ollama_defaults && CONFIG.ollama_defaults.temperature != null)
+    ? CONFIG.ollama_defaults.temperature : undefined;
   const ollamaOptions = { num_ctx: numCtx };
   if (body.temperature !== undefined && body.temperature !== null) {
     ollamaOptions.temperature = body.temperature;
+  } else if (defaultTemp !== undefined) {
+    ollamaOptions.temperature = defaultTemp;
   }
   return JSON.stringify({
     model: effectiveModel,

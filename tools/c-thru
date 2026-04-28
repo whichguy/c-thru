@@ -1185,7 +1185,7 @@ apply_background_model_overrides() {
   local llm_mode
   llm_mode="$(resolve_llm_mode)"
   case "$llm_mode" in
-    offline|local-only|best-opensource-local|best-opensource|opensource-only|local-best-quality)
+    offline|local-only|best-opensource-local|best-opensource|opensource-only|local-best-quality|semi-offload|cloud-judge-only)
       # fast-generalist → gemma4:26b (local, 102 t/s) — appropriate for Haiku-tier background work
       if [[ -z "${ANTHROPIC_SMALL_FAST_MODEL:-}" || "${ANTHROPIC_SMALL_FAST_MODEL:-}" == claude-* ]]; then
         export ANTHROPIC_SMALL_FAST_MODEL="fast-generalist"
@@ -3371,7 +3371,7 @@ build_forwarded_args() {
     # Append proxy URL so agents that call the proxy directly (e.g. context-injection
     # hooks) know where it is without hard-coding a port.
     [[ -n "${PROXY_PORT:-}" ]] && info_summary+=" Proxy: http://127.0.0.1:${PROXY_PORT}."
-    forwarded+=("--append-system-prompt" " /set parameter temperature 0.7 /no_thinking $info_summary")
+    forwarded+=("--append-system-prompt" "/no_thinking $info_summary")
   fi
 
   # ── Per-Process Ephemeral Injection ──────────────────────────────────────
@@ -3798,6 +3798,7 @@ if [[ -z "$MODEL" ]]; then
   REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
   if [[ "${CLAUDE_PROXY_BYPASS:-}" == "1" ]]; then
     claude_router_debug_dump transparent
+    apply_background_model_overrides
     run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
     exit $?
   fi
