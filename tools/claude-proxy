@@ -1129,10 +1129,11 @@ function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
 // starts flowing. Updates timerControls.stop so the outer up.on('error')
 // handler can clear the stall/ping intervals on connection failures.
 //
-// ARCH: three concurrent timers created here:
-//   stallCheck (1s) — log at >=5s idle, hard-fail at STREAM_STALL_HARDFAIL_MS
-//   pingTick (SSE_PING_INTERVAL_MS) — keep intermediate proxies alive
-//   Both are cleared on: res.close, upRes.end, upRes.error, stallCheck hard-fail,
+// ARCH: four concurrent timers created here:
+//   stallCheck (1s)      — log at >=5s idle, hard-fail at STREAM_STALL_HARDFAIL_MS
+//   pingTick             — keep intermediate proxies alive (SSE_PING_INTERVAL_MS cadence)
+//   wallTimer (one-shot) — absolute cap on total stream duration (STREAM_WALL_MS, 0=off)
+//   All are cleared on: res.close, upRes.end, upRes.error, any hard-fail,
 //   and via timerControls.stop() for pre-stream errors in up.on('error').
 function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, up, requestStartedAt, timerControls, upRes, body) {
   const streamHeaders = {
@@ -1275,7 +1276,24 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
     if (!res.writable) { stopTimers(); return; }
     sseWrite(res, 'ping', { type: 'ping' });
   }, SSE_PING_INTERVAL_MS);
-  const stopTimers = () => { clearInterval(stallCheck); clearInterval(pingTick); };
+  let wallTimer = null;
+  if (STREAM_WALL_MS > 0) {
+    wallTimer = setTimeout(() => {
+      stopTimers();
+      ctxLog(ctx, 'ollama.stream.wall_timeout', { elapsed_ms: STREAM_WALL_MS, backend: backend.id });
+      sseWrite(res, 'error', {
+        type: 'error',
+        error: { type: 'timeout_error', message: `stream exceeded wall-clock limit of ${STREAM_WALL_MS}ms — aborting` },
+      });
+      if (!up.destroyed) up.destroy(new Error(`stream wall-clock timeout ${STREAM_WALL_MS}ms`));
+      if (res.writable) res.end();
+    }, STREAM_WALL_MS);
+  }
+  const stopTimers = () => {
+    clearInterval(stallCheck);
+    clearInterval(pingTick);
+    if (wallTimer) { clearTimeout(wallTimer); wallTimer = null; }
+  };
   timerControls.stop = stopTimers;  // expose to outer-scope error handlers via mutable ref
 
   // Client disconnected mid-stream: the request-level `res.on('close')` fires.
