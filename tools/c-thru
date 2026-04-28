@@ -366,8 +366,7 @@ write_ephemeral_settings() {
   # UserPromptSubmit *               c-thru-proxy-health       asyncRewake if proxy down
   # UserPromptSubmit *               c-thru-classify           classify_intent tagging
   # PostToolUse      *               c-thru-map-changed        validate model-map.json on edit
-  # PreToolUse       Agent|WebSearch|c-thru-agent-router-hook  resolve capability for tool calls
-  #                   WebFetch|Monitor|Plan
+  # PreToolUse       Agent            c-thru-agent-router-hook  resolve capability for tool calls
   # PreToolUse       EnterPlanMode   c-thru-enter-plan-hook    advisory hint for /c-thru-plan
 
   if [[ -n "$port" ]]; then
@@ -389,7 +388,7 @@ write_ephemeral_settings() {
       {"matcher": "*", "hooks": [{"type": "command", "command": "$classify_cmd", "timeout": 5, "async": true}]}
     ],
     "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "$map_changed_cmd", "timeout": 5}]}],
-    "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebSearch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebFetch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Monitor", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Plan", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
+    "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
   },
   "permissions": {
     "allow": ["mcp__llm-capabilities__*"]
@@ -415,7 +414,7 @@ EOF
       {"matcher": "*", "hooks": [{"type": "command", "command": "$classify_cmd", "timeout": 5, "async": true}]}
     ],
     "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "$map_changed_cmd", "timeout": 5}]}],
-    "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebSearch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebFetch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Monitor", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Plan", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
+    "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
   },
   "permissions": {
     "allow": ["mcp__llm-capabilities__*"]

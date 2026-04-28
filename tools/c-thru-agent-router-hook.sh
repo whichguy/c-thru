@@ -6,9 +6,10 @@
 # Claude Code's Agent tool ignores the model: field in agent frontmatter
 # (known bug #44385), so the hook forces the correct model at the tool-call level.
 #
-# Other tools (WebSearch, WebFetch, Monitor, Plan): look up the tool_name
-# directly in agent_to_capability. Add entries to agent_to_capability in
-# config/model-map.json to route any tool to a different capability/model.
+# Only Agent tool calls are routed (they spawn subagents that make LLM requests).
+# Non-LLM tools (WebSearch, WebFetch, Monitor, Plan) pass through without override
+# since they don't generate LLM requests and setting updatedInput.model on them
+# corrupts their tool input parameters.
 set -uo pipefail
 
 DEBUG_LOG="${C_THRU_AGENT_HOOK_LOG:-}"
@@ -81,15 +82,8 @@ case "$tool_name" in
     # Agent tool: look up subagent_type in agent_to_capability
     lookup_key=$(json_read "$stdin_data" '.tool_input.subagent_type // .tool_input.name // empty')
     [ -n "$DEBUG_LOG" ] && printf '[%s] lookup_key=%s\n' "$(date +%H:%M:%S)" "${lookup_key:-<empty>}" >> "$DEBUG_LOG"
-    [ -n "$lookup_key" ] || exit 0
+    [ -n "$lookup_key" ] || { printf '[c-thru-agent-router] Agent tool call with no subagent_type — pass through\n' >&2; exit 0; }
     capability=$(resolve_capability "$lookup_key")
-    ;;
-
-  # Non-Agent tools: pass the tool name through as the model name.
-  # Add entries to agent_to_capability in config/model-map.json
-  # to route each tool name to the desired capability.
-  WebSearch|WebFetch|Monitor|Plan)
-    capability="$tool_name"
     ;;
 
   *)
@@ -99,7 +93,7 @@ case "$tool_name" in
 esac
 
 [ -n "$DEBUG_LOG" ] && printf '[%s] capability=%s\n' "$(date +%H:%M:%S)" "${capability:-<empty>}" >> "$DEBUG_LOG"
-[ -n "$capability" ] || exit 0
+[ -n "$capability" ] || { printf '[c-thru-agent-router] no capability mapping for lookup_key=%s — pass through\n' "$lookup_key" >&2; exit 0; }
 
 # --- Output updatedInput ---------------------------------------------
 # Override model=<capability> so the proxy receives the correct model.
