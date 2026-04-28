@@ -3400,9 +3400,19 @@ build_forwarded_args() {
   if [[ "${CLAUDE_PROXY_BYPASS:-0}" != "1" && "${C_THRU_SKIP_INFO_INJECTION:-0}" != "1" ]]; then
     local info_summary
     info_summary="$(get_system_info_summary "$model")"
-    # Append proxy URL so agents that call the proxy directly (e.g. context-injection
-    # hooks) know where it is without hard-coding a port.
-    [[ -n "${PROXY_PORT:-}" ]] && info_summary+=" Proxy: http://127.0.0.1:${PROXY_PORT}."
+    # Append proxy control-plane URL. This is the only in-band path to the proxy
+    # from within a session — there is no other mechanism to reach it.
+    if [[ -n "${PROXY_PORT:-}" ]]; then
+      info_summary+="
+
+c-thru proxy control plane: http://127.0.0.1:${PROXY_PORT}
+Use curl from Bash to interact. Key endpoints:
+  GET  /c-thru/status   — active mode, hw tier, per-capability model map, cooldown backends
+  POST /c-thru/mode     — switch routing mode live: {\"mode\":\"<m>\"} (connected|offline|cloud-only|…)
+  POST /c-thru/reload   — reload config from disk after editing model-map.json
+  GET  /v1/active-models — list of currently active local + cloud models
+  GET  /ping            — health check"
+    fi
     if [[ "${C_THRU_THINKING:-0}" == "1" ]]; then
       forwarded+=("--append-system-prompt" "$info_summary")
     else
