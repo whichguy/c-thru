@@ -1944,7 +1944,9 @@ const server = http.createServer((req, res) => {
 
         // Apply model_overrides unconditionally before route/alias resolution.
         if (CONFIG.model_overrides && CONFIG.model_overrides[body.model]) {
+          const overriddenFrom = body.model;
           body.model = CONFIG.model_overrides[body.model];
+          ctxLog(ctx, 'model_override', { from: overriddenFrom, to: body.model });
         }
 
         let resolved = resolveBackend(body.model, CONFIG, hwTier, activeMode);
