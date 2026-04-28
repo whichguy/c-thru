@@ -476,9 +476,13 @@ cmd_help() {
   echo "  --route <name>            use a named route from model-map.json"
   echo "  --model <model>           override model for this invocation"
   echo "  --local-only              synonym for --mode local-only"
+  echo "  --offline                 synonym for --mode offline"
   echo "  --best-cloud              synonym for --mode cloud-best-quality"
   echo "  --best-opensource-cloud   synonym for --mode best-opensource-cloud"
   echo "  --best-opensource-local   synonym for --mode best-opensource-local"
+  echo "  --best-opensource         synonym for --mode best-opensource"
+  echo "  --fastest                 synonym for --mode fastest-possible"
+  echo "  --smallest                synonym for --mode smallest-possible"
   echo -e "  --mode <mode>             set LLM connectivity mode for this invocation"
   echo -e "  ${GRAY}    Connectivity:${NC}      connected | offline | local-only"
   echo -e "  ${GRAY}    Per-cap mix:${NC}       semi-offload | cloud-judge-only | cloud-thinking | local-review"
@@ -1654,7 +1658,7 @@ ensure_proxy_running() {
     ready_timeout="${CLAUDE_PROXY_READY_TIMEOUT_SECONDS:-45}"
     rm -f "$ready_pipe"
     mkfifo "$ready_pipe"
-    printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} starting claude-proxy...\n" "proxy" >&2
+    printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} starting...\r" "proxy" >&2
     CLAUDE_ROUTER_DEBUG="${CLAUDE_ROUTER_DEBUG:-}" \
     CLAUDE_MODEL_MAP_PATH="$CONFIG" \
       "$proxy_js" >"$ready_pipe" 2>"$temp_log" &
@@ -1704,6 +1708,8 @@ ensure_proxy_running() {
         start_ec=1
         diagnose_proxy_startup_failure "$ROUTER_STARTED_PROXY_PID" "$ROUTER_PROXY_PORT" "$final_log" \
           "claude-proxy /ping responded but body is not the expected shape (port collision or half-init?)"
+      else
+        printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s${NC}\n" "proxy" "$ROUTER_PROXY_PORT" >&2
       fi
     fi
     rm -f "$ready_pipe"
@@ -1734,9 +1740,7 @@ ensure_proxy_running() {
     existing_config="$(printf '%s' "$ping_json" | jq -r '.config_path // empty' 2>/dev/null || true)"
     existing_pid="$(printf '%s' "$ping_json" | jq -r '.pid // empty' 2>/dev/null || true)"
     if [[ "$ping_ok" == "true" && "$existing_config" == "${CONFIG:-}" ]]; then
-      if [[ -n "${CLAUDE_ROUTER_DEBUG:-}" && "$CLAUDE_ROUTER_DEBUG" != "0" && "$CLAUDE_ROUTER_DEBUG" != "false" ]]; then
-        printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} reusing existing claude-proxy (:$(printf '%q' "$port"))\n" "proxy" >&2
-      fi
+      printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s${NC} ${GRAY}(reusing)${NC}\n" "proxy" "$port" >&2
       return 0
     fi
 
@@ -2386,18 +2390,11 @@ preflight_model_readiness() {
     if ! printf '%s\n' "$pulled_models" | grep -qxF "$bare_model"; then
       any_missing=1
       printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} model '$bare_model' not found locally — pulling...\n" "fleet" >&2
-      curl -s "${ollama_base%/}/api/pull" -d "{\"name\":\"${bare_model}\"}" --no-buffer 2>/dev/null | \
-        while IFS= read -r line; do
-          local st
-          if command -v jq >/dev/null 2>&1; then
-            st=$(printf '%s' "$line" | jq -r '.status // empty' 2>/dev/null)
-          else
-            st=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-                            process.stdout.write(d.status||'');}catch{}" <<< "$line" 2>/dev/null)
-          fi
-          [[ -n "$st" ]] && printf '\r    %-60s' "$st" >&2
-        done
-      printf '\r    %-60s\n' "Download complete" >&2
+      if command -v ollama >/dev/null 2>&1; then
+        ollama pull "$bare_model" >&2
+      else
+        printf "  ${GRAY}!${NC} ${BOLD}%-10s${NC} 'ollama' CLI not on PATH — cannot pull '$bare_model'; session may fail\n" "fleet" >&2
+      fi
       printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} warming $bare_model into VRAM...\n" "fleet" >&2
       curl -s "${ollama_base%/}/api/generate" \
         -d "{\"model\":\"${bare_model}\",\"prompt\":\"\",\"keep_alive\":\"5m\"}" \
@@ -3254,7 +3251,9 @@ build_forwarded_args() {
         i=$((i + 1))
         continue
         ;;
-      --bypass-proxy | --journal | --no-update | --no-agents | --debug)
+      --bypass-proxy | --journal | --no-update | --no-agents | --debug | \
+      --local-only | --best-cloud | --best-opensource-cloud | --best-opensource-local | \
+      --best-opensource | --fastest | --smallest | --offline)
         i=$((i + 1))
         continue
         ;;
@@ -3647,6 +3646,14 @@ while [[ $i -lt $n ]]; do
     --mode)             if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_MODE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else echo "c-thru: --mode requires a value" >&2; exit 1; fi ;;
     --profile=*)        export CLAUDE_LLM_PROFILE="${a#--profile=}"; i=$((i + 1)) ;;
     --profile)          if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_PROFILE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else echo "c-thru: --profile requires a tier name" >&2; exit 1; fi ;;
+    --local-only)              export CLAUDE_LLM_MODE="local-only"; i=$((i + 1)) ;;
+    --best-cloud)              export CLAUDE_LLM_MODE="cloud-best-quality"; i=$((i + 1)) ;;
+    --best-opensource-cloud)   export CLAUDE_LLM_MODE="best-opensource-cloud"; i=$((i + 1)) ;;
+    --best-opensource-local)   export CLAUDE_LLM_MODE="best-opensource-local"; i=$((i + 1)) ;;
+    --best-opensource)         export CLAUDE_LLM_MODE="best-opensource"; i=$((i + 1)) ;;
+    --fastest)                 export CLAUDE_LLM_MODE="fastest-possible"; i=$((i + 1)) ;;
+    --smallest)                export CLAUDE_LLM_MODE="smallest-possible"; i=$((i + 1)) ;;
+    --offline)                 export CLAUDE_LLM_MODE="offline"; i=$((i + 1)) ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;
     --no-update)        export CLAUDE_ROUTER_NO_UPDATE=1; i=$((i + 1)) ;;
