@@ -1182,10 +1182,21 @@ model_is_cloud_designated() {
 # route through the capability graph instead of leaking to Anthropic via model_routes.
 # Only overrides slots that are unset or contain a cloud model name (claude-*).
 apply_background_model_overrides() {
+  local launch_model="${1:-}"
+  # Always: suppress attribution header; subagent uses the same model as the main session
+  # so agents spawned by Claude Code see the same backend without a second routing decision.
+  [[ -z "${CLAUDE_CODE_ATTRIBUTION_HEADER:-}" ]] && export CLAUDE_CODE_ATTRIBUTION_HEADER=0
+  if [[ -z "${CLAUDE_CODE_SUBAGENT_MODEL:-}" && -n "$launch_model" ]]; then
+    export CLAUDE_CODE_SUBAGENT_MODEL="$launch_model"
+  fi
+
   local llm_mode
   llm_mode="$(resolve_llm_mode)"
   case "$llm_mode" in
     offline|local-only|best-opensource-local|best-opensource|opensource-only|local-best-quality|semi-offload|cloud-judge-only)
+      # Explicit empty API key: auth is via ANTHROPIC_AUTH_TOKEN=ollama; ensure no
+      # accidentally-present Anthropic key leaks to the proxy or Claude CLI.
+      [[ -z "${ANTHROPIC_API_KEY:-}" || "${ANTHROPIC_API_KEY:-}" == claude-* ]] && export ANTHROPIC_API_KEY=""
       # fast-generalist → gemma4:26b (local, 102 t/s) — appropriate for Haiku-tier background work
       if [[ -z "${ANTHROPIC_SMALL_FAST_MODEL:-}" || "${ANTHROPIC_SMALL_FAST_MODEL:-}" == claude-* ]]; then
         export ANTHROPIC_SMALL_FAST_MODEL="fast-generalist"
@@ -3798,7 +3809,7 @@ if [[ -z "$MODEL" ]]; then
   REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
   if [[ "${CLAUDE_PROXY_BYPASS:-}" == "1" ]]; then
     claude_router_debug_dump transparent
-    apply_background_model_overrides
+    apply_background_model_overrides "${MODEL:-}"
     run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
     exit $?
   fi
@@ -3812,7 +3823,7 @@ if [[ -z "$MODEL" ]]; then
     ensure_proxy_client_api_key
   fi
   claude_router_debug_dump transparent
-  apply_background_model_overrides
+  apply_background_model_overrides "${MODEL:-}"
   run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
   exit $?
 fi
@@ -3997,7 +4008,7 @@ while IFS= read -r -d '' arg; do
 done < <(build_forwarded_args "$FINAL_MODEL_ARG")
 debug_print_final_claude_command "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 preflight_model_readiness "${PROXY_PORT:-}"
-apply_background_model_overrides
+apply_background_model_overrides "${FINAL_MODEL_ARG:-}"
 printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} launching session...\n" "status" >&2
 run_real_claude "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 exit $?
