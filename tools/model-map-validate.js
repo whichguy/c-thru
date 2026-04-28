@@ -4,17 +4,30 @@
 const fs = require('fs');
 const path = require('path');
 
+// Hardcoded fallback for test fixtures that don't include llm_profiles.
+// Production validation uses deriveCapabilityAliases(config) instead — see below.
 const PROFILE_KEYS = ['default', 'classifier', 'explorer', 'reviewer', 'workhorse', 'coder',
   'judge', 'judge-strict', 'orchestrator', 'code-analyst', 'pattern-coder', 'deep-coder',
   'local-planner', 'commit-message-generator',
   'implementer-heavy', 'test-writer-heavy',
   'reasoner', 'fast-scout', 'code-analyst-light', 'deep-coder-precise', 'agentic-coder',
   'fast-coder',
-  // agent-named aliases (1:1 routing — agent name == capability key)
   'deep-code-debugger', 'fast-code-debugger',
   'generalist', 'vision', 'pdf', 'fast-generalist', 'large-general',
   'long-context', 'context-manager', 'edge', 'refactor',
   'image-analyst', 'writer'];
+
+// Returns the union of all capability-alias keys across every hw tier in llm_profiles.
+// Falls back to the hardcoded PROFILE_KEYS list when the config has no profiles (test fixtures).
+function deriveCapabilityAliases(config) {
+  const aliases = new Set();
+  if (isObject(config.llm_profiles)) {
+    for (const tier of Object.values(config.llm_profiles)) {
+      if (isObject(tier)) { for (const key of Object.keys(tier)) aliases.add(key); }
+    }
+  }
+  return aliases.size > 0 ? aliases : new Set(PROFILE_KEYS);
+}
 const CAPABILITY_KEYS = new Set([
   'default',
   'classify_intent',
@@ -497,21 +510,21 @@ function validateConfig(config, _errors, options) {
   if (profiles) {
     for (const [profileName, profileValue] of Object.entries(profiles)) {
       if (!isObject(profileValue)) { report(`'llm_profiles.${profileName}' must be an object`); continue; }
-      for (const aliasName of PROFILE_KEYS) {
-        if (profileValue[aliasName] != null) {
-          if (!isObject(profileValue[aliasName])) {
+      for (const [aliasName, aliasEntry] of Object.entries(profileValue)) {
+        if (aliasEntry != null) {
+          if (!isObject(aliasEntry)) {
             report(`'llm_profiles.${profileName}.${aliasName}' must be an object`);
           } else {
-            if (typeof profileValue[aliasName].connected_model !== 'string' || !profileValue[aliasName].connected_model.trim()) {
+            if (typeof aliasEntry.connected_model !== 'string' || !aliasEntry.connected_model.trim()) {
               report(`'llm_profiles.${profileName}.${aliasName}.connected_model' must be a non-empty string`);
             }
-            if (typeof profileValue[aliasName].disconnect_model !== 'string' || !profileValue[aliasName].disconnect_model.trim()) {
+            if (typeof aliasEntry.disconnect_model !== 'string' || !aliasEntry.disconnect_model.trim()) {
               report(`'llm_profiles.${profileName}.${aliasName}.disconnect_model' must be a non-empty string`);
             }
-            if (profileValue[aliasName].on_failure != null && !ON_FAILURE_VALUES.has(profileValue[aliasName].on_failure)) {
+            if (aliasEntry.on_failure != null && !ON_FAILURE_VALUES.has(aliasEntry.on_failure)) {
               report(`'llm_profiles.${profileName}.${aliasName}.on_failure' must be one of: ${[...ON_FAILURE_VALUES].join(', ')}`);
             }
-            const modesEntry = profileValue[aliasName].modes;
+            const modesEntry = aliasEntry.modes;
             if (modesEntry != null) {
               if (!isObject(modesEntry)) {
                 report(`'llm_profiles.${profileName}.${aliasName}.modes' must be an object`);
@@ -527,7 +540,7 @@ function validateConfig(config, _errors, options) {
               }
             }
             for (const optKey of ['cloud_best_model', 'local_best_model']) {
-              const v = profileValue[aliasName][optKey];
+              const v = aliasEntry[optKey];
               if (v != null && (typeof v !== 'string' || !v.trim())) {
                 report(`'llm_profiles.${profileName}.${aliasName}.${optKey}' must be a non-empty string when present`);
               }
@@ -649,7 +662,7 @@ function validateConfig(config, _errors, options) {
   // resolveCapabilityAlias can complete the 2-hop lookup without silently falling through
   // to a passthrough on a typo.
   if (config.agent_to_capability != null) {
-    const validCapAliases = new Set(PROFILE_KEYS);
+    const validCapAliases = deriveCapabilityAliases(config);
     if (!isObject(config.agent_to_capability)) {
       report("'agent_to_capability' must be an object when present");
     } else {
@@ -700,7 +713,7 @@ function validateRecommendedMappings(config, _errors) {
     report("'updated_at' must be a non-empty string");
   }
 
-  const validCaps = new Set(PROFILE_KEYS);
+  const validCaps = deriveCapabilityAliases(config);
   const recs = config.recommendations;
   if (recs != null) {
     if (!isObject(recs)) {
