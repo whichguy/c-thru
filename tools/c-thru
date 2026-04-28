@@ -1177,6 +1177,34 @@ model_is_cloud_designated() {
   [[ "$model" == *":cloud" || "$model" == *"-cloud" ]]
 }
 
+# In local-enforcing modes, override the ANTHROPIC_DEFAULT_* / ANTHROPIC_SMALL_FAST_MODEL
+# env vars so Claude Code's internal background requests (tool calls, summaries, etc.)
+# route through the capability graph instead of leaking to Anthropic via model_routes.
+# Only overrides slots that are unset or contain a cloud model name (claude-*).
+apply_background_model_overrides() {
+  local llm_mode
+  llm_mode="$(resolve_llm_mode)"
+  case "$llm_mode" in
+    offline|local-only|best-opensource-local|best-opensource|opensource-only|local-best-quality)
+      # fast-generalist → gemma4:26b (local, 102 t/s) — appropriate for Haiku-tier background work
+      if [[ -z "${ANTHROPIC_SMALL_FAST_MODEL:-}" || "${ANTHROPIC_SMALL_FAST_MODEL:-}" == claude-* ]]; then
+        export ANTHROPIC_SMALL_FAST_MODEL="fast-generalist"
+      fi
+      if [[ -z "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}" || "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}" == claude-* ]]; then
+        export ANTHROPIC_DEFAULT_HAIKU_MODEL="fast-generalist"
+      fi
+      # generalist → workhorse tier local model — appropriate for Sonnet-tier background work
+      if [[ -z "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" || "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" == claude-* ]]; then
+        export ANTHROPIC_DEFAULT_SONNET_MODEL="generalist"
+      fi
+      # large-general → judge tier local model — appropriate for Opus-tier background work
+      if [[ -z "${ANTHROPIC_DEFAULT_OPUS_MODEL:-}" || "${ANTHROPIC_DEFAULT_OPUS_MODEL:-}" == claude-* ]]; then
+        export ANTHROPIC_DEFAULT_OPUS_MODEL="large-general"
+      fi
+      ;;
+  esac
+}
+
 backend_local_prep_skip_reason() {
   local backend_id="$1"
   [[ -f "$CONFIG" && -n "$backend_id" ]] || return 1
@@ -3343,7 +3371,7 @@ build_forwarded_args() {
     # Append proxy URL so agents that call the proxy directly (e.g. context-injection
     # hooks) know where it is without hard-coding a port.
     [[ -n "${PROXY_PORT:-}" ]] && info_summary+=" Proxy: http://127.0.0.1:${PROXY_PORT}."
-    forwarded+=("--append-system-prompt" "/no_thinking $info_summary")
+    forwarded+=("--append-system-prompt" " /set parameter temperature 0.7 /no_thinking $info_summary")
   fi
 
   # ── Per-Process Ephemeral Injection ──────────────────────────────────────
@@ -3783,6 +3811,7 @@ if [[ -z "$MODEL" ]]; then
     ensure_proxy_client_api_key
   fi
   claude_router_debug_dump transparent
+  apply_background_model_overrides
   run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
   exit $?
 fi
@@ -3967,6 +3996,7 @@ while IFS= read -r -d '' arg; do
 done < <(build_forwarded_args "$FINAL_MODEL_ARG")
 debug_print_final_claude_command "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 preflight_model_readiness "${PROXY_PORT:-}"
+apply_background_model_overrides
 printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} launching session...\n" "status" >&2
 run_real_claude "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 exit $?
