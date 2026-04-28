@@ -86,6 +86,16 @@ case "$tool_name" in
     capability=$(resolve_capability "$lookup_key")
     ;;
 
+  WebSearch|WebFetch|Monitor|Plan)
+    # Non-LLM tools: log capability mapping for observability, pass through
+    # without updatedInput.model (setting it corrupts tool input params).
+    mapped_cap=$(resolve_capability "$tool_name")
+    if [ -n "$mapped_cap" ]; then
+      printf '[c-thru-agent-router] tool=%s capability=%s (observability only — no model override)\n' "$tool_name" "$mapped_cap" >&2
+    fi
+    exit 0
+    ;;
+
   *)
     # Unknown tool — pass through without override
     exit 0
@@ -96,6 +106,21 @@ esac
 [ -n "$capability" ] || { printf '[c-thru-agent-router] no capability mapping for lookup_key=%s — pass through\n' "$lookup_key" >&2; exit 0; }
 
 # --- Output updatedInput ---------------------------------------------
-# Override model=<capability> so the proxy receives the correct model.
+# Override model=<capability> in the full tool_input so the proxy receives
+# the correct capability alias regardless of whether Claude Code does a
+# field-level merge or full replace with updatedInput.
 [ -n "$DEBUG_LOG" ] && printf '[%s] OUTPUT model=%s\n' "$(date +%H:%M:%S)" "$capability" >> "$DEBUG_LOG"
-printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"model":"%s"}}}' "$capability"
+
+if command -v jq >/dev/null 2>&1; then
+  # Merge model into the original tool_input for safety against full-replace behavior
+  printf '%s' "$stdin_data" | jq -c --arg model "$capability" '{
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "allow",
+      "updatedInput": (.tool_input + {model: $model})
+    }
+  }'
+else
+  # Fallback: output model-only (relies on field-level merge in Claude Code)
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"model":"%s"}}}' "$capability"
+fi
