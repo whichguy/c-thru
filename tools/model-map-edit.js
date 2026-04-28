@@ -106,15 +106,19 @@ function applyUpdates(config, spec) {
     next.self_update = spec.self_update;
   }
 
-  if (spec.backends != null) {
-    if (!isObject(spec.backends)) fail("'backends' update payload must be an object");
-    next.backends = isObject(next.backends) ? { ...next.backends } : {};
-    for (const [name, val] of Object.entries(spec.backends)) {
+  if (spec.endpoints != null || spec.backends != null) {
+    const payload = spec.endpoints != null ? spec.endpoints : spec.backends;
+    const payloadKey = spec.endpoints != null ? 'endpoints' : 'backends';
+    if (!isObject(payload)) fail(`'${payloadKey}' update payload must be an object`);
+    // Write to whichever key already exists in the config; prefer endpoints for new files.
+    const writeKey = next.endpoints != null ? 'endpoints' : (next.backends != null ? 'backends' : payloadKey);
+    next[writeKey] = isObject(next[writeKey]) ? { ...next[writeKey] } : {};
+    for (const [name, val] of Object.entries(payload)) {
       if (val === null) {
-        delete next.backends[name];
+        delete next[writeKey][name];
       } else {
-        if (!isObject(val)) fail(`backend '${name}' must be an object`);
-        next.backends[name] = val;
+        if (!isObject(val)) fail(`endpoint/backend '${name}' must be an object`);
+        next[writeKey][name] = val;
       }
     }
   }
