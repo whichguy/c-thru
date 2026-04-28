@@ -81,9 +81,9 @@ const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:1143
 // THREE-TIER UPSTREAM WATCHDOG (each catches a distinct failure mode;
 // none subsumes the other — see L914 (TTFT), L1062 (stream stall), L1254 (upstream)):
 //   1. TTFT (OLLAMA_TTFT_TIMEOUT_MS, ~11s)        — pre-headers: upstream wedged on connect/load
-//   2. Stream stall (STREAM_STALL_HARDFAIL_MS, 2m) — mid-stream: socket alive but no bytes
+//   2. Stream stall (STREAM_STALL_HARDFAIL_MS, 5m) — mid-stream: socket alive but no bytes
 //   3. Upstream (OLLAMA_UPSTREAM_TIMEOUT_MS, 5m)  — req.setTimeout: rearms on any socket activity
-//   4. Wall clock (STREAM_WALL_MS, 20m)            — total stream duration cap regardless of activity
+//   4. Wall clock (STREAM_WALL_MS, 35m)            — total stream duration cap regardless of activity
 // OLLAMA_UPSTREAM_TIMEOUT_MS: hard cap from request issue to first byte.
 //   Note: this is `req.setTimeout` semantics — rearms on socket activity.
 //   For mid-stream stalls, see STREAM_STALL_HARDFAIL_MS.
@@ -98,8 +98,8 @@ const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:1143
 // OLLAMA_KEEP_ALIVE: how long Ollama should keep the model resident in
 //   VRAM after each request (forwarded as the `keep_alive` field).
 const OLLAMA_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_TIMEOUT_MS', 300000);
-const STREAM_STALL_HARDFAIL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_STALL_MS', 120000);
-const STREAM_WALL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_WALL_MS', 1200000);
+const STREAM_STALL_HARDFAIL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_STALL_MS', 300000);
+const STREAM_WALL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_WALL_MS', 2100000);
 const SSE_PING_INTERVAL_MS = numberFromEnv('CLAUDE_PROXY_PING_INTERVAL_MS', 15000);
 const OLLAMA_KEEP_ALIVE = process.env.CLAUDE_PROXY_OLLAMA_KEEP_ALIVE || '60m';
 // Time-to-first-response timeout for Ollama. Distinct from

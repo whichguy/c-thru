@@ -973,13 +973,26 @@ collect_active_profile_capability_assignments() {
     if [[ "$slot" == "default" && -n "$default_override" ]]; then
       requested="$default_override"
     else
-      # llm_mode-aware resolution: mirrors resolveProfileModel() in claude-proxy
+      # llm_mode-aware resolution: mirrors resolveProfileModel() in model-map-resolve.js
       requested="$(jq -r --arg p "$profile" --arg key "$slot" --arg mode "$llm_mode" '
         (.llm_profiles // {})[$p][$key] as $e |
         if $e == null then empty
         elif ($e.modes // {}) | has($mode) then $e.modes[$mode]
-        elif $mode == "offline" then $e.disconnect_model
+        elif $mode == "offline" or $mode == "local-only" then $e.disconnect_model
+        elif $mode == "connected" then $e.connected_model
         elif $mode == "semi-offload" or $mode == "cloud-judge-only" then $e.disconnect_model
+        elif $mode == "cloud-best-quality" then ($e.cloud_best_model // $e.connected_model)
+        elif $mode == "local-best-quality" then ($e.local_best_model // $e.disconnect_model)
+        elif $mode == "cloud-only" then ($e.cloud_best_model // $e.connected_model)
+        elif $mode == "cloud-thinking" then ($e.modes["cloud-thinking"] // $e.disconnect_model)
+        elif $mode == "local-review" then ($e.modes["local-review"] // $e.connected_model)
+        elif $mode == "claude-only" then ($e.modes["claude-only"] // $e.connected_model)
+        elif $mode == "opensource-only" then ($e.modes["opensource-only"] // $e.disconnect_model)
+        elif $mode == "fastest-possible" then ($e.modes["fastest-possible"] // $e.connected_model)
+        elif $mode == "smallest-possible" then ($e.modes["smallest-possible"] // $e.disconnect_model)
+        elif $mode == "best-opensource" then ($e.modes["best-opensource"] // $e.disconnect_model)
+        elif $mode == "best-opensource-cloud" then ($e.modes["best-opensource-cloud"] // $e.cloud_best_model // $e.connected_model)
+        elif $mode == "best-opensource-local" then ($e.modes["best-opensource-local"] // $e.local_best_model // $e.disconnect_model)
         else $e.connected_model
         end // empty
       ' "$CONFIG" 2>/dev/null)"
@@ -1128,13 +1141,26 @@ resolve_profile_alias_model() {
   profile="$(resolve_llm_profile_name)" || return 1
   llm_mode="$(resolve_llm_mode)"
   profile_key="$(profile_alias_key "$requested")"
-  # llm_mode: <llm_mode> → model selection (modes[] first, then connected/disconnect_model)
+  # llm_mode: mode-aware model selection — mirrors resolveProfileModel() in model-map-resolve.js
   resolved="$(jq -r --arg p "$profile" --arg key "$profile_key" --arg mode "$llm_mode" '
     (.llm_profiles // {})[$p][$key] as $e |
     if $e == null then empty
     elif ($e.modes // {}) | has($mode) then $e.modes[$mode]
-    elif $mode == "offline" then $e.disconnect_model
+    elif $mode == "offline" or $mode == "local-only" then $e.disconnect_model
+    elif $mode == "connected" then $e.connected_model
     elif $mode == "semi-offload" or $mode == "cloud-judge-only" then $e.disconnect_model
+    elif $mode == "cloud-best-quality" then ($e.cloud_best_model // $e.connected_model)
+    elif $mode == "local-best-quality" then ($e.local_best_model // $e.disconnect_model)
+    elif $mode == "cloud-only" then ($e.cloud_best_model // $e.connected_model)
+    elif $mode == "cloud-thinking" then ($e.modes["cloud-thinking"] // $e.disconnect_model)
+    elif $mode == "local-review" then ($e.modes["local-review"] // $e.connected_model)
+    elif $mode == "claude-only" then ($e.modes["claude-only"] // $e.connected_model)
+    elif $mode == "opensource-only" then ($e.modes["opensource-only"] // $e.disconnect_model)
+    elif $mode == "fastest-possible" then ($e.modes["fastest-possible"] // $e.connected_model)
+    elif $mode == "smallest-possible" then ($e.modes["smallest-possible"] // $e.disconnect_model)
+    elif $mode == "best-opensource" then ($e.modes["best-opensource"] // $e.disconnect_model)
+    elif $mode == "best-opensource-cloud" then ($e.modes["best-opensource-cloud"] // $e.cloud_best_model // $e.connected_model)
+    elif $mode == "best-opensource-local" then ($e.modes["best-opensource-local"] // $e.local_best_model // $e.disconnect_model)
     else $e.connected_model
     end // empty
   ' "$CONFIG" 2>/dev/null)"

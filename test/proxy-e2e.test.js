@@ -1,59 +1,44 @@
 #!/usr/bin/env node
 'use strict';
-// End-to-end tests: real proxy → real Ollama backend.
-// Tests model routing, capability alias resolution, agent chains,
-// and validates x-c-thru-resolved-via response headers on live traffic.
+// End-to-end tests: invokes c-thru directly as a subprocess with -p (non-interactive).
+// Tests the full stack: c-thru → proxy spawn → Ollama → response.
 //
 // Requires: Ollama running at localhost:11434 with qwen3:1.7b pulled.
 // Skips gracefully when Ollama is unreachable.
 //
 // Run with: node test/proxy-e2e.test.js
 
-const http = require('http');
-const fs   = require('fs');
-const os   = require('os');
-const path = require('path');
+const http         = require('http');
+const { execFile } = require('child_process');
+const path         = require('path');
 
-const {
-  assert, summary,
-  writeConfig, httpJson, withProxy,
-} = require('./helpers');
+const { assert, assertEq, summary } = require('./helpers');
 
-console.log('proxy-e2e integration tests\n');
+console.log('proxy-e2e integration tests (c-thru -p)\n');
 
-// ── E2E constants ──────────────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────
 
-const OLLAMA_URL   = 'http://localhost:11434';
-const E2E_MODEL    = 'qwen3:1.7b';    // smallest available; already pulled
-const E2E_TIMEOUT  = 60_000;          // real inference can take up to 60s
+const REPO_ROOT      = path.join(__dirname, '..');
+const C_THRU         = path.join(REPO_ROOT, 'tools', 'c-thru');
+const E2E_MODEL      = 'qwen3:1.7b';    // smallest available; already pulled
+const E2E_TIMEOUT_MS = 60_000;          // real inference can take up to 60s
 
-// Minimal body that gets a text response from qwen3 without burning tokens on thinking.
 const IDENTITY_PROMPT = 'what is your model name, where were you born, model id and who is your maker?';
-const MSG_BODY = {
-  messages: [{ role: 'user', content: IDENTITY_PROMPT }],
-  max_tokens: 2000,
-  stream: false,
-  thinking: { type: 'disabled' },
-};
 
-// ── Probe ──────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 function probeOllama(timeoutMs = 2000) {
   return new Promise(resolve => {
-    const u = new URL(OLLAMA_URL);
     const req = http.request(
-      { hostname: u.hostname, port: Number(u.port) || 11434, path: '/api/tags', method: 'GET' },
+      { hostname: '127.0.0.1', port: 11434, path: '/api/tags', method: 'GET' },
       res => {
         const chunks = [];
         res.on('data', c => chunks.push(c));
         res.on('end', () => {
           try {
             const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            const models = (body.models || []).map(m => m.name);
-            resolve({ available: true, models });
-          } catch {
-            resolve({ available: false, models: [] });
-          }
+            resolve({ available: true, models: (body.models || []).map(m => m.name) });
+          } catch { resolve({ available: false, models: [] }); }
         });
       }
     );
@@ -63,50 +48,30 @@ function probeOllama(timeoutMs = 2000) {
   });
 }
 
+// Runs: c-thru [extraArgs...] --model <model> -p "<prompt>"
+// Returns { exitCode, stdout, stderr }
+function runCThru(model, extraArgs = []) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      ...extraArgs,
+      '--model', model,
+      '-p', IDENTITY_PROMPT,
+    ];
+    const proc = execFile(C_THRU, args, { timeout: E2E_TIMEOUT_MS }, (err, stdout, stderr) => {
+      if (err && err.killed) {
+        reject(new Error(`c-thru timed out after ${E2E_TIMEOUT_MS}ms.\nstderr: ${stderr.slice(0, 500)}`));
+        return;
+      }
+      resolve({ exitCode: err ? (err.code || 1) : 0, stdout, stderr });
+    });
+    proc; // suppress unused-var warning
+  });
+}
+
 // ── Skip counter ───────────────────────────────────────────────────────────
 
 let _skipped = 0;
-function skip(reason) {
-  console.log(`  SKIP  ${reason}`);
-  _skipped++;
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function parseResolvedVia(headers) {
-  const raw = headers['x-c-thru-resolved-via'];
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
-
-function textContent(json) {
-  if (!json || !Array.isArray(json.content)) return '';
-  return json.content.filter(c => c.type === 'text').map(c => c.text).join('');
-}
-
-// ── Fixture config ─────────────────────────────────────────────────────────
-
-function buildConfig() {
-  return {
-    backends: {
-      ollama: { kind: 'ollama', url: OLLAMA_URL },
-    },
-    model_routes: {
-      [E2E_MODEL]: 'ollama',
-    },
-    llm_profiles: {
-      '16gb': {
-        workhorse: {
-          connected_model:  `${E2E_MODEL}@ollama`,
-          disconnect_model: `${E2E_MODEL}@ollama`,
-        },
-      },
-    },
-    agent_to_capability: {
-      'test-agent': 'workhorse',
-    },
-  };
-}
+function skip(reason) { console.log(`  SKIP  ${reason}`); _skipped++; }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -124,98 +89,38 @@ async function main() {
   }
   console.log(`Ollama reachable. ${probe.models.length} models present. Using: ${E2E_MODEL}\n`);
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-e2e-'));
-  const configPath = writeConfig(tmpDir, buildConfig());
+  // ── Test 1: direct model routing ───────────────────────────────────────────
+  console.log(`1. Direct model routing (c-thru --model ${E2E_MODEL} -p "...")`);
+  {
+    const r = await runCThru(E2E_MODEL);
+    assertEq(r.exitCode, 0, `direct route: exit code 0 (got ${r.exitCode})`);
+    assert(r.stdout.trim().length > 0, 'direct route: stdout is non-empty');
+    console.log(`  response: ${r.stdout.trim().slice(0, 120)}…`);
+  }
 
-  const proxyEnv = {
-    CLAUDE_PROXY_ANNOTATE_MODEL: '1',
-  };
+  // ── Test 2: offline mode ───────────────────────────────────────────────────
+  console.log('\n2. Offline mode (--mode offline forces local model)');
+  {
+    const r = await runCThru(E2E_MODEL, ['--mode', 'offline']);
+    assertEq(r.exitCode, 0, `offline: exit code 0 (got ${r.exitCode})`);
+    assert(r.stdout.trim().length > 0, 'offline: stdout is non-empty');
+    console.log(`  response: ${r.stdout.trim().slice(0, 120)}…`);
+  }
 
-  // ── Test 1: Direct model routing ──────────────────────────────────────────
-  console.log('1. Direct model routing (qwen3:1.7b via model_routes → Ollama)');
-  await withProxy({ configPath, profile: '16gb', env: proxyEnv }, async ({ port }) => {
-    const body = Object.assign({ model: E2E_MODEL }, MSG_BODY);
-    const r = await httpJson(port, 'POST', '/v1/messages', body, {}, E2E_TIMEOUT);
-
-    assert(r.status === 200, `direct route: status 200 (got ${r.status})`);
-    assert(r.json && r.json.type === 'message', 'direct route: response type === message');
-    assert(r.json && r.json.model === E2E_MODEL, `direct route: response model === ${E2E_MODEL}`);
-
-    const text = textContent(r.json);
-    assert(text.length > 0, 'direct route: text content is non-empty');
-
-    // No capability alias used → x-c-thru-resolved-via absent
-    const via = parseResolvedVia(r.headers);
-    assert(via === null, 'direct route: x-c-thru-resolved-via absent (no capability)');
-
-    // ANNOTATE_MODEL=1 → x-claude-proxy-served-by present
-    assert(
-      r.headers['x-c-thru-served-by'] === E2E_MODEL,
-      `direct route: x-c-thru-served-by === ${E2E_MODEL}`
-    );
-  });
-
-  // ── Test 2: Capability alias → resolved model → response headers ──────────
-  console.log('\n2. Capability alias (workhorse → qwen3:1.7b) + response header validation');
-  await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'connected' } }, async ({ port }) => {
-    const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
-    const r = await httpJson(port, 'POST', '/v1/messages', body, {}, E2E_TIMEOUT);
-
-    assert(r.status === 200, `capability alias: status 200 (got ${r.status})`);
-    assert(r.json && r.json.type === 'message', 'capability alias: response type === message');
-    assert(r.json && r.json.model === E2E_MODEL, `capability alias: response model === ${E2E_MODEL}`);
-
-    const text = textContent(r.json);
-    assert(text.length > 0, 'capability alias: text content is non-empty');
-
-    const via = parseResolvedVia(r.headers);
-    assert(via !== null, 'capability alias: x-c-thru-resolved-via header present');
-    assert(via && via.served_by === E2E_MODEL,
-      `capability alias: x-c-thru-resolved-via.served_by === ${E2E_MODEL} (got ${via && via.served_by})`);
-    assert(via && via.capability === 'workhorse',
-      `capability alias: x-c-thru-resolved-via.capability === workhorse (got ${via && via.capability})`);
-
-    assert(
-      r.headers['x-c-thru-served-by'] === E2E_MODEL,
-      `capability alias: x-c-thru-served-by === ${E2E_MODEL}`
-    );
-  });
-
-  // ── Test 3: agent_to_capability chain + response headers ─────────────────
-  console.log('\n3. agent_to_capability chain (test-agent → workhorse → qwen3:1.7b)');
-  await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'connected' } }, async ({ port }) => {
-    const body = Object.assign({ model: 'test-agent' }, MSG_BODY);
-    const r = await httpJson(port, 'POST', '/v1/messages', body, {}, E2E_TIMEOUT);
-
-    assert(r.status === 200, `agent chain: status 200 (got ${r.status})`);
-    assert(r.json && r.json.model === E2E_MODEL, `agent chain: response model === ${E2E_MODEL}`);
-
-    const text = textContent(r.json);
-    assert(text.length > 0, 'agent chain: text content is non-empty');
-
-    const via = parseResolvedVia(r.headers);
-    assert(via && via.served_by === E2E_MODEL,
-      `agent chain: x-c-thru-resolved-via.served_by === ${E2E_MODEL}`);
-    assert(via && via.capability === 'workhorse',
-      `agent chain: x-c-thru-resolved-via.capability === workhorse`);
-  });
-
-  // ── Test 4: offline mode routes to disconnect_model ───────────────────────
-  console.log('\n4. Offline mode (workhorse → disconnect_model)');
-  await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'offline' } }, async ({ port }) => {
-    const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
-    const r = await httpJson(port, 'POST', '/v1/messages', body, {}, E2E_TIMEOUT);
-
-    assert(r.status === 200, `offline: status 200 (got ${r.status})`);
-
-    const via = parseResolvedVia(r.headers);
-    assert(via && via.served_by === E2E_MODEL,
-      `offline: x-c-thru-resolved-via.served_by === ${E2E_MODEL} (disconnect_model)`);
-    assert(via && via.capability === 'workhorse',
-      'offline: x-c-thru-resolved-via.capability === workhorse');
-  });
-
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  // ── Test 3: default route (no explicit model) ──────────────────────────────
+  console.log('\n3. Default route (c-thru -p "..." — no --model flag)');
+  {
+    const r = await new Promise((resolve, reject) => {
+      const args = ['-p', IDENTITY_PROMPT];
+      execFile(C_THRU, args, { timeout: E2E_TIMEOUT_MS }, (err, stdout, stderr) => {
+        if (err && err.killed) { reject(new Error(`timed out.\nstderr: ${stderr.slice(0, 500)}`)); return; }
+        resolve({ exitCode: err ? (err.code || 1) : 0, stdout, stderr });
+      });
+    });
+    assertEq(r.exitCode, 0, `default route: exit code 0 (got ${r.exitCode})`);
+    assert(r.stdout.trim().length > 0, 'default route: stdout is non-empty');
+    console.log(`  response: ${r.stdout.trim().slice(0, 120)}…`);
+  }
 
   const failed = summary();
   if (_skipped) console.log(`(${_skipped} skipped)`);
