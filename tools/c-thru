@@ -343,13 +343,14 @@ write_ephemeral_settings() {
     else echo "$tools_dest/$base"; fi
   }
 
-  local session_cmd health_cmd classify_cmd map_changed_cmd postcompact_cmd planner_hint_cmd mcp_js
+  local session_cmd health_cmd classify_cmd map_changed_cmd postcompact_cmd planner_hint_cmd agent_router_cmd mcp_js
   session_cmd="$(find_tool_path c-thru-session-start)"
   health_cmd="$(find_tool_path c-thru-proxy-health)"
   classify_cmd="$(find_tool_path c-thru-classify)"
   map_changed_cmd="$(find_tool_path c-thru-map-changed)"
   postcompact_cmd="$(find_tool_path c-thru-postcompact-context)"
   planner_hint_cmd="$(find_tool_path c-thru-enter-plan-hook)"
+  agent_router_cmd="$(find_tool_path c-thru-agent-router-hook)"
   mcp_js="$(find_tool_path llm-capabilities-mcp.js)"
 
   # Hook inventory — every hook registered per session. To add a hook:
@@ -365,6 +366,8 @@ write_ephemeral_settings() {
   # UserPromptSubmit *               c-thru-proxy-health       asyncRewake if proxy down
   # UserPromptSubmit *               c-thru-classify           classify_intent tagging
   # PostToolUse      *               c-thru-map-changed        validate model-map.json on edit
+  # PreToolUse       Agent|WebSearch|c-thru-agent-router-hook  resolve capability for tool calls
+  #                   WebFetch|Monitor|Plan
   # PreToolUse       EnterPlanMode   c-thru-enter-plan-hook    advisory hint for /c-thru-plan
 
   if [[ -n "$port" ]]; then
@@ -386,7 +389,7 @@ write_ephemeral_settings() {
       {"matcher": "*", "hooks": [{"type": "command", "command": "$classify_cmd", "timeout": 5, "async": true}]}
     ],
     "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "$map_changed_cmd", "timeout": 5}]}],
-    "PreToolUse": [{"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
+    "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebSearch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebFetch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Monitor", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Plan", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
   },
   "permissions": {
     "allow": ["mcp__llm-capabilities__*"]
@@ -412,7 +415,7 @@ EOF
       {"matcher": "*", "hooks": [{"type": "command", "command": "$classify_cmd", "timeout": 5, "async": true}]}
     ],
     "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "$map_changed_cmd", "timeout": 5}]}],
-    "PreToolUse": [{"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
+    "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebSearch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebFetch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Monitor", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Plan", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
   },
   "permissions": {
     "allow": ["mcp__llm-capabilities__*"]
@@ -490,7 +493,12 @@ cmd_help() {
   echo "  --profile <tier>          force hardware tier (16gb|32gb|48gb|64gb|128gb)"
   echo "  --memory-gb <n>           override RAM detection (= CLAUDE_LLM_MEMORY_GB)"
   echo "  --debug                   enable router and proxy debug logs"
-  echo "  --thinking                enable extended thinking (removes /no_thinking from system prompt; = C_THRU_THINKING=1)"
+  echo "  --thinking                enable extended thinking on Anthropic models (= C_THRU_THINKING=1)"
+  echo -e "  ${GRAY}    Default: /no_thinking injected → extended thinking OFF (saves tokens/latency)${NC}"
+  echo -e "  ${GRAY}    With --thinking: /no_thinking removed → Claude uses a <think> block before responding${NC}"
+  echo -e "  ${GRAY}    Only affects Anthropic models; local reasoning models (DeepSeek-R1, Qwen3 thinking,${NC}"
+  echo -e "  ${GRAY}    phi4-reasoning) always reason internally — no flag needed.${NC}"
+  echo -e "  ${GRAY}    cloud-thinking mode routes judge/planner caps to a cloud thinking-capable model.${NC}"
   echo "  --bypass-proxy            skip proxy entirely (= CLAUDE_PROXY_BYPASS=1)"
   echo "  --journal                 enable per-request journaling (= CLAUDE_PROXY_JOURNAL=1)"
   echo "  --proxy-debug [N]         proxy verbose logs (= CLAUDE_PROXY_DEBUG=N; default 1)"
@@ -514,6 +522,25 @@ cmd_help() {
   echo "  CLAUDE_PROXY_CLASSIFY=1       run small classifier on prompts (Phase A: observe-only)"
   echo "  CLAUDE_PROXY_CLASSIFY_MODEL   classifier model tag (default gemma4:e2b)"
   echo "  NO_COLOR=1                    disable colored output"
+  echo ""
+  echo -e "${BOLD}Thinking & reasoning models:${NC}"
+  echo "  Anthropic models (claude-opus-*, claude-sonnet-*)"
+  echo "    Default: extended thinking OFF (/no_thinking injected into system prompt)"
+  echo "    Enable:  c-thru --thinking   or   C_THRU_THINKING=1"
+  echo "    Mode:    --mode cloud-thinking  routes judge/planner caps to cloud thinking model"
+  echo ""
+  echo "  Local reasoning models — always reason internally, no flag required:"
+  echo "    DeepSeek-R1 (7b/14b/32b)  temperature 0.6, top_p 0.95 (official); no system prompt"
+  echo "    Qwen3 thinking variants    temperature 0.6 (coding) / 1.0 (open); top_k 20"
+  echo "    phi4-reasoning             temperature 0.6–0.8; num_ctx 16384–32768"
+  echo ""
+  echo "  Known quirks:"
+  echo "    Qwen3: /no_think tag unreliable in Ollama — use non-thinking instruct variant instead"
+  echo "    Qwen3: thinking + tools = empty output; disable thinking when passing tool defs"
+  echo "    Qwen3: empty <think></think> tags emitted even in no-think mode — strip at consumer"
+  echo "    DeepSeek-R1: temperature=0 skips reasoning entirely; keep >= 0.5"
+  echo "    DeepSeek-R1: add <think>\n as assistant prefix to force reasoning engagement"
+  echo "    All reasoning models: presence_penalty preferred over repeat_penalty for Qwen3"
   echo ""
   echo -e "${BOLD}Config:${NC}"
   echo "  ~/.claude/model-map.overrides.json   user customizations (never overwritten on upgrade)"
@@ -3341,7 +3368,7 @@ build_forwarded_args() {
         i=$((i + 2))
         continue
         ;;
-      --mode=* | --profile=* | --memory-gb=* | --proxy-debug=* | --router-debug=*)
+      --mode=* | --profile=* | --memory-gb=* | --proxy-debug=* | --router-debug=* | --thinking=*)
         i=$((i + 1))
         continue
         ;;
@@ -3763,6 +3790,7 @@ while [[ $i -lt $n ]]; do
     --offline)                 export CLAUDE_LLM_MODE="offline"; i=$((i + 1)) ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
     --thinking)         export C_THRU_THINKING=1; i=$((i + 1)) ;;
+    --thinking=*)       echo "c-thru: --thinking is a boolean flag and takes no value (use --thinking alone)" >&2; exit 1 ;;
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;
     --no-update)        export C_THRU_NO_UPDATE=1; i=$((i + 1)) ;;
     --no-agents)        export NO_AGENTS=1; i=$((i + 1)) ;;
