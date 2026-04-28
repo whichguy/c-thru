@@ -12,7 +12,7 @@ const path = require('path');
 
 const {
   assert, assertEq, summary,
-  writeConfig, withProxy, httpJson, stubBackend,
+  writeConfig, withProxy, httpJson, httpStream, stubBackend, ollamaStubBackend,
 } = require('./helpers');
 
 console.log('proxy journal Phase A tests\n');
@@ -187,6 +187,91 @@ async function main() {
       } finally {
         await sseStub.close().catch(() => {});
         try { fs.rmSync(sseTmpDir, { recursive: true, force: true }); } catch {}
+      }
+    }
+
+    // ── Test 7: non-streaming Ollama — journal entry written ──────────────────
+    console.log('\n7. non-streaming Ollama: journal entry written with stream:false and response object');
+    {
+      const ollamaTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-journal-ollama-ns-'));
+      const journalDir7 = path.join(ollamaTmpDir, 'journal-ollama-ns');
+      const ollamaStub = await ollamaStubBackend([
+        { message: { content: 'hello from ollama', thinking: '' } },
+        { done: true, done_reason: 'stop', prompt_eval_count: 3, eval_count: 5 },
+      ]);
+      try {
+        const ollamaConfig = {
+          backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaStub.port}` } },
+          model_routes: { 'ollama-model': 'stub_ollama' },
+          llm_profiles: {
+            '128gb': {
+              workhorse: { connected_model: 'ollama-model', disconnect_model: 'ollama-model' },
+            },
+          },
+        };
+        const ollamaConfigPath = writeConfig(ollamaTmpDir, ollamaConfig);
+        await withProxy({
+          configPath: ollamaConfigPath, profile: '128gb', mode: 'connected',
+          env: { CLAUDE_PROXY_JOURNAL: '1', CLAUDE_PROXY_JOURNAL_DIR: journalDir7 },
+        }, async ({ port }) => {
+          await httpJson(port, 'POST', '/v1/messages', {
+            model: 'workhorse',
+            messages: [{ role: 'user', content: 'hi' }],
+            max_tokens: 5,
+          }, {}, 5000);
+          await new Promise(r => setTimeout(r, 300));
+          const entries = readJournal(journalDir7, 'workhorse');
+          assert(entries.length >= 1, `Ollama non-stream: at least 1 journal entry written (got ${entries.length})`);
+          const e = entries[0];
+          assertEq(e.stream, false, 'Ollama non-stream: stream:false in entry');
+          assertEq(e.served_by, 'ollama-model', 'Ollama non-stream: served_by matches model');
+          assert(e.response !== null && typeof e.response === 'object',
+            'Ollama non-stream: response is a non-null object');
+        });
+      } finally {
+        await ollamaStub.close().catch(() => {});
+        try { fs.rmSync(ollamaTmpDir, { recursive: true, force: true }); } catch {}
+      }
+    }
+
+    // ── Test 8: streaming Ollama — journal entry written ──────────────────────
+    console.log('\n8. streaming Ollama: journal entry written with stream:true');
+    {
+      const ollamaStreamTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-journal-ollama-s-'));
+      const journalDir8 = path.join(ollamaStreamTmpDir, 'journal-ollama-s');
+      const ollamaStreamStub = await ollamaStubBackend([
+        { message: { content: 'hi', thinking: '' } },
+        { done: true, done_reason: 'stop', prompt_eval_count: 2, eval_count: 3 },
+      ]);
+      try {
+        const ollamaStreamConfig = {
+          backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaStreamStub.port}` } },
+          model_routes: { 'ollama-stream-model': 'stub_ollama' },
+          llm_profiles: {
+            '128gb': {
+              workhorse: { connected_model: 'ollama-stream-model', disconnect_model: 'ollama-stream-model' },
+            },
+          },
+        };
+        const ollamaStreamConfigPath = writeConfig(ollamaStreamTmpDir, ollamaStreamConfig);
+        await withProxy({
+          configPath: ollamaStreamConfigPath, profile: '128gb', mode: 'connected',
+          env: { CLAUDE_PROXY_JOURNAL: '1', CLAUDE_PROXY_JOURNAL_DIR: journalDir8 },
+        }, async ({ port }) => {
+          await httpStream(port, 'POST', '/v1/messages', {
+            model: 'workhorse', stream: true,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 5,
+          });
+          await new Promise(r => setTimeout(r, 300));
+          const entries = readJournal(journalDir8, 'workhorse');
+          assert(entries.length >= 1, `Ollama stream: at least 1 journal entry written (got ${entries.length})`);
+          const e = entries[0];
+          assertEq(e.stream, true, 'Ollama stream: stream:true in entry');
+          assertEq(e.served_by, 'ollama-stream-model', 'Ollama stream: served_by matches model');
+        });
+      } finally {
+        await ollamaStreamStub.close().catch(() => {});
+        try { fs.rmSync(ollamaStreamTmpDir, { recursive: true, force: true }); } catch {}
       }
     }
 
