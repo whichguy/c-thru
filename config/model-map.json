@@ -1,22 +1,24 @@
 {
-  "backends": {
+  "endpoints": {
     "anthropic": {
-      "kind": "anthropic",
       "url": "https://api.anthropic.com",
+      "format": "anthropic",
       "auth_env": "ANTHROPIC_API_KEY"
     },
     "openrouter": {
-      "kind": "anthropic",
       "url": "https://openrouter.ai/api/v1",
+      "format": "anthropic",
       "auth_env": "OPENROUTER_API_KEY"
     },
     "ollama_local": {
-      "kind": "ollama",
-      "url": "http://localhost:11434"
+      "url": "http://localhost:11434",
+      "format": "anthropic",
+      "auth": "none"
     },
     "ollama_cloud": {
-      "kind": "ollama",
       "url": "http://localhost:11434",
+      "format": "anthropic",
+      "auth": "none",
       "prep_policy": "skip"
     }
   },
@@ -1374,7 +1376,23 @@
     "qwen3.6:35b-a3b": "ollama_local",
     "qwen3.6:27b": "ollama_local",
     "devstral-small-2:24b-cloud": "ollama_cloud",
-    "phi4-reasoning:latest": "ollama_local"
+    "phi4-reasoning:latest": "ollama_local",
+
+    "claude-opus-4-7":           { "endpoint": "anthropic", "name": "claude-opus-4-7" },
+    "claude-haiku-4-5-20251001": { "endpoint": "anthropic", "name": "claude-haiku-4-5-20251001" },
+    "opus":                      { "endpoint": "anthropic", "name": "claude-opus-4-7" },
+    "sonnet":                    { "endpoint": "anthropic", "name": "claude-sonnet-4-6" },
+    "haiku":                     { "endpoint": "anthropic", "name": "claude-haiku-4-5-20251001" },
+
+    "deepseek-v4-flash":         { "endpoint": "ollama_local", "name": "deepseek-v4-flash" },
+    "qwen3:8b":                  { "endpoint": "ollama_local", "name": "qwen3:8b" },
+    "qwen3:32b":                 { "endpoint": "ollama_local", "name": "qwen3:32b" },
+    "qwen3:72b":                 { "endpoint": "ollama_local", "name": "qwen3:72b" },
+    "qwen3.5:9b":                { "endpoint": "ollama_local", "name": "qwen3.5:9b" },
+    "qwen3.5:27b":               { "endpoint": "ollama_local", "name": "qwen3.5:27b" },
+    "gemma4:12b":                { "endpoint": "ollama_local", "name": "gemma4:12b" },
+    "gemma4:27b":                { "endpoint": "ollama_local", "name": "gemma4:27b" },
+    "devstral-small:2":          { "endpoint": "ollama_local", "name": "devstral-small:2" }
   },
   "routes": {
     "default": "workhorse",
