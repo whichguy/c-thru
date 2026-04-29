@@ -725,7 +725,7 @@ function validateRecommendedMappings(config, _errors) {
     } else {
       for (const [cap, tierMap] of Object.entries(recs)) {
         if (!validCaps.has(cap)) {
-          report(`'recommendations.${cap}' is not a known capability alias (expected one of: ${PROFILE_KEYS.join(', ')})`);
+          report(`'recommendations.${cap}' is not a known capability alias (expected one of: ${[...validCaps].join(', ')})`);
           continue;
         }
         if (!isObject(tierMap)) { report(`'recommendations.${cap}' must be an object`); continue; }

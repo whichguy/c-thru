@@ -128,7 +128,7 @@ function cmdResolve(args) {
 
   const selected = readSelectedConfig();
   const config = selected.config;
-  const { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, LLM_MODE_ENUM } = loadResolve();
+  const { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, LLM_MODE_ENUM, MODEL_PIN_PREFIX } = loadResolve();
 
   const mode     = resolveLlmMode(config);
   const tier     = resolveActiveTier(config);
@@ -137,6 +137,28 @@ function cmdResolve(args) {
   if (!capAlias) {
     process.stderr.write(`c-thru-config-helpers: unknown capability or agent: ${JSON.stringify(input)}\n`);
     process.exit(2);
+  }
+
+  const envMode = process.env.CLAUDE_LLM_MODE;
+  const modeSource = envMode
+    ? 'CLAUDE_LLM_MODE env'
+    : (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) ? `${selected.path} (${selected.source})` : 'default';
+
+  // model: prefix — agent is pinned directly to a model, bypassing capability tiers.
+  if (capAlias.startsWith(MODEL_PIN_PREFIX)) {
+    const pinnedModel = capAlias.slice(MODEL_PIN_PREFIX.length);
+    const target = resolveTerminalTarget(config, pinnedModel);
+    const providerModel = target ? target.providerModel : pinnedModel;
+    process.stdout.write(providerModel + '\n');
+    process.stderr.write(`  capability:  [pinned]  (via agent: ${input})\n`);
+    process.stderr.write(`  mode:        ${mode}  (${modeSource})  [ignored — direct model pin]\n`);
+    process.stderr.write(`  hw tier:     ${tier}  [ignored — direct model pin]\n`);
+    process.stderr.write(`  config:      ${selected.path}  (${selected.source})\n`);
+    if (target) {
+      process.stderr.write(`  target:      ${target.targetId}\n`);
+      process.stderr.write(`  backend:     ${target.backendId}\n`);
+    }
+    return;
   }
 
   const profile  = (config.llm_profiles || {})[tier];
@@ -153,11 +175,6 @@ function cmdResolve(args) {
   if (!resolved) { die(`resolveProfileModel returned empty for ${JSON.stringify(capAlias)}`); }
   const target = resolveTerminalTarget(config, resolved);
   const providerModel = target ? target.providerModel : resolved;
-
-  const envMode = process.env.CLAUDE_LLM_MODE;
-  const modeSource = envMode
-    ? 'CLAUDE_LLM_MODE env'
-    : (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) ? `${selected.path} (${selected.source})` : 'default';
 
   process.stdout.write(providerModel + '\n');
   process.stderr.write(`  capability:  ${capAlias}${input !== capAlias ? `  (via agent: ${input})` : ''}\n`);
