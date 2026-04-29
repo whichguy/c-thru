@@ -14,6 +14,7 @@ const { resolveSelectedConfigPath } = require('./model-map-config.js');
 
 const configStorage = new AsyncLocalStorage();
 const {
+  MODEL_PIN_PREFIX,
   resolveProfileModel,
   resolveLlmMode,
   resolveActiveTier,
@@ -569,6 +570,14 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
 
   const capAlias = resolveCapabilityAlias(model, cfg, tier);
   if (capAlias) {
+    if (capAlias.startsWith(MODEL_PIN_PREFIX)) {
+      const pinnedModel = capAlias.slice(MODEL_PIN_PREFIX.length);
+      const nextSeen = new Set(seen);
+      nextSeen.add(pinnedModel);
+      const nested = resolveBackend(pinnedModel, cfg, tier, mode, nextSeen);
+      if (nested.error) return nested;
+      return { ...nested, logicalRole: nested.logicalRole || model, capability: model };
+    }
     const profile = (cfg.llm_profiles || {})[tier];
     const entry = profile ? profile[capAlias] : null;
     if (entry) {
@@ -1942,14 +1951,48 @@ const server = http.createServer((req, res) => {
 
       if (req.url === '/ping') return send(res, 200, { ok: true, pid: process.pid, config_path: CONFIG_PATH, active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG), bind_address: server.address().address });
 
-      if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/')) {
+      if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/' || req.url.startsWith('/c-thru/status?'))) {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
-        const active_capabilities = {};
         const profiles = (CONFIG.llm_profiles || {})[tier] || {};
+        const active_capabilities = {};
         for (const [alias, entry] of Object.entries(profiles)) {
           const m = resolveProfileModel(entry, mode);
           if (m) active_capabilities[alias] = m.replace(BACKEND_SIGIL_RE, '$1');
+        }
+        // agent_resolutions: overridden agents only by default; ?verbose=1 shows all.
+        let verboseFlag = false;
+        try { verboseFlag = new URL(req.url, 'http://x').searchParams.get('verbose') === '1'; } catch {}
+        const overridesPath = process.env.CLAUDE_MODEL_MAP_OVERRIDES_PATH
+          || path.join(os.homedir(), '.claude', 'model-map.overrides.json');
+        let overriddenAgents = new Set();
+        try {
+          const ov = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
+          overriddenAgents = new Set(Object.keys((ov && ov.agent_to_capability) || {}));
+        } catch {}
+        const allA2c = CONFIG.agent_to_capability || {};
+        const agentKeys = verboseFlag
+          ? Object.keys(allA2c)
+          : [...overriddenAgents].filter(k => k in allA2c);
+        const agent_resolutions = {};
+        for (const agent of agentKeys) {
+          const capVal = allA2c[agent];
+          if (typeof capVal === 'string' && capVal.startsWith(MODEL_PIN_PREFIX)) {
+            agent_resolutions[agent] = {
+              capability: '[pinned]',
+              model: capVal.slice(MODEL_PIN_PREFIX.length),
+              pinned: true,
+            };
+          } else {
+            const profEntry = profiles[capVal];
+            let resolvedModel = profEntry ? resolveProfileModel(profEntry, mode) : null;
+            if (resolvedModel) resolvedModel = resolvedModel.replace(BACKEND_SIGIL_RE, '$1');
+            agent_resolutions[agent] = {
+              capability: capVal || null,
+              model: resolvedModel || null,
+              pinned: false,
+            };
+          }
         }
         return send(res, 200, {
           ok: true,
@@ -1957,6 +2000,7 @@ const server = http.createServer((req, res) => {
           hardware_tier: tier,
           config_source: CONFIG_SOURCE,
           active_capabilities,
+          agent_resolutions,
           usage: persistentUsage,
           // Cooldown state — backends the proxy is currently routing around.
           // Empty array when all configured backends are healthy.
