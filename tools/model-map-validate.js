@@ -669,6 +669,10 @@ function validateConfig(config, _errors, options) {
       for (const [agentName, capAlias] of Object.entries(config.agent_to_capability)) {
         if (typeof capAlias !== 'string' || !capAlias.trim()) {
           report(`'agent_to_capability.${agentName}' must be a non-empty string`);
+        } else if (capAlias.startsWith('model:')) {
+          const direct = capAlias.slice('model:'.length);
+          if (!direct.trim()) report(`agent_to_capability.${agentName}: model: prefix requires a non-empty model name`);
+          // skip alias-existence check for direct pins
         } else if (!validCapAliases.has(capAlias)) {
           report(`'agent_to_capability.${agentName}' references unknown capability alias '${capAlias}' (expected one of: ${PROFILE_KEYS.join(', ')})`);
         }
