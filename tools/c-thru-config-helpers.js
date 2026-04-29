@@ -147,6 +147,9 @@ function cmdResolve(args) {
   // model: prefix — agent is pinned directly to a model, bypassing capability tiers.
   if (capAlias.startsWith(MODEL_PIN_PREFIX)) {
     const pinnedModel = capAlias.slice(MODEL_PIN_PREFIX.length);
+    if (!pinnedModel.trim()) {
+      die(`agent '${input}' maps to 'model:' with empty model name — fix the override`);
+    }
     const target = resolveTerminalTarget(config, pinnedModel);
     const providerModel = target ? target.providerModel : pinnedModel;
     process.stdout.write(providerModel + '\n');
@@ -366,7 +369,8 @@ function cmdBackend(args) {
 // ── Subcommand: agent-list / agent-set / agent-pin / agent-reset ───────────────
 
 function cmdAgentList(_args) {
-  const config = readConfig();
+  const selected = readSelectedConfig();
+  const config = selected.config;
   const resolve = loadResolve();
   const { MODEL_PIN_PREFIX, resolveActiveTier, resolveLlmMode, resolveProfileModel } = resolve;
   const tier = resolveActiveTier(config);
@@ -417,7 +421,10 @@ function cmdAgentSet(args) {
   const [agent, capability] = positional;
   if (!agent || !capability) { die('usage: agent-set <agent> <capability> [--reload]'); }
 
-  const config = readConfig();
+  // Use the full effective config (system + global + project) for validation,
+  // so project-local capabilities are recognized alongside profile-level ones.
+  const selected = readSelectedConfig();
+  const config = selected.config;
   const { resolveActiveTier } = loadResolve();
   const tier = resolveActiveTier(config);
   const profiles = (config.llm_profiles || {})[tier] || {};
