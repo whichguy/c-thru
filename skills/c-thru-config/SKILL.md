@@ -35,7 +35,7 @@ Usage:
   /c-thru-config restart [--force]                                           full proxy restart
   /c-thru-config planning [...]                                              toggle EnterPlanMode planner hint
 
-Modes: connected | offline | local-only | semi-offload | cloud-judge-only | cloud-thinking | local-review | cloud-best-quality | local-best-quality | cloud-only | claude-only | opensource-only | fastest-possible | smallest-possible | best-opensource | best-opensource-cloud
+Modes: connected | offline | local-only | semi-offload | cloud-judge-only | cloud-thinking | local-review | cloud-best-quality | local-best-quality | cloud-only | claude-only | opensource-only | fastest-possible | smallest-possible | best-opensource | best-opensource-cloud | best-opensource-local
 ```
 
 ---

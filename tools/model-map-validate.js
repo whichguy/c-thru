@@ -674,7 +674,7 @@ function validateConfig(config, _errors, options) {
           if (!direct.trim()) report(`agent_to_capability.${agentName}: model: prefix requires a non-empty model name`);
           // skip alias-existence check for direct pins
         } else if (!validCapAliases.has(capAlias)) {
-          report(`'agent_to_capability.${agentName}' references unknown capability alias '${capAlias}' (expected one of: ${PROFILE_KEYS.join(', ')})`);
+          report(`'agent_to_capability.${agentName}' references unknown capability alias '${capAlias}' (expected one of: ${[...validCapAliases].join(', ')})`);
         }
       }
     }

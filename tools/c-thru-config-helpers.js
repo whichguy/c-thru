@@ -184,7 +184,7 @@ function cmdModeRead(_args) {
     'cloud-best-quality', 'local-best-quality',
     'local-only', 'cloud-thinking', 'local-review',
     'cloud-only', 'claude-only', 'opensource-only',
-    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud'
+    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local'
   ]);
   let config = {}, overrides = {};
   try { config    = JSON.parse(fs.readFileSync(MAP_PATH,       'utf8')); } catch {}
@@ -215,7 +215,7 @@ function cmdModeWrite(args) {
     'cloud-best-quality', 'local-best-quality',
     'local-only', 'cloud-thinking', 'local-review',
     'cloud-only', 'claude-only', 'opensource-only',
-    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud'
+    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local'
   ]);
   const mode = args[0];
   if (!mode || !VALID.has(mode)) {

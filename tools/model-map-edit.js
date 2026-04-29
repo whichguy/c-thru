@@ -115,7 +115,7 @@ function applyUpdates(config, spec, defaults) {
     'cloud-best-quality', 'local-best-quality',
     'local-only', 'cloud-thinking', 'local-review',
     'cloud-only', 'claude-only', 'opensource-only',
-    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud'
+    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local'
   ]);
   if (spec.llm_mode != null) {
     if (typeof spec.llm_mode !== 'string' || !LLM_MODES.has(spec.llm_mode)) {
