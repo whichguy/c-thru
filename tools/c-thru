@@ -1200,16 +1200,17 @@ model_is_cloud_designated() {
 # Only overrides slots that are unset or contain a cloud model name (claude-*).
 apply_background_model_overrides() {
   local launch_model="${1:-}"
-  # Always: suppress attribution header; subagent uses the same model as the main session
-  # so agents spawned by Claude Code see the same backend without a second routing decision.
+  # Suppress attribution header — subagents go through the same proxy so the
+  # per-agent-type hook (c-thru-agent-router-hook.sh) routes each one correctly.
+  # CLAUDE_CODE_SUBAGENT_MODEL is intentionally NOT set here: if it were pinned
+  # to the launch model, it would override the hook's updatedInput.model and
+  # all subagents would share the parent session's backend regardless of their
+  # frontmatter model field.
   [[ -z "${CLAUDE_CODE_ATTRIBUTION_HEADER:-}" ]] && export CLAUDE_CODE_ATTRIBUTION_HEADER=0
   # Prevent interactive git editors (rebase, commit message) from blocking
   # Claude Code's automated git operations. /usr/bin/true exits 0 immediately.
   # Mirrors `ollama launch claude` behavior (cmd/config/claude.go).
   [[ -z "${GIT_EDITOR:-}" ]] && export GIT_EDITOR="true"
-  if [[ -z "${CLAUDE_CODE_SUBAGENT_MODEL:-}" && -n "$launch_model" ]]; then
-    export CLAUDE_CODE_SUBAGENT_MODEL="$launch_model"
-  fi
   # Clear ambient ANTHROPIC_API_KEY only on proxy-authenticated paths.
   # apply_provider_block() sets ANTHROPIC_AUTH_TOKEN for proxy/Ollama backends
   # but leaves it unset for direct-Anthropic backends (kind: "anthropic" with
@@ -3191,7 +3192,7 @@ get_system_info_summary() {
   fi
 
   printf '%s\n%s\n%s\n\n%s' \
-    "YOUR MODEL IS: ${self_model:-unknown}. Do NOT assume you are Claude Sonnet, Claude Opus, or any other model — your actual model name is stated above. Refer to yourself only by that exact name." \
+    "MODEL IDENTITY: Use your trained name when referring to yourself. Never assume what model an Agent is — if it matters, ask the agent directly rather than assuming." \
     "c-thru routing active. Profile: ${profile:-unknown}. Mode: ${llm_mode:-unknown}." \
     "Available models by capability: ${caps_str}." \
     "Use specialized agents aggressively.
