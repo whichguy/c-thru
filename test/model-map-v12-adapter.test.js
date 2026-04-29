@@ -347,5 +347,86 @@ console.log('\n9. Every :cloud model in fallback_chains has a local terminal aft
   }
 }
 
+// ── Test 10: model: prefix in agent_to_capability ────────────────────────────
+console.log('\n10. model: prefix — validator + resolver');
+{
+  const { validateConfig } = require('../tools/model-map-validate.js');
+  const { resolveCapabilityAlias, MODEL_PIN_PREFIX } = require('../tools/model-map-resolve.js');
+
+  // 10a: validator accepts model: prefix without requiring it to be in llm_profiles
+  const errors10a = [];
+  const cfg10a = {
+    llm_profiles: { '64gb': { judge: { connected_model: 'claude-opus-4-6', disconnect_model: 'qwen3:1.7b' } } },
+    agent_to_capability: { 'test-agent': 'model:qwen3.5:9b' },
+    endpoints: { anthropic: { url: 'http://localhost', format: 'anthropic', auth: 'none' } },
+  };
+  validateConfig(cfg10a, errors10a);
+  assert(errors10a.length === 0, 'model: prefix value passes validator (no alias-existence check)');
+
+  // 10b: validator rejects model: prefix with empty model name
+  const errors10b = [];
+  const cfg10b = { ...cfg10a, agent_to_capability: { 'test-agent': 'model:' } };
+  validateConfig(cfg10b, errors10b);
+  assert(errors10b.some(e => e.includes('non-empty')), 'model: prefix with empty name is rejected');
+
+  // 10c: resolveCapabilityAlias returns raw model: value from agent_to_capability
+  const cfg10c = { agent_to_capability: { implementer: 'model:qwen3.5:9b' } };
+  const alias = resolveCapabilityAlias('implementer', cfg10c, '64gb');
+  assert(alias === 'model:qwen3.5:9b', 'resolveCapabilityAlias returns model: prefixed value');
+
+  // 10d: MODEL_PIN_PREFIX exported and equals 'model:'
+  assert(MODEL_PIN_PREFIX === 'model:', "MODEL_PIN_PREFIX exported from model-map-resolve.js as 'model:'");
+
+  // 10e: cycle guard — model: pin → agent name that also has model: pin terminates (not stack-overflow).
+  //      Covered at runtime by the existing seen-set in resolveBackend which detects revisits.
+  //      Validate here that resolveCapabilityAlias does NOT recurse (it returns raw string only).
+  const cfg10e = { agent_to_capability: { 'a': 'model:b', 'b': 'model:a' } };
+  const aliasA = resolveCapabilityAlias('a', cfg10e, '64gb');
+  assert(aliasA === 'model:b', 'resolveCapabilityAlias is non-recursive (cycle guard is in resolveBackend)');
+}
+
+// ── Test 11: applyAgentToCapabilityUpdates reset restores system default ──────
+console.log('\n11. agent-reset restores system default (not null-delete)');
+{
+  const { applyUpdates } = require('../tools/model-map-edit.js');
+
+  const defaults = {
+    agent_to_capability: { implementer: 'deep-coder', planner: 'judge' },
+    llm_profiles: { '64gb': {} },
+    endpoints: {},
+  };
+  const withOverride = {
+    ...defaults,
+    agent_to_capability: { implementer: 'judge', planner: 'judge' },
+  };
+
+  // Reset implementer → should restore to 'deep-coder' from defaults
+  const after = applyUpdates(withOverride, { agent_to_capability: { implementer: null } }, defaults);
+  assert(
+    after.agent_to_capability.implementer === 'deep-coder',
+    'null reset restores implementer to system default deep-coder (not undefined/null)',
+  );
+  assert(
+    after.agent_to_capability.planner === 'judge',
+    'planner (no override) unchanged after reset',
+  );
+
+  // When agent has NO system default, null falls through to delete
+  const defaultsNoPlanner = {
+    agent_to_capability: { implementer: 'deep-coder' },
+    llm_profiles: { '64gb': {} },
+    endpoints: {},
+  };
+  const withExtra = {
+    ...defaultsNoPlanner,
+    agent_to_capability: { implementer: 'deep-coder', 'new-agent': 'judge' },
+  };
+  const afterExtra = applyUpdates(withExtra, { agent_to_capability: { 'new-agent': null } }, defaultsNoPlanner);
+  assert(
+    !Object.prototype.hasOwnProperty.call(afterExtra.agent_to_capability, 'new-agent'),
+    'null reset of agent with no system default removes key from effective',
+  );
+}
+
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
