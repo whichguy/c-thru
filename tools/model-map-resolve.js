@@ -9,6 +9,8 @@ const os = require('os');
 
 const { execSync } = require('child_process');
 
+const MODEL_PIN_PREFIX = 'model:';
+
 const LLM_MODE_ENUM = new Set([
   'connected', 'semi-offload', 'cloud-judge-only', 'offline',
   'cloud-best-quality', 'local-best-quality',
@@ -339,6 +341,7 @@ function compareKey(a, b) {
 }
 
 module.exports = {
+  MODEL_PIN_PREFIX,
   resolveProfileModel,
   resolveLlmMode,
   resolveActiveTier,
