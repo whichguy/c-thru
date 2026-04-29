@@ -346,20 +346,132 @@ function cmdBackend(args) {
   }
 }
 
+// ── Subcommand: agent-list / agent-set / agent-pin / agent-reset ───────────────
+
+function cmdAgentList(_args) {
+  const config = readConfig();
+  const resolve = loadResolve();
+  const { MODEL_PIN_PREFIX, resolveActiveTier, resolveLlmMode, resolveProfileModel } = resolve;
+  const tier = resolveActiveTier(config);
+  const mode = resolveLlmMode(config);
+  const profiles = (config.llm_profiles || {})[tier] || {};
+  const a2c = config.agent_to_capability || {};
+
+  let overriddenAgents = new Set();
+  try {
+    const ov = JSON.parse(fs.readFileSync(OVERRIDES_PATH, 'utf8'));
+    overriddenAgents = new Set(Object.keys((ov && ov.agent_to_capability) || {}));
+  } catch {}
+
+  if (Object.keys(a2c).length === 0) {
+    process.stdout.write('No agent_to_capability entries found in config.\n');
+    return;
+  }
+
+  const rows = [];
+  for (const [agent, capVal] of Object.entries(a2c)) {
+    let capDisplay, modelDisplay;
+    if (typeof capVal === 'string' && capVal.startsWith(MODEL_PIN_PREFIX)) {
+      capDisplay = '[pinned]';
+      modelDisplay = capVal.slice(MODEL_PIN_PREFIX.length);
+    } else {
+      capDisplay = capVal || '(none)';
+      const entry = profiles[capVal];
+      const m = entry ? resolveProfileModel(entry, mode) : null;
+      modelDisplay = m || '(unresolved)';
+    }
+    rows.push({ agent, cap: capDisplay, model: modelDisplay, overridden: overriddenAgents.has(agent) });
+  }
+
+  const w1 = Math.max(5, ...rows.map(r => r.agent.length));
+  const w2 = Math.max(10, ...rows.map(r => r.cap.length));
+  process.stdout.write(` ${'AGENT'.padEnd(w1)}  ${'CAPABILITY'.padEnd(w2)}  MODEL\n`);
+  process.stdout.write(` ${'-'.repeat(w1)}  ${'-'.repeat(w2)}  ${'-'.repeat(40)}\n`);
+  for (const r of rows) {
+    process.stdout.write(`${r.overridden ? '*' : ' '}${r.agent.padEnd(w1)}  ${r.cap.padEnd(w2)}  ${r.model}\n`);
+  }
+  if (overriddenAgents.size > 0) {
+    process.stdout.write('\n* = user override (in model-map.overrides.json)\n');
+  }
+}
+
+function cmdAgentSet(args) {
+  const positional = args.filter(a => !a.startsWith('--'));
+  const [agent, capability] = positional;
+  if (!agent || !capability) { die('usage: agent-set <agent> <capability> [--reload]'); }
+
+  const config = readConfig();
+  const { resolveActiveTier } = loadResolve();
+  const tier = resolveActiveTier(config);
+  const profiles = (config.llm_profiles || {})[tier] || {};
+
+  if (!Object.prototype.hasOwnProperty.call(profiles, capability)) {
+    die(`unknown capability '${capability}' for tier '${tier}'. Valid: ${Object.keys(profiles).sort().join(', ')}`);
+  }
+
+  runEdit(JSON.stringify({ agent_to_capability: { [agent]: capability } }));
+  process.stdout.write(`mapped ${agent} → ${capability} (tier: ${tier})\n`);
+  if (hasFlag(args, '--reload')) {
+    reloadProxy();
+  } else {
+    process.stdout.write(`run '/c-thru-config reload' to apply to running proxy\n`);
+  }
+}
+
+function cmdAgentPin(args) {
+  const positional = args.filter(a => !a.startsWith('--'));
+  const [agent, model] = positional;
+  if (!agent || !model) { die('usage: agent-pin <agent> <model> [--reload]'); }
+
+  const { MODEL_PIN_PREFIX } = loadResolve();
+  runEdit(JSON.stringify({ agent_to_capability: { [agent]: MODEL_PIN_PREFIX + model } }));
+  process.stdout.write(`pinned ${agent} → ${model} directly (bypasses capability tier)\n`);
+  if (hasFlag(args, '--reload')) {
+    reloadProxy();
+  } else {
+    process.stdout.write(`run '/c-thru-config reload' to apply to running proxy\n`);
+  }
+}
+
+function cmdAgentReset(args) {
+  const positional = args.filter(a => !a.startsWith('--'));
+  const [agent] = positional;
+  if (!agent) { die('usage: agent-reset <agent> [--reload]'); }
+
+  try {
+    const systemConfig = JSON.parse(fs.readFileSync(SYSTEM_PATH, 'utf8'));
+    if (!Object.prototype.hasOwnProperty.call(systemConfig.agent_to_capability || {}, agent)) {
+      process.stdout.write(`warning: '${agent}' has no system-default entry — reset will leave it unmapped\n`);
+    }
+  } catch {}
+
+  runEdit(JSON.stringify({ agent_to_capability: { [agent]: null } }));
+  process.stdout.write(`reset ${agent} → system default\n`);
+  if (hasFlag(args, '--reload')) {
+    reloadProxy();
+  } else {
+    process.stdout.write(`run '/c-thru-config reload' to apply to running proxy\n`);
+  }
+}
+
 // ── Main dispatch ──────────────────────────────────────────────────────────────
 
 const USAGE = `
 c-thru-config-helpers — shared config operations for /c-thru-config skill
 
 Subcommands:
-  resolve   <capability>                         resolve capability/agent → model
-  mode-read                                      show active mode + source
-  mode-write <mode> [--reload]                   set llm_mode in overrides
-  remap      <tier> <cap> <model> [--reload]     rebind connected+disconnect model
-  set-cloud-best <tier> <cap> <model> [--reload] set cloud_best_model
-  set-local-best <tier> <cap> <model> [--reload] set local_best_model
-  route      <model> <backend> [--reload]        bind model → backend
+  resolve    <capability>                         resolve capability/agent → model
+  mode-read                                       show active mode + source
+  mode-write <mode> [--reload]                    set llm_mode in overrides
+  remap      <tier> <cap> <model> [--reload]      rebind connected+disconnect model
+  set-cloud-best <tier> <cap> <model> [--reload]  set cloud_best_model
+  set-local-best <tier> <cap> <model> [--reload]  set local_best_model
+  route      <model> <backend> [--reload]         bind model → backend
   backend    <name> <url> [--kind k] [--auth-env VAR] [--reload]  add/update backend
+  agent-list                                      show agent → capability → model table (* = overridden)
+  agent-set  <agent> <capability> [--reload]      map agent → capability alias (logical tier)
+  agent-pin  <agent> <model> [--reload]           pin agent directly to a model (bypass tiers)
+  agent-reset <agent> [--reload]                  restore system default for agent
 `.trimStart();
 
 const [,, subcmd, ...rest] = process.argv;
@@ -373,6 +485,10 @@ switch (subcmd) {
   case 'set-local-best': cmdSetLocalBest(rest); break;
   case 'route':          cmdRoute(rest);        break;
   case 'backend':        cmdBackend(rest);      break;
+  case 'agent-list':     cmdAgentList(rest);    break;
+  case 'agent-set':      cmdAgentSet(rest);     break;
+  case 'agent-pin':      cmdAgentPin(rest);     break;
+  case 'agent-reset':    cmdAgentReset(rest);   break;
   default:
     process.stdout.write(USAGE);
     process.exit(subcmd ? 1 : 0);

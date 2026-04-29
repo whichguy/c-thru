@@ -4,7 +4,7 @@ description: |
   Unified c-thru configuration: diagnose the active setup, resolve what a
   capability alias maps to, switch connectivity modes, remap per-capability
   models, validate the config, or reload the running proxy.
-  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | validate | reload | restart [--force]
+  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | agent list | agent set <agent> <cap> [--reload] | agent pin <agent> <model> [--reload] | agent reset <agent> [--reload] | validate | reload | restart [--force]
 color: cyan
 ---
 
@@ -26,6 +26,10 @@ Usage:
   /c-thru-config set-local-best-model <cap> <model> [--tier <tier>] [--reload]  set local_best_model for a capability
   /c-thru-config route <model> <backend> [--reload]                          bind a model name → backend
   /c-thru-config backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload]  add/update a backend
+  /c-thru-config agent list                                                  show agent → capability → model table (* = overridden)
+  /c-thru-config agent set <agent> <capability> [--reload]                   map agent → capability alias (logical tier)
+  /c-thru-config agent pin <agent> <model> [--reload]                        pin agent directly to a model (bypass tiers)
+  /c-thru-config agent reset <agent> [--reload]                              restore system default for agent
   /c-thru-config validate                                                    schema check
   /c-thru-config reload                                                      SIGHUP the running proxy
   /c-thru-config restart [--force]                                           full proxy restart
@@ -515,6 +519,65 @@ rl.on('close', () => {
 });
   " 2>/dev/null
 fi
+```
+
+---
+
+## Subcommand: `agent`
+
+**Usage:** `/c-thru-config agent <list|set|pin|reset> [...]`
+
+Override which model an agent uses without editing `config/model-map.json` (system config is read-only). Changes are written to `~/.claude/model-map.overrides.json` and merged at runtime.
+
+Two override modes:
+- **Logical remap** (`set`): change which capability tier an agent routes through (e.g. point `implementer` at `judge` instead of `deep-coder`)
+- **Direct pin** (`pin`): skip the capability tier entirely and route an agent straight to a specific model tag
+
+### Verb: `list`
+
+```bash
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd 2>/dev/null)" || REPO_ROOT="${CLAUDE_PROFILE_DIR:-$HOME/.claude}/../.."
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-list
+```
+
+Prints a three-column table: `AGENT | CAPABILITY | MODEL`. Entries with user overrides are marked with `*`. Pinned entries show `[pinned]` in the capability column.
+
+### Verb: `set`
+
+**Usage:** `/c-thru-config agent set <agent> <capability> [--reload]`
+
+Map `<agent>` → `<capability>` alias (logical tier remap). `<capability>` must be a valid capability key in `llm_profiles[activeTier]` — use `/c-thru-config diag` to list valid values.
+
+```bash
+AGENT="$1"
+CAPABILITY="$2"
+RELOAD="${3:-}"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-set "$AGENT" "$CAPABILITY" ${RELOAD:+--reload}
+```
+
+### Verb: `pin`
+
+**Usage:** `/c-thru-config agent pin <agent> <model> [--reload]`
+
+Pin `<agent>` directly to `<model>`, bypassing capability tier lookup. Uses `model:` prefix in `agent_to_capability` internally. The model is resolved through normal `model_routes` for backend lookup.
+
+```bash
+AGENT="$1"
+MODEL="$2"
+RELOAD="${3:-}"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-pin "$AGENT" "$MODEL" ${RELOAD:+--reload}
+```
+
+### Verb: `reset`
+
+**Usage:** `/c-thru-config agent reset <agent> [--reload]`
+
+Remove the user override for `<agent>`, restoring the system default. Null-deletes the key from `model-map.overrides.json`. If the agent has no system-default entry, a warning is printed.
+
+```bash
+AGENT="$1"
+RELOAD="${2:-}"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-reset "$AGENT" ${RELOAD:+--reload}
 ```
 
 ---

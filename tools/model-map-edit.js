@@ -67,18 +67,29 @@ function applyLlmProfilesUpdates(config, llmProfiles) {
   }
 }
 
-function applyAgentToCapabilityUpdates(config, a2cSpec) {
+function applyAgentToCapabilityUpdates(config, a2cSpec, defaults) {
   if (a2cSpec == null) return;
   if (!isObject(a2cSpec)) fail("'agent_to_capability' update payload must be an object");
   config.agent_to_capability = isObject(config.agent_to_capability) ? { ...config.agent_to_capability } : {};
   for (const [agent, val] of Object.entries(a2cSpec)) {
-    if (val === null) { delete config.agent_to_capability[agent]; continue; }
+    if (val === null) {
+      // Restore system default when present so computeOverrideDiff omits this key.
+      // Without access to defaults, deleting would produce null in the overrides file,
+      // which would suppress the system default on the next merge.
+      const defaultVal = defaults && (defaults.agent_to_capability || {})[agent];
+      if (defaultVal !== undefined) {
+        config.agent_to_capability[agent] = defaultVal;
+      } else {
+        delete config.agent_to_capability[agent];
+      }
+      continue;
+    }
     if (typeof val !== 'string' || !val.trim()) fail(`agent_to_capability['${agent}'] must be a non-empty string or null`);
     config.agent_to_capability[agent] = val;
   }
 }
 
-function applyUpdates(config, spec) {
+function applyUpdates(config, spec, defaults) {
   if (!isObject(config)) fail('top-level effective model-map config must be an object');
   if (!isObject(spec)) fail('edit spec must be a JSON object');
 
@@ -86,7 +97,7 @@ function applyUpdates(config, spec) {
   applyRouteUpdates(next, spec.routes);
   applyFallbackUpdates(next, spec.fallback_strategies);
   applyLlmProfilesUpdates(next, spec.llm_profiles);
-  applyAgentToCapabilityUpdates(next, spec.agent_to_capability);
+  applyAgentToCapabilityUpdates(next, spec.agent_to_capability, defaults);
 
   if (spec.default_model != null) {
     if (typeof spec.default_model !== 'string' || !spec.default_model.trim()) fail("'default_model' must be a non-empty string");
@@ -175,7 +186,7 @@ function main() {
 
   try {
     const { defaults, effective } = loadLayeredConfig(defaultsPath, overridesPath);
-    const nextEffective = applyUpdates(effective, spec);
+    const nextEffective = applyUpdates(effective, spec, defaults);
     const nextOverrides = computeOverrideDiff(defaults, nextEffective) || {};
     fs.mkdirSync(path.dirname(overridesPath), { recursive: true });
     fs.mkdirSync(path.dirname(effectivePath), { recursive: true });
