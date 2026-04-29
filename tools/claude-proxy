@@ -572,9 +572,7 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
   if (capAlias) {
     if (capAlias.startsWith(MODEL_PIN_PREFIX)) {
       const pinnedModel = capAlias.slice(MODEL_PIN_PREFIX.length);
-      const nextSeen = new Set(seen);
-      nextSeen.add(pinnedModel);
-      const nested = resolveBackend(pinnedModel, cfg, tier, mode, nextSeen);
+      const nested = resolveBackend(pinnedModel, cfg, tier, mode, seen);
       if (nested.error) return nested;
       return { ...nested, logicalRole: nested.logicalRole || model, capability: model };
     }

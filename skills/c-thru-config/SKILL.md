@@ -548,12 +548,15 @@ Prints a three-column table: `AGENT | CAPABILITY | MODEL`. Entries with user ove
 
 Map `<agent>` → `<capability>` alias (logical tier remap). `<capability>` must be a valid capability key in `llm_profiles[activeTier]` — use `/c-thru-config diag` to list valid values.
 
+Extract `<AGENT>`, `<CAPABILITY>`, and optional `--reload` from `$ARGUMENTS`. Both `<AGENT>` and `<CAPABILITY>` are required.
+
 ```bash
-AGENT="$1"
-CAPABILITY="$2"
-RELOAD="${3:-}"
-node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-set "$AGENT" "$CAPABILITY" ${RELOAD:+--reload}
+AGENT="<AGENT>"
+CAPABILITY="<CAPABILITY>"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-set "$AGENT" "$CAPABILITY" ${RELOAD_FLAG}
 ```
+
+Substitute `${RELOAD_FLAG}` with `--reload` when present in `$ARGUMENTS`, otherwise empty.
 
 ### Verb: `pin`
 
@@ -561,12 +564,15 @@ node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent
 
 Pin `<agent>` directly to `<model>`, bypassing capability tier lookup. Uses `model:` prefix in `agent_to_capability` internally. The model is resolved through normal `model_routes` for backend lookup.
 
+Extract `<AGENT>`, `<MODEL>`, and optional `--reload` from `$ARGUMENTS`. Both `<AGENT>` and `<MODEL>` are required.
+
 ```bash
-AGENT="$1"
-MODEL="$2"
-RELOAD="${3:-}"
-node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-pin "$AGENT" "$MODEL" ${RELOAD:+--reload}
+AGENT="<AGENT>"
+MODEL="<MODEL>"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-pin "$AGENT" "$MODEL" ${RELOAD_FLAG}
 ```
+
+Substitute `${RELOAD_FLAG}` with `--reload` when present in `$ARGUMENTS`, otherwise empty.
 
 ### Verb: `reset`
 
@@ -574,11 +580,14 @@ node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent
 
 Remove the user override for `<agent>`, restoring the system default. Null-deletes the key from `model-map.overrides.json`. If the agent has no system-default entry, a warning is printed.
 
+Extract `<AGENT>` and optional `--reload` from `$ARGUMENTS`.
+
 ```bash
-AGENT="$1"
-RELOAD="${2:-}"
-node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-reset "$AGENT" ${RELOAD:+--reload}
+AGENT="<AGENT>"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-reset "$AGENT" ${RELOAD_FLAG}
 ```
+
+Substitute `${RELOAD_FLAG}` with `--reload` when present in `$ARGUMENTS`, otherwise empty.
 
 ---
 
