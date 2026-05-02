@@ -1144,7 +1144,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
         }
         recordUsage(effectiveModel, backend.id, inputTokens, outputTokens,
           Date.now() - (requestMeta.startedAt || Date.now()),
-          requestMeta.originalModel || null);
+          requestMeta.capability || null);
         clearBackendCooldown(backend.id);
         if (shouldJournal(requestMeta.capability)) {
           const rawBuf = Buffer.concat(usageBuf);
@@ -1524,7 +1524,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
     });
     recordUsage(effectiveModel, backend.id, promptTokens, outputTokens,
       Date.now() - (requestMeta.startedAt || Date.now()),
-      requestMeta.originalModel || null);
+      requestMeta.capability || null);
     clearBackendCooldown(backend.id);
     if (shouldJournal(requestMeta.capability)) {
       writeJournalEntry({
@@ -1704,7 +1704,7 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
       });
       recordUsage(effectiveModel, backend.id, promptTokens, outputTokens,
         Date.now() - (requestMeta.startedAt || Date.now()),
-        requestMeta.originalModel || null);
+        requestMeta.capability || null);
       clearBackendCooldown(backend.id);
       if (shouldJournal(requestMeta.capability)) {
         let parsedResponse = null;
