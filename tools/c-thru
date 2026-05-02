@@ -811,13 +811,24 @@ validate_model_map_config() {
 validate_model_map_config || exit 1
 
 is_llm_profile_alias() {
-  case "$1" in
-    classifier|explorer|reviewer|workhorse|coder|judge|orchestrator|reasoner|fast-scout|agentic-coder|general-default)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
+  # Check against live llm_profiles keys first (handles any schema version).
+  # Falls back to hardcoded list when CONFIG is unavailable.
+  local name="$1"
+  if [[ -f "${CONFIG:-}" ]]; then
+    jq -e --arg n "$name" '(.llm_profiles // {}) | has($n)' "$CONFIG" >/dev/null 2>&1 && return 0
+  fi
+  # v2 pipeline + utility capabilities (20 agents)
+  case "$name" in
+    planner|planner-hard|explore|coder|coder-fallback|tester|docs|\
+    reviewer-routine|reviewer-security|\
+    debugger-hypothesis|debugger-investigate|debugger-hard|\
+    vision|pdf|writer|edge|generalist|fast-generalist|fast-scout|long-context)
+      return 0 ;;
+    # v1 legacy names — kept for backwards-compat with old overrides
+    classifier|explorer|reviewer|workhorse|judge|orchestrator|reasoner|\
+    agentic-coder|general-default)
+      return 0 ;;
+    *) return 1 ;;
   esac
 }
 
