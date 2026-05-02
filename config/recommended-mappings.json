@@ -33,9 +33,5 @@
       "128gb": "qwen3-coder:30b"
     }
   },
-  "agent_to_capability_defaults": {
-    "planner": "judge",
-    "review-plan": "judge",
-    "implementer": "deep-coder"
-  }
+  "agent_to_capability_defaults": {}
 }
