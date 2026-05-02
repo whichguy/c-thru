@@ -106,13 +106,24 @@ function reloadProxy() {
 }
 
 function die(msg) { process.stderr.write(`c-thru-config-helpers: ${msg}\n`); process.exit(1); }
-function arg(args, flagName) {
+
+/**
+  * @description Extract a flag value from args (e.g. '--tier', '--reload').
+  * @param {string[]} args - the full args array
+  * @param {string} flagName - flag to look for (e.g. '--tier')
+  * @returns {string|null} the flag value, or null if absent / invalid
+  */
+function extractFlagValue(args, flagName) {
   const i = args.indexOf(flagName);
   if (i === -1) return null;
   const val = args[i + 1];
   if (val === undefined || val.startsWith('--')) return null;
   return val;
 }
+
+/** @deprecated Renamed to extractFlagValue — wrapper kept for backward compat */
+function arg(args, flagName) { return extractFlagValue(args, flagName); }
+
 function hasFlag(args, flag) { return args.includes(flag); }
 
 // ── Subcommand: resolve ────────────────────────────────────────────────────────
@@ -128,7 +139,7 @@ function cmdResolve(args) {
 
   const selected = readSelectedConfig();
   const config = selected.config;
-  const { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, LLM_MODE_ENUM } = loadResolve();
+  const { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, LLM_MODE_ENUM, MODEL_PIN_PREFIX } = loadResolve();
 
   const mode     = resolveLlmMode(config);
   const tier     = resolveActiveTier(config);
@@ -137,6 +148,31 @@ function cmdResolve(args) {
   if (!capAlias) {
     process.stderr.write(`c-thru-config-helpers: unknown capability or agent: ${JSON.stringify(input)}\n`);
     process.exit(2);
+  }
+
+  const envMode = process.env.CLAUDE_LLM_MODE;
+  const modeSource = envMode
+    ? 'CLAUDE_LLM_MODE env'
+    : (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) ? `${selected.path} (${selected.source})` : 'default';
+
+  // model: prefix — agent is pinned directly to a model, bypassing capability tiers.
+  if (capAlias.startsWith(MODEL_PIN_PREFIX)) {
+    const pinnedModel = capAlias.slice(MODEL_PIN_PREFIX.length);
+    if (!pinnedModel.trim()) {
+      die(`agent '${input}' maps to 'model:' with empty model name — fix the override`);
+    }
+    const target = resolveTerminalTarget(config, pinnedModel);
+    const providerModel = target ? target.providerModel : pinnedModel;
+    process.stdout.write(providerModel + '\n');
+    process.stderr.write(`  capability:  [pinned]  (via agent: ${input})\n`);
+    process.stderr.write(`  mode:        ${mode}  (${modeSource})  [ignored — direct model pin]\n`);
+    process.stderr.write(`  hw tier:     ${tier}  [ignored — direct model pin]\n`);
+    process.stderr.write(`  config:      ${selected.path}  (${selected.source})\n`);
+    if (target) {
+      process.stderr.write(`  target:      ${target.targetId}\n`);
+      process.stderr.write(`  backend:     ${target.backendId}\n`);
+    }
+    return;
   }
 
   const profile  = (config.llm_profiles || {})[tier];
@@ -153,11 +189,6 @@ function cmdResolve(args) {
   if (!resolved) { die(`resolveProfileModel returned empty for ${JSON.stringify(capAlias)}`); }
   const target = resolveTerminalTarget(config, resolved);
   const providerModel = target ? target.providerModel : resolved;
-
-  const envMode = process.env.CLAUDE_LLM_MODE;
-  const modeSource = envMode
-    ? 'CLAUDE_LLM_MODE env'
-    : (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) ? `${selected.path} (${selected.source})` : 'default';
 
   process.stdout.write(providerModel + '\n');
   process.stderr.write(`  capability:  ${capAlias}${input !== capAlias ? `  (via agent: ${input})` : ''}\n`);
@@ -184,7 +215,7 @@ function cmdModeRead(_args) {
     'cloud-best-quality', 'local-best-quality',
     'local-only', 'cloud-thinking', 'local-review',
     'cloud-only', 'claude-only', 'opensource-only',
-    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud'
+    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local'
   ]);
   let config = {}, overrides = {};
   try { config    = JSON.parse(fs.readFileSync(MAP_PATH,       'utf8')); } catch {}
@@ -215,7 +246,7 @@ function cmdModeWrite(args) {
     'cloud-best-quality', 'local-best-quality',
     'local-only', 'cloud-thinking', 'local-review',
     'cloud-only', 'claude-only', 'opensource-only',
-    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud'
+    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local'
   ]);
   const mode = args[0];
   if (!mode || !VALID.has(mode)) {
@@ -346,20 +377,168 @@ function cmdBackend(args) {
   }
 }
 
+// ── Subcommand: agent-list / agent-set / agent-pin / agent-reset ───────────────
+
+function cmdAgentList(_args) {
+  const selected = readSelectedConfig();
+  const config = selected.config;
+  const resolve = loadResolve();
+  const { MODEL_PIN_PREFIX, resolveActiveTier, resolveLlmMode, resolveProfileModel } = resolve;
+  const tier = resolveActiveTier(config);
+  const mode = resolveLlmMode(config);
+  const profiles = (config.llm_profiles || {})[tier] || {};
+  const a2c = config.agent_to_capability || {};
+
+  let overriddenAgents = new Set();
+  try {
+    const ov = JSON.parse(fs.readFileSync(OVERRIDES_PATH, 'utf8'));
+    overriddenAgents = new Set(Object.keys((ov && ov.agent_to_capability) || {}));
+  } catch {}
+
+  if (Object.keys(a2c).length === 0) {
+    process.stdout.write('No agent_to_capability entries found in config.\n');
+    return;
+  }
+
+  const rows = [];
+  for (const [agent, capVal] of Object.entries(a2c)) {
+    let capDisplay, modelDisplay;
+    if (typeof capVal === 'string' && capVal.startsWith(MODEL_PIN_PREFIX)) {
+      capDisplay = '[pinned]';
+      modelDisplay = capVal.slice(MODEL_PIN_PREFIX.length);
+    } else {
+      capDisplay = capVal || '(none)';
+      const entry = profiles[capVal];
+      const m = entry ? resolveProfileModel(entry, mode) : null;
+      modelDisplay = m || '(unresolved)';
+    }
+    rows.push({ agent, cap: capDisplay, model: modelDisplay, overridden: overriddenAgents.has(agent) });
+  }
+
+  const w1 = Math.max(5, ...rows.map(r => r.agent.length));
+  const w2 = Math.max(10, ...rows.map(r => r.cap.length));
+  process.stdout.write(` ${'AGENT'.padEnd(w1)}  ${'CAPABILITY'.padEnd(w2)}  MODEL\n`);
+  process.stdout.write(` ${'-'.repeat(w1)}  ${'-'.repeat(w2)}  ${'-'.repeat(40)}\n`);
+  for (const r of rows) {
+    process.stdout.write(`${r.overridden ? '*' : ' '}${r.agent.padEnd(w1)}  ${r.cap.padEnd(w2)}  ${r.model}\n`);
+  }
+  if (overriddenAgents.size > 0) {
+    process.stdout.write('\n* = user override (in model-map.overrides.json)\n');
+  }
+}
+
+function cmdAgentSet(args) {
+  const positional = args.filter(a => !a.startsWith('--'));
+  const [agent, capability] = positional;
+  if (!agent || !capability) { die('usage: agent-set <agent> <capability> [--tier <tier>] [--reload]'); }
+
+  // Use the full effective config (system + global + project) for validation,
+  // so project-local capabilities are recognized alongside profile-level ones.
+  const selected = readSelectedConfig();
+  const config = selected.config;
+  const { resolveActiveTier } = loadResolve();
+
+  // Resolve tier: explicit --tier flag, active tier, or auto-detect.
+  const explicitTier = (function extractTier(args) {
+    const idx = args.indexOf('--tier');
+    if (idx < 0 || idx + 1 >= args.length) return null;
+    return args[idx + 1];
+  })(args);
+
+  const allProfiles = config.llm_profiles || {};
+  const activeTier = resolveActiveTier(config);
+
+  let tier;
+  if (explicitTier) {
+    tier = explicitTier;
+    const tierProfiles = allProfiles[tier] || {};
+    if (!Object.prototype.hasOwnProperty.call(tierProfiles, capability)) {
+      die(`unknown capability '${capability}' for tier '${tier}'. Valid: ${Object.keys(tierProfiles).sort().join(', ')}`);
+    }
+  } else {
+    // Find which tier(s) have this capability.
+    const candidateTiers = [];
+    for (const [t, prof] of Object.entries(allProfiles)) {
+      if (Object.prototype.hasOwnProperty.call(prof, capability)) candidateTiers.push(t);
+    }
+
+    if (candidateTiers.length === 0) {
+      const activeProf = allProfiles[activeTier] || {};
+      die(`unknown capability '${capability}' for tier '${activeTier}'. Valid: ${Object.keys(activeProf).sort().join(', ')}`);
+    }
+
+    if (candidateTiers.length === 1) {
+      tier = candidateTiers[0];
+    } else if (candidateTiers.includes(activeTier)) {
+      tier = activeTier;
+    } else {
+      tier = candidateTiers[0];
+    }
+  }
+
+  runEdit(JSON.stringify({ agent_to_capability: { [agent]: capability } }));
+  process.stdout.write(`mapped ${agent} → ${capability} (tier: ${tier})\n`);
+  if (hasFlag(args, '--reload')) {
+    reloadProxy();
+  } else {
+    process.stdout.write(`run '/c-thru-config reload' to apply to running proxy\n`);
+  }
+}
+
+function cmdAgentPin(args) {
+  const positional = args.filter(a => !a.startsWith('--'));
+  const [agent, model] = positional;
+  if (!agent || !model) { die('usage: agent-pin <agent> <model> [--reload]'); }
+
+  const { MODEL_PIN_PREFIX } = loadResolve();
+  runEdit(JSON.stringify({ agent_to_capability: { [agent]: MODEL_PIN_PREFIX + model } }));
+  process.stdout.write(`pinned ${agent} → ${model} directly (bypasses capability tier)\n`);
+  if (hasFlag(args, '--reload')) {
+    reloadProxy();
+  } else {
+    process.stdout.write(`run '/c-thru-config reload' to apply to running proxy\n`);
+  }
+}
+
+function cmdAgentReset(args) {
+  const positional = args.filter(a => !a.startsWith('--'));
+  const [agent] = positional;
+  if (!agent) { die('usage: agent-reset <agent> [--reload]'); }
+
+  try {
+    const systemConfig = JSON.parse(fs.readFileSync(SYSTEM_PATH, 'utf8'));
+    if (!Object.prototype.hasOwnProperty.call(systemConfig.agent_to_capability || {}, agent)) {
+      process.stdout.write(`warning: '${agent}' has no system-default entry — reset will leave it unmapped\n`);
+    }
+  } catch {}
+
+  runEdit(JSON.stringify({ agent_to_capability: { [agent]: null } }));
+  process.stdout.write(`reset ${agent} → system default\n`);
+  if (hasFlag(args, '--reload')) {
+    reloadProxy();
+  } else {
+    process.stdout.write(`run '/c-thru-config reload' to apply to running proxy\n`);
+  }
+}
+
 // ── Main dispatch ──────────────────────────────────────────────────────────────
 
 const USAGE = `
 c-thru-config-helpers — shared config operations for /c-thru-config skill
 
 Subcommands:
-  resolve   <capability>                         resolve capability/agent → model
-  mode-read                                      show active mode + source
-  mode-write <mode> [--reload]                   set llm_mode in overrides
-  remap      <tier> <cap> <model> [--reload]     rebind connected+disconnect model
-  set-cloud-best <tier> <cap> <model> [--reload] set cloud_best_model
-  set-local-best <tier> <cap> <model> [--reload] set local_best_model
-  route      <model> <backend> [--reload]        bind model → backend
+  resolve    <capability>                         resolve capability/agent → model
+  mode-read                                       show active mode + source
+  mode-write <mode> [--reload]                    set llm_mode in overrides
+  remap      <tier> <cap> <model> [--reload]      rebind connected+disconnect model
+  set-cloud-best <tier> <cap> <model> [--reload]  set cloud_best_model
+  set-local-best <tier> <cap> <model> [--reload]  set local_best_model
+  route      <model> <backend> [--reload]         bind model → backend
   backend    <name> <url> [--kind k] [--auth-env VAR] [--reload]  add/update backend
+  agent-list                                      show agent → capability → model table (* = overridden)
+  agent-set  <agent> <capability> [--reload]      map agent → capability alias (logical tier)
+  agent-pin  <agent> <model> [--reload]           pin agent directly to a model (bypass tiers)
+  agent-reset <agent> [--reload]                  restore system default for agent
 `.trimStart();
 
 const [,, subcmd, ...rest] = process.argv;
@@ -373,6 +552,10 @@ switch (subcmd) {
   case 'set-local-best': cmdSetLocalBest(rest); break;
   case 'route':          cmdRoute(rest);        break;
   case 'backend':        cmdBackend(rest);      break;
+  case 'agent-list':     cmdAgentList(rest);    break;
+  case 'agent-set':      cmdAgentSet(rest);     break;
+  case 'agent-pin':      cmdAgentPin(rest);     break;
+  case 'agent-reset':    cmdAgentReset(rest);   break;
   default:
     process.stdout.write(USAGE);
     process.exit(subcmd ? 1 : 0);

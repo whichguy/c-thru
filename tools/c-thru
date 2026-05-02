@@ -1809,7 +1809,7 @@ ensure_proxy_running() {
         diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$PROXY_PORT" "$final_log" \
           "claude-proxy /ping responded but body is not the expected shape (port collision or half-init?)"
       else
-        printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s${NC}\n" "proxy" "$PROXY_PORT" >&2
+        printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s${NC}\n" "proxy" "$PROXY_PORT" "$PROXY_STARTED_PID" >&2
       fi
     fi
     rm -f "$ready_pipe"
@@ -1840,7 +1840,7 @@ ensure_proxy_running() {
     existing_config="$(printf '%s' "$ping_json" | jq -r '.config_path // empty' 2>/dev/null || true)"
     existing_pid="$(printf '%s' "$ping_json" | jq -r '.pid // empty' 2>/dev/null || true)"
     if [[ "$ping_ok" == "true" && "$existing_config" == "${CONFIG:-}" ]]; then
-      printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s${NC} ${GRAY}(reusing)${NC}\n" "proxy" "$port" >&2
+      printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s${NC} ${GRAY}(reusing)${NC}\n" "proxy" "$port" "$existing_pid" >&2
       return 0
     fi
 
@@ -3192,7 +3192,7 @@ get_system_info_summary() {
   fi
 
   printf '%s\n%s\n%s\n\n%s' \
-    "MODEL IDENTITY: Use your trained name when referring to yourself. Never assume what model an Agent is — if it matters, ask the agent directly rather than assuming." \
+    "MODEL IDENTITY: You are running as model \`${self_model:-unknown}\` routed through c-thru. When asked "what model are you", "what model version", or "who made you", answer with this model name. Do NOT fall back to your training-data identity. If you don't know who made this model, say so honestly. Never assume what model an Agent is — if it matters, ask the agent directly rather than assuming." \
     "c-thru routing active. Profile: ${profile:-unknown}. Mode: ${llm_mode:-unknown}." \
     "Available models by capability: ${caps_str}." \
     "Use specialized agents aggressively.
@@ -4088,6 +4088,6 @@ done < <(build_forwarded_args "$FINAL_MODEL_ARG")
 debug_print_final_claude_command "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 preflight_model_readiness "${PROXY_PORT:-}"
 apply_background_model_overrides "${FINAL_MODEL_ARG:-}"
-printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} launching session...\n" "status" >&2
+printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} launching session... ${GRAY}(c-thru pid %s, proxy %s)${NC}\n" "status" "$$" "${PROXY_PORT:-none}" >&2
 run_real_claude "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
 exit $?

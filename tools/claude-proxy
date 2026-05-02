@@ -14,6 +14,7 @@ const { resolveSelectedConfigPath } = require('./model-map-config.js');
 
 const configStorage = new AsyncLocalStorage();
 const {
+  MODEL_PIN_PREFIX,
   resolveProfileModel,
   resolveLlmMode,
   resolveActiveTier,
@@ -481,31 +482,47 @@ function isLocalBackend(backend) {
 //   (no auth config)  → passthrough: forward incoming auth verbatim
 function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders) {
   const auth = backend.auth;
-  if (auth === 'none') {
-    delete outgoingHeaders['authorization'];
-    delete outgoingHeaders['x-api-key'];
+  const incomingAuth = incomingHeaders['authorization'];
+  const incomingKey = incomingHeaders['x-api-key'];
+
+  // Priority 1: Incoming Bearer token from the client.
+  // "only in the case we don't have incoming bearer, then use the key."
+  if (incomingAuth && incomingAuth.startsWith('Bearer ')) {
+    outgoingHeaders['authorization'] = incomingAuth;
     return;
   }
+
+  // Priority 2: Configured auth via auth_env or auth object.
   if (backend.auth_env) {
-    delete outgoingHeaders['authorization'];
-    delete outgoingHeaders['x-api-key'];
     const value = process.env[backend.auth_env] || '';
-    if (value) outgoingHeaders['authorization'] = `Bearer ${value}`;
-    return;
-  }
-  if (auth && typeof auth === 'object') {
-    delete outgoingHeaders['authorization'];
-    delete outgoingHeaders['x-api-key'];
+    if (value) {
+      if (backend.kind === 'anthropic') {
+        outgoingHeaders['x-api-key'] = value;
+      } else {
+        outgoingHeaders['authorization'] = `Bearer ${value}`;
+      }
+    }
+  } else if (auth && typeof auth === 'object') {
     const header = (auth.header || 'Authorization').toLowerCase();
     const schemeDefault = header === 'authorization' ? 'Bearer' : '';
     const scheme = auth.scheme != null ? auth.scheme : schemeDefault;
     const value = auth.literal != null ? auth.literal : (auth.env ? process.env[auth.env] || '' : '');
     if (value) outgoingHeaders[header] = scheme ? `${scheme} ${value}` : value;
-    return;
+  } else {
+    // Priority 3: Passthrough original headers if no explicit override exists.
+    if (incomingAuth && !outgoingHeaders['authorization']) {
+      outgoingHeaders['authorization'] = incomingAuth;
+    }
+    if (incomingKey && !outgoingHeaders['x-api-key']) {
+      outgoingHeaders['x-api-key'] = incomingKey;
+    }
   }
-  // Passthrough: forward incoming Authorization/x-api-key verbatim
-  if (incomingHeaders['authorization']) outgoingHeaders['authorization'] = incomingHeaders['authorization'];
-  if (incomingHeaders['x-api-key']) outgoingHeaders['x-api-key'] = incomingHeaders['x-api-key'];
+
+  // Default: Ollama backends (kind:"ollama") often use 'Bearer ollama' as a dummy
+  // token for their /v1/messages adapter. If no other Authorization header is set, inject it.
+  if (backend.kind === 'ollama' && !outgoingHeaders['authorization']) {
+    outgoingHeaders['authorization'] = 'Bearer ollama';
+  }
 }
 
 function resolveBackend(model, cfg, tier, mode, _seen) {
@@ -569,6 +586,15 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
 
   const capAlias = resolveCapabilityAlias(model, cfg, tier);
   if (capAlias) {
+    if (capAlias.startsWith(MODEL_PIN_PREFIX)) {
+      const pinnedModel = capAlias.slice(MODEL_PIN_PREFIX.length);
+      if (!pinnedModel.trim()) {
+        return { error: `agent_to_capability resolves to 'model:' with empty model name`, status: 400 };
+      }
+      const nested = resolveBackend(pinnedModel, cfg, tier, mode, seen);
+      if (nested.error) return nested;
+      return { ...nested, logicalRole: nested.logicalRole || model, capability: model };
+    }
     const profile = (cfg.llm_profiles || {})[tier];
     const entry = profile ? profile[capAlias] : null;
     if (entry) {
@@ -699,17 +725,10 @@ function flattenMessagesForOllama(body) {
 function scrubCthruHeaders(headers) {
   const out = { ...headers };
   delete out.host;
-  delete out.connection;
   // Drop content-length: the proxy rewrites the request body before forwarding —
   // model name swap, message flattening, keep_alive injection — so the original
-  // length is wrong by some non-deterministic delta. Even a one-byte model-name
-  // change (e.g. "claude-sonnet-4-6" → "qwen3.6:35b-a3b-coding-nvfp4") shifts it.
-  // Forwarding the stale length causes upstream 400s when the new body is
-  // shorter, or hangs when longer. Removing it lets Node recompute.
+  // length is wrong by some non-deterministic delta.
   delete out['content-length'];
-  // Cookie headers must never cross the proxy boundary regardless of auth config.
-  delete out['cookie'];
-  delete out['set-cookie'];
   // Remove any x-c-thru specific headers if they exist
   for (const k of Object.keys(out)) {
     if (k.toLowerCase().startsWith('x-c-thru-')) delete out[k];
@@ -884,6 +903,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
       chain_depth: chain.size + 1,
       hops_skipped_cooldown: hopsWalked,
     });
+    requestMeta._fallbackFrom = requestMeta._fallbackFrom || backend.id;
     body.model = resolved.effectiveModel;
     if (isOllamaLegacy(resolved.backend)) {
       dispatchOllamaBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
@@ -1832,6 +1852,28 @@ async function forwardOllamaLegacy(ctx, req, res, body, backend, effectiveModel,
   up.end();
 }
 
+// ── Network Watcher ──────────────────────────────────────────────────
+// On macOS (Darwin), monitors internet reachability via `scutil -r google.com`.
+// When connectivity transitions from Not Reachable → Reachable, immediately
+// clear all backend cooldowns.
+let isOnlineLast = true;
+function startNetworkWatcher() {
+  if (process.platform !== 'darwin') return;
+
+  const interval = 5000;
+  setInterval(() => {
+    require('child_process').exec('scutil -r google.com', (err, stdout) => {
+      const isOnline = !err && stdout.includes('Reachable') && !stdout.includes('Not Reachable');
+      if (isOnline && !isOnlineLast) {
+        proxyLog('network.restored', { message: 'Internet reachability restored; clearing all backend cooldowns' });
+        failedBackendUntil.clear();
+      }
+      isOnlineLast = isOnline;
+    });
+  }, interval);
+  proxyLog('network.watcher_init', { platform: process.platform, interval_ms: interval });
+}
+
 // ── Config loading & reload ────────────────────────────────────────────
 function loadConfig() {
   const resolved = resolveConfigSelectionForReload();
@@ -1879,8 +1921,45 @@ function resolveConfigSelectionForReload() {
   return resolveSelectedConfigPath({ baseDir: __dirname, syncProfile: false });
 }
 
+// Check if model-map.json is older than either system.json or overrides.json.
+// If so, re-run model-map-sync.js to regenerate the merged file. This handles
+// the case where a user manually edits overrides without running model-map-edit
+// (which normally re-merges atomically after every edit).
+function maybeRegenerateMergedConfig() {
+  const claudeDir = path.join(os.homedir(), '.claude');
+  const systemPath = path.join(claudeDir, 'model-map.system.json');
+  const overridesPath = path.join(claudeDir, 'model-map.overrides.json');
+  const mergedPath = path.join(claudeDir, 'model-map.json');
+  let mergedMtime = 0;
+  try { mergedMtime = fs.statSync(mergedPath).mtimeMs; } catch {}
+
+  let needSync = false;
+  try {
+    if (fs.statSync(systemPath).mtimeMs > mergedMtime) needSync = true;
+    if (fs.statSync(overridesPath).mtimeMs > mergedMtime) needSync = true;
+  } catch {}
+
+  if (!needSync) return;
+
+  // Run model-map-sync to regenerate.
+  const syncTool = path.join(__dirname, 'model-map-sync.js');
+  if (!fs.existsSync(syncTool)) return;
+  try {
+    const result = require('child_process').spawnSync(
+      process.execPath,
+      [syncTool, systemPath, overridesPath, '', mergedPath],
+      { encoding: 'utf8', timeout: 5000 }
+    );
+    if (result.status === 0) {
+      console.error(`c-thru: regenerated merged config from sources (system + overrides)`);
+    }
+  } catch {}
+}
+
 function reloadConfigFromDisk() {
   try {
+    // Check if merged file is stale vs sources; re-merge if needed.
+    maybeRegenerateMergedConfig();
     const resolved = resolveConfigSelectionForReload();
     if (!resolved) throw new Error('no model-map.json found');
     const nextConfig = JSON.parse(fs.readFileSync(resolved.path, 'utf8'));
@@ -1909,8 +1988,37 @@ function refreshConfigIfChanged() {
   } catch {}
 }
 
+// ── Config file watcher ───────────────────────────────────────────────
+// Watch the resolved config path so any edit (including model-map-edit
+// writing overrides + merged profile) triggers an automatic reload.
+// Eliminates the need for manual /c-thru-config reload in most cases.
+let configWatchHandle = null;
+function armConfigWatcher(configPath) {
+  if (configWatchHandle) fs.unwatchFile(configWatchHandle);
+  if (!configPath) return;
+  try {
+    configWatchHandle = fs.watchFile(configPath, { interval: 1007 }, (curr, _prev) => {
+      if (curr.mtimeMs !== CONFIG_MTIME_MS) {
+        const drained = reloadConfigFromDisk();
+        if (drained) {
+          // If the reload resolved a different path, re-arm on the new path.
+          if (CONFIG_PATH !== configPath) armConfigWatcher(CONFIG_PATH);
+        } else {
+          // If reload failed but the file changed, still update our mtime
+          // so we don't keep retrying on unchanged files.
+          try {
+            CONFIG_MTIME_MS = Math.floor(fs.statSync(configPath).mtimeMs);
+          } catch {}
+        }
+      }
+    });
+  } catch {}
+}
+
 // ── Main Server ──────────────────────────────────────────────────────
 loadConfig();
+armConfigWatcher(CONFIG_PATH);
+startNetworkWatcher();
 if (UNRECOGNIZED_CLI_FLAGS.length) {
   proxyLog('cli.unrecognized_flags', { flags: UNRECOGNIZED_CLI_FLAGS });
 }
@@ -1942,14 +2050,48 @@ const server = http.createServer((req, res) => {
 
       if (req.url === '/ping') return send(res, 200, { ok: true, pid: process.pid, config_path: CONFIG_PATH, active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG), bind_address: server.address().address });
 
-      if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/')) {
+      if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/' || req.url.startsWith('/c-thru/status?'))) {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
-        const active_capabilities = {};
         const profiles = (CONFIG.llm_profiles || {})[tier] || {};
+        const active_capabilities = {};
         for (const [alias, entry] of Object.entries(profiles)) {
           const m = resolveProfileModel(entry, mode);
           if (m) active_capabilities[alias] = m.replace(BACKEND_SIGIL_RE, '$1');
+        }
+        // agent_resolutions: overridden agents only by default; ?verbose=1 shows all.
+        let verboseFlag = false;
+        try { verboseFlag = new URL(req.url, 'http://x').searchParams.get('verbose') === '1'; } catch {}
+        const overridesPath = process.env.CLAUDE_MODEL_MAP_OVERRIDES_PATH
+          || path.join(os.homedir(), '.claude', 'model-map.overrides.json');
+        let overriddenAgents = new Set();
+        try {
+          const ov = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
+          overriddenAgents = new Set(Object.keys((ov && ov.agent_to_capability) || {}));
+        } catch {}
+        const allA2c = CONFIG.agent_to_capability || {};
+        const agentKeys = verboseFlag
+          ? Object.keys(allA2c)
+          : [...overriddenAgents].filter(k => k in allA2c);
+        const agent_resolutions = {};
+        for (const agent of agentKeys) {
+          const capVal = allA2c[agent];
+          if (typeof capVal === 'string' && capVal.startsWith(MODEL_PIN_PREFIX)) {
+            agent_resolutions[agent] = {
+              capability: '[pinned]',
+              model: capVal.slice(MODEL_PIN_PREFIX.length),
+              pinned: true,
+            };
+          } else {
+            const profEntry = profiles[capVal];
+            let resolvedModel = profEntry ? resolveProfileModel(profEntry, mode) : null;
+            if (resolvedModel) resolvedModel = resolvedModel.replace(BACKEND_SIGIL_RE, '$1');
+            agent_resolutions[agent] = {
+              capability: capVal || null,
+              model: resolvedModel || null,
+              pinned: false,
+            };
+          }
         }
         return send(res, 200, {
           ok: true,
@@ -1957,6 +2099,7 @@ const server = http.createServer((req, res) => {
           hardware_tier: tier,
           config_source: CONFIG_SOURCE,
           active_capabilities,
+          agent_resolutions,
           usage: persistentUsage,
           // Cooldown state — backends the proxy is currently routing around.
           // Empty array when all configured backends are healthy.
@@ -2161,6 +2304,19 @@ const server = http.createServer((req, res) => {
         });
 
         body.model = effectiveModel;
+
+        // ── Cooldown skip ──
+        // If the primary resolved backend is in cooldown, jump directly to the
+        // fallback logic instead of paying the TTFT cost of a known-bad backend.
+        if (backend.fallback_to && isInCooldown(backend.id)) {
+          ctxLog(ctx, 'dispatch.skip_cooldown', { backend: backend.id, fallback: backend.fallback_to });
+          const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
+            reason: 'backend is in cooldown from a previous failure',
+            statusCode: 0
+          });
+          if (handled) return;
+        }
+
         if (isOllamaLegacy(backend)) {
           return dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }

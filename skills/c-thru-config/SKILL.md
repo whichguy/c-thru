@@ -4,7 +4,7 @@ description: |
   Unified c-thru configuration: diagnose the active setup, resolve what a
   capability alias maps to, switch connectivity modes, remap per-capability
   models, validate the config, or reload the running proxy.
-  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | validate | reload | restart [--force]
+  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | agent list | agent set <agent> <cap> [--reload] | agent pin <agent> <model> [--reload] | agent reset <agent> [--reload] | validate | reload | restart [--force]
 color: cyan
 ---
 
@@ -13,26 +13,92 @@ color: cyan
 ## Routing
 
 Parse the first word of `$ARGUMENTS` as `SUBCOMMAND`. Route to the matching
-section below. If `$ARGUMENTS` is empty or the subcommand is unrecognized,
-print the usage block:
+section below.
 
-```
-Usage:
-  /c-thru-config diag [--verbose]                                            full diagnostics view
-  /c-thru-config resolve <capability>                                        what does X resolve to right now?
-  /c-thru-config mode [<mode>] [--reload]                                    read or set connectivity mode
-  /c-thru-config remap <cap> <model> [--tier <tier>] [--reload]              rebind a capability → model
-  /c-thru-config set-cloud-best-model <cap> <model> [--tier <tier>] [--reload]  set cloud_best_model for a capability
-  /c-thru-config set-local-best-model <cap> <model> [--tier <tier>] [--reload]  set local_best_model for a capability
-  /c-thru-config route <model> <backend> [--reload]                          bind a model name → backend
-  /c-thru-config backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload]  add/update a backend
-  /c-thru-config validate                                                    schema check
-  /c-thru-config reload                                                      SIGHUP the running proxy
-  /c-thru-config restart [--force]                                           full proxy restart
-  /c-thru-config planning [...]                                              toggle EnterPlanMode planner hint
+### NL fallthrough
 
-Modes: connected | offline | local-only | semi-offload | cloud-judge-only | cloud-thinking | local-review | cloud-best-quality | local-best-quality | cloud-only | claude-only | opensource-only | fastest-possible | smallest-possible | best-opensource | best-opensource-cloud
-```
+If `$ARGUMENTS` is empty or the `SUBCOMMAND` is not a known subcommand, treat
+the **full `$ARGUMENTS`** as a natural-language intent. Do NOT print static
+usage. Instead, interpret what the user wants and map it to the correct
+subcommand below, constructing the arguments as needed. Ask one short
+clarifying question only if the intent is genuinely ambiguous.
+
+**Intent mapping table** — map user phrasing to concrete actions:
+
+| User says (examples) | Action | Notes |
+|---|---|---|
+| "switch to offline", "go offline", "offline mode", "disconnect" | `mode offline --reload` | apply immediately |
+| "switch to connected", "go online", "connected mode" | `mode connected --reload` | apply immediately |
+| "use best opensource cloud", "best open source" | `mode best-opensource-cloud --reload` | |
+| "what mode am I in", "show mode", "current mode" | `mode` (read) | |
+| "use <model> for <cap>", "make <cap> use <model>", "set <cap> to <model>" | `remap <cap> <model>` [--tier] | e.g. "use qwen for coding" → `remap coder qwen3-coder-next:cloud`; default tier is active |
+| "set cloud model for <cap> to <model>" | `set-cloud-best-model <cap> <model>` [--tier] | |
+| "set local model for <cap> to <model>" | `set-local-best-model <cap> <model>` [--tier] | |
+| "route <model> to <backend>", "bind <model> → <backend>" | `route <model> <backend>` | |
+| "add backend <name> at <url>", "register backend" | `backend <name> <url>` [--kind] [--auth-env] | |
+| "list agents", "show agents", "agent table" | `agent list` | |
+| "pin <agent> to <model>", "force <agent> to use <model>" | `agent pin <agent> <model> --reload` | apply immediately |
+| "reset <agent>", "restore default for <agent>" | `agent reset <agent> --reload` | apply immediately |
+| "move <agent> to <cap>", "set <agent> capability to <cap>" | `agent set <agent> <cap> --reload` | |
+| "validate", "check config" | `validate` | |
+| "reload", "refresh proxy" | `reload` | |
+| "restart proxy", "bounce proxy", "bounce the proxy" | `restart` | |
+| "restart proxy force", "force restart" | `restart --force` | |
+| "diagnostics", "diag", "what's happening", "status", "show status", "health" | `diag [--verbose]` | |
+| "verbose diagnostics", "detailed status" | `diag --verbose` | |
+| "what does <cap> resolve to", "what model is <agent>", "what is <cap>" | `resolve <cap_or_agent>` | |
+| "disable planner hint", "stop planning hints" | `planning off` | |
+| "enable planner hint", "start planning hints" | `planning on` | |
+| "toggle planner hint", "flip planner hint" | toggle → planning (infer current state, then enable/disable) | |
+
+**Capability/agent reference table** — when the user mentions a capability or
+agent by a natural-language role, resolve to the canonical key:
+
+| User says | Canonical capability/agent |
+|---|---|
+| "coding", "code", "coder" | `coder` |
+| "workhorse", "general", "default model" | `workhorse` |
+| "judge", "evaluator", "judging" | `judge` |
+| "orchestrator", "planner", "planning" (agent, not /c-thru-config planning) | `orchestrator` |
+| "explorer", "discovery", "search" | `explorer` |
+| "reviewer", "review", "code review" | `reviewer` |
+| "classifier", "fast generalist", "fast" | `classifier` |
+| "reasoner", "reasoning", "deep reasoning" | `reasoner` |
+| "deep coder", "deep coding" | `deep-coder` |
+| "implementer", "implementation" | `implementer` |
+| "fast coder", "fast coding" | `fast-coder` |
+| "agentic coder", "agentic" | `agentic-coder` |
+| "generalist", "generalist" | `generalist` |
+| "vision", "image", "screenshot" | `vision` |
+| "pdf", "document reading" | `pdf` |
+| "writer", "writing", "prose" | `writer` |
+| "scout", "fast scout" | `fast-scout` |
+| "code analyst", "light code review" | `code-analyst-light` |
+| "refactor" | `refactor` |
+| "edge", "small tasks" | `edge` |
+| "long context", "large context" | `long-context` |
+
+**Model name shorthand** — when the user mentions a model by a short/partial
+name, expand to the full tag registered in `model_routes`:
+
+| User says | Full model tag |
+|---|---|
+| "qwen coder", "qwen code" | `qwen3-coder-next:cloud` |
+| "qwen 35b", "qwen coding" | `qwen3.6:35b-a3b-coding-nvfp4` or `qwen3.6:35b-a3b-coding-mxfp8` (ask if ambiguous) |
+| "qwen 27b", "qwen fast" | `qwen3.6:27b-coding-nvfp4` |
+| "deepseek r1", "r1" | `deepseek-r1:32b` |
+| "deepseek v4", "ds v4" | `deepseek-v4-pro:cloud` |
+| "gemma 4", "gemma" | `gemma4:26b` |
+| "gemma e2b" | `gemma4:e2b` |
+| "sonnet", "claude sonnet" | `claude-sonnet-4-6` |
+| "opus", "claude opus" | `claude-opus-4-7` |
+| "haiku", "claude haiku" | `claude-haiku-4-5-20251001` |
+| "devstral", "devstral small" | `devstral-small-2:24b` |
+| "mistral", "mistral small" | `mistral-small3.1:24b` |
+| "gpt oss" | `gpt-oss:20b` |
+
+After constructing the subcommand and arguments from the intent table, execute
+that subcommand's block exactly as if the user had typed it directly.
 
 ---
 
@@ -516,6 +582,74 @@ rl.on('close', () => {
   " 2>/dev/null
 fi
 ```
+
+---
+
+## Subcommand: `agent`
+
+**Usage:** `/c-thru-config agent <list|set|pin|reset> [...]`
+
+Override which model an agent uses without editing `config/model-map.json` (system config is read-only). Changes are written to `~/.claude/model-map.overrides.json` and merged at runtime.
+
+Two override modes:
+- **Logical remap** (`set`): change which capability tier an agent routes through (e.g. point `implementer` at `judge` instead of `deep-coder`)
+- **Direct pin** (`pin`): skip the capability tier entirely and route an agent straight to a specific model tag
+
+### Verb: `list`
+
+```bash
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd 2>/dev/null)" || REPO_ROOT="${CLAUDE_PROFILE_DIR:-$HOME/.claude}/../.."
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-list
+```
+
+Prints a three-column table: `AGENT | CAPABILITY | MODEL`. Entries with user overrides are marked with `*`. Pinned entries show `[pinned]` in the capability column.
+
+### Verb: `set`
+
+**Usage:** `/c-thru-config agent set <agent> <capability> [--reload]`
+
+Map `<agent>` → `<capability>` alias (logical tier remap). `<capability>` must be a valid capability key in `llm_profiles[activeTier]` — use `/c-thru-config diag` to list valid values.
+
+Extract `<AGENT>`, `<CAPABILITY>`, and optional `--reload` from `$ARGUMENTS`. Both `<AGENT>` and `<CAPABILITY>` are required.
+
+```bash
+AGENT="<AGENT>"
+CAPABILITY="<CAPABILITY>"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-set "$AGENT" "$CAPABILITY" ${RELOAD_FLAG}
+```
+
+Substitute `${RELOAD_FLAG}` with `--reload` when present in `$ARGUMENTS`, otherwise empty.
+
+### Verb: `pin`
+
+**Usage:** `/c-thru-config agent pin <agent> <model> [--reload]`
+
+Pin `<agent>` directly to `<model>`, bypassing capability tier lookup. Uses `model:` prefix in `agent_to_capability` internally. The model is resolved through normal `model_routes` for backend lookup.
+
+Extract `<AGENT>`, `<MODEL>`, and optional `--reload` from `$ARGUMENTS`. Both `<AGENT>` and `<MODEL>` are required.
+
+```bash
+AGENT="<AGENT>"
+MODEL="<MODEL>"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-pin "$AGENT" "$MODEL" ${RELOAD_FLAG}
+```
+
+Substitute `${RELOAD_FLAG}` with `--reload` when present in `$ARGUMENTS`, otherwise empty.
+
+### Verb: `reset`
+
+**Usage:** `/c-thru-config agent reset <agent> [--reload]`
+
+Remove the user override for `<agent>`, restoring the system default. Null-deletes the key from `model-map.overrides.json`. If the agent has no system-default entry, a warning is printed.
+
+Extract `<AGENT>` and optional `--reload` from `$ARGUMENTS`.
+
+```bash
+AGENT="<AGENT>"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" agent-reset "$AGENT" ${RELOAD_FLAG}
+```
+
+Substitute `${RELOAD_FLAG}` with `--reload` when present in `$ARGUMENTS`, otherwise empty.
 
 ---
 
