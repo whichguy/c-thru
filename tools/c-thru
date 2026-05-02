@@ -1083,6 +1083,25 @@ log_llm_profile_selection() {
     local _sl_assignments
     _sl_assignments="$(collect_active_profile_capability_assignments "$launch_model")"
 
+    # Precompute model→endpoint map (single jq call).
+    local _sl_ep_map=""
+    if [[ -f "$CONFIG" ]]; then
+      _sl_ep_map="$(jq -r '
+        (.model_routes // {}) | to_entries[] |
+        .key as $k |
+        (.value | if type == "string" then . elif type == "object" then (.endpoint // "?") else "?" end) as $ep |
+        "\($k)\t\($ep)"
+      ' "$CONFIG" 2>/dev/null || true)"
+    fi
+
+    _sl_endpoint() {
+      local mdl="$1" k ep
+      while IFS=$'\t' read -r k ep; do
+        [[ "$k" == "$mdl" ]] && printf '%s' "$ep" && return 0
+      done <<< "$_sl_ep_map"
+      [[ "$mdl" == claude-* ]] && printf 'anthropic' || printf 'ollama_local'
+    }
+
     _sl_lookup() {
       local want="$1" slot model rec
       while IFS=$'\t' read -r slot model rec; do
@@ -1093,11 +1112,12 @@ log_llm_profile_selection() {
 
     _sl_print_row() {
       local slot="$1" model="$2"
+      local ep; ep="$(_sl_endpoint "$model")"
       if (( _sl_first )); then
-        printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-22s ${GRAY}→${NC} %s\n" "plan" "$slot" "$model" >&2
+        printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-22s ${GRAY}→${NC} %-38s ${GRAY}[%s]${NC}\n" "plan" "$slot" "$model" "$ep" >&2
         _sl_first=0
       else
-        printf "               ${BOLD}%-22s${NC} ${GRAY}→${NC} %s\n" "$slot" "$model" >&2
+        printf "               ${BOLD}%-22s${NC} ${GRAY}→${NC} %-38s ${GRAY}[%s]${NC}\n" "$slot" "$model" "$ep" >&2
       fi
     }
 
@@ -1838,7 +1858,16 @@ ensure_proxy_running() {
         diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$PROXY_PORT" "$final_log" \
           "claude-proxy /ping responded but body is not the expected shape (port collision or half-init?)"
       else
-        printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s${NC}\n" "proxy" "$PROXY_PORT" "$PROXY_STARTED_PID" >&2
+        local _ping_body _ptier _pmode
+        _ping_body="$(proxy_ping_json "$PROXY_PORT" 2>/dev/null || true)"
+        _ptier="$(printf '%s' "$_ping_body" | jq -r '.active_tier // empty' 2>/dev/null || true)"
+        _pmode="$(printf '%s' "$_ping_body" | jq -r '.active_mode // empty' 2>/dev/null || true)"
+        local _pcfg; _pcfg="$(printf '%s' "${CONFIG:-}" | sed "s|$HOME|~|")"
+        printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s${NC}" "proxy" "$PROXY_PORT" "$PROXY_STARTED_PID" >&2
+        [[ -n "$_pcfg" ]]  && printf "  ${GRAY}config=%s${NC}" "$_pcfg" >&2
+        [[ -n "$_ptier" ]] && printf "  ${GRAY}tier=%s${NC}" "$_ptier" >&2
+        [[ -n "$_pmode" ]] && printf "  ${GRAY}mode=%s${NC}" "$_pmode" >&2
+        printf "\n" >&2
       fi
     fi
     rm -f "$ready_pipe"
@@ -1869,7 +1898,15 @@ ensure_proxy_running() {
     existing_config="$(printf '%s' "$ping_json" | jq -r '.config_path // empty' 2>/dev/null || true)"
     existing_pid="$(printf '%s' "$ping_json" | jq -r '.pid // empty' 2>/dev/null || true)"
     if [[ "$ping_ok" == "true" && "$existing_config" == "${CONFIG:-}" ]]; then
-      printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s${NC} ${GRAY}(reusing)${NC}\n" "proxy" "$port" "$existing_pid" >&2
+      local _rcfg _rtier _rmode
+      _rcfg="$(printf '%s' "$ping_json" | jq -r '.config_path // empty' 2>/dev/null | sed "s|$HOME|~|" || true)"
+      _rtier="$(printf '%s' "$ping_json" | jq -r '.active_tier // empty' 2>/dev/null || true)"
+      _rmode="$(printf '%s' "$ping_json" | jq -r '.active_mode // empty' 2>/dev/null || true)"
+      printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s  (reusing)${NC}" "proxy" "$port" "$existing_pid" >&2
+      [[ -n "$_rcfg" ]]  && printf "  ${GRAY}config=%s${NC}" "$_rcfg" >&2
+      [[ -n "$_rtier" ]] && printf "  ${GRAY}tier=%s${NC}" "$_rtier" >&2
+      [[ -n "$_rmode" ]] && printf "  ${GRAY}mode=%s${NC}" "$_rmode" >&2
+      printf "\n" >&2
       return 0
     fi
 
@@ -3014,7 +3051,11 @@ ensure_ollama_running() {
     fi
   fi
 
-  [[ "$mode" == "active" ]] && _ollama_done "${GREEN}✓${NC}" "Ollama server" "$cli_host"
+  if [[ "$mode" == "active" ]]; then
+    local _ollama_model_count
+    _ollama_model_count="$(curl -sf --max-time 2 "${cli_host%/}/api/tags" 2>/dev/null | jq -r '.models | length' 2>/dev/null || true)"
+    _ollama_done "${GREEN}✓${NC}" "Ollama server" "${cli_host}${_ollama_model_count:+  (${_ollama_model_count} models available)}"
+  fi
   cthru_debug_event "ollama prep server_alive mode=$mode host=$cli_host"
 
   # --- Probe 2: is the model already loaded in VRAM? ---
