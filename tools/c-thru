@@ -1080,17 +1080,52 @@ log_llm_profile_selection() {
   fi
 
   if profile_has_capability_assignments "$launch_model"; then
-    local first=1
-    local slot model _rec
-    while IFS=$'\t' read -r slot model _rec; do
-      [[ -n "$slot" && -n "$model" ]] || continue
-      if (( first )); then
-        printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-12s ${GRAY}→${NC} %s\n" "plan" "$slot" "$model" >&2
-        first=0
+    local _sl_assignments
+    _sl_assignments="$(collect_active_profile_capability_assignments "$launch_model")"
+
+    _sl_lookup() {
+      local want="$1" slot model rec
+      while IFS=$'\t' read -r slot model rec; do
+        [[ "$slot" == "$want" ]] && printf '%s\t%s' "$slot" "$model" && return 0
+      done <<< "$_sl_assignments"
+      return 1
+    }
+
+    _sl_print_row() {
+      local slot="$1" model="$2"
+      if (( _sl_first )); then
+        printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-22s ${GRAY}→${NC} %s\n" "plan" "$slot" "$model" >&2
+        _sl_first=0
       else
-        printf "               ${BOLD}%-12s${NC} ${GRAY}→${NC} %s\n" "$slot" "$model" >&2
+        printf "               ${BOLD}%-22s${NC} ${GRAY}→${NC} %s\n" "$slot" "$model" >&2
       fi
-    done < <(collect_active_profile_capability_assignments "$launch_model")
+    }
+
+    local _sl_first=1
+    local _sl_slot _sl_model _sl_row
+    for _sl_slot in \
+        planner planner-hard explore \
+        coder coder-fallback tester docs \
+        reviewer-routine reviewer-security \
+        debugger-hypothesis debugger-investigate debugger-hard \
+        vision pdf writer edge generalist fast-generalist fast-scout long-context; do
+      _sl_row="$(_sl_lookup "$_sl_slot")" || continue
+      IFS=$'\t' read -r _sl_slot _sl_model <<< "$_sl_row"
+      _sl_print_row "$_sl_slot" "$_sl_model"
+    done
+    # Forward-compat: any capability not in the ordered list
+    local _sl_found
+    while IFS=$'\t' read -r _sl_slot _sl_model _; do
+      [[ -n "$_sl_slot" ]] || continue
+      _sl_found=0
+      for _s in planner planner-hard explore coder coder-fallback tester docs \
+                reviewer-routine reviewer-security \
+                debugger-hypothesis debugger-investigate debugger-hard \
+                vision pdf writer edge generalist fast-generalist fast-scout long-context; do
+        [[ "$_s" == "$_sl_slot" ]] && _sl_found=1 && break
+      done
+      (( _sl_found )) || _sl_print_row "$_sl_slot" "$_sl_model"
+    done <<< "$_sl_assignments"
   fi
 
   PROXY_PROFILE_SUMMARY_LOGGED=1
