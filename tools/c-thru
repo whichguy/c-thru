@@ -1089,7 +1089,13 @@ log_llm_profile_selection() {
       _sl_ep_map="$(jq -r '
         (.model_routes // {}) | to_entries[] |
         .key as $k |
-        (.value | if type == "string" then . elif type == "object" then (.endpoint // "?") else "?" end) as $ep |
+        # model_routes values: string "backend-id", v2 alias {"endpoint":...,"name":...},
+        # or mode-conditional {"connected":"backend","offline":"backend"} — take .endpoint
+        # for alias objects; for mode-conditional objects take the first string value found.
+        (.value | if type == "string" then .
+                  elif type == "object" then
+                    (.endpoint // (to_entries | map(select(.value | type == "string")) | .[0].value) // "?")
+                  else "?" end) as $ep |
         "\($k)\t\($ep)"
       ' "$CONFIG" 2>/dev/null || true)"
     fi
@@ -1850,24 +1856,29 @@ ensure_proxy_running() {
         start_ec=1
         diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$PROXY_PORT" "$final_log" \
           "claude-proxy did not answer /ping on :$PROXY_PORT within 2s"
-      elif ! verify_proxy_health "$PROXY_PORT"; then
-        # /ping returned something but it wasn't the expected {"ok":true,...}
-        # shape — port was likely already bound by an unrelated process when
-        # we tried to spawn (collision), or the proxy half-initialized.
-        start_ec=1
-        diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$PROXY_PORT" "$final_log" \
-          "claude-proxy /ping responded but body is not the expected shape (port collision or half-init?)"
       else
+        # Single /ping call: shape-check and capture tier/mode in one round-trip.
+        # verify_proxy_health() would call proxy_ping_json() internally then discard
+        # the body — inlining the check here avoids a duplicate HTTP round-trip.
         local _ping_body _ptier _pmode
         _ping_body="$(proxy_ping_json "$PROXY_PORT" 2>/dev/null || true)"
-        _ptier="$(printf '%s' "$_ping_body" | jq -r '.active_tier // empty' 2>/dev/null || true)"
-        _pmode="$(printf '%s' "$_ping_body" | jq -r '.active_mode // empty' 2>/dev/null || true)"
-        local _pcfg; _pcfg="$(printf '%s' "${CONFIG:-}" | sed "s|$HOME|~|")"
-        printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s${NC}" "proxy" "$PROXY_PORT" "$PROXY_STARTED_PID" >&2
-        [[ -n "$_pcfg" ]]  && printf "  ${GRAY}config=%s${NC}" "$_pcfg" >&2
-        [[ -n "$_ptier" ]] && printf "  ${GRAY}tier=%s${NC}" "$_ptier" >&2
-        [[ -n "$_pmode" ]] && printf "  ${GRAY}mode=%s${NC}" "$_pmode" >&2
-        printf "\n" >&2
+        if ! [[ "$_ping_body" == *'"ok":true'* ]]; then
+          # /ping returned something but not the expected {"ok":true,...} shape —
+          # port was likely already bound by an unrelated process (collision), or
+          # the proxy half-initialized.
+          start_ec=1
+          diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$PROXY_PORT" "$final_log" \
+            "claude-proxy /ping responded but body is not the expected shape (port collision or half-init?)"
+        else
+          _ptier="$(printf '%s' "$_ping_body" | jq -r '.active_tier // empty' 2>/dev/null || true)"
+          _pmode="$(printf '%s' "$_ping_body" | jq -r '.active_mode // empty' 2>/dev/null || true)"
+          local _pcfg; _pcfg="$(printf '%s' "${CONFIG:-}" | sed "s|$HOME|~|")"
+          printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s${NC}" "proxy" "$PROXY_PORT" "$PROXY_STARTED_PID" >&2
+          [[ -n "$_pcfg" ]]  && printf "  ${GRAY}config=%s${NC}" "$_pcfg" >&2
+          [[ -n "$_ptier" ]] && printf "  ${GRAY}tier=%s${NC}" "$_ptier" >&2
+          [[ -n "$_pmode" ]] && printf "  ${GRAY}mode=%s${NC}" "$_pmode" >&2
+          printf "\n" >&2
+        fi
       fi
     fi
     rm -f "$ready_pipe"
