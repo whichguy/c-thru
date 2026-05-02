@@ -3502,14 +3502,7 @@ print_active_profile_table() {
 
   _print_agent_row() {
     local slot="$1" model="$2" rec_suffix="$3"
-    local agents_dir; agents_dir="$CTHRU_REPO_ROOT/agents"
-    local agent_label
-    if [[ -f "$agents_dir/${slot}.md" ]]; then
-      agent_label="agents/${slot}.md"
-    else
-      agent_label="(no agent file)"
-    fi
-    printf '  %-24s  %-30s  %s%s\n' "$agent_label" "$slot" "$model" "${rec_suffix:+  $rec_suffix}"
+    printf '  %-22s  %-40s%s\n' "$slot" "$model" "${rec_suffix:+  $rec_suffix}"
   }
 
   _lookup_row() {
