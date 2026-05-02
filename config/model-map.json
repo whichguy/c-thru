@@ -89,22 +89,22 @@
         "16gb": "gemma4:e4b",
         "32gb": "devstral-small-2:24b",
         "48gb": "devstral-small-2:24b",
-        "64gb": "devstral-small-2:24b",
-        "128gb": "devstral-small-2:24b"
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-cloud-oss": {
         "16gb": "gemma4:e4b",
         "32gb": "devstral-small-2:24b",
         "48gb": "devstral-small-2:24b",
-        "64gb": "devstral-small-2:24b",
-        "128gb": "devstral-small-2:24b"
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-local-oss": {
         "16gb": "gemma4:e4b",
         "32gb": "devstral-small-2:24b",
         "48gb": "devstral-small-2:24b",
-        "64gb": "devstral-small-2:24b",
-        "128gb": "devstral-small-2:24b"
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-cloud-gov": "phi4-mini",
       "best-local-gov": "phi4-mini",
@@ -154,16 +154,16 @@
         "16gb": "claude-haiku-4-5-20251001",
         "32gb": "claude-haiku-4-5-20251001",
         "48gb": "claude-sonnet-4-6",
-        "64gb": "qwen3-coder:30b",
-        "128gb": "qwen3-coder:30b"
+        "64gb": "qwen3.6:35b-a3b-coding-mxfp8",
+        "128gb": "qwen3.6:35b-a3b-coding-mxfp8"
       },
       "best-cloud-oss": "thudm/glm-4-plus",
       "best-local-oss": {
         "16gb": "gemma4:e4b",
         "32gb": "qwen3-coder:30b",
         "48gb": "qwen3-coder:30b",
-        "64gb": "qwen3-coder:30b",
-        "128gb": "qwen3-coder:30b"
+        "64gb": "qwen3.6:35b-a3b-coding-mxfp8",
+        "128gb": "qwen3.6:35b-a3b-coding-mxfp8"
       },
       "best-cloud-gov": {
         "16gb": "claude-haiku-4-5-20251001",
@@ -186,22 +186,22 @@
         "16gb": "gemma4:e4b",
         "32gb": "qwen3-coder:30b",
         "48gb": "qwen3-coder:30b",
-        "64gb": "qwen3-coder:30b",
-        "128gb": "qwen3-coder:30b"
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-cloud-oss": {
         "16gb": "gemma4:e4b",
         "32gb": "qwen3-coder:30b",
         "48gb": "qwen3-coder:30b",
-        "64gb": "qwen3-coder:30b",
-        "128gb": "qwen3-coder:30b"
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-local-oss": {
         "16gb": "gemma4:e4b",
         "32gb": "qwen3-coder:30b",
         "48gb": "qwen3-coder:30b",
-        "64gb": "qwen3-coder:30b",
-        "128gb": "qwen3-coder:30b"
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-cloud-gov": "phi4-mini",
       "best-local-gov": "phi4-mini",
@@ -568,24 +568,24 @@
     "fast-generalist": {
       "best-cloud": {
         "16gb": "gemma4:e4b",
-        "32gb": "gemma4:26b",
-        "48gb": "gemma4:26b",
-        "64gb": "gemma4:26b",
-        "128gb": "gemma4:26b"
+        "32gb": "qwen3.6:27b-nvfp4",
+        "48gb": "qwen3.6:27b-nvfp4",
+        "64gb": "qwen3.6:35b-a3b-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-nvfp4"
       },
       "best-cloud-oss": {
         "16gb": "gemma4:e4b",
-        "32gb": "gemma4:26b",
-        "48gb": "gemma4:26b",
-        "64gb": "gemma4:26b",
-        "128gb": "gemma4:26b"
+        "32gb": "qwen3.6:27b-nvfp4",
+        "48gb": "qwen3.6:27b-nvfp4",
+        "64gb": "qwen3.6:35b-a3b-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-nvfp4"
       },
       "best-local-oss": {
         "16gb": "gemma4:e4b",
-        "32gb": "gemma4:26b",
-        "48gb": "gemma4:26b",
-        "64gb": "gemma4:26b",
-        "128gb": "gemma4:26b"
+        "32gb": "qwen3.6:27b-nvfp4",
+        "48gb": "qwen3.6:27b-nvfp4",
+        "64gb": "qwen3.6:35b-a3b-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-nvfp4"
       },
       "best-cloud-gov": "phi4-mini",
       "best-local-gov": "phi4-mini",
@@ -637,7 +637,7 @@
         "32gb": "qwen3.6:27b",
         "48gb": "qwen3.6:27b",
         "64gb": "qwen3.6:35b",
-        "128gb": "devstral-small-2:24b"
+        "128gb": "qwen3.6:35b-a3b-q8_0"
       },
       "best-cloud-gov": {
         "16gb": "phi4-mini",
@@ -809,7 +809,9 @@
       "endpoint": "ollama_local",
       "name": "devstral-small:2"
     },
-    "qwen3.6:35b-a3b-q8_0": "ollama_local"
+    "qwen3.6:35b-a3b-q8_0": "ollama_local",
+    "qwen3.6:35b-a3b-nvfp4": "ollama_local",
+    "qwen3.6:27b-nvfp4": "ollama_local"
   },
   "routes": {
     "default": "generalist",
