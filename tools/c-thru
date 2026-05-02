@@ -47,6 +47,8 @@ LAUNCH_PROJECT_DIR=""
 ORIGINAL_CLAUDE_PROFILE_DIR="${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 CLAUDE_PROFILE_DIR="$ORIGINAL_CLAUDE_PROFILE_DIR"
 OLLAMA_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
+# Number of models Ollama keeps loaded in parallel (default 4).
+OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-4}"
 # CLAUDE_PROXY_PORT is intentionally NOT defaulted here.  When unset the proxy
 # binds to port 0 (OS-assigned free port), enabling one independent proxy per
 # shell.  Set CLAUDE_PROXY_PORT explicitly only when you need a fixed port
@@ -1944,14 +1946,14 @@ ensure_proxy_running() {
     if [[ -n "$explicit_log" ]]; then
       ensure_proxy_log_parent_dir "$explicit_log"
       CLAUDE_PROXY_PORT="$port" C_THRU_DEBUG="${C_THRU_DEBUG:-}" \
-      CLAUDE_MODEL_MAP_PATH="$CONFIG" \
+      CLAUDE_MODEL_MAP_PATH="$CONFIG" OLLAMA_NUM_PARALLEL="$OLLAMA_NUM_PARALLEL" \
         node "$proxy_js" >>"$explicit_log" 2>&1 &
       PROXY_LOG_PATH="$explicit_log"
     else
       temp_log="$(proxy_ephemeral_stderr_path "${$}.$port.$RANDOM")"
       ensure_proxy_log_parent_dir "$temp_log"
       CLAUDE_PROXY_PORT="$port" C_THRU_DEBUG="${C_THRU_DEBUG:-}" \
-      CLAUDE_MODEL_MAP_PATH="$CONFIG" \
+      CLAUDE_MODEL_MAP_PATH="$CONFIG" OLLAMA_NUM_PARALLEL="$OLLAMA_NUM_PARALLEL" \
         node "$proxy_js" >/dev/null 2>"$temp_log" &
       PROXY_LOG_PATH=""
     fi
@@ -2936,7 +2938,7 @@ ensure_ollama_running() {
     if [[ -z "$port_pid" ]]; then
       # Nothing on the port — clean spawn
       [[ "$mode" == "active" ]] && _ollama_spin "${braille[1]}" "Ollama server" "$cli_host" "starting"
-      nohup ollama serve </dev/null >/dev/null 2>&1 &
+      env OLLAMA_NUM_PARALLEL="$OLLAMA_NUM_PARALLEL" nohup ollama serve </dev/null >/dev/null 2>&1 &
       disown 2>/dev/null || true
     else
       # Port occupied but HTTP dead — zombie or crashed server.
@@ -2955,7 +2957,7 @@ ensure_ollama_running() {
         [[ "$mode" == "active" ]] && _ollama_spin "${braille[4]}" "Ollama server" "$cli_host" "killing zombie (pid $port_pid)"
         kill "$port_pid" 2>/dev/null || true
         sleep 0.5
-        nohup ollama serve </dev/null >/dev/null 2>&1 &
+        env OLLAMA_NUM_PARALLEL="$OLLAMA_NUM_PARALLEL" nohup ollama serve </dev/null >/dev/null 2>&1 &
         disown 2>/dev/null || true
         cthru_debug_event "ollama server zombie_kill pid=$port_pid port=$ollama_port host=$cli_host"
       fi
