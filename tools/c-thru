@@ -1075,9 +1075,6 @@ log_llm_profile_selection() {
   printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-12s ${GRAY}(%s)${NC}\n" "profile" "$profile" "$summary_context" >&2
   printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-12s\n" "mode" "$llm_mode" >&2
 
-  if [[ -n "$launch_model" ]]; then
-    printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} ${GREEN}%s${NC}\n" "model" "$launch_model" >&2
-  fi
 
   if profile_has_capability_assignments "$launch_model"; then
     local _sl_assignments
@@ -1119,11 +1116,13 @@ log_llm_profile_selection() {
     _sl_print_row() {
       local slot="$1" model="$2"
       local ep; ep="$(_sl_endpoint "$model")"
+      local ep_suffix=""
+      [[ "$ep" != "ollama_local" ]] && ep_suffix=" ${GRAY}[$ep]${NC}"
       if (( _sl_first )); then
-        printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-22s ${GRAY}→${NC} %-38s ${GRAY}[%s]${NC}\n" "plan" "$slot" "$model" "$ep" >&2
+        printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-22s ${GRAY}→${NC} %-38s${ep_suffix}\n" "plan" "$slot" "$model" >&2
         _sl_first=0
       else
-        printf "               ${BOLD}%-22s${NC} ${GRAY}→${NC} %-38s ${GRAY}[%s]${NC}\n" "$slot" "$model" "$ep" >&2
+        printf "               ${BOLD}%-22s${NC} ${GRAY}→${NC} %-38s${ep_suffix}\n" "$slot" "$model" >&2
       fi
     }
 
@@ -1883,11 +1882,10 @@ ensure_proxy_running() {
           _ptier="$(printf '%s' "$_ping_body" | jq -r '.active_tier // empty' 2>/dev/null || true)"
           _pmode="$(printf '%s' "$_ping_body" | jq -r '.active_mode // empty' 2>/dev/null || true)"
           local _pcfg; _pcfg="$(printf '%s' "${CONFIG:-}" | sed "s|$HOME|~|")"
-          printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s${NC}" "proxy" "$PROXY_PORT" "$PROXY_STARTED_PID" >&2
-          [[ -n "$_pcfg" ]]  && printf "  ${GRAY}config=%s${NC}" "$_pcfg" >&2
-          [[ -n "$_ptier" ]] && printf "  ${GRAY}tier=%s${NC}" "$_ptier" >&2
-          [[ -n "$_pmode" ]] && printf "  ${GRAY}mode=%s${NC}" "$_pmode" >&2
-          printf "\n" >&2
+          printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s" "proxy" "$PROXY_PORT" "$PROXY_STARTED_PID" >&2
+          [[ -n "$_ptier" ]] && printf "  tier=%s" "$_ptier" >&2
+          [[ -n "$_pmode" ]] && printf "  mode=%s" "$_pmode" >&2
+          printf "${NC}\n" >&2
         fi
       fi
     fi
@@ -1923,11 +1921,10 @@ ensure_proxy_running() {
       _rcfg="$(printf '%s' "$ping_json" | jq -r '.config_path // empty' 2>/dev/null | sed "s|$HOME|~|" || true)"
       _rtier="$(printf '%s' "$ping_json" | jq -r '.active_tier // empty' 2>/dev/null || true)"
       _rmode="$(printf '%s' "$ping_json" | jq -r '.active_mode // empty' 2>/dev/null || true)"
-      printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s  (reusing)${NC}" "proxy" "$port" "$existing_pid" >&2
-      [[ -n "$_rcfg" ]]  && printf "  ${GRAY}config=%s${NC}" "$_rcfg" >&2
-      [[ -n "$_rtier" ]] && printf "  ${GRAY}tier=%s${NC}" "$_rtier" >&2
-      [[ -n "$_rmode" ]] && printf "  ${GRAY}mode=%s${NC}" "$_rmode" >&2
-      printf "\n" >&2
+      printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s" "proxy" "$port" "$existing_pid" >&2
+      [[ -n "$_rtier" ]] && printf "  tier=%s" "$_rtier" >&2
+      [[ -n "$_rmode" ]] && printf "  mode=%s" "$_rmode" >&2
+      printf "${NC}\n" >&2
       return 0
     fi
 
