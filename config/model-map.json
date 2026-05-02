@@ -198,8 +198,8 @@
       },
       "best-local-oss": {
         "16gb": "gemma4:e4b",
-        "32gb": "qwen3-coder:30b",
-        "48gb": "qwen3-coder:30b",
+        "32gb": "qwen3.6:27b-coding-nvfp4",
+        "48gb": "qwen3.6:27b-coding-nvfp4",
         "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
         "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
