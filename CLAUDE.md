@@ -291,6 +291,20 @@ The agent fleet uses a flat identity mapping: each agent's `model` frontmatter f
 | `fast-scout` | Latency-optimized search |
 | `long-context` | Large context window tasks |
 
+### Pipeline orchestration
+
+Each pipeline agent ends its response with an `UNBLOCKED_TASKS` block containing
+`Task()` calls for the next agent(s). The orchestrator follows these breadcrumbs
+rather than memorizing a fixed pipeline sequence.
+
+Typical flow:
+  planner → (UNBLOCKED_TASKS) → coder
+  coder   → (UNBLOCKED_TASKS) → tester → reviewer-routine
+  any agent → (UNBLOCKED_TASKS) → debugger-hypothesis (on failure)
+
+Debug subloop (triggered by coder/tester failure):
+  debugger-hypothesis → debugger-investigate → (loop) → debugger-hard on exhaustion
+
 ### agent_to_capability resolution
 
 Agent files declare `model: <agent-name>`. The proxy resolves via:

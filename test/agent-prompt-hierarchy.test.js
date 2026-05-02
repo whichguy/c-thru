@@ -148,9 +148,9 @@ async function run() {
 
   console.log('--- Phase 1: Recon & Scaffolding ---');
 
-  // 1. discovery-advisor
+  // 1. explore (gap advisor)
   {
-    const name = 'discovery-advisor';
+    const name = 'explore';
     const sys = readSystemPrompt(name);
     const user = `intent: ${SCENARIO.intent}\nrecon_path: recon.md\ngaps_out: gaps.md\n\nContents of recon.md:\n${artifacts.recon}`;
     console.log(`  [${name}] calling...`);
@@ -164,9 +164,9 @@ async function run() {
     artifacts.gaps = resp; // In a real scenario, this would be the content of gaps.md
   }
 
-  // 2. explorer
+  // 2. explore (fan-out)
   {
-    const name = 'explorer';
+    const name = 'explore';
     const sys = readSystemPrompt(name);
     const user = `gap_question: Is src/auth/utils.js available for new utilities?\noutput_path: discovery/auth-utils.md\n\nFile list from recon:\n- src/auth/login.js\n- src/auth/session.js`;
     console.log(`  [${name}] calling...`);
@@ -180,9 +180,9 @@ async function run() {
     artifacts.discovery = resp;
   }
 
-  // 3. scaffolder
+  // 3. coder (stub creation)
   {
-    const name = 'scaffolder';
+    const name = 'coder';
     const sys = readSystemPrompt(name);
     const user = buildWorkerDigest(name, 'item-001', [SCENARIO.target], `Create a stub for a palindrome checker in ${SCENARIO.target}.`);
     console.log(`  [${name}] calling...`);
@@ -200,9 +200,9 @@ async function run() {
 
   console.log('\n--- Phase 2: Implementation & Tests ---');
 
-  // 4. implementer
+  // 4. coder (implementation)
   {
-    const name = 'implementer';
+    const name = 'coder';
     const sys = readSystemPrompt(name);
     const user = buildWorkerDigest(name, 'item-002', [SCENARIO.target], `Implement the palindrome checker in ${SCENARIO.target} based on the following stubs:\n\n${artifacts.stubs}`);
     console.log(`  [${name}] calling...`);
@@ -216,9 +216,9 @@ async function run() {
     artifacts.implementation = resp;
   }
 
-  // 5. test-writer
+  // 5. tester
   {
-    const name = 'test-writer';
+    const name = 'tester';
     const sys = readSystemPrompt(name);
     const user = buildWorkerDigest(name, 'item-003', ['src/auth/utils.test.js'], `Write unit tests for the palindrome checker implementation:\n\n${artifacts.implementation}`);
     console.log(`  [${name}] calling...`);
@@ -236,9 +236,9 @@ async function run() {
 
   console.log('\n--- Phase 3: Review & Synthesis ---');
 
-  // 6. wave-reviewer
+  // 6. reviewer-routine
   {
-    const name = 'wave-reviewer';
+    const name = 'reviewer-routine';
     const sys = readSystemPrompt(name);
     const user = buildWorkerDigest(name, 'item-004', [SCENARIO.target, 'src/auth/utils.test.js'], `Review the implementation and tests for the palindrome checker.
 Implementation:
@@ -249,15 +249,15 @@ ${artifacts.tests}`);
     console.log(`  [${name}] calling...`);
     const resp = await postMessages(name, sys, user);
     const block = parseStatusBlock(resp);
-    // wave-reviewer might return PARTIAL if it finds something, but for a simple case COMPLETE is expected.
+    // reviewer-routine might return PARTIAL if it finds something, but for a simple case COMPLETE is expected.
     if (!['COMPLETE', 'PARTIAL'].includes(block.STATUS)) fail(name, `Expected COMPLETE or PARTIAL, got ${block.STATUS}`);
     ok(`${name}: STATUS=${block.STATUS}`);
     artifacts.waveReview = resp;
   }
 
-  // 7. plan-orchestrator
+  // 7. coder (wave executor)
   {
-    const name = 'plan-orchestrator';
+    const name = 'coder';
     const sys = readSystemPrompt(name);
     const user = `Execute wave 001 for intent: ${SCENARIO.intent}
 READY_ITEMS:
@@ -270,7 +270,7 @@ ${artifacts.waveReview}`;
     console.log(`  [${name}] calling...`);
     const resp = await postMessages(name, sys, user);
     const block = parseStatusBlock(resp);
-    // plan-orchestrator might not have a strict STATUS contract in all versions, but we check if it responds.
+    // coder might not have a strict STATUS contract in all versions, but we check if it responds.
     ok(`${name}: Responded`);
     artifacts.waveSummary = resp;
   }
@@ -279,9 +279,9 @@ ${artifacts.waveReview}`;
 
   console.log('\n--- Phase 4: Planners & Judges ---');
 
-  // 8. planner-local (dep_update)
+  // 8. planner (dep_update)
   {
-    const name = 'planner-local';
+    const name = 'planner';
     const sys = readSystemPrompt(name);
     const user = `signal: dep_update
 intent: ${SCENARIO.intent}
@@ -315,9 +315,9 @@ ${artifacts.discovery}`;
     artifacts.currentPlan = resp;
   }
 
-  // 10. review-plan
+  // 10. reviewer-routine (plan review)
   {
-    const name = 'review-plan';
+    const name = 'reviewer-routine';
     const sys = readSystemPrompt(name);
     const user = `Review the following plan for intent: ${SCENARIO.intent}
 
@@ -328,9 +328,9 @@ ${artifacts.currentPlan}`;
     ok(`${name}: VERDICT=${v ? v[1] : 'unknown'}`);
   }
 
-  // 11. final-reviewer
+  // 11. reviewer-routine (final review)
   {
-    const name = 'final-reviewer';
+    const name = 'reviewer-routine';
     const sys = readSystemPrompt(name);
     const user = `intent: ${SCENARIO.intent}
 plan:

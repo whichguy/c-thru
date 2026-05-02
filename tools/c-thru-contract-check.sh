@@ -11,7 +11,7 @@
 #   4.  Agent-count consistency (agents/*.md vs agent_to_capability keys,
 #       excluding routing-only entries that have no agent file)
 #   5.  Phase 0 mkdir coverage for $PLAN_DIR subdirectories
-#   6.  STATUS/VERDICT value coverage in SKILL.md + plan-orchestrator.md
+#   6.  STATUS/VERDICT value coverage in SKILL.md + coder.md (wave executor)
 #   7.  Undeclared prompt keys in Agent() invocations
 #   8.  Restart-mode anchor presence in cloud agent files
 #   9.  Tier-budget frontmatter declarations
@@ -103,7 +103,7 @@ done < <(grep -oE 'subagent_type:[[:space:]]*"[^"]+"' "$SKILL" \
 # ---------------------------------------------------------------------------
 # Check 3 — Agent prompt key mismatch
 #
-# For each Agent() block in SKILL.md + plan-orchestrator.md: extract key names
+# For each Agent() block in SKILL.md + coder.md: extract key names
 # from the prompt body. For each agent file: extract declared input tokens from
 # the Input: line. Report: declared tokens with no corresponding key in prompt.
 #
@@ -264,8 +264,8 @@ in_prompt && /"\)/ && !/^[[:space:]]+[a-zA-Z][a-zA-Z0-9_.-]+:[[:space:]]/ && age
 ' "$1"
 }
 
-ORCHESTRATOR="$AGENTS_DIR/plan-orchestrator.md"
-# Scan SKILL.md only for Check 3/7 (plan-orchestrator uses a different prompt-close
+ORCHESTRATOR="$AGENTS_DIR/coder.md"
+# Scan SKILL.md only for Check 3/7 (coder uses a different prompt-close
 # format that the awk doesn't parse reliably). Check 6 uses grep directly.
 awk_agent_blocks "$SKILL" > "$tmpblocks"
 
@@ -408,17 +408,17 @@ done
 # ---------------------------------------------------------------------------
 # Check 6 — STATUS/VERDICT value coverage
 #
-# For each agent called from SKILL.md or plan-orchestrator.md:
+# For each agent called from SKILL.md or coder.md:
 #   Extract declared STATUS/VERDICT values from the Return block.
 #   For each non-trivial value V (not COMPLETE or APPROVED):
-#     Search SKILL.md + plan-orchestrator.md for the literal string V as a
+#     Search SKILL.md + coder.md for the literal string V as a
 #     whole-word match. FAIL if the value is absent from both caller files.
 # ---------------------------------------------------------------------------
 echo "6/13  STATUS/VERDICT value coverage check..."
 
 # Extract STATUS/VERDICT values from an agent's Return block.
 # Matches both "**Return:**" (most agents) and "## Step N — Return STATUS"
-# (plan-orchestrator) conventions. Prints one value per line.
+# (coder) conventions. Prints one value per line.
 extract_return_values() {
     local agent_file="$1"
     awk '
@@ -438,7 +438,7 @@ extract_return_values() {
     ' "$agent_file" 2>/dev/null
 }
 
-# Build list of agents referenced as subagent_type in SKILL.md or plan-orchestrator
+# Build list of agents referenced as subagent_type in SKILL.md or coder.md
 called_agents=$(cut -d'|' -f1 "$tmpblocks" | sort -u)
 
 for agent in $called_agents; do
@@ -460,7 +460,7 @@ for agent in $called_agents; do
         if [ "$found_in_callers" -eq 1 ]; then
             ok "Agent(\"$agent\") $val — found in caller"
         else
-            fail "Agent(\"$agent\"): declared return value \"$val\" has no branch in SKILL.md or plan-orchestrator.md"
+            fail "Agent(\"$agent\"): declared return value \"$val\" has no branch in SKILL.md or coder.md"
         fi
     done < <(extract_return_values "$agent_file")
 done

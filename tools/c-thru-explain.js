@@ -56,8 +56,8 @@ Prints the model resolution chain for a hypothetical request, without sending on
   --tier <t>           hardware tier (default: detected from RAM)
 
 Examples:
-  c-thru explain --capability workhorse --mode best-opensource
-  c-thru explain --agent test-writer --mode local-best-quality --tier 64gb
+  c-thru explain --capability coder --mode best-cloud-oss
+  c-thru explain --agent tester --mode best-local-oss --tier 64gb
 `);
   process.exit(0);
 }

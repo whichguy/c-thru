@@ -676,7 +676,7 @@ function cmdInjectContract(cliArgs) {
                    '[List changed sections, e.g., src/main.js: 10-50]\n\n' +
                    'STATUS: [COMPLETE|PARTIAL|ERROR|RECUSE]\n';
 
-    if (agent === 'discovery-advisor' || agent === 'explorer') {
+    if (agent === 'explore') {
       template += 'ANSWERED: [yes|no]\n' +
                   'GAPS: [number of remaining unknown areas]\n';
     } else if (agent === 'uplift-decider') {
@@ -687,7 +687,7 @@ function cmdInjectContract(cliArgs) {
                  'RATIONALE: [One sentence explaining why the local output is accepted or why escalation is needed]\n' +
                  'SUMMARY: [≤20 words summary]\n';
     } else {
-      // Standard worker (implementer, test-writer, scaffolder, etc)
+      // Standard worker (coder, tester, reviewer-routine, etc)
       template += 'CONFIDENCE: [high|medium|low]\n' +
                   'UNCERTAINTY_REASONS: [List rubric bullets if medium/low; omit if high]\n' +
                   'WROTE: [comma-separated paths from target_resources]\n' +

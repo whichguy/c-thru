@@ -27,9 +27,9 @@ clarifying question only if the intent is genuinely ambiguous.
 
 | User says (examples) | Action | Notes |
 |---|---|---|
-| "switch to offline", "go offline", "offline mode", "disconnect" | `mode offline --reload` | apply immediately |
-| "switch to connected", "go online", "connected mode" | `mode connected --reload` | apply immediately |
-| "use best opensource cloud", "best open source" | `mode best-opensource-cloud --reload` | |
+| "switch to local", "local mode", "best-local-oss", "disconnect", "switch to offline", "go offline", "offline mode" | `mode best-local-oss --reload` | apply immediately |
+| "switch to cloud", "cloud mode", "best-cloud", "switch to connected", "go online", "connected mode" | `mode best-cloud --reload` | apply immediately |
+| "use best opensource cloud", "best-cloud-oss", "open source cloud", "best open source" | `mode best-cloud-oss --reload` | |
 | "what mode am I in", "show mode", "current mode" | `mode` (read) | |
 | "use <model> for <cap>", "make <cap> use <model>", "set <cap> to <model>" | `remap <cap> <model>` [--tier] | e.g. "use qwen for coding" → `remap coder qwen3-coder-next:cloud`; default tier is active |
 | "set cloud model for <cap> to <model>" | `set-cloud-best-model <cap> <model>` [--tier] | |
@@ -56,27 +56,26 @@ agent by a natural-language role, resolve to the canonical key:
 
 | User says | Canonical capability/agent |
 |---|---|
-| "coding", "code", "coder" | `coder` |
-| "workhorse", "general", "default model" | `workhorse` |
-| "judge", "evaluator", "judging" | `judge` |
-| "orchestrator", "planner", "planning" (agent, not /c-thru-config planning) | `orchestrator` |
-| "explorer", "discovery", "search" | `explorer` |
-| "reviewer", "review", "code review" | `reviewer` |
-| "classifier", "fast generalist", "fast" | `classifier` |
-| "reasoner", "reasoning", "deep reasoning" | `reasoner` |
-| "deep coder", "deep coding" | `deep-coder` |
-| "implementer", "implementation" | `implementer` |
-| "fast coder", "fast coding" | `fast-coder` |
-| "agentic coder", "agentic" | `agentic-coder` |
-| "generalist", "generalist" | `generalist` |
+| "coder", "coding", "code" | `coder` |
+| "fallback coder", "backup coder" | `coder-fallback` |
+| "planner", "planning", "orchestrator" | `planner` |
+| "hard planner", "hardest planning", "complex plan" | `planner-hard` |
+| "explorer", "explore", "discovery", "search" | `explore` |
+| "tester", "test writer", "tests" | `tester` |
+| "docs", "documentation writer" | `docs` |
+| "reviewer", "review", "routine review", "code review" | `reviewer-routine` |
+| "security reviewer", "security review", "sec review" | `reviewer-security` |
+| "hypothesis", "debug hypothesis" | `debugger-hypothesis` |
+| "investigator", "debug investigate" | `debugger-investigate` |
+| "hard debugger", "hard debug", "deep debug" | `debugger-hard` |
 | "vision", "image", "screenshot" | `vision` |
 | "pdf", "document reading" | `pdf` |
-| "writer", "writing", "prose" | `writer` |
-| "scout", "fast scout" | `fast-scout` |
-| "code analyst", "light code review" | `code-analyst-light` |
-| "refactor" | `refactor` |
-| "edge", "small tasks" | `edge` |
+| "generalist", "general purpose" | `generalist` |
+| "fast generalist", "fast" | `fast-generalist` |
+| "fast scout", "scout", "quick search" | `fast-scout` |
 | "long context", "large context" | `long-context` |
+| "edge", "small tasks", "minimal" | `edge` |
+| "prose writer", "long-form writing" | `writer` |
 
 **Model name shorthand** — when the user mentions a model by a short/partial
 name, expand to the full tag registered in `model_routes`:
@@ -107,7 +106,7 @@ that subcommand's block exactly as if the user had typed it directly.
 **Usage:** `/c-thru-config resolve <capability>`
 
 Answers "under the current mode and hardware tier, what concrete model will
-`<capability>` use?" Accepts capability aliases (`deep-coder`) and agent names (`implementer`).
+`<capability>` use?" Accepts capability keys (`coder`, `planner`, `reviewer-routine`) and agent names.
 
 Extract capability name from `$ARGUMENTS`. If missing, print usage and stop.
 
@@ -487,9 +486,10 @@ try {
 
 // Capability → model table
 const CAPS = [
-  'judge','judge-strict','orchestrator','local-planner','deep-coder',
-  'code-analyst','pattern-coder','commit-message-generator',
-  'workhorse','coder','reviewer','explorer','classifier','default',
+  'planner','planner-hard','explore','coder','coder-fallback',
+  'tester','docs','reviewer-routine','reviewer-security',
+  'debugger-hypothesis','debugger-investigate','debugger-hard',
+  'vision','pdf','writer','edge','generalist','fast-generalist','fast-scout','long-context',
 ];
 const profile = (config.llm_profiles || {})[tier] || {};
 const maxLen = CAPS.filter(c => profile[c]).reduce((m,c) => Math.max(m,c.length), 0);
@@ -592,7 +592,7 @@ fi
 Override which model an agent uses without editing `config/model-map.json` (system config is read-only). Changes are written to `~/.claude/model-map.overrides.json` and merged at runtime.
 
 Two override modes:
-- **Logical remap** (`set`): change which capability tier an agent routes through (e.g. point `implementer` at `judge` instead of `deep-coder`)
+- **Logical remap** (`set`): change which capability tier an agent routes through (e.g. point `coder-fallback` at `planner` instead of `coder`)
 - **Direct pin** (`pin`): skip the capability tier entirely and route an agent straight to a specific model tag
 
 ### Verb: `list`
