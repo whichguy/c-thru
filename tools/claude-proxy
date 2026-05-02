@@ -305,7 +305,9 @@ const PID_FILE = path.join(os.homedir(), '.claude', 'proxy.pid');
 let persistentUsage = {
   total_input: 0,
   total_output: 0,
+  total_duration_ms: 0,
   by_model: {},
+  by_agent: {},
   by_backend: {},
   first_recorded: null,
   last_recorded: null,
@@ -318,21 +320,34 @@ function loadPersistentUsage() {
       // missing newer fields. Preserve loaded counts, fill in missing keys.
       persistentUsage = Object.assign(persistentUsage, loaded);
       if (!persistentUsage.by_backend) persistentUsage.by_backend = {};
+      if (!persistentUsage.by_agent) persistentUsage.by_agent = {};
     }
   } catch {}
 }
 loadPersistentUsage();
 
-function recordUsage(model, backendId, input, output) {
+function recordUsage(model, backendId, input, output, durationMs, agentName) {
   if (!input && !output) return;  // skip noise from empty/error responses
+  const dur = durationMs || 0;
   persistentUsage.total_input += input;
   persistentUsage.total_output += output;
-  // Per-model: counts + call frequency
-  if (!persistentUsage.by_model[model]) persistentUsage.by_model[model] = { input: 0, output: 0, calls: 0, last_call: null };
+  persistentUsage.total_duration_ms += dur;
+  // Per-model: counts + call frequency + duration
+  if (!persistentUsage.by_model[model]) persistentUsage.by_model[model] = { input: 0, output: 0, calls: 0, total_duration_ms: 0, last_call: null };
   persistentUsage.by_model[model].input += input;
   persistentUsage.by_model[model].output += output;
   persistentUsage.by_model[model].calls += 1;
+  persistentUsage.by_model[model].total_duration_ms += dur;
   persistentUsage.by_model[model].last_call = nowIso();
+  // Per-agent: original requested name — only meaningful when different from resolved model
+  if (agentName) {
+    if (!persistentUsage.by_agent[agentName]) persistentUsage.by_agent[agentName] = { input: 0, output: 0, calls: 0, total_duration_ms: 0, last_call: null };
+    persistentUsage.by_agent[agentName].input += input;
+    persistentUsage.by_agent[agentName].output += output;
+    persistentUsage.by_agent[agentName].calls += 1;
+    persistentUsage.by_agent[agentName].total_duration_ms += dur;
+    persistentUsage.by_agent[agentName].last_call = nowIso();
+  }
   // Per-backend: same shape, lets /c-thru/status answer "how much went to
   // anthropic vs local?" at a glance
   if (backendId) {
@@ -1125,7 +1140,9 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
           inputTokens = obj.usage?.input_tokens || 0;
           outputTokens = obj.usage?.output_tokens || 0;
         }
-        recordUsage(effectiveModel, backend.id, inputTokens, outputTokens);
+        recordUsage(effectiveModel, backend.id, inputTokens, outputTokens,
+          Date.now() - (requestMeta.startedAt || Date.now()),
+          requestMeta.originalModel || null);
         clearBackendCooldown(backend.id);
         if (shouldJournal(requestMeta.capability)) {
           const rawBuf = Buffer.concat(usageBuf);
@@ -1503,7 +1520,9 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
       output_tokens: outputTokens,
       stop_reason: stopReason,
     });
-    recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
+    recordUsage(effectiveModel, backend.id, promptTokens, outputTokens,
+      Date.now() - (requestMeta.startedAt || Date.now()),
+      requestMeta.originalModel || null);
     clearBackendCooldown(backend.id);
     if (shouldJournal(requestMeta.capability)) {
       writeJournalEntry({
@@ -1681,7 +1700,9 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
         output_tokens: outputTokens,
         stop_reason: stopReason,
       });
-      recordUsage(effectiveModel, backend.id, promptTokens, outputTokens);
+      recordUsage(effectiveModel, backend.id, promptTokens, outputTokens,
+        Date.now() - (requestMeta.startedAt || Date.now()),
+        requestMeta.originalModel || null);
       clearBackendCooldown(backend.id);
       if (shouldJournal(requestMeta.capability)) {
         let parsedResponse = null;

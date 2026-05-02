@@ -1340,10 +1340,20 @@ proxy_port_is_explicit() {
 claude_proxy_listen_port() {
   if [[ -n "${CLAUDE_PROXY_PORT:-}" ]]; then
     printf '%s' "$CLAUDE_PROXY_PORT"
-  elif [[ -n "$PROXY_PORT" ]]; then
+  elif [[ -n "${PROXY_PORT:-}" ]]; then
     printf '%s' "$PROXY_PORT"
   elif [[ "${CLAUDE_PROXY_USE_OLLAMA_PORT:-0}" == "1" ]]; then
     printf '%s' "11434"
+  else
+    # Fall back to pid-file: find the proxy's listening port via lsof.
+    local pid_file="$CLAUDE_PROFILE_DIR/proxy.pid"
+    if [[ -f "$pid_file" ]] && command -v lsof >/dev/null 2>&1; then
+      local pid; pid="$(cat "$pid_file" 2>/dev/null)"
+      if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        lsof -iTCP -sTCP:LISTEN -n -P -p "$pid" 2>/dev/null \
+          | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1
+      fi
+    fi
   fi
 }
 
@@ -3695,25 +3705,51 @@ show_models() {
         fi
       fi
 
-      # Per-model usage stats from /c-thru/status
+      # Per-agent and per-model usage stats from /c-thru/status
       local status_json=""
       status_json="$(curl -sf --max-time 2.0 "http://127.0.0.1:$proxy_port/c-thru/status" 2>/dev/null || true)"
       if [[ -n "$status_json" ]]; then
+        local agent_usage
+        agent_usage="$(printf '%s' "$status_json" | jq -r '
+          (.usage.by_agent // {}) | to_entries |
+          sort_by(.value.last_call // "") | reverse[] |
+          [.key,
+           (.value.calls | tostring),
+           ((.value.input + .value.output) | tostring),
+           (if .value.calls > 0 then (.value.total_duration_ms / .value.calls | floor | tostring) else "-" end),
+           (.value.last_call // "-")] |
+          @tsv
+        ' 2>/dev/null || true)"
+        if [[ -n "$agent_usage" ]]; then
+          echo ""
+          echo "Agent usage (most recent first):"
+          printf '  %-24s  %6s  %12s  %8s  %s\n' "agent" "calls" "tokens" "avg ms" "last call"
+          printf '  %-24s  %6s  %12s  %8s  %s\n' "-----" "-----" "------" "------" "---------"
+          while IFS=$'\t' read -r agent calls tokens avg_ms last_call; do
+            [[ -n "$agent" ]] || continue
+            printf '  %-24s  %6s  %12s  %8s  %s\n' "$agent" "$calls" "$tokens" "$avg_ms" "${last_call:0:19}"
+          done <<< "$agent_usage"
+        fi
+
         local usage_models
         usage_models="$(printf '%s' "$status_json" | jq -r '
           (.usage.by_model // {}) | to_entries |
           sort_by(.value.last_call // "") | reverse[] |
-          [.key, (.value.calls | tostring), ((.value.input + .value.output) | tostring), (.value.last_call // "-")] |
+          [.key,
+           (.value.calls | tostring),
+           ((.value.input + .value.output) | tostring),
+           (if .value.calls > 0 then (.value.total_duration_ms / .value.calls | floor | tostring) else "-" end),
+           (.value.last_call // "-")] |
           @tsv
         ' 2>/dev/null || true)"
         if [[ -n "$usage_models" ]]; then
           echo ""
           echo "Model usage (most recent first):"
-          printf '  %-44s  %6s  %12s  %s\n' "model" "calls" "tokens" "last call"
-          printf '  %-44s  %6s  %12s  %s\n' "-----" "-----" "------" "---------"
-          while IFS=$'\t' read -r model calls tokens last_call; do
+          printf '  %-44s  %6s  %12s  %8s  %s\n' "model" "calls" "tokens" "avg ms" "last call"
+          printf '  %-44s  %6s  %12s  %8s  %s\n' "-----" "-----" "------" "------" "---------"
+          while IFS=$'\t' read -r model calls tokens avg_ms last_call; do
             [[ -n "$model" ]] || continue
-            printf '  %-44s  %6s  %12s  %s\n' "$model" "$calls" "$tokens" "${last_call:0:19}"
+            printf '  %-44s  %6s  %12s  %8s  %s\n' "$model" "$calls" "$tokens" "$avg_ms" "${last_call:0:19}"
           done <<< "$usage_models"
         fi
       fi
