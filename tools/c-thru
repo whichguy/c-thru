@@ -3484,11 +3484,76 @@ print_active_profile_table() {
   echo "Active hardware profile: $profile ($summary_context, mode=$llm_mode)"
   echo ""
 
+  # Ordered pipeline agents — declared in pipeline flow order.
+  local -a PIPELINE_ORDER=(
+    planner planner-hard explore
+    coder coder-fallback tester docs
+    reviewer-routine reviewer-security
+    debugger-hypothesis debugger-investigate debugger-hard
+  )
+  # Utility agents printed after.
+  local -a UTILITY_ORDER=(
+    vision pdf writer edge generalist fast-generalist fast-scout long-context
+  )
+
+  # Collect assignments into an associative-array-like structure using a temp file.
+  local tmp_assignments
+  tmp_assignments="$(collect_active_profile_capability_assignments)"
+
+  _print_agent_row() {
+    local slot="$1" model="$2" rec_suffix="$3"
+    local agents_dir; agents_dir="$CTHRU_REPO_ROOT/agents"
+    local agent_label
+    if [[ -f "$agents_dir/${slot}.md" ]]; then
+      agent_label="agents/${slot}.md"
+    else
+      agent_label="(no agent file)"
+    fi
+    printf '  %-24s  %-30s  %s%s\n' "$agent_label" "$slot" "$model" "${rec_suffix:+  $rec_suffix}"
+  }
+
+  _lookup_row() {
+    local want="$1"
+    local slot model rec_suffix
+    while IFS=$'\t' read -r slot model rec_suffix; do
+      [[ "$slot" == "$want" ]] && printf '%s\t%s\t%s' "$slot" "$model" "$rec_suffix" && return 0
+    done <<< "$tmp_assignments"
+    return 1
+  }
+
+  echo "  Pipeline agents (planner → coder → tester → reviewer flow):"
   local slot model rec_suffix
+  for slot in "${PIPELINE_ORDER[@]}"; do
+    local row; row="$(_lookup_row "$slot")" || continue
+    IFS=$'\t' read -r slot model rec_suffix <<< "$row"
+    _print_agent_row "$slot" "$model" "$rec_suffix"
+  done
+
+  echo ""
+  echo "  Utility agents:"
+  for slot in "${UTILITY_ORDER[@]}"; do
+    local row; row="$(_lookup_row "$slot")" || continue
+    IFS=$'\t' read -r slot model rec_suffix <<< "$row"
+    _print_agent_row "$slot" "$model" "$rec_suffix"
+  done
+
+  # Any capability not in the ordered lists (forward-compat).
+  local extras=""
   while IFS=$'\t' read -r slot model rec_suffix; do
-    [[ -n "$slot" && -n "$model" ]] || continue
-    printf '  %-14s  %-40s%s\n' "$slot" "$model" "${rec_suffix:+  $rec_suffix}"
-  done < <(collect_active_profile_capability_assignments)
+    [[ -n "$slot" ]] || continue
+    local found=0
+    for s in "${PIPELINE_ORDER[@]}" "${UTILITY_ORDER[@]}"; do [[ "$s" == "$slot" ]] && found=1 && break; done
+    [[ "$found" -eq 0 ]] && extras="${extras}${slot}\t${model}\t${rec_suffix}\n"
+  done <<< "$tmp_assignments"
+  if [[ -n "$extras" ]]; then
+    echo ""
+    echo "  Other:"
+    while IFS=$'\t' read -r slot model rec_suffix; do
+      [[ -n "$slot" ]] || continue
+      _print_agent_row "$slot" "$model" "$rec_suffix"
+    done < <(printf '%b' "$extras")
+  fi
+
   echo ""
 }
 
