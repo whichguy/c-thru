@@ -13,7 +13,7 @@
 #   5.  Phase 0 mkdir coverage for $PLAN_DIR subdirectories
 #   6.  STATUS/VERDICT value coverage in SKILL.md + coder.md (wave executor)
 #   7.  Undeclared prompt keys in Agent() invocations
-#   8.  Restart-mode anchor presence in cloud agent files
+#   8.  HANDOFF declaration coverage in pipeline agents
 #   9.  Tier-budget frontmatter declarations
 #   10. preflight_model_readiness routing skeleton sync (tools/c-thru vs test wrapper)
 #   11. LLM mode enum sync (model-map-resolve.js LLM_MODE_ENUM vs model-map-validate.js LLM_MODES)
@@ -176,7 +176,7 @@ agent_tokens() {
 is_multi_mode() {
     local agent_file="$1"
     local count
-    count=$(grep -c -Ei '^Input[s]?:' "$agent_file" 2>/dev/null || echo 0)
+    count=$(grep -Ei '^Input[s]?:' "$agent_file" 2>/dev/null | wc -l)
     [ "$count" -gt 1 ]
 }
 
@@ -524,35 +524,26 @@ while IFS='|' read -r agent keys; do
 done < "$tmpblocks"
 
 # ---------------------------------------------------------------------------
-# Check 8 — Restart-mode anchor presence in heavy agent files
+# Check 8 — HANDOFF declaration coverage in pipeline agents
 #
-# Static check: agents/implementer-heavy.md and agents/test-writer-heavy.md
-# must contain a <!-- mode: restart --> anchor in their restart-mode branch.
-# This anchor guards against anchoring-grep false positives from terms like
-# "prior", "previous", or "attempt" bleeding into restart-mode sections.
-# Runtime verification of rendered prompt digests belongs in the harness
-# (test/c-thru-plan-harness.test.js), not here.
-# Reference: wiki/entities/uplift-cascade-pattern.md
+# Each of the 12 pipeline agents must declare a HANDOFF: field somewhere in
+# its STATUS block. This ensures the orchestrator's breadcrumb chain is intact.
+# Utility agents (vision, pdf, writer, edge, generalist, fast-generalist,
+# fast-scout, long-context) are exempt — they are terminal agents.
 # ---------------------------------------------------------------------------
-echo "8/13  Restart-mode anchor check in heavy agents..."
+echo "8/13  HANDOFF declaration coverage check..."
 
-CLOUD_AGENTS=("$AGENTS_DIR/implementer-heavy.md" "$AGENTS_DIR/test-writer-heavy.md")
-for cloud_agent in "${CLOUD_AGENTS[@]}"; do
-    [ -f "$cloud_agent" ] || continue
-    agent_base=$(basename "$cloud_agent")
-    if ! grep -q '<!-- mode: restart -->' "$cloud_agent" 2>/dev/null; then
-        fail "$agent_base: missing <!-- mode: restart --> anchor in restart-mode branch — add to the restart bullet in Mode detection section"
+PIPELINE_AGENTS=(
+  planner planner-hard explore coder coder-fallback tester docs
+  reviewer-routine reviewer-security debugger-hypothesis debugger-investigate debugger-hard
+)
+for agent_name in "${PIPELINE_AGENTS[@]}"; do
+    agent_file="$AGENTS_DIR/${agent_name}.md"
+    [ -f "$agent_file" ] || { fail "${agent_name}.md: file not found"; continue; }
+    if grep -q '^HANDOFF:' "$agent_file" 2>/dev/null; then
+        ok "${agent_name}.md: HANDOFF declared"
     else
-        ok "$agent_base: <!-- mode: restart --> anchor present"
-    fi
-    # Anchoring-grep: verify no banned terms appear OUTSIDE a <!-- mode: restart --> anchor region.
-    # Strategy: strip the restart-mode line (which legitimately describes the restart branch),
-    # then check that no "prior approach" / "prior partial output" phrasing remains.
-    stripped=$(grep -v '<!-- mode: restart -->' "$cloud_agent" 2>/dev/null || true)
-    if echo "$stripped" | grep -qE 'prior (partial output|approach)'; then
-        fail "$agent_base: contains 'prior partial output' or 'prior approach' outside restart-mode anchor — rephrase to avoid anchoring-grep false positive (use 'escalation input' or 'fresh approach')"
-    else
-        ok "$agent_base: no anchoring-grep false-positive terms outside restart-mode anchor"
+        fail "${agent_name}.md: missing HANDOFF: field — add to STATUS block"
     fi
 done
 

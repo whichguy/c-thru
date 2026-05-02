@@ -4,6 +4,8 @@ description: Use PROACTIVELY after coder completes any non-trivial change. Revie
 model: reviewer-routine
 tier_budget: 50000
 ---
+Input: `current.md`, `INDEX`, `round`, `review_out`
+Input: `intent`, `current.md`, `INDEX`, `journal`, `journal_offset`, `review_out`
 
 # Agent: Reviewer (Routine)
 

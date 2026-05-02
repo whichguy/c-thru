@@ -4,6 +4,7 @@ description: MUST BE USED for all code implementation tasks. Writes, edits, and 
 model: coder
 tier_budget: 50000
 ---
+Input: `current.md`, READY_ITEMS, `commit_message`, `wave_dir`
 
 # Agent: Coder
 

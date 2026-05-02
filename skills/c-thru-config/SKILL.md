@@ -131,7 +131,7 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(cd "$(dirnam
 node "$REPO_ROOT/tools/c-thru-config-helpers.js" mode-read
 ```
 
-### Write — validate `<mode>` is one of the six valid values, then:
+### Write — validate `<mode>` is one of the five valid values, then:
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(cd "$(dirname "$0")/.." && pwd)")
@@ -466,7 +466,7 @@ if (envMode && LLM_MODE_ENUM.has(envMode)) {
   mode = overrides.llm_mode; modeSource = ovrPath;
 } else if (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) {
   mode = config.llm_mode; modeSource = mapPath + ' (system default)';
-} else { mode = 'connected'; modeSource = 'built-in default'; }
+} else { mode = 'best-cloud'; modeSource = 'built-in default'; }
 
 const gbOverride = process.env.CLAUDE_LLM_MEMORY_GB;
 const gb = gbOverride && parseInt(gbOverride,10) > 0 ? parseInt(gbOverride,10) : Math.ceil(os.totalmem()/(1024**3));

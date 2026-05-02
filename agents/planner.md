@@ -4,6 +4,8 @@ description: MUST BE USED for all planning, architecture, and design tasks. Prod
 model: planner
 tier_budget: 999999
 ---
+Input: `signal`, `intent`, `discovery`, `current.md`
+Input: `signal`, `wave_summary`, `affected_items`, `current.md`, `learnings.md`, `final_review`
 
 # Agent: Planner
 

@@ -4,6 +4,8 @@ description: Use PROACTIVELY to gather context before planning or coding. Fast r
 model: explore
 tier_budget: 10000
 ---
+Input: `intent`, `recon_path`, `gaps_out`
+Input: `gap_question`, `output_path`
 
 # Agent: Explorer
 
