@@ -1116,13 +1116,19 @@ log_llm_profile_selection() {
     _sl_print_row() {
       local slot="$1" model="$2"
       local ep; ep="$(_sl_endpoint "$model")"
-      local ep_suffix=""
-      [[ "$ep" != "ollama_local" ]] && ep_suffix=" ${GRAY}[$ep]${NC}"
       if (( _sl_first )); then
-        printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-22s ${GRAY}→${NC} %-38s${ep_suffix}\n" "plan" "$slot" "$model" >&2
+        if [[ "$ep" != "ollama_local" ]]; then
+          printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-22s ${GRAY}→${NC} %-38s ${GRAY}[%s]${NC}\n" "plan" "$slot" "$model" "$ep" >&2
+        else
+          printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-22s ${GRAY}→${NC} %-38s\n" "plan" "$slot" "$model" >&2
+        fi
         _sl_first=0
       else
-        printf "               ${BOLD}%-22s${NC} ${GRAY}→${NC} %-38s${ep_suffix}\n" "$slot" "$model" >&2
+        if [[ "$ep" != "ollama_local" ]]; then
+          printf "               ${BOLD}%-22s${NC} ${GRAY}→${NC} %-38s ${GRAY}[%s]${NC}\n" "$slot" "$model" "$ep" >&2
+        else
+          printf "               ${BOLD}%-22s${NC} ${GRAY}→${NC} %-38s\n" "$slot" "$model" >&2
+        fi
       fi
     }
 
@@ -1881,7 +1887,6 @@ ensure_proxy_running() {
         else
           _ptier="$(printf '%s' "$_ping_body" | jq -r '.active_tier // empty' 2>/dev/null || true)"
           _pmode="$(printf '%s' "$_ping_body" | jq -r '.active_mode // empty' 2>/dev/null || true)"
-          local _pcfg; _pcfg="$(printf '%s' "${CONFIG:-}" | sed "s|$HOME|~|")"
           printf "  ${GRAY}✓${NC} ${BOLD}%-10s${NC} ${GRAY}http://127.0.0.1:%s  pid %s" "proxy" "$PROXY_PORT" "$PROXY_STARTED_PID" >&2
           [[ -n "$_ptier" ]] && printf "  tier=%s" "$_ptier" >&2
           [[ -n "$_pmode" ]] && printf "  mode=%s" "$_pmode" >&2
@@ -3969,7 +3974,9 @@ if [[ "${1:-}" == "stats" && "${2:-}" == "clear" ]]; then
   if [[ -z "$result" ]]; then
     echo "c-thru: proxy did not respond" >&2; exit 1
   fi
-  printf '%s\n' "$result" | jq .
+  if ! printf '%s\n' "$result" | jq .; then
+    echo "c-thru: proxy responded but with non-JSON body: $result" >&2; exit 1
+  fi
   exit 0
 fi
 

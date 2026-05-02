@@ -2376,11 +2376,16 @@ const server = http.createServer((req, res) => {
 server.listen(INITIAL_PORT, '127.0.0.1', () => {
   process.stdout.write(`READY ${server.address().port}\n`);
   console.error(`c-thru listening on :${server.address().port}`);
+  try { fs.writeFileSync(PID_FILE, String(process.pid)); } catch {}
 });
 
+function cleanupPidFile() {
+  try { if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE); } catch {}
+}
+
 process.on('SIGHUP', () => reloadConfigFromDisk());
-process.on('SIGTERM', () => { flushPersistentUsageNowSync(); process.exit(0); });
-process.on('SIGINT', () => { flushPersistentUsageNowSync(); process.exit(0); });
+process.on('SIGTERM', () => { flushPersistentUsageNowSync(); cleanupPidFile(); process.exit(0); });
+process.on('SIGINT', () => { flushPersistentUsageNowSync(); cleanupPidFile(); process.exit(0); });
 // `beforeExit` fires on natural process termination (event loop emptied).
 // `exit` is too late for async I/O. This catches "node ran out of work"
 // shutdowns where SIGTERM/SIGINT didn't fire.
