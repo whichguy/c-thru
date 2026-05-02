@@ -494,6 +494,39 @@ function isLocalBackend(backend) {
     (backend.format === 'anthropic' && /localhost|127\.0\.0\.1/.test(backend.url || ''));
 }
 
+// Return the first model_extra_params entry whose pattern is a substring of model.
+function getModelExtraParams(model) {
+  const extras = CONFIG.model_extra_params;
+  if (!extras) return null;
+  for (const [pattern, params] of Object.entries(extras)) {
+    if (model.includes(pattern)) return params;
+  }
+  return null;
+}
+
+// Shallow-clone body and inject capability sampling defaults + model extra params.
+// Caller-supplied values always win (we only fill gaps). top_k and model extras
+// are only injected for local backends — cloud Anthropic rejects unknown fields.
+function injectSamplingDefaults(body, effectiveModel, capability, backend) {
+  if (!body) return body;
+  const capDefaults = (CONFIG.capability_sampling_defaults || {})[capability];
+  const modelExtras = isLocalBackend(backend) ? getModelExtraParams(effectiveModel) : null;
+  if (!capDefaults && !modelExtras) return body;
+
+  const out = Object.assign({}, body);
+  if (capDefaults) {
+    if (out.temperature == null && capDefaults.temperature != null) out.temperature = capDefaults.temperature;
+    if (out.top_p == null && capDefaults.top_p != null) out.top_p = capDefaults.top_p;
+    if (isLocalBackend(backend) && out.top_k == null && capDefaults.top_k != null) out.top_k = capDefaults.top_k;
+  }
+  if (modelExtras) {
+    for (const [k, v] of Object.entries(modelExtras)) {
+      if (out[k] == null) out[k] = v;
+    }
+  }
+  return out;
+}
+
 // Apply auth for an outbound request based on endpoint auth config.
 //   auth:"none"       → strip auth headers, inject nothing
 //   auth_env present  → inject Authorization: Bearer <env value>
@@ -1198,7 +1231,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       sendAnthropicError(res, 502, `backend anthropic at ${targetUrl.origin} error: ${e.message}`);
     }
   });
-  if (body) up.write(JSON.stringify(body));
+  const outBody = injectSamplingDefaults(body, effectiveModel, requestMeta.capability, backend);
+  if (outBody) up.write(JSON.stringify(outBody));
   up.end();
 }
 

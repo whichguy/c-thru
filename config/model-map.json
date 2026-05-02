@@ -894,5 +894,27 @@
     "pull_timeout_ms": 600000
   },
   "quality_tolerance_pct": 15,
-  "model_overrides": {}
+  "model_overrides": {},
+  "capability_sampling_defaults": {
+    "coder":                { "temperature": 1.0, "top_p": 0.95, "top_k": 20 },
+    "tester":               { "temperature": 1.0, "top_p": 0.95, "top_k": 20 },
+    "debugger-investigate": { "temperature": 1.0, "top_p": 0.95, "top_k": 20 },
+    "explore":              { "temperature": 1.0, "top_p": 0.95, "top_k": 20 },
+    "planner":              { "temperature": 0.6 },
+    "planner-hard":         { "temperature": 0.6 },
+    "reviewer-routine":     { "temperature": 0.6 },
+    "reviewer-security":    { "temperature": 0.6 },
+    "debugger-hypothesis":  { "temperature": 0.6 },
+    "debugger-hard":        { "temperature": 0.6 },
+    "generalist":           { "temperature": 0.6 },
+    "fast-generalist":      { "temperature": 0.6 },
+    "vision":               { "temperature": 0.6 },
+    "pdf":                  { "temperature": 0.6 },
+    "long-context":         { "temperature": 0.6 },
+    "docs":                 { "temperature": 0.6 },
+    "writer":               { "temperature": 0.7 }
+  },
+  "model_extra_params": {
+    "qwen3.6": { "preserve_thinking": true }
+  }
 }
