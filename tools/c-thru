@@ -475,21 +475,21 @@ cmd_help() {
   echo -e "${BOLD}Flags${NC} ${GRAY}(stripped before forwarding to claude):${NC}"
   echo "  --route <name>            use a named route from model-map.json"
   echo "  --model <model>           override model for this invocation"
-  echo "  --local-only              synonym for --mode local-only"
-  echo "  --offline                 synonym for --mode offline"
-  echo "  --best-cloud              synonym for --mode cloud-best-quality"
-  echo "  --best-opensource-cloud   synonym for --mode best-opensource-cloud"
-  echo "  --best-opensource-local   synonym for --mode best-opensource-local"
-  echo "  --best-opensource         synonym for --mode best-opensource"
-  echo "  --fastest                 synonym for --mode fastest-possible"
-  echo "  --smallest                synonym for --mode smallest-possible"
-  echo -e "  --mode <mode>             set LLM connectivity mode for this invocation"
-  echo -e "  ${GRAY}    Connectivity:${NC}      connected | offline | local-only"
-  echo -e "  ${GRAY}    Per-cap mix:${NC}       semi-offload | cloud-judge-only | cloud-thinking | local-review"
-  echo -e "  ${GRAY}    Best-of-tier:${NC}      cloud-best-quality | local-best-quality"
-  echo -e "  ${GRAY}    Provider filter:${NC}   cloud-only | claude-only | opensource-only"
-  echo -e "  ${GRAY}    Benchmark rank:${NC}    fastest-possible | smallest-possible | best-opensource | best-opensource-cloud | best-opensource-local"
-  echo -e "  ${GRAY}    Full reference:${NC}    docs/connectivity-modes.md"
+  echo "  --local-only              synonym for --mode best-local-oss"
+  echo "  --offline                 synonym for --mode best-local-oss"
+  echo "  --best-cloud              synonym for --mode best-cloud"
+  echo "  --best-opensource-cloud   synonym for --mode best-cloud-oss"
+  echo "  --best-opensource-local   synonym for --mode best-local-oss"
+  echo "  --best-opensource         synonym for --mode best-cloud-oss"
+  echo "  --fastest                 synonym for --mode best-local-oss"
+  echo "  --smallest                synonym for --mode best-local-oss"
+  echo -e "  --mode <mode>             set LLM routing mode for this invocation"
+  echo -e "  ${GRAY}    Modes:${NC}             best-cloud | best-cloud-oss | best-local-oss | best-cloud-gov | best-local-gov"
+  echo -e "  ${GRAY}    best-cloud:${NC}        Anthropic/cloud models (Claude Opus/Sonnet); local at 64+ GB"
+  echo -e "  ${GRAY}    best-cloud-oss:${NC}    OSS cloud via OpenRouter (DeepSeek, Kimi, Qwen); local at 64+ GB"
+  echo -e "  ${GRAY}    best-local-oss:${NC}    fully local inference (Phi, Qwen, Devstral, Llama)"
+  echo -e "  ${GRAY}    best-cloud-gov:${NC}    USGov compliant (non-Chinese-origin cloud models)"
+  echo -e "  ${GRAY}    best-local-gov:${NC}    USGov compliant local (Phi, GPT-OSS; blocks Qwen/DeepSeek)"
   echo "  --profile <tier>          force hardware tier (16gb|32gb|48gb|64gb|128gb)"
   echo "  --memory-gb <n>           override RAM detection (= CLAUDE_LLM_MEMORY_GB)"
   echo "  --debug                   enable router and proxy debug logs"
@@ -511,11 +511,7 @@ cmd_help() {
   echo "  C_THRU_DEBUG=1|2       verbose route resolution to stderr"
   echo "  CLAUDE_PROXY_DEBUG=1|2        proxy-side verbose logs"
   echo -e "  CLAUDE_LLM_MODE=<mode>        where calls go and how models are selected"
-  echo -e "  ${GRAY}    Connectivity:   connected|offline|local-only — cloud vs local routing${NC}"
-  echo -e "  ${GRAY}    Per-cap mix:    semi-offload|cloud-judge-only|cloud-thinking|local-review${NC}"
-  echo -e "  ${GRAY}    Best-of-tier:   cloud-best-quality|local-best-quality${NC}"
-  echo -e "  ${GRAY}    Provider filter:cloud-only|claude-only|opensource-only${NC}"
-  echo -e "  ${GRAY}    Benchmark rank: fastest-possible|smallest-possible|best-opensource|best-opensource-cloud|best-opensource-local${NC}"
+  echo -e "  ${GRAY}    best-cloud|best-cloud-oss|best-local-oss|best-cloud-gov|best-local-gov${NC}"
   echo "  CLAUDE_LLM_MEMORY_GB=<n>      override RAM detection for hw tier selection"
   echo "  C_THRU_NO_UPDATE=1     disable git self-update at startup"
   echo "  CLAUDE_PROXY_JOURNAL=1        record every request/response to ~/.claude/journal/"
@@ -896,7 +892,9 @@ memory_gb_to_profile() {
 llm_profile_exists() {
   local profile="$1"
   [[ -f "$CONFIG" && -n "$profile" ]] || return 1
-  jq -e --arg p "$profile" '((.llm_profiles // {})[$p] | type) == "object"' "$CONFIG" >/dev/null 2>&1
+  # New schema is capability-outer; tiers are encoded inside each capability's mode values.
+  # Any hardware tier is "valid" if llm_profiles is non-empty and contains at least one entry.
+  jq -e '((.llm_profiles // {}) | length) > 0' "$CONFIG" >/dev/null 2>&1
 }
 
 llm_profiles_defined() {
@@ -967,7 +965,8 @@ resolve_llm_profile_name() {
 }
 
 profile_capability_slots() {
-  printf '%s\n' default classifier explorer reviewer workhorse coder judge orchestrator reasoner fast-scout agentic-coder
+  [[ -f "$CONFIG" ]] || return 0
+  jq -r '(.llm_profiles // {}) | keys[]' "$CONFIG" 2>/dev/null || true
 }
 
 collect_active_profile_capability_assignments() {
@@ -991,27 +990,18 @@ collect_active_profile_capability_assignments() {
       requested="$default_override"
     else
       # llm_mode-aware resolution: mirrors resolveProfileModel() in model-map-resolve.js
+      # New schema: llm_profiles[$key][$mode] is a string or tier-keyed object {$p: model}
       requested="$(jq -r --arg p "$profile" --arg key "$slot" --arg mode "$llm_mode" '
-        (.llm_profiles // {})[$p][$key] as $e |
-        if $e == null then empty
-        elif ($e.modes // {}) | has($mode) then $e.modes[$mode]
-        elif $mode == "offline" or $mode == "local-only" then $e.disconnect_model
-        elif $mode == "connected" then $e.connected_model
-        elif $mode == "semi-offload" or $mode == "cloud-judge-only" then $e.disconnect_model
-        elif $mode == "cloud-best-quality" then ($e.cloud_best_model // $e.connected_model)
-        elif $mode == "local-best-quality" then ($e.local_best_model // $e.disconnect_model)
-        elif $mode == "cloud-only" then ($e.cloud_best_model // $e.connected_model)
-        elif $mode == "cloud-thinking" then ($e.modes["cloud-thinking"] // $e.disconnect_model)
-        elif $mode == "local-review" then ($e.modes["local-review"] // $e.connected_model)
-        elif $mode == "claude-only" then ($e.modes["claude-only"] // $e.connected_model)
-        elif $mode == "opensource-only" then ($e.modes["opensource-only"] // $e.disconnect_model)
-        elif $mode == "fastest-possible" then ($e.modes["fastest-possible"] // $e.connected_model)
-        elif $mode == "smallest-possible" then ($e.modes["smallest-possible"] // $e.disconnect_model)
-        elif $mode == "best-opensource" then ($e.modes["best-opensource"] // $e.disconnect_model)
-        elif $mode == "best-opensource-cloud" then ($e.modes["best-opensource-cloud"] // $e.cloud_best_model // $e.connected_model)
-        elif $mode == "best-opensource-local" then ($e.modes["best-opensource-local"] // $e.local_best_model // $e.disconnect_model)
-        else $e.connected_model
-        end // empty
+        (.llm_profiles // {})[$key] as $cap |
+        if $cap == null then empty
+        else
+          (($cap[$mode] // $cap["best-cloud"]) as $modeVal |
+          if $modeVal == null then empty
+          elif ($modeVal | type) == "string" then $modeVal
+          elif ($modeVal | type) == "object" then ($modeVal[$p] // empty)
+          else empty
+          end)
+        end
       ' "$CONFIG" 2>/dev/null)"
     fi
     [[ -n "$requested" && "$requested" != "null" ]] || continue
@@ -1120,10 +1110,10 @@ resolve_llm_mode() {
     return 0
   fi
 
-  local config_mode="connected"
+  local config_mode="best-cloud"
   if [[ -f "$CONFIG" ]]; then
-    config_mode="$(jq -r '.llm_mode // .llm_connectivity_mode // "connected"' "$CONFIG" 2>/dev/null)"
-    [[ -z "$config_mode" || "$config_mode" == "null" ]] && config_mode="connected"
+    config_mode="$(jq -r '.llm_mode // .llm_connectivity_mode // "best-cloud"' "$CONFIG" 2>/dev/null)"
+    [[ -z "$config_mode" || "$config_mode" == "null" ]] && config_mode="best-cloud"
     [[ "$config_mode" == "disconnect" ]] && config_mode="offline"
   fi
 
@@ -1159,27 +1149,18 @@ resolve_profile_alias_model() {
   llm_mode="$(resolve_llm_mode)"
   profile_key="$(profile_alias_key "$requested")"
   # llm_mode: mode-aware model selection — mirrors resolveProfileModel() in model-map-resolve.js
+  # New schema: llm_profiles[$key][$mode] is a string or tier-keyed object {$p: model}
   resolved="$(jq -r --arg p "$profile" --arg key "$profile_key" --arg mode "$llm_mode" '
-    (.llm_profiles // {})[$p][$key] as $e |
-    if $e == null then empty
-    elif ($e.modes // {}) | has($mode) then $e.modes[$mode]
-    elif $mode == "offline" or $mode == "local-only" then $e.disconnect_model
-    elif $mode == "connected" then $e.connected_model
-    elif $mode == "semi-offload" or $mode == "cloud-judge-only" then $e.disconnect_model
-    elif $mode == "cloud-best-quality" then ($e.cloud_best_model // $e.connected_model)
-    elif $mode == "local-best-quality" then ($e.local_best_model // $e.disconnect_model)
-    elif $mode == "cloud-only" then ($e.cloud_best_model // $e.connected_model)
-    elif $mode == "cloud-thinking" then ($e.modes["cloud-thinking"] // $e.disconnect_model)
-    elif $mode == "local-review" then ($e.modes["local-review"] // $e.connected_model)
-    elif $mode == "claude-only" then ($e.modes["claude-only"] // $e.connected_model)
-    elif $mode == "opensource-only" then ($e.modes["opensource-only"] // $e.disconnect_model)
-    elif $mode == "fastest-possible" then ($e.modes["fastest-possible"] // $e.connected_model)
-    elif $mode == "smallest-possible" then ($e.modes["smallest-possible"] // $e.disconnect_model)
-    elif $mode == "best-opensource" then ($e.modes["best-opensource"] // $e.disconnect_model)
-    elif $mode == "best-opensource-cloud" then ($e.modes["best-opensource-cloud"] // $e.cloud_best_model // $e.connected_model)
-    elif $mode == "best-opensource-local" then ($e.modes["best-opensource-local"] // $e.local_best_model // $e.disconnect_model)
-    else $e.connected_model
-    end // empty
+    (.llm_profiles // {})[$key] as $cap |
+    if $cap == null then empty
+    else
+      (($cap[$mode] // $cap["best-cloud"]) as $modeVal |
+      if $modeVal == null then empty
+      elif ($modeVal | type) == "string" then $modeVal
+      elif ($modeVal | type) == "object" then ($modeVal[$p] // empty)
+      else empty
+      end)
+    end
   ' "$CONFIG" 2>/dev/null)"
   if [[ -n "$resolved" && "$resolved" != "null" ]]; then
     printf '%s' "$resolved"
@@ -1221,19 +1202,19 @@ apply_background_model_overrides() {
   local llm_mode
   llm_mode="$(resolve_llm_mode)"
   case "$llm_mode" in
-    offline|local-only|best-opensource-local|best-opensource|opensource-only|local-best-quality|semi-offload|cloud-judge-only)
-      # fast-generalist → gemma4:26b (local, 102 t/s) — appropriate for Haiku-tier background work
+    best-local-oss|best-local-gov|offline|local-only|best-opensource-local|best-opensource|opensource-only|local-best-quality|semi-offload|cloud-judge-only)
+      # fast-generalist → small local model — appropriate for Haiku-tier background work
       if [[ -z "${ANTHROPIC_SMALL_FAST_MODEL:-}" || "${ANTHROPIC_SMALL_FAST_MODEL:-}" == claude-* ]]; then
         export ANTHROPIC_SMALL_FAST_MODEL="fast-generalist"
       fi
       if [[ -z "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}" || "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}" == claude-* ]]; then
         export ANTHROPIC_DEFAULT_HAIKU_MODEL="fast-generalist"
       fi
-      # generalist → workhorse tier local model — appropriate for Sonnet-tier background work
+      # generalist → local model — appropriate for Sonnet-tier background work
       if [[ -z "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" || "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" == claude-* ]]; then
         export ANTHROPIC_DEFAULT_SONNET_MODEL="generalist"
       fi
-      # large-general → judge tier local model — appropriate for Opus-tier background work
+      # large-general → local model — appropriate for Opus-tier background work
       if [[ -z "${ANTHROPIC_DEFAULT_OPUS_MODEL:-}" || "${ANTHROPIC_DEFAULT_OPUS_MODEL:-}" == claude-* ]]; then
         export ANTHROPIC_DEFAULT_OPUS_MODEL="large-general"
       fi
@@ -3781,14 +3762,14 @@ while [[ $i -lt $n ]]; do
     --mode)             if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_MODE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else echo "c-thru: --mode requires a value" >&2; exit 1; fi ;;
     --profile=*)        export CLAUDE_LLM_PROFILE="${a#--profile=}"; i=$((i + 1)) ;;
     --profile)          if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_PROFILE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else echo "c-thru: --profile requires a tier name" >&2; exit 1; fi ;;
-    --local-only)              export CLAUDE_LLM_MODE="local-only"; i=$((i + 1)) ;;
-    --best-cloud)              export CLAUDE_LLM_MODE="cloud-best-quality"; i=$((i + 1)) ;;
-    --best-opensource-cloud)   export CLAUDE_LLM_MODE="best-opensource-cloud"; i=$((i + 1)) ;;
-    --best-opensource-local)   export CLAUDE_LLM_MODE="best-opensource-local"; i=$((i + 1)) ;;
-    --best-opensource)         export CLAUDE_LLM_MODE="best-opensource"; i=$((i + 1)) ;;
-    --fastest)                 export CLAUDE_LLM_MODE="fastest-possible"; i=$((i + 1)) ;;
-    --smallest)                export CLAUDE_LLM_MODE="smallest-possible"; i=$((i + 1)) ;;
-    --offline)                 export CLAUDE_LLM_MODE="offline"; i=$((i + 1)) ;;
+    --local-only)              export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
+    --best-cloud)              export CLAUDE_LLM_MODE="best-cloud"; i=$((i + 1)) ;;
+    --best-opensource-cloud)   export CLAUDE_LLM_MODE="best-cloud-oss"; i=$((i + 1)) ;;
+    --best-opensource-local)   export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
+    --best-opensource)         export CLAUDE_LLM_MODE="best-cloud-oss"; i=$((i + 1)) ;;
+    --fastest)                 export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
+    --smallest)                export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
+    --offline)                 export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
     --thinking | --thinking=*)  export C_THRU_THINKING=1; i=$((i + 1)) ;;
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;

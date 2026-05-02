@@ -175,17 +175,14 @@ function cmdResolve(args) {
     return;
   }
 
-  const profile  = (config.llm_profiles || {})[tier];
-  if (!profile) { die(`no llm_profiles entry for tier ${tier}`); }
-
   const aliasKey = capAlias === 'general-default' ? 'default' : capAlias;
-  const entry    = profile[aliasKey];
+  const entry    = (config.llm_profiles || {})[aliasKey];
   if (!entry || typeof entry !== 'object') {
-    process.stderr.write(`c-thru-config-helpers: no profile entry for ${JSON.stringify(capAlias)} in tier ${tier}\n`);
+    process.stderr.write(`c-thru-config-helpers: no profile entry for ${JSON.stringify(capAlias)}\n`);
     process.exit(2);
   }
 
-  const resolved = resolveProfileModel(entry, mode);
+  const resolved = resolveProfileModel(entry, tier, mode);
   if (!resolved) { die(`resolveProfileModel returned empty for ${JSON.stringify(capAlias)}`); }
   const target = resolveTerminalTarget(config, resolved);
   const providerModel = target ? target.providerModel : resolved;
@@ -386,7 +383,7 @@ function cmdAgentList(_args) {
   const { MODEL_PIN_PREFIX, resolveActiveTier, resolveLlmMode, resolveProfileModel } = resolve;
   const tier = resolveActiveTier(config);
   const mode = resolveLlmMode(config);
-  const profiles = (config.llm_profiles || {})[tier] || {};
+  const allProfiles = config.llm_profiles || {};
   const a2c = config.agent_to_capability || {};
 
   let overriddenAgents = new Set();
@@ -408,8 +405,8 @@ function cmdAgentList(_args) {
       modelDisplay = capVal.slice(MODEL_PIN_PREFIX.length);
     } else {
       capDisplay = capVal || '(none)';
-      const entry = profiles[capVal];
-      const m = entry ? resolveProfileModel(entry, mode) : null;
+      const entry = allProfiles[capVal];
+      const m = entry ? resolveProfileModel(entry, tier, mode) : null;
       modelDisplay = m || '(unresolved)';
     }
     rows.push({ agent, cap: capDisplay, model: modelDisplay, overridden: overriddenAgents.has(agent) });

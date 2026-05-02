@@ -153,7 +153,7 @@ were not available to the agent.
 
 | Flag | Sets env | Effect |
 |---|---|---|
-| `--mode <m>` | `CLAUDE_LLM_MODE` | Connectivity / routing mode (15 values; see docs/connectivity-modes.md) |
+| `--mode <m>` | `CLAUDE_LLM_MODE` | Routing mode (5 values): `best-cloud` \| `best-cloud-oss` \| `best-local-oss` \| `best-cloud-gov` \| `best-local-gov` |
 | `--profile <t>` | `CLAUDE_LLM_PROFILE` | Force hardware tier |
 | `--memory-gb <n>` | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection |
 | `--bypass-proxy` | `CLAUDE_PROXY_BYPASS=1` | Skip proxy entirely |
@@ -183,7 +183,7 @@ were not available to the agent.
 | `CLAUDE_PROXY_CLASSIFY_OLLAMA_URL` | Where to send classifier requests (default `OLLAMA_BASE_URL` or `localhost:11434`) |
 | `CLAUDE_PROXY_CLASSIFY_TIMEOUT_MS` | Classifier hard timeout (default 5000) |
 | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection (positive integer GB). Malformed values fall through to `os.totalmem()`. |
-| `CLAUDE_LLM_MODE` | Override connectivity / routing mode (16 modes): `connected` | `offline` | `local-only` | `semi-offload` | `cloud-judge-only` | `cloud-thinking` | `local-review` | `cloud-best-quality` | `local-best-quality` | `cloud-only` | `claude-only` | `opensource-only` | `fastest-possible` | `smallest-possible` | `best-opensource` | `best-opensource-cloud`. See `docs/connectivity-modes.md` for full reference. Replaces `CLAUDE_CONNECTIVITY_MODE` (legacy alias still accepted). |
+| `CLAUDE_LLM_MODE` | Override routing mode (5 modes): `best-cloud` \| `best-cloud-oss` \| `best-local-oss` \| `best-cloud-gov` \| `best-local-gov`. `best-cloud`: Anthropic/cloud models, local at 64+ GB. `best-cloud-oss`: OSS cloud via OpenRouter (DeepSeek, Kimi, Qwen). `best-local-oss`: fully local (Phi, Qwen, Devstral). `best-cloud-gov`: USGov compliant cloud (non-Chinese-origin). `best-local-gov`: USGov compliant local (Phi, GPT-OSS). Legacy `CLAUDE_CONNECTIVITY_MODE` still accepted. |
 
 | `C_THRU_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). Also settable via `/map-model update off` (writes `self_update: false` to model-map.overrides.json). |
 | `C_THRU_UPDATE_INTERVAL` | Seconds between self-update fetches (default `3600`). Debounced via `.git/FETCH_HEAD` mtime. |
@@ -257,88 +257,58 @@ Catches dangling `subagent_type` references, missing prompt keys vs. declared `I
 Invoke with `/c-thru-plan <intent>`. State in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/`. Completed plans archived to `~/.claude/c-thru-archive/`.
 Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`.
 
-### Capability aliases
+### Pipeline agents (12 + 8 utility)
 
-Wave-system internal agents route through shared capability tiers. User-facing role agents
-each have a self-named capability that mirrors the same tier — making `agent_to_capability`
-a 1:1 map for all user-facing agents (agent name == capability key).
+The agent fleet uses a flat identity mapping: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. No alias indirection.
 
-**Shared capability tiers (wave-internal agents):**
+**12 pipeline agents (planner → coder → tester → reviewer flow):**
 
-| Alias | Cognitive tier | Wave-system agents |
+| Agent / Capability | Role | Tier budget |
 |---|---|---|
-| `judge` | 4–5 | planner, auditor, review-plan, final-reviewer, journal-digester, evaluator, supervisor, supervisor-debug, uplift-decider |
-| `judge-strict` | 4–5, hard_fail | security-reviewer |
-| `orchestrator` | 2 | plan-orchestrator, integrator, doc-writer |
-| `local-planner` | 2–3 local | planner-local (dep_update signal only) |
-| `code-analyst` | 2–3 | test-writer, wave-reviewer, wave-synthesizer, converger |
-| `test-writer-heavy` | 4 heavy | test-writer-heavy |
-| `pattern-coder` | 1 | scaffolder, discovery-advisor, learnings-consolidator |
-| `deep-coder` | 3 | implementer |
-| `implementer-heavy` | 4 heavy | implementer-heavy |
-| `commit-message-generator` | 1 local | (deterministic pre-processor — clean-wave path) |
+| `planner` | High-stakes planning; Opus cloud, 27B local at 64+ GB | 999999 |
+| `planner-hard` | Hardest planning; always Opus / Kimi K2.6 | 999999 |
+| `explore` | Fast read-only exploration; Phi/Qwen small | 10000 |
+| `coder` | Primary coding; Sonnet/Devstral/QwenCoder | 50000 |
+| `coder-fallback` | Backup coder from different training distribution | 10000 |
+| `tester` | Test generation; same models as explore | 10000 |
+| `docs` | Documentation writing; Gemma E4B / Phi (gov) | 10000 |
+| `reviewer-routine` | Routine code review; Sonnet/local-27B | 50000 |
+| `reviewer-security` | Security review; always Opus / Kimi K2.6, hard_fail | 999999 |
+| `debugger-hypothesis` | Parallel hypothesis testing; Sonnet/local-27B | 50000 |
+| `debugger-investigate` | Investigation; same shape as coder | 50000 |
+| `debugger-hard` | Hard debugging; always Opus / Kimi K2.6 | 999999 |
 
-**User-facing role agents (self-named capabilities — agent name == capability key):**
+**8 retained utility agents:**
 
-| Agent / Capability | Cognitive tier | Backing capability (models copied from) |
-|---|---|---|
-| `judge` | 4–5 | — (canonical) |
-| `large-general` | 4–5 | judge |
-| `planner` | 4–5 | judge |
-| `deep-code-debugger` | 3 (reasoning) | reasoner |
-| `fast-code-debugger` | 2 (fast-debug) | fast-code-debugger |
-| `reasoner` | 3 (reasoning) | — (canonical) |
-| `orchestrator` | 2 | — (canonical) |
-| `long-context` | 2 | orchestrator |
-| `context-manager` | 2 | orchestrator |
-| `agentic-coder` | 3 | — (canonical) |
-| `implementer-heavy` | 4 heavy | — (canonical, was deep-coder-cloud) |
-| `fast-coder` | 3 cloud / local | — (canonical) |
-| `refactor` | 3 | deep-coder |
-| `deep-coder-precise` | 3 (mxfp8/BF16) | — (canonical) |
-| `coder` | 2 | — (canonical) |
-| `reviewer` | 2 (review) | — (canonical) |
-| `code-analyst-light` | 1–2 (light) | — (canonical) |
-| `test-writer-heavy` | 4 heavy | — (canonical, was code-analyst-cloud) |
-| `generalist` | 2 (general) | workhorse |
-| `vision` | 2 (general) | workhorse |
-| `image-analyst` | 2 (general) | workhorse |
-| `pdf` | 2 (general) | workhorse |
-| `fast-generalist` | 1 (fast) | classifier |
-| `edge` | 1 | pattern-coder |
-| `writer` | 2–4 (prose) | writer |
-| `explorer` | 1 (discovery) | — (canonical) |
-| `fast-scout` | 1 (latency-optimised) | — (canonical) |
-
-**Internal capability tier definitions (not directly agent-named):**
-
-| Alias | Purpose |
+| Agent | Purpose |
 |---|---|
-| `workhorse` | Backing tier for generalist/vision/pdf |
-| `classifier` | Backing tier for fast-generalist |
-| `default` | Fallback for unresolved requests |
+| `vision` | Image/screenshot analysis |
+| `pdf` | PDF reading and extraction |
+| `writer` | Long-form prose |
+| `edge` | Minimal-footprint tasks |
+| `generalist` | General-purpose |
+| `fast-generalist` | Fast/cheap background work |
+| `fast-scout` | Latency-optimized search |
+| `long-context` | Large context window tasks |
 
 ### agent_to_capability resolution
 
-Agent files declare `model: <agent-name>`. The proxy resolves via 2-hop graph:
-`agent-name → agent_to_capability → capability-alias → llm_profiles[hw] → concrete model`.
+Agent files declare `model: <agent-name>`. The proxy resolves via:
+`agent-name → agent_to_capability (identity) → llm_profiles[capability][mode][tier] → concrete model`.
 
 The `agent_to_capability` map lives in `config/model-map.json` (top-level key).
-`resolveCapabilityAlias()` in `claude-proxy` performs the traversal at request time —
-no data is duplicated into `llm_profiles`.
+`resolveCapabilityAlias()` in `claude-proxy` performs the traversal at request time.
 
 ### Adding/rebinding
 
-- Rebind one agent to a different tier: change one line in `agent_to_capability`.
-- Swap a tier's backing model: change one line in `llm_profiles[<hw>][<alias>]`.
+- Swap a capability's model for one mode×tier cell: one value change in `llm_profiles[cap][mode][tier]`.
+- Swap all tiers for a mode: replace the entire mode-value object.
 - Agent files are never modified for either operation.
 
 ### Model tags
 
-New Ollama tags used by agentic aliases: `devstral-small:2`, `qwen3.6:35b`,
-`qwen3.5:122b`, `qwen3.5:27b`, `qwen3.5:9b`, `qwen3.5:1.7b`.
-Run `ollama list` to confirm presence before first use.
-
-### Worker CONFIDENCE field (Wave-1)
-
-All worker agents (implementer, wave-reviewer, test-writer, scaffolder) return `CONFIDENCE: high|medium|low` in their STATUS block, derived from the §12.1 rubric embedded in each agent prompt. Absent CONFIDENCE is treated as `medium` (graceful degradation). The orchestrator logs calibration tuples to `$wave_dir/cascade/<item>.jsonl` joining worker confidence with `verify.json` test outcomes. See `docs/agent-architecture.md` for STATUS contract and calibration formula.
+Local Ollama tags: `qwen3:7b`, `qwen3:14b`, `qwen3:30b`, `devstral-small-2:24b`, `gemma4:e4b`,
+`phi4-mini`, `phi4-reasoning:plus`, `llama4:scout`.
+Cloud-OSS via OpenRouter: `deepseek/deepseek-r2`, `moonshotai/kimi-k2`, `thudm/glm-4-plus`.
+Placeholder (not yet available): `gpt-oss-120b:TODO`, `gpt-oss-20b:TODO`, `qwen3-coder-next:TODO`.
+Run `ollama list` to confirm local tags before first use.

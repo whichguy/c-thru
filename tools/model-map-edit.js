@@ -37,33 +37,36 @@ function applyFallbackUpdates(config, fallbackStrategies) {
   }
 }
 
+const LLM_PROFILE_MODES = new Set(['best-cloud', 'best-cloud-oss', 'best-local-oss', 'best-cloud-gov', 'best-local-gov']);
+const HARDWARE_TIERS = new Set(['16gb', '32gb', '48gb', '64gb', '128gb']);
+
 function applyLlmProfilesUpdates(config, llmProfiles) {
   if (llmProfiles == null) return;
   if (!isObject(llmProfiles)) fail("'llm_profiles' update payload must be an object");
   config.llm_profiles = isObject(config.llm_profiles) ? JSON.parse(JSON.stringify(config.llm_profiles)) : {};
-  for (const [tier, capMap] of Object.entries(llmProfiles)) {
-    if (typeof tier !== 'string' || !tier.trim()) fail('llm_profiles tier keys must be non-empty strings');
-    if (capMap === null) fail(`llm_profiles['${tier}'] = null is not supported — removing an entire tier is out of scope`);
-    if (!isObject(capMap)) fail(`llm_profiles['${tier}'] must be an object`);
-    config.llm_profiles[tier] = isObject(config.llm_profiles[tier]) ? { ...config.llm_profiles[tier] } : {};
-    for (const [cap, entry] of Object.entries(capMap)) {
-      if (typeof cap !== 'string' || !cap.trim()) fail(`llm_profiles['${tier}'] capability keys must be non-empty strings`);
-      if (entry === null) {
-        delete config.llm_profiles[tier][cap];
-        continue;
-      }
-      if (!isObject(entry)) fail(`llm_profiles['${tier}']['${cap}'] must be an object or null`);
-      for (const [k, v] of Object.entries(entry)) {
-        if (v === null) fail(`llm_profiles['${tier}']['${cap}']['${k}'] = null is not supported — use full-object replace only`);
-      }
-      if (typeof entry.connected_model !== 'string' || !entry.connected_model.trim()) {
-        fail(`llm_profiles['${tier}']['${cap}'].connected_model must be a non-empty string`);
-      }
-      if (typeof entry.disconnect_model !== 'string' || !entry.disconnect_model.trim()) {
-        fail(`llm_profiles['${tier}']['${cap}'].disconnect_model must be a non-empty string`);
-      }
-      config.llm_profiles[tier][cap] = entry;
+  for (const [cap, entry] of Object.entries(llmProfiles)) {
+    if (typeof cap !== 'string' || !cap.trim()) fail('llm_profiles capability keys must be non-empty strings');
+    if (entry === null) {
+      delete config.llm_profiles[cap];
+      continue;
     }
+    if (!isObject(entry)) fail(`llm_profiles['${cap}'] must be an object or null`);
+    if (entry.connected_model !== undefined || entry.disconnect_model !== undefined) {
+      fail(`llm_profiles['${cap}'] uses old schema (connected_model/disconnect_model); migrate to mode-keyed format (best-cloud, best-local-oss, etc.)`);
+    }
+    for (const [k, v] of Object.entries(entry)) {
+      if (k === 'on_failure' || k === 'fallback_to') continue;
+      if (!LLM_PROFILE_MODES.has(k)) fail(`llm_profiles['${cap}']['${k}'] is not a valid mode key; valid: ${[...LLM_PROFILE_MODES].join(', ')}`);
+      if (v !== null && typeof v !== 'string' && !isObject(v)) {
+        fail(`llm_profiles['${cap}']['${k}'] must be a string, tier-keyed object, or null`);
+      }
+      if (isObject(v)) {
+        for (const tier of Object.keys(v)) {
+          if (!HARDWARE_TIERS.has(tier)) fail(`llm_profiles['${cap}']['${k}']['${tier}'] is not a valid hardware tier; valid: ${[...HARDWARE_TIERS].join(', ')}`);
+        }
+      }
+    }
+    config.llm_profiles[cap] = entry;
   }
 }
 
@@ -110,16 +113,9 @@ function applyUpdates(config, spec, defaults) {
     next.llm_active_profile = spec.active_profile;
   }
 
-  const LLM_MODES = new Set([
-    'connected', 'semi-offload', 'cloud-judge-only', 'offline',
-    'cloud-best-quality', 'local-best-quality',
-    'local-only', 'cloud-thinking', 'local-review',
-    'cloud-only', 'claude-only', 'opensource-only',
-    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local'
-  ]);
   if (spec.llm_mode != null) {
-    if (typeof spec.llm_mode !== 'string' || !LLM_MODES.has(spec.llm_mode)) {
-      fail(`'llm_mode' must be one of: ${[...LLM_MODES].join(', ')}`);
+    if (typeof spec.llm_mode !== 'string' || !LLM_PROFILE_MODES.has(spec.llm_mode)) {
+      fail(`'llm_mode' must be one of: ${[...LLM_PROFILE_MODES].join(', ')}`);
     }
     next.llm_mode = spec.llm_mode;
   }

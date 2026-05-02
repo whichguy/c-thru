@@ -16,6 +16,7 @@ const configStorage = new AsyncLocalStorage();
 const {
   MODEL_PIN_PREFIX,
   resolveProfileModel,
+  resolveLocalFallback,
   resolveLlmMode,
   resolveActiveTier,
   resolveCapabilityAlias,
@@ -595,14 +596,16 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
       if (nested.error) return nested;
       return { ...nested, logicalRole: nested.logicalRole || model, capability: model };
     }
-    const profile = (cfg.llm_profiles || {})[tier];
-    const entry = profile ? profile[capAlias] : null;
+    // New schema: llm_profiles[capability] (capability-outer, not tier-outer)
+    const entry = (cfg.llm_profiles || {})[capAlias] || null;
     if (entry) {
-      const resolved = resolveProfileModel(entry, mode);
+      const resolved = resolveProfileModel(entry, tier, mode);
       if (resolved) {
         const nested = resolveBackend(resolved, cfg, tier, mode, seen);
-        if (nested.error) return nested; // Propagate the error
+        if (nested.error) return nested;
         return { ...nested, logicalRole: capAlias, capability: capAlias };
+      } else {
+        return { error: `no model resolved for capability '${capAlias}' in mode '${mode}' at tier '${tier}'`, status: 503 };
       }
     }
   }
@@ -816,8 +819,8 @@ function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
   if (res.headersSent) return false;
   const capKey = requestMeta.capability;
   if (!capKey) return false;
-  const profileEntry = (CONFIG.llm_profiles?.[requestMeta.hwTier] || {})[capKey];
-  const termModel = profileEntry?.disconnect_model;
+  // New schema: llm_profiles[capability], use resolveLocalFallback to find a local model
+  const termModel = resolveLocalFallback(CONFIG.llm_profiles?.[capKey], requestMeta.hwTier);
   if (!termModel) return false;
   const triedM = requestMeta._triedModels || new Set();
   if (triedM.has(termModel)) return false;
@@ -2053,11 +2056,12 @@ const server = http.createServer((req, res) => {
       if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/' || req.url.startsWith('/c-thru/status?'))) {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
-        const profiles = (CONFIG.llm_profiles || {})[tier] || {};
+        // New schema: llm_profiles[capability] (capability-outer, not tier-outer)
+        const allProfiles = CONFIG.llm_profiles || {};
         const active_capabilities = {};
-        for (const [alias, entry] of Object.entries(profiles)) {
-          const m = resolveProfileModel(entry, mode);
-          if (m) active_capabilities[alias] = m.replace(BACKEND_SIGIL_RE, '$1');
+        for (const [capabilityName, entry] of Object.entries(allProfiles)) {
+          const m = resolveProfileModel(entry, tier, mode);
+          if (m) active_capabilities[capabilityName] = m.replace(BACKEND_SIGIL_RE, '$1');
         }
         // agent_resolutions: overridden agents only by default; ?verbose=1 shows all.
         let verboseFlag = false;
@@ -2083,8 +2087,8 @@ const server = http.createServer((req, res) => {
               pinned: true,
             };
           } else {
-            const profEntry = profiles[capVal];
-            let resolvedModel = profEntry ? resolveProfileModel(profEntry, mode) : null;
+            const profEntry = allProfiles[capVal];
+            let resolvedModel = profEntry ? resolveProfileModel(profEntry, tier, mode) : null;
             if (resolvedModel) resolvedModel = resolvedModel.replace(BACKEND_SIGIL_RE, '$1');
             agent_resolutions[agent] = {
               capability: capVal || null,
@@ -2143,11 +2147,12 @@ const server = http.createServer((req, res) => {
       if (req.method === 'GET' && (req.url === '/v1/active-models' || req.url === '/v1/active-models/')) {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
-        const profiles = (CONFIG.llm_profiles || {})[tier] || {};
+        // New schema: llm_profiles[capability] (capability-outer)
+        const allProfiles2 = CONFIG.llm_profiles || {};
         const local_models = [];
         const capabilities = [];
-        for (const [alias, entry] of Object.entries(profiles)) {
-          const m = resolveProfileModel(entry, mode);
+        for (const [alias, entry] of Object.entries(allProfiles2)) {
+          const m = resolveProfileModel(entry, tier, mode);
           if (!m) continue;
           const sigilMatch = m.match(BACKEND_SIGIL_RE);
           const base = sigilMatch ? sigilMatch[1] : m;
@@ -2256,7 +2261,8 @@ const server = http.createServer((req, res) => {
         // unchanged for non-filter modes. Returns null when no compliant candidate exists.
         const capKey = logicalRole;
         const capChain = capKey && CONFIG.fallback_chains?.[hwTier]?.[capKey];
-        const profileEntry = capKey && (CONFIG.llm_profiles?.[hwTier] || {})[capKey];
+        // New schema: llm_profiles[capability] (capability-outer, not tier-outer)
+        const profileEntry = capKey ? (CONFIG.llm_profiles || {})[capKey] : null;
         const onFailure = profileEntry?.on_failure || 'cascade';
 
         if (capChain) {

@@ -4,27 +4,21 @@
 const fs = require('fs');
 const path = require('path');
 
-// Hardcoded fallback for test fixtures that don't include llm_profiles.
-// Production validation uses deriveCapabilityAliases(config) instead — see below.
-const PROFILE_KEYS = ['default', 'classifier', 'explorer', 'reviewer', 'workhorse', 'coder',
-  'judge', 'judge-strict', 'orchestrator', 'code-analyst', 'pattern-coder', 'deep-coder',
-  'local-planner', 'commit-message-generator',
-  'implementer-heavy', 'test-writer-heavy',
-  'reasoner', 'fast-scout', 'code-analyst-light', 'deep-coder-precise', 'agentic-coder',
-  'fast-coder',
-  'deep-code-debugger', 'fast-code-debugger',
-  'generalist', 'vision', 'pdf', 'fast-generalist', 'large-general',
-  'long-context', 'context-manager', 'edge', 'refactor',
-  'image-analyst', 'writer'];
+// New schema: llm_profiles is capability-outer, not tier-outer.
+// 12 pipeline agents + 8 utility agents. Fallback for test fixtures.
+const PROFILE_KEYS = [
+  'planner', 'planner-hard', 'explore', 'coder', 'coder-fallback', 'tester',
+  'docs', 'reviewer-routine', 'reviewer-security',
+  'debugger-hypothesis', 'debugger-investigate', 'debugger-hard',
+  'vision', 'pdf', 'writer', 'edge', 'generalist', 'fast-generalist', 'fast-scout', 'long-context',
+];
 
-// Returns the union of all capability-alias keys across every hw tier in llm_profiles.
-// Falls back to the hardcoded PROFILE_KEYS list when the config has no profiles (test fixtures).
+// Returns the set of capability keys from llm_profiles (outer keys in new schema).
+// Falls back to hardcoded PROFILE_KEYS list when the config has no profiles (test fixtures).
 function deriveCapabilityAliases(config) {
   const aliases = new Set();
   if (isObject(config.llm_profiles)) {
-    for (const tier of Object.values(config.llm_profiles)) {
-      if (isObject(tier)) { for (const key of Object.keys(tier)) aliases.add(key); }
-    }
+    for (const key of Object.keys(config.llm_profiles)) aliases.add(key);
   }
   return aliases.size > 0 ? aliases : new Set(PROFILE_KEYS);
 }
@@ -49,16 +43,18 @@ const CAPABILITY_KEYS = new Set([
 ]);
 const CONNECTIVITY_MODES = new Set(['connected', 'disconnect']);
 const BACKEND_SIGIL_RE = /^(.+)@([A-Za-z0-9_-]+)$/;
+// 5-mode enum — keep in sync with LLM_MODE_ENUM in model-map-resolve.js.
 const LLM_MODES = new Set([
-  'connected', 'semi-offload', 'cloud-judge-only', 'offline',
-  'cloud-best-quality', 'local-best-quality',
-  // Phase 1 additions — keep in sync with LLM_MODE_ENUM in model-map-resolve.js (Check 11).
-  'local-only', 'cloud-thinking', 'local-review',
-  // Phase 2 additions — provider-filter modes
+  'best-cloud', 'best-cloud-oss', 'best-local-oss', 'best-cloud-gov', 'best-local-gov',
+]);
+// Legacy mode names accepted in llm_mode field for backward compat (auto-converted by resolveLlmMode).
+const LEGACY_LLM_MODES = new Set([
+  'connected', 'offline', 'semi-offload', 'cloud-judge-only', 'local-only',
+  'cloud-best-quality', 'local-best-quality', 'cloud-thinking', 'local-review',
   'cloud-only', 'claude-only', 'opensource-only',
-  // Phase 3 additions — benchmark-driven ranking modes
   'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local',
 ]);
+const HARDWARE_TIERS = new Set(['16gb', '32gb', '48gb', '64gb', '128gb']);
 const ON_FAILURE_VALUES = new Set(['cascade', 'hard_fail']);
 const JS_WRAPPER_FLAG = 'C_THRU_ENABLE_TARGET_JS';
 const TRUSTED_JS_FLAG = 'C_THRU_MODEL_MAP_TRUSTED_JS';
@@ -280,10 +276,47 @@ function expectNonEmptyString(parent, key, context) {
   return value;
 }
 
-function validateProfileEntry(profileName, aliasName, entry) {
-  if (!isObject(entry)) fail(`'llm_profiles.${profileName}.${aliasName}' must be an object`);
-  expectNonEmptyString(entry, 'connected_model', `llm_profiles.${profileName}.${aliasName}`);
-  expectNonEmptyString(entry, 'disconnect_model', `llm_profiles.${profileName}.${aliasName}`);
+// New schema: llm_profiles[capability] is a mode-keyed object.
+// Each mode key maps to either a string or a tier-keyed object.
+function validateCapabilityEntry(capabilityName, entry, report) {
+  if (!isObject(entry)) {
+    report(`'llm_profiles.${capabilityName}' must be an object`);
+    return;
+  }
+  const RESERVED_KEYS = new Set(['on_failure', 'fallback_to', 'fallback_chains']);
+  let hasModeKey = false;
+  for (const [key, value] of Object.entries(entry)) {
+    if (RESERVED_KEYS.has(key)) continue;
+    if (!LLM_MODES.has(key)) {
+      report(`'llm_profiles.${capabilityName}.${key}' is not a valid mode (expected one of: ${[...LLM_MODES].join(', ')}) and not a reserved key (${[...RESERVED_KEYS].join(', ')})`);
+      continue;
+    }
+    hasModeKey = true;
+    // Value must be a non-empty string (same model for all tiers) or a tier-keyed object
+    if (typeof value === 'string') {
+      if (!value.trim()) report(`'llm_profiles.${capabilityName}.${key}' must be a non-empty string`);
+    } else if (isObject(value)) {
+      for (const [tier, model] of Object.entries(value)) {
+        if (!HARDWARE_TIERS.has(tier)) {
+          report(`'llm_profiles.${capabilityName}.${key}.${tier}' uses unknown hardware tier (expected: ${[...HARDWARE_TIERS].join(', ')})`);
+        }
+        if (typeof model !== 'string' || !model.trim()) {
+          report(`'llm_profiles.${capabilityName}.${key}.${tier}' must be a non-empty string`);
+        }
+      }
+    } else {
+      report(`'llm_profiles.${capabilityName}.${key}' must be a string or tier-keyed object`);
+    }
+  }
+  if (!hasModeKey) {
+    report(`'llm_profiles.${capabilityName}' has no mode keys (expected at least one of: ${[...LLM_MODES].join(', ')})`);
+  }
+  if (entry.on_failure != null && !ON_FAILURE_VALUES.has(entry.on_failure)) {
+    report(`'llm_profiles.${capabilityName}.on_failure' must be one of: ${[...ON_FAILURE_VALUES].join(', ')}`);
+  }
+  if (entry.fallback_to != null && typeof entry.fallback_to !== 'string') {
+    report(`'llm_profiles.${capabilityName}.fallback_to' must be a string when present`);
+  }
 }
 
 function validateQualityScore(value, context) {
@@ -485,8 +518,8 @@ function validateConfig(config, _errors, options) {
     }
   }
 
-  if (config.llm_mode != null && !LLM_MODES.has(config.llm_mode)) {
-    report(`'llm_mode' must be one of: ${[...LLM_MODES].join(', ')}`);
+  if (config.llm_mode != null && !LLM_MODES.has(config.llm_mode) && !LEGACY_LLM_MODES.has(config.llm_mode)) {
+    report(`'llm_mode' must be one of: ${[...LLM_MODES].join(', ')} (or a legacy mode for backward compat)`);
   }
 
   if (config.llm_connectivity_mode != null) {
@@ -505,54 +538,15 @@ function validateConfig(config, _errors, options) {
     }
   }
 
+  // New schema: llm_profiles is capability-outer (not tier-outer).
+  // llm_profiles[capability][mode] = string | {tier: string}
   let profiles = null;
   try { profiles = expectObject(config, 'llm_profiles', false); } catch (e) { report(e.message); }
   if (profiles) {
-    for (const [profileName, profileValue] of Object.entries(profiles)) {
-      if (!isObject(profileValue)) { report(`'llm_profiles.${profileName}' must be an object`); continue; }
-      for (const [aliasName, aliasEntry] of Object.entries(profileValue)) {
-        if (aliasEntry != null) {
-          if (!isObject(aliasEntry)) {
-            report(`'llm_profiles.${profileName}.${aliasName}' must be an object`);
-          } else {
-            if (typeof aliasEntry.connected_model !== 'string' || !aliasEntry.connected_model.trim()) {
-              report(`'llm_profiles.${profileName}.${aliasName}.connected_model' must be a non-empty string`);
-            }
-            if (typeof aliasEntry.disconnect_model !== 'string' || !aliasEntry.disconnect_model.trim()) {
-              report(`'llm_profiles.${profileName}.${aliasName}.disconnect_model' must be a non-empty string`);
-            }
-            if (aliasEntry.on_failure != null && !ON_FAILURE_VALUES.has(aliasEntry.on_failure)) {
-              report(`'llm_profiles.${profileName}.${aliasName}.on_failure' must be one of: ${[...ON_FAILURE_VALUES].join(', ')}`);
-            }
-            const modesEntry = aliasEntry.modes;
-            if (modesEntry != null) {
-              if (!isObject(modesEntry)) {
-                report(`'llm_profiles.${profileName}.${aliasName}.modes' must be an object`);
-              } else {
-                for (const modeKey of Object.keys(modesEntry)) {
-                  if (!LLM_MODES.has(modeKey)) {
-                    report(`'llm_profiles.${profileName}.${aliasName}.modes.${modeKey}' is not a valid llm_mode (expected one of: ${[...LLM_MODES].join(', ')})`);
-                  }
-                  if (typeof modesEntry[modeKey] !== 'string' || !modesEntry[modeKey].trim()) {
-                    report(`'llm_profiles.${profileName}.${aliasName}.modes.${modeKey}' must be a non-empty string`);
-                  }
-                }
-              }
-            }
-            for (const optKey of ['cloud_best_model', 'local_best_model']) {
-              const v = aliasEntry[optKey];
-              if (v != null && (typeof v !== 'string' || !v.trim())) {
-                report(`'llm_profiles.${profileName}.${aliasName}.${optKey}' must be a non-empty string when present`);
-              }
-            }
-          }
-        }
+    for (const [capabilityName, capEntry] of Object.entries(profiles)) {
+      if (capEntry != null) {
+        validateCapabilityEntry(capabilityName, capEntry, report);
       }
-    }
-
-    const active = config.llm_active_profile || 'auto';
-    if (active !== 'auto' && !profiles[active]) {
-      report(`'llm_active_profile' references unknown profile '${active}'`);
     }
   }
 

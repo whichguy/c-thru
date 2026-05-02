@@ -39,20 +39,14 @@ if (!capAlias) {
   process.exit(2);
 }
 
-const profile = (config.llm_profiles || {})[tier];
-if (!profile) {
-  process.stderr.write('c-thru-resolve: no llm_profiles entry for tier ' + tier + '\n');
-  process.exit(1);
-}
-
 const aliasKey = capAlias === 'general-default' ? 'default' : capAlias;
-const entry = profile[aliasKey];
+const entry = (config.llm_profiles || {})[aliasKey];
 if (!entry || typeof entry !== 'object') {
-  process.stderr.write('c-thru-resolve: no profile entry for ' + JSON.stringify(capAlias) + ' in tier ' + tier + '\n');
+  process.stderr.write('c-thru-resolve: no profile entry for ' + JSON.stringify(capAlias) + '\n');
   process.exit(2);
 }
 
-const resolved = resolveProfileModel(entry, mode);
+const resolved = resolveProfileModel(entry, tier, mode);
 if (typeof resolved !== 'string' || !resolved) {
   process.stderr.write('c-thru-resolve: resolveProfileModel returned empty for ' + JSON.stringify(capAlias) + '\n');
   process.exit(1);
