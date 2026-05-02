@@ -115,22 +115,22 @@
         "16gb": "claude-sonnet-4-6",
         "32gb": "claude-sonnet-4-6",
         "48gb": "claude-sonnet-4-6",
-        "64gb": "devstral-small-2:24b",
-        "128gb": "devstral-small-2:24b"
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-cloud-oss": {
         "16gb": "deepseek-v4-pro:cloud",
         "32gb": "deepseek-v4-pro:cloud",
         "48gb": "deepseek-v4-pro:cloud",
-        "64gb": "devstral-small-2:24b",
-        "128gb": "devstral-small-2:24b"
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
-        "32gb": "devstral-small-2:24b",
-        "48gb": "devstral-small-2:24b",
-        "64gb": "devstral-small-2:24b",
-        "128gb": "devstral-small-2:24b"
+        "32gb": "qwen3.6:27b-coding-nvfp4",
+        "48gb": "qwen3.6:27b-coding-nvfp4",
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-cloud-gov": {
         "16gb": "claude-sonnet-4-6",
@@ -334,22 +334,22 @@
         "16gb": "claude-sonnet-4-6",
         "32gb": "claude-sonnet-4-6",
         "48gb": "claude-sonnet-4-6",
-        "64gb": "devstral-small-2:24b",
-        "128gb": "devstral-small-2:24b"
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-cloud-oss": {
         "16gb": "deepseek-v4-pro:cloud",
         "32gb": "deepseek-v4-pro:cloud",
         "48gb": "deepseek-v4-pro:cloud",
-        "64gb": "devstral-small-2:24b",
-        "128gb": "devstral-small-2:24b"
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
-        "32gb": "devstral-small-2:24b",
-        "48gb": "devstral-small-2:24b",
-        "64gb": "devstral-small-2:24b",
-        "128gb": "devstral-small-2:24b"
+        "32gb": "qwen3.6:27b-coding-nvfp4",
+        "48gb": "qwen3.6:27b-coding-nvfp4",
+        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
       },
       "best-cloud-gov": {
         "16gb": "claude-sonnet-4-6",
