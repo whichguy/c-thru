@@ -302,16 +302,10 @@ const PID_FILE = path.join(os.homedir(), '.claude', 'proxy.pid');
 // + forwardAnthropic), debounce-flushed to disk so the hot path doesn't pay
 // fs.writeFileSync latency per request. Sync-flushed on shutdown signals so
 // we don't lose the last debounce window.
-let persistentUsage = {
-  total_input: 0,
-  total_output: 0,
-  total_duration_ms: 0,
-  by_model: {},
-  by_agent: {},
-  by_backend: {},
-  first_recorded: null,
-  last_recorded: null,
-};
+function emptyUsage() {
+  return { total_input: 0, total_output: 0, total_duration_ms: 0, by_model: {}, by_agent: {}, by_backend: {}, first_recorded: null, last_recorded: null };
+}
+let persistentUsage = emptyUsage();
 function loadPersistentUsage() {
   try {
     if (fs.existsSync(USAGE_STATS_FILE)) {
@@ -329,36 +323,44 @@ loadPersistentUsage();
 function recordUsage(model, backendId, input, output, durationMs, agentName) {
   if (!input && !output) return;  // skip noise from empty/error responses
   const dur = durationMs || 0;
+  const now = nowIso();  // single call — reused for all maps so timestamps are identical
   persistentUsage.total_input += input;
   persistentUsage.total_output += output;
   persistentUsage.total_duration_ms += dur;
-  // Per-model: counts + call frequency + duration
-  if (!persistentUsage.by_model[model]) persistentUsage.by_model[model] = { input: 0, output: 0, calls: 0, total_duration_ms: 0, last_call: null };
-  persistentUsage.by_model[model].input += input;
-  persistentUsage.by_model[model].output += output;
-  persistentUsage.by_model[model].calls += 1;
-  persistentUsage.by_model[model].total_duration_ms += dur;
-  persistentUsage.by_model[model].last_call = nowIso();
-  // Per-agent: original requested name — only meaningful when different from resolved model
-  if (agentName) {
-    if (!persistentUsage.by_agent[agentName]) persistentUsage.by_agent[agentName] = { input: 0, output: 0, calls: 0, total_duration_ms: 0, last_call: null };
-    persistentUsage.by_agent[agentName].input += input;
-    persistentUsage.by_agent[agentName].output += output;
-    persistentUsage.by_agent[agentName].calls += 1;
-    persistentUsage.by_agent[agentName].total_duration_ms += dur;
-    persistentUsage.by_agent[agentName].last_call = nowIso();
+  if (!persistentUsage.first_recorded) persistentUsage.first_recorded = now;
+  persistentUsage.last_recorded = now;
+  // Per-model
+  if (!persistentUsage.by_model[model])
+    persistentUsage.by_model[model] = { input: 0, output: 0, calls: 0, total_duration_ms: 0, first_call: null, last_call: null };
+  const bm = persistentUsage.by_model[model];
+  bm.input += input;
+  bm.output += output;
+  bm.calls += 1;
+  bm.total_duration_ms += dur;
+  if (!bm.first_call) bm.first_call = now;
+  bm.last_call = now;
+  // Per-agent: only when the original request name differs from the concrete model
+  // (guards against double-counting when a literal model name is sent directly)
+  if (agentName && agentName !== model) {
+    if (!persistentUsage.by_agent[agentName])
+      persistentUsage.by_agent[agentName] = { input: 0, output: 0, calls: 0, total_duration_ms: 0, first_call: null, last_call: null, served_by: {} };
+    const ba = persistentUsage.by_agent[agentName];
+    ba.input += input;
+    ba.output += output;
+    ba.calls += 1;
+    ba.total_duration_ms += dur;
+    if (!ba.first_call) ba.first_call = now;
+    ba.last_call = now;
+    if (!ba.served_by) ba.served_by = {};
+    ba.served_by[model] = (ba.served_by[model] || 0) + 1;
   }
-  // Per-backend: same shape, lets /c-thru/status answer "how much went to
-  // anthropic vs local?" at a glance
+  // Per-backend
   if (backendId) {
     if (!persistentUsage.by_backend[backendId]) persistentUsage.by_backend[backendId] = { input: 0, output: 0, calls: 0 };
     persistentUsage.by_backend[backendId].input += input;
     persistentUsage.by_backend[backendId].output += output;
     persistentUsage.by_backend[backendId].calls += 1;
   }
-  const now = nowIso();
-  if (!persistentUsage.first_recorded) persistentUsage.first_recorded = now;
-  persistentUsage.last_recorded = now;
   scheduleUsageFlush();
 }
 
@@ -2075,6 +2077,14 @@ const server = http.createServer((req, res) => {
       });
 
       if (req.url === '/ping') return send(res, 200, { ok: true, pid: process.pid, config_path: CONFIG_PATH, active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG), bind_address: server.address().address });
+
+      if (req.method === 'POST' && (req.url === '/c-thru/stats/clear' || req.url === '/c-thru/stats/clear/')) {
+        const clearedAt = new Date().toISOString();
+        persistentUsage = emptyUsage();
+        flushPersistentUsageNowSync();
+        proxyLog('stats.cleared', { cleared_at: clearedAt });
+        return send(res, 200, { ok: true, cleared_at: clearedAt });
+      }
 
       if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/' || req.url.startsWith('/c-thru/status?'))) {
         const tier = resolveActiveTier(CONFIG);

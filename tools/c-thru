@@ -3960,6 +3960,19 @@ if [[ "${1:-}" == "restart" ]]; then
   cmd_restart "$@"; exit $?
 fi
 
+if [[ "${1:-}" == "stats" && "${2:-}" == "clear" ]]; then
+  port="$(claude_proxy_listen_port || true)"
+  if [[ -z "$port" ]]; then
+    echo "c-thru: proxy not running" >&2; exit 1
+  fi
+  result="$(curl -sf -X POST "http://127.0.0.1:$port/c-thru/stats/clear" 2>/dev/null || true)"
+  if [[ -z "$result" ]]; then
+    echo "c-thru: proxy did not respond" >&2; exit 1
+  fi
+  printf '%s\n' "$result" | jq .
+  exit 0
+fi
+
 # ── Phase 1: Argument Pre-Parsing ──────────────────────────────────────────
 # Parse c-thru flags early so they are active during ephemeral setup and warming.
 # These flags are stripped later before forwarding to the real claude binary.
