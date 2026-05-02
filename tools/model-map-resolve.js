@@ -68,11 +68,17 @@ function resolveProfileModel(entry, tier, mode) {
 
 // resolveLocalFallback — walks local modes to find any available local model for this entry.
 // Used by tryLocalTerminalFallback in claude-proxy (replaces disconnect_model lookup).
-function resolveLocalFallback(entry, tier) {
+// activeMode is passed so gov sessions only return non-Chinese-origin models.
+function resolveLocalFallback(entry, tier, activeMode) {
   if (!entry) return null;
-  for (const mode of ['best-local-oss', 'best-local-gov', 'best-cloud']) {
+  const govModes = new Set(['best-cloud-gov', 'best-local-gov']);
+  const isGov = activeMode != null && govModes.has(activeMode);
+  const localModes = isGov
+    ? ['best-local-gov', 'best-cloud-gov', 'best-cloud']
+    : ['best-local-oss', 'best-local-gov', 'best-cloud'];
+  for (const mode of localModes) {
     const m = resolveProfileModel(entry, tier, mode);
-    if (m) return m;
+    if (m && (!isGov || !isChineseOrigin(m))) return m;
   }
   return null;
 }

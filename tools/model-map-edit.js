@@ -66,7 +66,24 @@ function applyLlmProfilesUpdates(config, llmProfiles) {
         }
       }
     }
-    config.llm_profiles[cap] = entry;
+    // Deep-merge onto existing entry so unspecified mode keys are preserved.
+    // Tier sub-objects are also merged (user can update a single tier without clobbering others).
+    const existing = config.llm_profiles[cap];
+    if (isObject(existing) && isObject(entry)) {
+      const merged = Object.assign({}, existing);
+      for (const [k, v] of Object.entries(entry)) {
+        if (v === null) { delete merged[k]; continue; }
+        if (k === 'on_failure' || k === 'fallback_to') { merged[k] = v; continue; }
+        if (isObject(v) && isObject(merged[k])) {
+          merged[k] = Object.assign({}, merged[k], v);
+        } else {
+          merged[k] = v;
+        }
+      }
+      config.llm_profiles[cap] = merged;
+    } else {
+      config.llm_profiles[cap] = entry;
+    }
   }
 }
 

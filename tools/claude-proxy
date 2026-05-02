@@ -819,8 +819,9 @@ function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
   if (res.headersSent) return false;
   const capKey = requestMeta.capability;
   if (!capKey) return false;
-  // New schema: llm_profiles[capability], use resolveLocalFallback to find a local model
-  const termModel = resolveLocalFallback(CONFIG.llm_profiles?.[capKey], requestMeta.hwTier);
+  // New schema: llm_profiles[capability], use resolveLocalFallback to find a local model.
+  // Pass activeMode so gov sessions skip Chinese-origin local fallbacks.
+  const termModel = resolveLocalFallback(CONFIG.llm_profiles?.[capKey], requestMeta.hwTier, requestMeta.activeMode);
   if (!termModel) return false;
   const triedM = requestMeta._triedModels || new Set();
   if (triedM.has(termModel)) return false;

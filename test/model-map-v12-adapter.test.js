@@ -436,5 +436,152 @@ console.log('\n15. USGov filter: best-cloud-gov and best-local-gov block Chinese
   }
 }
 
+// ── Test 16: resolveLocalFallback gov filter ───────────────────────────
+console.log('\n16. resolveLocalFallback: gov mode skips Chinese-origin models');
+{
+  const entry = {
+    'best-cloud':     { '16gb': 'claude-opus-4-7' },
+    'best-local-oss': { '16gb': 'qwen3:7b', '64gb': 'qwen3:30b' },
+    'best-local-gov': { '16gb': 'phi4-mini', '64gb': 'phi4-reasoning:plus' },
+  };
+  // Non-gov: best-local-oss returns first (even if Chinese-origin)
+  assert(resolveLocalFallback(entry, '16gb', 'best-cloud') === 'qwen3:7b', 'non-gov: returns Chinese-origin best-local-oss model');
+  // Gov: skips qwen3:7b (Chinese-origin in best-local-oss), returns phi4-mini from best-local-gov
+  assert(resolveLocalFallback(entry, '16gb', 'best-local-gov') === 'phi4-mini', 'gov: skips Chinese-origin, returns phi4-mini from best-local-gov');
+  assert(resolveLocalFallback(entry, '64gb', 'best-cloud-gov') === 'phi4-reasoning:plus', 'gov (best-cloud-gov): skips Chinese-origin qwen3:30b, returns phi4-reasoning:plus');
+  // Gov where all local modes are Chinese-origin → falls back to cloud
+  const cloudOnlyGov = {
+    'best-cloud':     'claude-opus-4-7',
+    'best-local-oss': 'qwen3:30b',
+    'best-local-gov': 'qwen3:7b',
+  };
+  assert(resolveLocalFallback(cloudOnlyGov, '64gb', 'best-local-gov') === 'claude-opus-4-7', 'gov: all local are Chinese-origin, falls back to best-cloud');
+}
+
+// ── Test 17: applyLlmProfilesUpdates partial-mode deep-merge ──────────
+console.log('\n17. applyLlmProfilesUpdates: partial mode edit preserves unspecified mode keys');
+{
+  const { applyUpdates } = require('../tools/model-map-edit.js');
+  const { computeOverrideDiff, mergeConfigLayers } = require('../tools/model-map-layered.js');
+
+  const base = {
+    llm_profiles: {
+      planner: { ...MIN_CAPABILITY_ENTRY },
+    },
+    models: [],
+    tool_capability_to_profile: {},
+    endpoints: {},
+    agent_to_capability: {},
+  };
+
+  // User edits only best-cloud at 64gb
+  const partialSpec = {
+    llm_profiles: {
+      planner: { 'best-cloud': { '64gb': 'custom-model' } },
+    },
+  };
+
+  const after = applyUpdates(base, partialSpec, base);
+
+  // best-cloud.64gb updated
+  assert(
+    after.llm_profiles.planner['best-cloud']['64gb'] === 'custom-model',
+    'partial edit: best-cloud.64gb updated to custom-model',
+  );
+  // best-cloud.16gb preserved
+  assert(
+    after.llm_profiles.planner['best-cloud']['16gb'] === 'model-a',
+    'partial edit: best-cloud.16gb preserved from original',
+  );
+  // Other mode keys preserved
+  assert(
+    typeof after.llm_profiles.planner['best-local-oss'] === 'object',
+    'partial edit: best-local-oss mode key preserved',
+  );
+  assert(
+    typeof after.llm_profiles.planner['best-cloud-gov'] === 'object',
+    'partial edit: best-cloud-gov mode key preserved',
+  );
+
+  // Round-trip: computeOverrideDiff then mergeConfigLayers should not null-wipe any modes
+  const diff = computeOverrideDiff(base, after);
+  const roundTripped = mergeConfigLayers(base, diff || {});
+  assert(
+    roundTripped.llm_profiles.planner['best-cloud']['64gb'] === 'custom-model',
+    'round-trip: best-cloud.64gb survives computeOverrideDiff + mergeConfigLayers',
+  );
+  assert(
+    typeof roundTripped.llm_profiles.planner['best-local-oss'] === 'object',
+    'round-trip: best-local-oss not null-wiped by computeOverrideDiff',
+  );
+}
+
+// ── Test 18: fallback_to cross-reference validation ────────────────────
+console.log('\n18. Validator rejects fallback_to referencing unknown capability');
+{
+  const badErrs = [];
+  validateConfig({
+    llm_profiles: {
+      planner: {
+        ...MIN_CAPABILITY_ENTRY,
+        'fallback_to': 'typo-capability',
+      },
+    },
+    models: [],
+    tool_capability_to_profile: {},
+  }, badErrs);
+  assert(badErrs.some(e => e.includes('typo-capability')), "fallback_to referencing unknown key is rejected");
+
+  // Self-referential fallback_to (capability points to itself) — also invalid
+  const selfErrs = [];
+  validateConfig({
+    llm_profiles: {
+      planner: {
+        ...MIN_CAPABILITY_ENTRY,
+        'fallback_to': 'planner',
+      },
+    },
+    models: [],
+    tool_capability_to_profile: {},
+  }, selfErrs);
+  // Note: self-reference is technically valid (key exists in profiles) — expect no error
+  assert(selfErrs.length === 0, "fallback_to pointing to self is not an error (capability exists)");
+
+  // Valid fallback_to
+  const goodErrs = [];
+  validateConfig({
+    llm_profiles: {
+      planner:      { ...MIN_CAPABILITY_ENTRY, 'fallback_to': 'planner-hard' },
+      'planner-hard': { ...MIN_CAPABILITY_ENTRY },
+    },
+    models: [],
+    tool_capability_to_profile: {},
+  }, goodErrs);
+  assert(goodErrs.length === 0, "fallback_to pointing to existing capability passes");
+}
+
+// ── Test 19: llm_capabilities.model cross-validation ──────────────────
+console.log('\n19. Validator rejects llm_capabilities.model referencing unknown capability');
+{
+  const badErrs = [];
+  validateConfig({
+    llm_profiles: { 'fast-scout': { ...MIN_CAPABILITY_ENTRY } },
+    llm_capabilities: { classify_intent: { model: 'typo-capability' } },
+    models: [],
+    tool_capability_to_profile: {},
+  }, badErrs);
+  assert(badErrs.some(e => e.includes('typo-capability')), "llm_capabilities.model referencing unknown capability is rejected");
+
+  // model: prefix is exempt from cross-reference check
+  const pinErrs = [];
+  validateConfig({
+    llm_profiles: { 'fast-scout': { ...MIN_CAPABILITY_ENTRY } },
+    llm_capabilities: { classify_intent: { model: 'model:qwen3:7b' } },
+    models: [],
+    tool_capability_to_profile: {},
+  }, pinErrs);
+  assert(pinErrs.length === 0, "llm_capabilities.model with model: prefix passes without cross-reference");
+}
+
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

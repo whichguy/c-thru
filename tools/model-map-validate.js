@@ -548,6 +548,14 @@ function validateConfig(config, _errors, options) {
         validateCapabilityEntry(capabilityName, capEntry, report);
       }
     }
+    // Cross-reference: fallback_to must point to a known capability key
+    for (const [capabilityName, capEntry] of Object.entries(profiles)) {
+      if (capEntry != null && typeof capEntry.fallback_to === 'string') {
+        if (!Object.prototype.hasOwnProperty.call(profiles, capEntry.fallback_to)) {
+          report(`'llm_profiles.${capabilityName}.fallback_to' references unknown capability '${capEntry.fallback_to}'`);
+        }
+      }
+    }
   }
 
   let capabilities = null;
@@ -560,6 +568,9 @@ function validateConfig(config, _errors, options) {
       if (!isObject(entry)) { report(`'llm_capabilities.${capabilityName}' must be an object`); continue; }
       if (typeof entry.model !== 'string' || !entry.model.trim()) {
         report(`'llm_capabilities.${capabilityName}.model' must be a non-empty string`);
+      } else if (profiles && !entry.model.startsWith('model:') &&
+                 !Object.prototype.hasOwnProperty.call(profiles, entry.model)) {
+        report(`'llm_capabilities.${capabilityName}.model' references unknown capability '${entry.model}' (not in llm_profiles)`);
       }
     }
   }

@@ -176,9 +176,17 @@ if (GOV_MODES.has(mode) && slotPick) {
 console.log('');
 header('Final routing');
 line('served_by', final || '(null)', 'concrete model the proxy will forward to');
-const backendId = config.model_routes?.[final];
-const backend = backendId && config.backends?.[backendId];
-if (backendId) line('backend_id', backendId);
+const routeEntry = config.model_routes?.[final];
+const endpointsMap = config.endpoints || config.backends || {};
+let realBackendId, backend;
+if (routeEntry && typeof routeEntry === 'object') {
+  realBackendId = routeEntry.endpoint;
+  backend = endpointsMap[realBackendId];
+} else if (typeof routeEntry === 'string') {
+  realBackendId = routeEntry;
+  backend = endpointsMap[realBackendId];
+}
+if (realBackendId) line('backend_id', realBackendId);
 if (backend) {
   line('backend.kind', backend.kind || '?');
   if (backend.url) line('backend.url', backend.url);
