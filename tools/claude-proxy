@@ -2389,7 +2389,7 @@ process.on('SIGINT', () => { flushPersistentUsageNowSync(); cleanupPidFile(); pr
 // `beforeExit` fires on natural process termination (event loop emptied).
 // `exit` is too late for async I/O. This catches "node ran out of work"
 // shutdowns where SIGTERM/SIGINT didn't fire.
-process.on('beforeExit', () => flushPersistentUsageNowSync());
+process.on('beforeExit', () => { flushPersistentUsageNowSync(); cleanupPidFile(); });
 process.on('SIGPIPE', () => proxyLog('process.sigpipe', { message: 'ignored SIGPIPE' }));
 
 process.on('uncaughtException', err => {
