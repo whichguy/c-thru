@@ -174,7 +174,7 @@ migrate_providers_schema() {
 install_skill() {
     local commands_dir="$CLAUDE_DIR/commands"
     local skill_file="$commands_dir/c-thru-status.md"
-    local canonical_line='~/.claude/tools/c-thru --list $ARGUMENTS'
+    local canonical_line='Show c-thru routes, proxy URL, per-model usage stats'
     mkdir -p "$commands_dir"
     if [ -f "$skill_file" ] && grep -qF "$canonical_line" "$skill_file" 2>/dev/null; then
         echo -e "  ${GRAY}✓  /c-thru-status${NC}"
@@ -182,10 +182,14 @@ install_skill() {
     fi
     cat > "$skill_file" << 'SKILL_EOF'
 ---
-description: "Show c-thru routes, models, and backend health. Use 'fix' to pull missing models and reload."
+description: "Show c-thru routes, proxy URL, per-model usage stats (calls, tokens, last call time), and backend health. Use 'fix' to pull missing models and reload."
 allowed-tools: "Bash"
 ---
 # c-thru Status
+Run the list command. It shows: active profile, all 20 agents with model assignments and endpoints,
+proxy URL with tier/mode, Ollama model count, backend health, and per-model usage stats
+(call count, total tokens, timestamp of last call).
+
 If `$ARGUMENTS` is empty or `--verbose`, run:
 ```bash
 ~/.claude/tools/c-thru --list $ARGUMENTS

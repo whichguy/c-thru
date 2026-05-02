@@ -328,10 +328,11 @@ function recordUsage(model, backendId, input, output) {
   persistentUsage.total_input += input;
   persistentUsage.total_output += output;
   // Per-model: counts + call frequency
-  if (!persistentUsage.by_model[model]) persistentUsage.by_model[model] = { input: 0, output: 0, calls: 0 };
+  if (!persistentUsage.by_model[model]) persistentUsage.by_model[model] = { input: 0, output: 0, calls: 0, last_call: null };
   persistentUsage.by_model[model].input += input;
   persistentUsage.by_model[model].output += output;
   persistentUsage.by_model[model].calls += 1;
+  persistentUsage.by_model[model].last_call = new Date().toISOString();
   // Per-backend: same shape, lets /c-thru/status answer "how much went to
   // anthropic vs local?" at a glance
   if (backendId) {
