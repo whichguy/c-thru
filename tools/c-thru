@@ -13,7 +13,7 @@
 #        c-thru --model gemma4:26b        — Ollama (auto-detected)
 #        c-thru --model bedrock-opus      — Bedrock (from model-map.json)
 #        c-thru --model opus              — Ollama if not in model-map (name passed through)
-#        c-thru --mode offline            — force LLM mode for this invocation (stripped before forwarding)
+#        c-thru --offline            — force LLM mode for this invocation (stripped before forwarding)
 #        c-thru --profile 64gb           — force hardware tier (stripped before forwarding)
 #        c-thru --list                    — show all available models
 #        c-thru --help                    — show usage
@@ -65,6 +65,7 @@ export CLAUDE_PROXY_PORT
 PROXY_STARTED_PID=""
 CLAUDE_CHILD_PID=""
 PROXY_CLEANUP_ARMED=0
+_PROXY_SPIN_PID=""
 PROXY_PORT=""
 ENSURED_PROXY_HTTP_BASE=""
 PROXY_LOG_PATH=""
@@ -500,7 +501,7 @@ cmd_help() {
   echo -e "  ${GRAY}    With --thinking: /no_thinking removed → Claude uses a <think> block before responding${NC}"
   echo -e "  ${GRAY}    Only affects Anthropic models; local reasoning models (DeepSeek-R1, Qwen3 thinking,${NC}"
   echo -e "  ${GRAY}    phi4-reasoning) always reason internally — no flag needed.${NC}"
-  echo -e "  ${GRAY}    cloud-thinking mode routes judge/planner caps to a cloud thinking-capable model.${NC}"
+  echo -e "  ${GRAY}    When --thinking is enabled, judge/planner caps are routed to a cloud thinking-capable model.${NC}"
   echo "  --bypass-proxy            skip proxy entirely (= CLAUDE_PROXY_BYPASS=1)"
   echo "  --journal                 enable per-request journaling (= CLAUDE_PROXY_JOURNAL=1)"
   echo "  --proxy-debug [N]         proxy verbose logs (= CLAUDE_PROXY_DEBUG=N; default 1)"
@@ -525,7 +526,7 @@ cmd_help() {
   echo "  Anthropic models (claude-opus-*, claude-sonnet-*)"
   echo "    Default: extended thinking OFF (/no_thinking injected into system prompt)"
   echo "    Enable:  c-thru --thinking   or   C_THRU_THINKING=1"
-  echo "    Mode:    --mode cloud-thinking  routes judge/planner caps to cloud thinking model"
+  echo "    When --thinking is enabled, judge/planner capabilities are routed to cloud thinking-capable models"
   echo ""
   echo "  Local reasoning models — always reason internally, no flag required:"
   echo "    DeepSeek-R1 (7b/14b/32b)  temperature 0.6, top_p 0.95 (official); no system prompt"
@@ -1676,6 +1677,11 @@ pid_looks_like_proxy() {
 
 cleanup_proxy_children() {
   local ec="${1:-$?}"
+  if [[ -n "${_PROXY_SPIN_PID:-}" ]]; then
+    kill "$_PROXY_SPIN_PID" 2>/dev/null || true
+    wait "$_PROXY_SPIN_PID" 2>/dev/null || true
+    _PROXY_SPIN_PID=""
+  fi
   if [[ -n "${CLAUDE_CHILD_PID:-}" ]]; then
     if kill -0 "$CLAUDE_CHILD_PID" 2>/dev/null; then
       kill "$CLAUDE_CHILD_PID" >/dev/null 2>&1 || true
@@ -1833,17 +1839,36 @@ ensure_proxy_running() {
     CLAUDE_MODEL_MAP_PATH="$CONFIG" \
       "$proxy_js" >"$ready_pipe" 2>"$temp_log" &
     PROXY_STARTED_PID="$!"
+    # Braille spinner during blocking READY wait — killed via global _PROXY_SPIN_PID
+    # (global so cleanup_proxy_children can kill it on signal delivery)
+    # arm_proxy_cleanup is called AFTER PID capture so the trap sees a valid value.
+    _PROXY_SPIN_PID=""
+    if [[ -t 2 ]]; then
+      local _pbraille=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+      ( _psi=0
+        while true; do
+          printf "\r  %s%s%s proxy  %sstarting...%s    " \
+            "$BOLD" "${_pbraille[$_psi]}" "$NC" "$GRAY" "$NC" >&2
+          _psi=$(( (_psi + 1) % 10 ))
+          sleep 0.1
+        done
+      ) &
+      _PROXY_SPIN_PID=$!
+    fi
     arm_proxy_cleanup
     local start_ec=0
     if ! IFS= read -r -t "$ready_timeout" ready_line <"$ready_pipe"; then
+      [[ -n "$_PROXY_SPIN_PID" ]] && { kill "$_PROXY_SPIN_PID" 2>/dev/null; wait "$_PROXY_SPIN_PID" 2>/dev/null; _PROXY_SPIN_PID=""; printf "\r%70s\r" "" >&2; }
       start_ec=1
       diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "" "$temp_log" \
         "timed out waiting for claude-proxy readiness line (after ${ready_timeout}s)"
     elif [[ ! "$ready_line" =~ ^READY\ ([0-9]+)$ ]]; then
+      [[ -n "$_PROXY_SPIN_PID" ]] && { kill "$_PROXY_SPIN_PID" 2>/dev/null; wait "$_PROXY_SPIN_PID" 2>/dev/null; _PROXY_SPIN_PID=""; printf "\r%70s\r" "" >&2; }
       start_ec=1
       diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "" "$temp_log" \
         "malformed claude-proxy readiness line '$ready_line'"
     else
+      [[ -n "$_PROXY_SPIN_PID" ]] && { kill "$_PROXY_SPIN_PID" 2>/dev/null; wait "$_PROXY_SPIN_PID" 2>/dev/null; _PROXY_SPIN_PID=""; printf "\r%70s\r" "" >&2; }
       PROXY_PORT="${BASH_REMATCH[1]}"
       local final_log=""
       final_log="$(proxy_log_final_path "$PROXY_PORT")"
@@ -2157,6 +2182,85 @@ _ollama_done() {
   local icon="$1" label="$2" detail="$3"
   printf "\r  ${BOLD}%s${NC} %s  ${GRAY}%s${NC}                              \n" \
     "$icon" "$label" "$detail" >&2
+}
+
+# Bootstrap a missing endpoint auth env var by walking the user through
+# obtaining a key. Only fires for known interactive providers (today: Gemini
+# AI Studio via GOOGLE_API_KEY). Returns 0 if the var is now set (or was
+# already set), non-zero if the user aborted or the path is non-interactive.
+#
+# Side effects: opens the provider's key page in the default browser
+# (best-effort), prompts on the TTY, appends `export $envname=...` to the
+# user's shell rc file (idempotent — replaces an existing line), and exports
+# the value for the current shell so downstream auth resolution sees it.
+bootstrap_endpoint_auth_env() {
+  local envname="$1"
+  [[ -z "$envname" || "$envname" == "null" ]] && return 0
+  [[ -n "${!envname:-}" ]] && return 0
+
+  # Vertex / OAuth-token-style auth: short-lived, doesn't fit the
+  # write-to-rc bootstrap. Tell the user how to refresh and let normal
+  # auth resolution surface the failure.
+  if [[ "$envname" == "GOOGLE_CLOUD_TOKEN" ]]; then
+    echo "c-thru: GOOGLE_CLOUD_TOKEN is unset. Refresh with: gcloud auth print-access-token" >&2
+    return 1
+  fi
+
+  local url=""
+  case "$envname" in
+    GOOGLE_API_KEY) url="https://aistudio.google.com/app/api-keys" ;;
+    *) return 0 ;;
+  esac
+
+  if [[ ! -t 0 || ! -t 2 ]]; then
+    echo "c-thru: $envname is unset and stdin/stderr is not a TTY (CI / scripted run)." >&2
+    echo "c-thru: get a key at $url and re-run with $envname exported." >&2
+    return 1
+  fi
+
+  echo "c-thru: $envname is unset. Opening $url ..." >&2
+  echo "c-thru: (if the browser does not open, visit the URL above manually)" >&2
+
+  if command -v open >/dev/null 2>&1; then
+    (open "$url" >/dev/null 2>&1 &) 2>/dev/null
+  elif command -v xdg-open >/dev/null 2>&1; then
+    (xdg-open "$url" >/dev/null 2>&1 &) 2>/dev/null
+  fi
+
+  local key=""
+  printf "Paste your API key and press enter (input hidden): " >&2
+  IFS= read -rs key
+  echo >&2
+  key="${key#"${key%%[![:space:]]*}"}"
+  key="${key%"${key##*[![:space:]]}"}"
+  if [[ -z "$key" ]]; then
+    echo "c-thru: empty input — aborting." >&2
+    return 1
+  fi
+
+  local rcfile="$HOME/.zshrc"
+  case "${SHELL:-}" in
+    */bash) rcfile="$HOME/.bashrc" ;;
+  esac
+
+  if [[ -f "$rcfile" ]] && grep -q "^export $envname=" "$rcfile" 2>/dev/null; then
+    if sed --version >/dev/null 2>&1; then
+      sed -i "s|^export $envname=.*|export $envname=$key|" "$rcfile"
+    else
+      sed -i '' "s|^export $envname=.*|export $envname=$key|" "$rcfile"
+    fi
+    echo "c-thru: updated existing $envname line in $rcfile" >&2
+  else
+    {
+      printf '\n# Added by c-thru on %s\n' "$(date +%Y-%m-%d)"
+      printf 'export %s=%s\n' "$envname" "$key"
+    } >> "$rcfile" 2>/dev/null && \
+      echo "c-thru: appended export $envname to $rcfile" >&2 || \
+      echo "c-thru: could not write $rcfile — continuing with current shell only." >&2
+  fi
+
+  export "$envname=$key"
+  return 0
 }
 
 # Ollama API key for CLI: optional inline .api_key on backend JSON, else ${!.auth_env}.
@@ -3649,6 +3753,109 @@ print_active_profile_table() {
   echo ""
 }
 
+# --- Render color-coded agent + model usage tables from /c-thru/status JSON ---
+# Usage: _print_usage_tables <status_json>
+_print_usage_tables() {
+  local status_json="$1"
+  [[ -z "$status_json" ]] && return
+
+  # Session totals
+  local total_in total_out total_calls first_rec last_rec
+  total_in="$(printf '%s' "$status_json" | jq -r '.usage.total_input // 0' 2>/dev/null || echo 0)"
+  total_out="$(printf '%s' "$status_json" | jq -r '.usage.total_output // 0' 2>/dev/null || echo 0)"
+  total_calls="$(printf '%s' "$status_json" | jq -r '[.usage.by_model // {} | to_entries[].value.calls] | add // 0' 2>/dev/null || echo 0)"
+  first_rec="$(printf '%s' "$status_json" | jq -r '.usage.first_recorded // ""' 2>/dev/null || true)"
+  last_rec="$(printf '%s' "$status_json" | jq -r '.usage.last_recorded // ""' 2>/dev/null || true)"
+
+  if [[ "$total_calls" -gt 0 ]] 2>/dev/null; then
+    printf '\n%sSession totals:%s  %s calls  %s in  %s out' \
+      "$BOLD" "$NC" "$total_calls" "$total_in" "$total_out"
+    [[ -n "$first_rec" ]] && printf '  %s%s → %s%s' "$GRAY" "${first_rec:0:19}" "${last_rec:0:19}" "$NC"
+    printf '\n'
+  fi
+
+  # Compute "one hour ago" ISO prefix for last-call freshness highlighting
+  local _hour_ago=""
+  _hour_ago="$(date -u -v-1H '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -u -d '-1 hour' '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || true)"
+
+  # --- Agent usage ---
+  # TSV: agent \t calls \t input \t output \t avg_ms \t last_call \t served_by_csv
+  local agent_data=""
+  agent_data="$(printf '%s' "$status_json" | jq -r '
+    (.usage.by_agent // {}) | to_entries |
+    sort_by(.value.last_call // "") | reverse[] |
+    [.key,
+     (.value.calls | tostring),
+     (.value.input | tostring),
+     (.value.output | tostring),
+     (if .value.calls > 0 then (.value.total_duration_ms / .value.calls | floor | tostring) else "-" end),
+     (.value.last_call // "-"),
+     ((.value.served_by // {}) | to_entries | sort_by(-.value) | map(.key + "=" + (.value | tostring)) | join(","))] |
+    @tsv
+  ' 2>/dev/null || true)"
+
+  if [[ -n "$agent_data" ]]; then
+    printf '\n%sAgent usage%s  %s─────────────────────────────────────────────────────%s\n' \
+      "$BOLD" "$NC" "$GRAY" "$NC"
+    printf '  %-24s  %6s  %10s  %10s  %8s  %s\n' "agent" "calls" "in" "out" "avg ms" "last call"
+    printf '  %-24s  %6s  %10s  %10s  %8s  %s\n' "─────" "─────" "──" "───" "──────" "─────────"
+    while IFS=$'\t' read -r agent calls tin tout avg_ms last_call served_csv; do
+      [[ -n "$agent" ]] || continue
+      local acolor="$GRAY"
+      [[ "$calls" -gt 0 ]] 2>/dev/null && acolor="$GREEN"
+      local mscolor=""
+      [[ "$avg_ms" != "-" ]] && [[ "$avg_ms" -gt 10000 ]] 2>/dev/null && mscolor="$YELLOW"
+      local lccolor="$GRAY"
+      [[ -n "$_hour_ago" && "$last_call" > "$_hour_ago" ]] && lccolor="${BOLD}${GREEN}"
+      printf '  %s%-24s%s  %6s  %10s  %10s  %s%8s%s  %s%s%s\n' \
+        "$acolor" "$agent" "$NC" "$calls" "$tin" "$tout" \
+        "$mscolor" "$avg_ms" "$NC" \
+        "$lccolor" "${last_call:0:19}" "$NC"
+      # served_by sub-rows
+      if [[ -n "$served_csv" && "$served_csv" != "-" ]]; then
+        IFS=',' read -ra _sbpairs <<< "$served_csv"
+        for _sbp in "${_sbpairs[@]}"; do
+          [[ "$_sbp" == *=* ]] || continue
+          printf '  %s  └─ %-20s  %s call(s)%s\n' \
+            "$GRAY" "${_sbp%%=*}" "${_sbp##*=}" "$NC"
+        done
+      fi
+    done <<< "$agent_data"
+  fi
+
+  # --- Model usage ---
+  local model_data=""
+  model_data="$(printf '%s' "$status_json" | jq -r '
+    (.usage.by_model // {}) | to_entries |
+    sort_by(.value.last_call // "") | reverse[] |
+    [.key,
+     (.value.calls | tostring),
+     (.value.input | tostring),
+     (.value.output | tostring),
+     (if .value.calls > 0 then (.value.total_duration_ms / .value.calls | floor | tostring) else "-" end),
+     (.value.last_call // "-")] |
+    @tsv
+  ' 2>/dev/null || true)"
+
+  if [[ -n "$model_data" ]]; then
+    printf '\n%sModel usage%s  %s──────────────────────────────────────────────────────%s\n' \
+      "$BOLD" "$NC" "$GRAY" "$NC"
+    printf '  %-44s  %6s  %10s  %10s  %8s  %s\n' "model" "calls" "in" "out" "avg ms" "last call"
+    printf '  %-44s  %6s  %10s  %10s  %8s  %s\n' "─────" "─────" "──" "───" "──────" "─────────"
+    while IFS=$'\t' read -r model calls tin tout avg_ms last_call; do
+      [[ -n "$model" ]] || continue
+      local mscolor=""
+      [[ "$avg_ms" != "-" ]] && [[ "$avg_ms" -gt 10000 ]] 2>/dev/null && mscolor="$YELLOW"
+      local lccolor="$GRAY"
+      [[ -n "$_hour_ago" && "$last_call" > "$_hour_ago" ]] && lccolor="${BOLD}${GREEN}"
+      printf '  %-44s  %6s  %10s  %10s  %s%8s%s  %s%s%s\n' \
+        "$model" "$calls" "$tin" "$tout" \
+        "$mscolor" "$avg_ms" "$NC" \
+        "$lccolor" "${last_call:0:19}" "$NC"
+    done <<< "$model_data"
+  fi
+}
+
 # --- Show available models from all sources ---
 show_models() {
   # Active hardware profile + capability assignments
@@ -3710,51 +3917,7 @@ show_models() {
       # Per-agent and per-model usage stats from /c-thru/status
       local status_json=""
       status_json="$(curl -sf --max-time 2.0 "http://127.0.0.1:$proxy_port/c-thru/status" 2>/dev/null || true)"
-      if [[ -n "$status_json" ]]; then
-        local agent_usage
-        agent_usage="$(printf '%s' "$status_json" | jq -r '
-          (.usage.by_agent // {}) | to_entries |
-          sort_by(.value.last_call // "") | reverse[] |
-          [.key,
-           (.value.calls | tostring),
-           ((.value.input + .value.output) | tostring),
-           (if .value.calls > 0 then (.value.total_duration_ms / .value.calls | floor | tostring) else "-" end),
-           (.value.last_call // "-")] |
-          @tsv
-        ' 2>/dev/null || true)"
-        if [[ -n "$agent_usage" ]]; then
-          echo ""
-          echo "Agent usage (most recent first):"
-          printf '  %-24s  %6s  %12s  %8s  %s\n' "agent" "calls" "tokens" "avg ms" "last call"
-          printf '  %-24s  %6s  %12s  %8s  %s\n' "-----" "-----" "------" "------" "---------"
-          while IFS=$'\t' read -r agent calls tokens avg_ms last_call; do
-            [[ -n "$agent" ]] || continue
-            printf '  %-24s  %6s  %12s  %8s  %s\n' "$agent" "$calls" "$tokens" "$avg_ms" "${last_call:0:19}"
-          done <<< "$agent_usage"
-        fi
-
-        local usage_models
-        usage_models="$(printf '%s' "$status_json" | jq -r '
-          (.usage.by_model // {}) | to_entries |
-          sort_by(.value.last_call // "") | reverse[] |
-          [.key,
-           (.value.calls | tostring),
-           ((.value.input + .value.output) | tostring),
-           (if .value.calls > 0 then (.value.total_duration_ms / .value.calls | floor | tostring) else "-" end),
-           (.value.last_call // "-")] |
-          @tsv
-        ' 2>/dev/null || true)"
-        if [[ -n "$usage_models" ]]; then
-          echo ""
-          echo "Model usage (most recent first):"
-          printf '  %-44s  %6s  %12s  %8s  %s\n' "model" "calls" "tokens" "avg ms" "last call"
-          printf '  %-44s  %6s  %12s  %8s  %s\n' "-----" "-----" "------" "------" "---------"
-          while IFS=$'\t' read -r model calls tokens avg_ms last_call; do
-            [[ -n "$model" ]] || continue
-            printf '  %-44s  %6s  %12s  %8s  %s\n' "$model" "$calls" "$tokens" "$avg_ms" "${last_call:0:19}"
-          done <<< "$usage_models"
-        fi
-      fi
+      _print_usage_tables "$status_json"
     fi
   fi
 }
@@ -3963,6 +4126,19 @@ fi
 
 if [[ "${1:-}" == "restart" ]]; then
   cmd_restart "$@"; exit $?
+fi
+
+if [[ "${1:-}" == "stats" && ( -z "${2:-}" || "${2:-}" == "show" ) ]]; then
+  port="$(claude_proxy_listen_port || true)"
+  if [[ -z "$port" ]]; then
+    echo "c-thru: proxy not running" >&2; exit 1
+  fi
+  status_json="$(curl -sf --max-time 2.0 "http://127.0.0.1:$port/c-thru/status" 2>/dev/null || true)"
+  if [[ -z "$status_json" ]]; then
+    echo "c-thru: proxy did not respond" >&2; exit 1
+  fi
+  _print_usage_tables "$status_json"
+  exit 0
 fi
 
 if [[ "${1:-}" == "stats" && "${2:-}" == "clear" ]]; then
@@ -4176,8 +4352,17 @@ apply_resolved_backend() {
   KIND=$(jq -r '.format // .kind // "anthropic"' <<< "$backend_json")
   BASE_URL=$(jq -r '.url // empty' <<< "$backend_json")
   AUTH_ENV=$(jq -r '.auth_env // empty' <<< "$backend_json")
-  # Ollama: old-schema kind=="ollama" or v2 format=="anthropic"+localhost URL
-  if [[ "$KIND" == "ollama" ]] || { [[ "$KIND" == "anthropic" ]] && echo "$BASE_URL" | grep -qE '(localhost|127\.0\.0\.1)'; }; then
+  # Bootstrap missing auth env for interactive providers (Gemini AI Studio
+  # today). For non-Gemini formats this is a no-op. The proxy reads the env
+  # directly for Gemini routes, so this must run before the proxy spawns.
+  if [[ "$KIND" == "gemini" ]] && [[ -n "$AUTH_ENV" ]] && [[ -z "${!AUTH_ENV:-}" ]]; then
+    bootstrap_endpoint_auth_env "$AUTH_ENV" || {
+      echo "c-thru: refusing to dispatch Gemini route '$backend_id' without $AUTH_ENV" >&2
+      exit 1
+    }
+  fi
+  # Ollama/Gemini: old-schema kind=="ollama" or v2 format=="anthropic|gemini" or v2 format=="anthropic"+localhost URL
+  if [[ "$KIND" == "ollama" ]] || [[ "$KIND" == "gemini" ]] || { [[ "$KIND" == "anthropic" ]] && echo "$BASE_URL" | grep -qE '(localhost|127\.0\.0\.1)'; }; then
     OLLAMA_BACKEND_URL="$BASE_URL"
     ensure_proxy_http_base || exit 1
     apply_ollama_client_block "$ENSURED_PROXY_HTTP_BASE" "" "{}"
@@ -4277,13 +4462,40 @@ elif curl -sf --max-time 3 "$OLLAMA_HTTP_BASE/api/tags" 2>/dev/null | jq -e --ar
   ensure_ollama_running "$EFFECTIVE_MODEL" "$OLLAMA_HTTP_BASE" "${OLLAMA_API_KEY:-}"
   [[ "$OLLAMA_PREP_SWEEP_STARTED" != "1" ]] && run_background_ollama_prep_sweep "$EFFECTIVE_MODEL" "$(ollama_cli_host "$OLLAMA_HTTP_BASE")" "${OLLAMA_API_KEY:-}"
 else
+  # Last-chance guardrail: if model_routes says this routes to a non-Ollama
+  # backend (e.g. Gemini, OpenRouter, Anthropic), refuse to fall through to
+  # the Ollama-pull path. Earlier branches should have caught this; reaching
+  # here usually means ~/.claude/model-map.json is out of sync with the
+  # shipped config. Failing loudly beats a silent `ollama pull gemini-latest`
+  # that always 404s.
+  if [[ -f "$CONFIG" ]]; then
+    _route_be="$(jq -r --arg m "$EFFECTIVE_MODEL" '
+      (.model_routes[$m] // empty) | (if type == "object" then .endpoint else . end)
+    ' "$CONFIG" 2>/dev/null)"
+    [[ -z "$_route_be" ]] && _route_be="$(lookup_model_pattern_value "model_routes" "$EFFECTIVE_MODEL" 2>/dev/null || true)"
+    if [[ -n "$_route_be" ]]; then
+      _route_url="$(jq -r --arg id "$_route_be" '(.endpoints // .backends)[$id].url // empty' "$CONFIG" 2>/dev/null)"
+      _route_kind="$(jq -r --arg id "$_route_be" '(.endpoints // .backends)[$id] | (.format // .kind // "anthropic")' "$CONFIG" 2>/dev/null)"
+      if [[ "$_route_kind" != "ollama" ]] && [[ -n "$_route_url" ]] && ! echo "$_route_url" | grep -qE '(localhost|127\.0\.0\.1)'; then
+        echo "c-thru: error: model '$EFFECTIVE_MODEL' is routed to non-Ollama backend '$_route_be' ($_route_url)" >&2
+        echo "       but earlier resolution did not pick it up. ~/.claude/model-map.json is likely stale." >&2
+        echo "       Try:  ./install.sh && pkill -f claude-proxy" >&2
+        echo "       Then: c-thru explain --model '$EFFECTIVE_MODEL'   to verify resolution." >&2
+        exit 1
+      fi
+    fi
+  fi
+
   # 3) Unknown to model-map and not in tag list
   if [[ "${C_THRU_STRICT_MODELS:-}" == "1" ]]; then
     echo "c-thru: error: '$EFFECTIVE_MODEL' is unknown and C_THRU_STRICT_MODELS=1 is set." >&2
     exit 1
   fi
-  # Fallback: still assume Ollama; pass model name through
-  echo "c-thru: '$EFFECTIVE_MODEL' not in model-map or local Ollama tags — assuming Ollama at $OLLAMA_HTTP_BASE" >&2
+  # Fallback: still assume Ollama; pass model name through. Prefixed WARN so
+  # the message is visible — historically users ignored the quiet info line
+  # and ended up with hung sessions.
+  echo "c-thru: WARN: '$EFFECTIVE_MODEL' not in model-map or local Ollama tags — assuming Ollama at $OLLAMA_HTTP_BASE" >&2
+  echo "       (if this is a Gemini/cloud model, run: c-thru explain --model '$EFFECTIVE_MODEL')" >&2
   ensure_proxy_http_base || exit 1
   apply_ollama_client_block "$ENSURED_PROXY_HTTP_BASE" "" "{}"
   ensure_ollama_running "$EFFECTIVE_MODEL" "$OLLAMA_HTTP_BASE" "${OLLAMA_API_KEY:-}"
