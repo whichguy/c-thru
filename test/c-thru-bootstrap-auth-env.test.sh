@@ -135,6 +135,22 @@ with_tmphome test_metacharacters
 
 echo
 echo "9. Replace path: awk rewrite swaps existing line, doesn't append duplicate"
+# Mirror the production awk-via-ENVIRON pattern so the test catches regressions
+# in the awk-escape-processing fix (POSIX awk -v interprets \n, \b, etc.;
+# ENVIRON[] does not).
+do_replace() {
+  local home="$1" envname="$2" key="$3"
+  local _apos="'"
+  local _qrepl="${_apos}\\${_apos}${_apos}"
+  local _qkey="${_apos}${key//${_apos}/${_qrepl}}${_apos}"
+  local _newline="export $envname=$_qkey"
+  local _tmp
+  _tmp=$(mktemp)
+  _CTHRU_LINE="$_newline" awk -v ev="$envname" \
+    'BEGIN{line=ENVIRON["_CTHRU_LINE"]} $0 ~ "^export "ev"=" { print line; next } { print }' \
+    "$home/.zshrc" > "$_tmp" && mv "$_tmp" "$home/.zshrc"
+}
+
 test_replace() {
   local home="$1"
   cat > "$home/.zshrc" <<'EOF'
@@ -144,16 +160,7 @@ export GOOGLE_API_KEY='AIzaSy_old_value'
 alias ll='ls -la'
 EOF
   local key='AIzaSy_new&|$value'
-  local _apos="'"
-  local _qrepl="${_apos}\\${_apos}${_apos}"
-  local _qkey="${_apos}${key//${_apos}/${_qrepl}}${_apos}"
-  local _newline="export GOOGLE_API_KEY=$_qkey"
-  local _tmp
-  _tmp=$(mktemp)
-  awk -v ev="GOOGLE_API_KEY" -v line="$_newline" \
-    '$0 ~ "^export "ev"=" { print line; next } { print }' \
-    "$home/.zshrc" > "$_tmp" && mv "$_tmp" "$home/.zshrc"
-
+  do_replace "$home" GOOGLE_API_KEY "$key"
   local count
   count=$(grep -c '^export GOOGLE_API_KEY=' "$home/.zshrc")
   assert "[[ $count -eq 1 ]]" "exactly 1 GOOGLE_API_KEY line after replace (got $count)"
@@ -165,6 +172,24 @@ EOF
   assert "grep -q \"^alias ll=\" '$home/.zshrc'" "alias line preserved"
 }
 with_tmphome test_replace
+
+echo
+echo "9b. Replace path with backslash key (regression: awk -v stripped \\b/\\n)"
+test_replace_backslash() {
+  local home="$1"
+  printf 'export GOOGLE_API_KEY=%s\n' "'old'" > "$home/.zshrc"
+  # Each of these would be silently mangled by `awk -v line=...` because
+  # POSIX awk processes escape sequences during -v assignment. ENVIRON[]
+  # is byte-literal and therefore safe.
+  for key in 'AIzaSy\backslash' 'AIzaSy\n_literal' 'AIzaSy\\double'; do
+    printf 'export GOOGLE_API_KEY=%s\n' "'old'" > "$home/.zshrc"
+    do_replace "$home" GOOGLE_API_KEY "$key"
+    local sourced_val
+    sourced_val=$(bash -c "source '$home/.zshrc' && printf '%s' \"\$GOOGLE_API_KEY\"")
+    assert "[[ '$sourced_val' == '$key' ]]" "backslash key '$key' survives replace (got '$sourced_val')"
+  done
+}
+with_tmphome test_replace_backslash
 
 echo
 echo "10. No command-injection: shell metachar key does not execute on source"
@@ -179,6 +204,12 @@ test_no_injection() {
   printf 'export GOOGLE_API_KEY=%s\n' "$_qkey" >> "$home/.zshrc"
   bash -c "source '$home/.zshrc'"
   assert "[[ ! -e '$sentinel' ]]" "no command execution from sourced rc file"
+  # Also verify the value is preserved verbatim — a silently-failed source
+  # (e.g. syntax error) would leave $GOOGLE_API_KEY empty and pass the
+  # sentinel check vacuously.
+  local sourced_val
+  sourced_val=$(bash -c "source '$home/.zshrc' && printf '%s' \"\$GOOGLE_API_KEY\"")
+  assert "[[ '$sourced_val' == '$key' ]]" "key preserved verbatim, source did not silently fail (got '$sourced_val')"
 }
 with_tmphome test_no_injection
 

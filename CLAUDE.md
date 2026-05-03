@@ -26,6 +26,7 @@ node --check tools/claude-proxy         # node syntax check
 node --check tools/model-map-*.js tools/llm-capabilities-mcp.js
 node tools/model-map-validate.js config/model-map.json   # validate shipped config
 node test/model-map-v12-adapter.test.js                  # adapter regression test
+bash test/c-thru-bootstrap-auth-env.test.sh              # interactive auth bootstrap (TTY-mocked)
 ~/.claude/tools/c-thru list      # runtime smoke-test (requires install; --list also accepted)
 ```
 
@@ -184,6 +185,10 @@ were not available to the agent.
 | `CLAUDE_PROXY_CLASSIFY_TIMEOUT_MS` | Classifier hard timeout (default 5000) |
 | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection for hardware-tier selection (positive integer GB). Malformed values fall through to `os.totalmem()`. |
 | `CLAUDE_LLM_MODE` | Override routing mode (5 modes): `best-cloud` \| `best-cloud-oss` \| `best-local-oss` \| `best-cloud-gov` \| `best-local-gov`. `best-cloud`: Anthropic/cloud models, local at 64+ GB. `best-cloud-oss`: OSS cloud via OpenRouter (DeepSeek, Kimi, Qwen). `best-local-oss`: fully local (Phi, Qwen, Devstral). `best-cloud-gov`: USGov compliant cloud (non-Chinese-origin). `best-local-gov`: USGov compliant local (Phi, GPT-OSS). Legacy `CLAUDE_CONNECTIVITY_MODE` still accepted. |
+| `GOOGLE_API_KEY` | API key for Google AI Studio Gemini endpoint (`endpoints.gemini_ai`). Sent as `x-goog-api-key`. |
+| `GOOGLE_CLOUD_TOKEN` | Bearer token for Vertex AI Gemini endpoint (`endpoints.gemini_vertex`). Refresh with `gcloud auth print-access-token`. |
+| `GOOGLE_CLOUD_PROJECT` | GCP project ID, interpolated into `endpoints.gemini_vertex.url` at config load via `${VAR}` substitution. Required to use the `gemini_vertex` endpoint. |
+| `GOOGLE_CLOUD_REGION` | GCP region (e.g. `us-central1`), interpolated into `endpoints.gemini_vertex.url` at config load. Required to use the `gemini_vertex` endpoint. |
 
 | `C_THRU_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). Also settable via `/map-model update off` (writes `self_update: false` to model-map.overrides.json). |
 | `C_THRU_UPDATE_INTERVAL` | Seconds between self-update fetches (default `3600`). Debounced via `.git/FETCH_HEAD` mtime. |

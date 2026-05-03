@@ -2263,8 +2263,12 @@ bootstrap_endpoint_auth_env() {
       export "$envname=$key"
       return 0
     }
-    if awk -v ev="$envname" -v line="$_newline" \
-        '$0 ~ "^export "ev"=" { print line; next } { print }' \
+    # POSIX awk's `-v` assignment processes escape sequences (`\n`, `\b`, `\\`,
+    # etc.) before the program sees the value, which would silently strip
+    # backslashes from $_newline. ENVIRON[] is byte-literal, so pass through
+    # the environment instead.
+    if _CTHRU_LINE="$_newline" awk -v ev="$envname" \
+        'BEGIN{line=ENVIRON["_CTHRU_LINE"]} $0 ~ "^export "ev"=" { print line; next } { print }' \
         "$rcfile" > "$_tmp" && mv "$_tmp" "$rcfile"; then
       echo "c-thru: updated existing $envname line in $rcfile" >&2
     else

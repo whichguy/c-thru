@@ -131,9 +131,15 @@ async function spawnProxy(opts = {}) {
     try {
       const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       const endpoints = raw.endpoints || raw.backends || {};
-      configAuthKeys = Object.values(endpoints)
-        .map(e => e && e.auth_env)
-        .filter(Boolean);
+      // Cover both schemas applyOutboundAuth accepts: top-level
+      // `auth_env: "FOO"` and nested `auth: {env: "FOO"}`.
+      configAuthKeys = Object.values(endpoints).flatMap(e => {
+        if (!e || typeof e !== 'object') return [];
+        const out = [];
+        if (e.auth_env) out.push(e.auth_env);
+        if (e.auth && typeof e.auth === 'object' && e.auth.env) out.push(e.auth.env);
+        return out;
+      });
     } catch {}
   }
   const AUTH_ENV_KEYS = [...new Set([...STATIC_AUTH_KEYS, ...configAuthKeys])];
