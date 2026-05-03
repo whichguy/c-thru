@@ -135,6 +135,8 @@ node test/proxy-gemini-routing.test.js
 GOOGLE_API_KEY=$KEY C_THRU_LIVE_GEMINI=1 \
   node test/proxy-gemini-live-shapes.test.js
 GOOGLE_API_KEY=$KEY C_THRU_LIVE_GEMINI=1 \
+  node test/proxy-gemini-live-thinking.test.js
+GOOGLE_API_KEY=$KEY C_THRU_LIVE_GEMINI=1 \
   bash test/proxy-gemini-live-e2e.test.sh
 ```
 
