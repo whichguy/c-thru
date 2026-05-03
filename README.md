@@ -96,6 +96,15 @@ Each capability response includes a `x-c-thru-resolved-via` header with JSON des
 
 Per-profile `on_failure` field controls fallback behavior: `"cascade"` (default) walks the fallback chain; `"hard_fail"` returns null immediately, sending a clean error instead of a non-equivalent substitute.
 
+**Gemini thinking observability** (when routed to a Gemini endpoint):
+- `x-c-thru-thinking-auto-enabled: 1` — proxy auto-enabled thinking on Gemini 3 Pro (matches `gemini-3*-pro*`, `gemini-pro-latest`, `gemini-pro`); opt out with `thinking:{type:'disabled'}`.
+- `x-c-thru-thinking-level: <minimal|low|medium|high>` — Gemini 3+ uses `thinkingLevel` (replaces legacy `thinkingBudget`). Anthropic's `budget_tokens` is mapped to the closest level the target model supports.
+- `x-c-thru-thinking-budget-added: <N>` — proxy expanded `maxOutputTokens` by N because Gemini 3 counts thinking against the same pool as visible tokens.
+- `x-c-thru-thinking-tokens: <N>` — upstream `thoughtsTokenCount` (non-streaming). Streaming surfaces it as `message_delta.usage.thinking_output_tokens`.
+- `output_tokens` matches Anthropic semantics: includes thinking tokens.
+
+**`/model` picker exposure**: aliases `claude-via-gemini-pro` and `claude-via-gemini-flash` make Gemini selectable from Claude Code's runtime `/model` picker (which only displays `claude-*` IDs).
+
 ### Lifecycle & Constraints
 
 - **`claude-proxy`** is a long-running HTTP server spawned by `c-thru`. Logs land at `~/.claude/proxy.*.log`. Reload config via SIGHUP (`c-thru reload`) or restart with `c-thru restart`. Kill a stuck proxy with `pkill -f claude-proxy`.

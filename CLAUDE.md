@@ -207,6 +207,16 @@ were not available to the agent.
 
 Per-profile `on_failure` field in `llm_profiles[hw][profile]`: `"cascade"` (default) walks the fallback chain; `"hard_fail"` returns null immediately so the proxy returns a clean error instead of a non-equivalent substitute.
 
+**Gemini thinking headers** (Anthropic↔Gemini translation):
+- `x-c-thru-thinking-auto-enabled: 1` — proxy auto-enabled thinking on Gemini 3 Pro (model match: `gemini-3*-pro*`, `gemini-pro-latest`, `gemini-pro`). Default `thinkingLevel='low'`. Opt out with `thinking:{type:'disabled'}`.
+- `x-c-thru-thinking-level: <minimal|low|medium|high>` — Gemini 3+ uses the `thinkingLevel` enum (replaces legacy `thinkingBudget`). Anthropic's `budget_tokens` is mapped: 0→minimal (flash only), ≤2048→low, ≤8192→medium (3.1+ only — `gemini-3-pro` falls back to `high`), >8192→high. Gemini 2.5 still uses numeric `thinkingBudget` (mixing both = 400 from upstream).
+- `x-c-thru-thinking-budget-added: <N>` — proxy expanded `maxOutputTokens` to `max_tokens + N` because Gemini 3 counts thinking against `maxOutputTokens` (Anthropic's `max_tokens` means visible-answer length). On Gemini 3 N is the level's approximate budget (minimal=256, low=2048, medium=8192, high=16384); on Gemini 2.5 N equals the explicit `thinkingBudget`.
+- `x-c-thru-thinking-tokens: <N>` — upstream `usageMetadata.thoughtsTokenCount`. Non-streaming only (headers can't be set after SSE writeHead). Streaming surfaces it inside `message_delta.usage.thinking_output_tokens`.
+- `output_tokens` includes thinking tokens (Anthropic parity): `candidatesTokenCount + thoughtsTokenCount`.
+- Auto-enable / budget-added headers are suppressed on `/v1/messages/count_tokens` since no model invocation occurs.
+
+**`/model` picker exposure**: Claude Code's runtime `/model` picker only displays `claude-*` IDs from `/v1/models`. The aliases `claude-via-gemini-pro` and `claude-via-gemini-flash` route to `gemini_ai` and surface in the picker; direct `gemini-*` IDs still work for shell users.
+
 Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3) auth headers (via `applyOutboundAuth` — strips or injects based on endpoint `auth`/`auth_env` config; absent = passthrough), (4) SSE `usage` injection, (5) protocol translation (gated on `format: "openai"` — 501 stub until implemented), (6) `x-c-thru-resolved-via` response header, (7) `model_overrides` unconditional name substitution before route graph traversal, (8) `@<backend>` sigil stripping — suffix stripped before forwarding so the provider only sees the base model name.
 
 ## Proxy Lifecycle

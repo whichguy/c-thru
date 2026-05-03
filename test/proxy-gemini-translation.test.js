@@ -10,7 +10,7 @@ const os   = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const {
-  stubBackend, writeConfig, httpJson, withProxy,
+  stubBackend, writeConfig, writeConfigFresh, httpJson, withProxy,
 } = require('./helpers');
 
 let passed = 0;
@@ -232,7 +232,9 @@ async function main() {
         stream: false,
       });
       assert(r.status === 200, 'thinking req status 200');
-      assert(captured4?.generationConfig?.thinkingConfig?.thinkingBudget === 512, 'thinkingBudget mapped to 512');
+      // Gemini 3 family uses thinkingLevel (not thinkingBudget); budget_tokens=512 → 'low'.
+      assert(captured4?.generationConfig?.thinkingConfig?.thinkingLevel === 'low', `thinkingLevel='low' for budget 512 (got ${captured4?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+      assert(captured4?.generationConfig?.thinkingConfig?.thinkingBudget === undefined, 'thinkingBudget NOT sent on Gemini 3 (would 400 if mixed)');
       assert(captured4?.generationConfig?.thinkingConfig?.includeThoughts === true, 'includeThoughts:true forwarded');
     });
 
@@ -568,7 +570,7 @@ async function main() {
       assert(parts[1]?.inlineData?.data === tinyPdf, 'document base64 data preserved');
     });
 
-    // ── G4. Lazy fire-and-forget context caching (miss → create → hit) ────
+    // ── G4. Lazy fire-and-forget context caching (miss -> create -> hit) ────
     console.log('\nG4. Context caching: turn 1 miss + create, turn 2 hit with prefix stripped');
     const generateRequests = [];
     let cacheCreatePayload = null;
@@ -648,6 +650,1128 @@ async function main() {
       assert(gc?.hit >= 1, `G4 /ping hit >= 1 (got ${gc?.hit})`);
       assert(gc?.created >= 1, `G4 /ping created >= 1 (got ${gc?.created})`);
       assert(gc?.entries >= 1, `G4 /ping entries >= 1 (got ${gc?.entries})`);
+    });
+
+    // ── 11. Wave 1: Client disconnect tears down upstream Gemini ─────────────
+    // When the Claude Code client closes mid-stream, the proxy must destroy
+    // the upstream HTTPS request to Gemini. Otherwise Gemini keeps generating
+    // (and billing for) tokens no client will read.
+    console.log('\n11. Wave 1: client disconnect cancels upstream Gemini stream');
+    const closeStub = http.createServer((sreq, sres) => {
+      // Record when this upstream request socket closes.
+      sreq.on('close', () => { sreq._closedAt = Date.now(); closedAt = sreq._closedAt; });
+      if (sreq.url.includes(':streamGenerateContent')) {
+        sres.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        });
+        // Emit one chunk then sleep — never end.
+        sres.write(`data: ${JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'hi' }] } }]
+        })}\n\n`);
+        // Hold the connection open for 30s. Cleared when proxy disconnects.
+        sreq._holdTimer = setTimeout(() => { try { sres.end(); } catch {} }, 30000);
+        sreq.on('close', () => { try { clearTimeout(sreq._holdTimer); } catch {} });
+        return;
+      }
+      sres.writeHead(200, { 'Content-Type': 'application/json' });
+      sres.end('{}');
+    });
+    let closedAt = 0;
+    await new Promise(r => closeStub.listen(0, '127.0.0.1', r));
+    const closeStubPort = closeStub.address().port;
+    const closeConfigPath = writeConfig(
+      fs.mkdtempSync(path.join(tmpDir, 'wave1-')),
+      buildGeminiConfig(closeStubPort)
+    );
+    try {
+      await withProxy({ configPath: closeConfigPath, profile: '16gb', env }, async ({ port }) => {
+        // Issue a streaming request and abort after first byte (~50ms).
+        const t0 = Date.now();
+        await new Promise((resolve) => {
+          const reqBody = JSON.stringify({
+            model: GEMINI_MODEL,
+            messages: [{ role: 'user', content: 'hi' }],
+            max_tokens: 10,
+            stream: true,
+          });
+          const cReq = http.request({
+            hostname: '127.0.0.1', port, path: '/v1/messages', method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(reqBody) },
+          }, (cRes) => {
+            cRes.on('data', () => {
+              // Got first byte — abort the client connection.
+              cReq.destroy();
+              resolve();
+            });
+            cRes.on('end', resolve);
+            cRes.on('error', resolve);
+          });
+          cReq.on('error', resolve);
+          cReq.write(reqBody);
+          cReq.end();
+        });
+        // Poll up to 1s for the upstream stub to observe the close.
+        const deadline = Date.now() + 1000;
+        while (!closedAt && Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 20));
+        }
+        const elapsed = closedAt ? closedAt - t0 : -1;
+        assert(closedAt > 0, `upstream socket closed after client disconnect (elapsed=${elapsed}ms)`);
+        assert(closedAt > 0 && elapsed < 1500, `upstream closed within 1.5s of client (got ${elapsed}ms)`);
+      });
+    } finally {
+      await new Promise(r => closeStub.close(r));
+    }
+
+    // ── 12. Wave 2: Gemini gRPC status -> Anthropic error type mapping ────────
+    console.log('\n12. Wave 2: gRPC status -> Anthropic error type mapping');
+    const errCases = [
+      { statusCode: 400, status: 'RESOURCE_EXHAUSTED', expectType: 'rate_limit_error' },
+      { statusCode: 403, status: 'PERMISSION_DENIED',  expectType: 'permission_error' },
+      { statusCode: 401, status: 'UNAUTHENTICATED',    expectType: 'authentication_error' },
+      { statusCode: 400, status: 'INVALID_ARGUMENT',   expectType: 'invalid_request_error' },
+      { statusCode: 503, status: 'UNAVAILABLE',        expectType: 'overloaded_error' },
+    ];
+    for (const tc of errCases) {
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          res.writeHead(tc.statusCode, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: { code: tc.statusCode, status: tc.status, message: 'simulated' },
+          }));
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: GEMINI_MODEL,
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 10,
+          stream: false,
+        });
+        assert(r.json?.error?.type === tc.expectType,
+          `${tc.status} (HTTP ${tc.statusCode}) -> ${tc.expectType} (got ${r.json?.error?.type})`);
+      });
+    }
+
+    // 12b. Unparseable body falls through to status-code mapping.
+    console.log('\n12b. Wave 2: unparseable body falls through to status-code mapping');
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        res.writeHead(429, { 'Content-Type': 'text/plain' });
+        res.end('this is not json at all');
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 10,
+        stream: false,
+      });
+      assert(r.json?.error?.type === 'rate_limit_error',
+        `unparseable 429 -> rate_limit_error via status-code fallback (got ${r.json?.error?.type})`);
+    });
+
+    // 12c. Retry-After header round-trips; 429 synthesizes ratelimit-remaining=0.
+    console.log('\n12c. Wave 2: Retry-After + ratelimit-requests-remaining propagation');
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '30' });
+        res.end(JSON.stringify({
+          error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'quota' },
+        }));
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 10,
+        stream: false,
+      });
+      assert(r.headers?.['retry-after'] === '30',
+        `Retry-After=30 propagated (got '${r.headers?.['retry-after']}')`);
+      assert(r.headers?.['anthropic-ratelimit-requests-remaining'] === '0',
+        `anthropic-ratelimit-requests-remaining=0 synthesized (got '${r.headers?.['anthropic-ratelimit-requests-remaining']}')`);
+    });
+
+    // ── 13. Wave 3: Vertex cache create uses regional URL, not /v1beta/ ──────
+    console.log('\n13. Wave 3: Vertex G4 cache create -> /v1/projects/{p}/locations/{l}/cachedContents');
+    let vertexCachePath = null;
+    let vertexGenerateRequests = [];
+    stub.setHandler((req, res) => {
+      let body = '';
+      req.on('data', d => body += d);
+      req.on('end', () => {
+        let parsed = null;
+        try { parsed = JSON.parse(body); } catch {}
+        if (req.url.includes('/cachedContents') && req.method === 'POST') {
+          vertexCachePath = req.url;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            name: 'projects/test-proj/locations/us-central1/cachedContents/vx9',
+            model: `models/${GEMINI_MODEL}`,
+            expireTime: new Date(Date.now() + 300000).toISOString(),
+          }));
+          return;
+        }
+        if (req.url.includes(':generateContent')) {
+          vertexGenerateRequests.push(parsed);
+          const turn = vertexGenerateRequests.length;
+          const usage = (turn >= 2 && parsed && parsed.cachedContent)
+            ? { promptTokenCount: 100, candidatesTokenCount: 5, cachedContentTokenCount: 95 }
+            : { promptTokenCount: 100, candidatesTokenCount: 5 };
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: `vt${turn}` }] }, finishReason: 'STOP' }],
+            usageMetadata: usage,
+          }));
+          return;
+        }
+        res.writeHead(404); res.end();
+      });
+      return true;
+    });
+    const vertexConfig = {
+      backends: {
+        gemini_vertex_stub: {
+          format: 'gemini',
+          vertex: true,
+          url: `http://127.0.0.1:${stub.port}/v1/projects/test-proj/locations/us-central1/publishers/google/models`,
+          auth: { literal: 'fake-vertex-token' },
+        },
+      },
+      model_routes: { [GEMINI_MODEL]: 'gemini_vertex_stub' },
+    };
+    const vertexConfigPath = writeConfig(
+      fs.mkdtempSync(path.join(tmpDir, 'wave3-')),
+      vertexConfig,
+    );
+    await withProxy({ configPath: vertexConfigPath, profile: '16gb', env }, async ({ port }) => {
+      const longSystem = 'You are a helpful assistant. ' + 'y'.repeat(2000);
+      const reqBody = {
+        model: GEMINI_MODEL,
+        system: [{ type: 'text', text: longSystem, cache_control: { type: 'ephemeral', ttl: '5m' } }],
+        messages: [{ role: 'user', content: 'q1' }],
+        max_tokens: 100,
+        stream: false,
+      };
+      // Turn 1 — miss + create.
+      const r1 = await httpJson(port, 'POST', '/v1/messages', reqBody);
+      assert(r1.status === 200, 'Vertex G4 turn1 status 200');
+      assert(r1.headers?.['x-c-thru-cache-status'] === 'miss',
+        `Vertex G4 turn1 cache-status=miss (got '${r1.headers?.['x-c-thru-cache-status']}')`);
+      // Wait for fire-and-forget cache create.
+      const deadline = Date.now() + 1000;
+      while (vertexCachePath === null && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 20));
+      }
+      assert(vertexCachePath === '/v1/projects/test-proj/locations/us-central1/cachedContents',
+        `Vertex cache create URL (got '${vertexCachePath}')`);
+      // Turn 2 — hit, cachedContent attached.
+      const r2 = await httpJson(port, 'POST', '/v1/messages', reqBody);
+      assert(r2.headers?.['x-c-thru-cache-status'] === 'hit',
+        `Vertex G4 turn2 cache-status=hit (got '${r2.headers?.['x-c-thru-cache-status']}')`);
+      assert(vertexGenerateRequests[1]?.cachedContent === 'projects/test-proj/locations/us-central1/cachedContents/vx9',
+        `Vertex turn2 cachedContent ref (got '${vertexGenerateRequests[1]?.cachedContent}')`);
+    });
+
+    // 13b. Vertex countTokens URL has no /v1beta/ prefix.
+    console.log('\n13b. Wave 3: Vertex :countTokens URL preserves regional prefix');
+    let vertexCountPath = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':countTokens')) {
+        vertexCountPath = req.url;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ totalTokens: 42 }));
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath: vertexConfigPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages/count_tokens', {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'count me' }],
+      });
+      assert(r.status === 200, `Vertex countTokens status 200 (got ${r.status})`);
+      assert(r.json?.input_tokens === 42, `Vertex countTokens result mapped (got ${r.json?.input_tokens})`);
+      assert(vertexCountPath?.startsWith('/v1/projects/test-proj/'),
+        `Vertex countTokens path has regional prefix (got '${vertexCountPath}')`);
+      assert(!vertexCountPath?.includes('/v1beta/'),
+        `Vertex countTokens path has no /v1beta/ (got '${vertexCountPath}')`);
+      assert(vertexCountPath?.endsWith(':countTokens'),
+        `Vertex countTokens path ends with :countTokens (got '${vertexCountPath}')`);
+    });
+
+    // ── 14. Wave 4: metadata.user_id propagated as x-c-thru-user-id header ───
+    // Pure passthrough: request body to Gemini is unchanged; only the response
+    // header is added so journals + downstream telemetry can attribute calls.
+    console.log('\n14. Wave 4: metadata.user_id -> x-c-thru-user-id response header');
+    let userIdGeneratePayload = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          try { userIdGeneratePayload = JSON.parse(body); } catch {}
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 10,
+        stream: false,
+        metadata: { user_id: 'u123' },
+      });
+      assert(r.status === 200, `Wave 4 status 200 (got ${r.status})`);
+      assert(r.headers?.['x-c-thru-user-id'] === 'u123',
+        `x-c-thru-user-id=u123 (got '${r.headers?.['x-c-thru-user-id']}')`);
+      assert(userIdGeneratePayload && userIdGeneratePayload.metadata === undefined,
+        `Gemini request body has no metadata field (transparent passthrough)`);
+    });
+
+    // 14b. Absent metadata.user_id -> header absent (no spurious empty value).
+    console.log('\n14b. Wave 4: no metadata.user_id -> no x-c-thru-user-id header');
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 10,
+        stream: false,
+      });
+      assert(r.status === 200, `14b status 200 (got ${r.status})`);
+      assert(r.headers?.['x-c-thru-user-id'] === undefined,
+        `x-c-thru-user-id absent (got '${r.headers?.['x-c-thru-user-id']}')`);
+    });
+
+    // ── 15. Wave 4: redacted_thinking -> dropped + observability header ──────
+    // Gemini cannot decrypt Anthropic-encrypted opaque blobs and would 400 if
+    // forwarded. Drop is surgical: adjacent text blocks still flow through.
+    console.log('\n15. Wave 4: redacted_thinking dropped + x-c-thru-redacted-thinking-dropped header');
+    let redactedGeneratePayload = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          try { redactedGeneratePayload = JSON.parse(body); } catch {}
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{
+          role: 'assistant',
+          content: [
+            { type: 'redacted_thinking', data: 'ENCRYPTED_BLOB_OPAQUE' },
+            { type: 'text', text: 'visible reply' },
+          ],
+        }, {
+          role: 'user',
+          content: 'continue',
+        }],
+        max_tokens: 10,
+        stream: false,
+      });
+      assert(r.status === 200, `15 status 200 (got ${r.status})`);
+      assert(r.headers?.['x-c-thru-redacted-thinking-dropped'] === '1',
+        `x-c-thru-redacted-thinking-dropped=1 (got '${r.headers?.['x-c-thru-redacted-thinking-dropped']}')`);
+      const payloadStr = JSON.stringify(redactedGeneratePayload || {});
+      assert(!payloadStr.includes('ENCRYPTED_BLOB_OPAQUE'),
+        `encrypted blob not forwarded to Gemini`);
+      const modelMsg = redactedGeneratePayload?.contents?.find(c => c.role === 'model');
+      assert(modelMsg && Array.isArray(modelMsg.parts),
+        `model message present in upstream payload`);
+      assert(modelMsg.parts.some(p => p.text === 'visible reply'),
+        `adjacent text block still forwarded (drop is surgical)`);
+    });
+
+    // ── 16. x-c-thru-resolution-chain on a route(model->backend) hop ─────────
+    // GEMINI_MODEL is registered as `model_routes[GEMINI_MODEL] = "gemini_stub"`,
+    // so the chain should read `req:<model> -> route(<model>->gemini_stub)`.
+    console.log('\n16. x-c-thru-resolution-chain emits route hop');
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+        }));
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 10,
+        stream: false,
+      });
+      assert(r.status === 200, `16 status 200 (got ${r.status})`);
+      const ch = r.headers?.['x-c-thru-resolution-chain'];
+      assert(typeof ch === 'string' && ch.length > 0,
+        `x-c-thru-resolution-chain present (got '${ch}')`);
+      assert(ch.startsWith(`req:${GEMINI_MODEL}`),
+        `chain starts with req:${GEMINI_MODEL} (got '${ch}')`);
+      assert(ch.includes(`route(${GEMINI_MODEL}->gemini_stub)`),
+        `chain contains route hop to gemini_stub (got '${ch}')`);
+      // served-by is unchanged: still the resolved concrete model name.
+      assert(r.headers?.['x-c-thru-served-by'] === GEMINI_MODEL,
+        `x-c-thru-served-by=${GEMINI_MODEL} unchanged (got '${r.headers?.['x-c-thru-served-by']}')`);
+    });
+
+    // 16b. v2 alias (endpoint+name) -> chain emits alias hop with both fields.
+    // writeConfigFresh: v2-alias config goes in a sibling dir so it doesn't
+    // overwrite the original configPath that 15b still depends on.
+    console.log('\n16b. x-c-thru-resolution-chain emits alias hop for v2 alias');
+    const aliasConfigPath = writeConfigFresh(tmpDir, 'alias', {
+      backends: {
+        gemini_stub: {
+          format: 'gemini',
+          url: `http://127.0.0.1:${stub.port}`,
+          auth: { literal: 'fake-gemini-key' },
+        },
+      },
+      model_routes: {
+        'gemini-pro-shortcut': { endpoint: 'gemini_stub', name: GEMINI_MODEL },
+      },
+    });
+    await withProxy({ configPath: aliasConfigPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: 'gemini-pro-shortcut',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 10,
+        stream: false,
+      });
+      assert(r.status === 200, `16b status 200 (got ${r.status})`);
+      const ch = r.headers?.['x-c-thru-resolution-chain'];
+      assert(typeof ch === 'string' && ch.includes(`alias(gemini-pro-shortcut->gemini_stub/${GEMINI_MODEL})`),
+        `chain contains alias hop (got '${ch}')`);
+      // served-by is the RESOLVED concrete name, not the alias.
+      assert(r.headers?.['x-c-thru-served-by'] === GEMINI_MODEL,
+        `x-c-thru-served-by=${GEMINI_MODEL} resolved (got '${r.headers?.['x-c-thru-served-by']}')`);
+    });
+
+    // ── 17. thoughtsTokenCount -> x-c-thru-thinking-tokens header ─────────
+    console.log('\n17. thoughtsTokenCount -> x-c-thru-thinking-tokens header');
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+          usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 10, thoughtsTokenCount: 42 },
+        }));
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        thinking: { type: 'enabled', budget_tokens: 256 },
+        messages: [{ role: 'user', content: 'go' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(r.status === 200, `17 status 200 (got ${r.status})`);
+      assert(r.headers?.['x-c-thru-thinking-tokens'] === '42',
+        `x-c-thru-thinking-tokens=42 (got '${r.headers?.['x-c-thru-thinking-tokens']}')`);
+    });
+
+    // ── 18. Budget arithmetic: max_tokens + thinkingBudget ────────────────
+    console.log('\n18. Budget arithmetic — maxOutputTokens = max_tokens + thinkingBudget');
+    let captured18 = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          captured18 = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        thinking: { type: 'enabled', budget_tokens: 500 },
+        messages: [{ role: 'user', content: 'go' }],
+        max_tokens: 200,
+        stream: false,
+      });
+      assert(r.status === 200, `18 status 200 (got ${r.status})`);
+      // Gemini 3 family: budget_tokens=500 → thinkingLevel='low' (≤2048).
+      // approx budget for 'low' = 2048; maxOutputTokens=200+2048=2248.
+      assert(captured18?.generationConfig?.maxOutputTokens === 2248,
+        `maxOutputTokens=2248 (200+approxLow) (got ${captured18?.generationConfig?.maxOutputTokens})`);
+      assert(captured18?.generationConfig?.thinkingConfig?.thinkingLevel === 'low',
+        `thinkingLevel='low' for budget 500 (got ${captured18?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+      assert(captured18?.generationConfig?.thinkingConfig?.thinkingBudget === undefined,
+        `thinkingBudget NOT sent (would 400 if mixed with thinkingLevel) (got ${captured18?.generationConfig?.thinkingConfig?.thinkingBudget})`);
+      assert(r.headers?.['x-c-thru-thinking-budget-added'] === '2048',
+        `x-c-thru-thinking-budget-added=2048 (approxLow) (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
+      assert(r.headers?.['x-c-thru-thinking-level'] === 'low',
+        `x-c-thru-thinking-level=low (got '${r.headers?.['x-c-thru-thinking-level']}')`);
+    });
+
+    // ── 19. Auto-enable thinking on Gemini 3 Pro ──────────────────────────
+    console.log('\n19. Auto-enable thinking on Gemini 3 Pro');
+    {
+      const proConfigPath = writeConfigFresh(tmpDir, 'autopro', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: {
+          'gemini-pro-latest': 'gemini_stub',
+          'gemini-flash-latest': 'gemini_stub',
+        },
+      });
+      let captured19 = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured19 = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: proConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-pro-latest',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 100,
+          stream: false,
+        });
+        assert(r.status === 200, `19 status 200 (got ${r.status})`);
+        // Auto-enable on Gemini 3 family → thinkingLevel='low' (default).
+        assert(captured19?.generationConfig?.thinkingConfig?.thinkingLevel === 'low',
+          `auto-enabled thinkingLevel='low' (got ${captured19?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+        assert(captured19?.generationConfig?.thinkingConfig?.thinkingBudget === undefined,
+          `auto-enable does NOT send legacy thinkingBudget (got ${captured19?.generationConfig?.thinkingConfig?.thinkingBudget})`);
+        assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === '1',
+          `x-c-thru-thinking-auto-enabled=1 (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
+      });
+
+      // Negative: gemini-flash-latest is not Gemini 3 Pro -> no auto-enable.
+      let captured19b = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured19b = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: proConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-flash-latest',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 100,
+          stream: false,
+        });
+        assert(r.status === 200, `19 (flash) status 200 (got ${r.status})`);
+        assert(captured19b?.generationConfig?.thinkingConfig === undefined,
+          `flash: no auto-enable thinkingConfig (got ${JSON.stringify(captured19b?.generationConfig?.thinkingConfig)})`);
+        assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === undefined,
+          `flash: x-c-thru-thinking-auto-enabled absent (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
+      });
+    }
+
+    // ── 19b. Explicit opt-out: thinking:{type:'disabled'} on Gemini 3 Pro ──
+    console.log('\n19b. Explicit thinking:{type:"disabled"} opts out of auto-enable');
+    {
+      const proConfigPath = writeConfigFresh(tmpDir, 'autopro_off', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-pro-latest': 'gemini_stub' },
+      });
+      let captured = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: proConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-pro-latest',
+          thinking: { type: 'disabled' },
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 100,
+          stream: false,
+        });
+        assert(r.status === 200, `19b status 200 (got ${r.status})`);
+        assert(captured?.generationConfig?.thinkingConfig === undefined,
+          `opt-out: no thinkingConfig (got ${JSON.stringify(captured?.generationConfig?.thinkingConfig)})`);
+        assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === undefined,
+          `opt-out: x-c-thru-thinking-auto-enabled absent (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
+      });
+    }
+
+    // ── 17b. output_tokens parity: includes thoughtsTokenCount ────────────
+    console.log('\n17b. output_tokens parity — includes thoughtsTokenCount (Anthropic semantics)');
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+          usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 10, thoughtsTokenCount: 42 },
+        }));
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        thinking: { type: 'enabled', budget_tokens: 256 },
+        messages: [{ role: 'user', content: 'go' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(r.status === 200, `17b status 200 (got ${r.status})`);
+      assert(r.json?.usage?.output_tokens === 52,
+        `output_tokens=52 (10 visible + 42 thinking) (got ${r.json?.usage?.output_tokens})`);
+      assert(r.json?.usage?.input_tokens === 5,
+        `input_tokens=5 unaffected (got ${r.json?.usage?.input_tokens})`);
+    });
+
+    // ── 19c. Regex precision: gemini-3-flash-preview must NOT auto-enable ──
+    console.log('\n19c. Regex precision — gemini-3-flash-preview is not Gemini 3 Pro');
+    {
+      const flashConfigPath = writeConfigFresh(tmpDir, 'flash3', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-3-flash-preview': 'gemini_stub' },
+      });
+      let captured = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: flashConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-3-flash-preview',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 100,
+          stream: false,
+        });
+        assert(r.status === 200, `19c status 200 (got ${r.status})`);
+        assert(captured?.generationConfig?.thinkingConfig === undefined,
+          `gemini-3-flash-preview: no auto-enable (got ${JSON.stringify(captured?.generationConfig?.thinkingConfig)})`);
+        assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === undefined,
+          `gemini-3-flash-preview: header absent (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
+      });
+
+      // Positive: gemini-3.1-pro-preview DOES match.
+      const proConfigPath = writeConfigFresh(tmpDir, 'pro31', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-3.1-pro-preview': 'gemini_stub' },
+      });
+      let captured2 = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured2 = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: proConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-3.1-pro-preview',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 100,
+          stream: false,
+        });
+        assert(r.status === 200, `19c (pro) status 200 (got ${r.status})`);
+        assert(captured2?.generationConfig?.thinkingConfig?.thinkingLevel === 'low',
+          `gemini-3.1-pro-preview auto-enables thinkingLevel='low' (got ${captured2?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+        assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === '1',
+          `gemini-3.1-pro-preview header set (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
+      });
+    }
+
+    // ── 20. Streaming: thoughtsTokenCount surfaces in message_delta usage ─
+    console.log('\n20. Streaming — thoughtsTokenCount in message_delta.usage (header not possible mid-stream)');
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':streamGenerateContent')) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        // Final SSE chunk includes finishReason + usageMetadata with thoughtsTokenCount.
+        res.write('data: ' + JSON.stringify({
+          candidates: [{
+            content: { parts: [{ text: 'final' }] },
+            finishReason: 'STOP',
+          }],
+          usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 12, thoughtsTokenCount: 33 },
+        }) + '\n\n');
+        res.end();
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      // Use raw http to read the SSE stream
+      const sseBody = await new Promise((resolve, reject) => {
+        const req = http.request({
+          hostname: '127.0.0.1', port, path: '/v1/messages', method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        }, (res) => {
+          let buf = '';
+          res.on('data', d => buf += d);
+          res.on('end', () => resolve({ status: res.statusCode, body: buf }));
+        });
+        req.on('error', reject);
+        req.write(JSON.stringify({
+          model: GEMINI_MODEL,
+          thinking: { type: 'enabled', budget_tokens: 256 },
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 100,
+          stream: true,
+        }));
+        req.end();
+      });
+      assert(sseBody.status === 200, `20 status 200 (got ${sseBody.status})`);
+      const deltaMatch = sseBody.body.match(/event:\s*message_delta\s*\ndata:\s*(\{[^\n]+\})/);
+      assert(deltaMatch != null, 'message_delta event present');
+      let delta = null;
+      try { delta = JSON.parse(deltaMatch[1]); } catch {}
+      assert(delta?.usage?.output_tokens === 45,
+        `streaming output_tokens=45 (12+33) (got ${delta?.usage?.output_tokens})`);
+      assert(delta?.usage?.thinking_output_tokens === 33,
+        `streaming thinking_output_tokens=33 (got ${delta?.usage?.thinking_output_tokens})`);
+    });
+
+    // ── 20b. Streaming: auto-enable + budget-added headers at writeHead ───
+    console.log('\n20b. Streaming — auto-enable + budget-added headers flushed at writeHead');
+    {
+      const proConfigPath = writeConfigFresh(tmpDir, 'streamhead', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-pro-latest': 'gemini_stub' },
+      });
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':streamGenerateContent')) {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          res.write('data: ' + JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }) + '\n\n');
+          res.end();
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: proConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const headers = await new Promise((resolve, reject) => {
+          const req = http.request({
+            hostname: '127.0.0.1', port, path: '/v1/messages', method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          }, (res) => {
+            res.on('data', () => {});
+            res.on('end', () => resolve({ status: res.statusCode, headers: res.headers }));
+          });
+          req.on('error', reject);
+          req.write(JSON.stringify({
+            model: 'gemini-pro-latest',
+            messages: [{ role: 'user', content: 'go' }],
+            max_tokens: 200,
+            stream: true,
+          }));
+          req.end();
+        });
+        assert(headers.status === 200, `20b status 200 (got ${headers.status})`);
+        assert(headers.headers['x-c-thru-thinking-auto-enabled'] === '1',
+          `streaming x-c-thru-thinking-auto-enabled=1 (got '${headers.headers['x-c-thru-thinking-auto-enabled']}')`);
+        assert(headers.headers['x-c-thru-thinking-budget-added'] === '2048',
+          `streaming x-c-thru-thinking-budget-added=2048 (approxLow) (got '${headers.headers['x-c-thru-thinking-budget-added']}')`);
+      });
+    }
+
+    // ── 20c. thoughtsTokenCount absent → no thinking-tokens header noise ──
+    console.log('\n20c. thoughtsTokenCount absent (Gemini LOW-thinking bug) — header omitted, output_tokens clean');
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+          usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 10 },  // no thoughtsTokenCount
+        }));
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        thinking: { type: 'enabled', budget_tokens: 256 },
+        messages: [{ role: 'user', content: 'go' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(r.status === 200, `20c status 200 (got ${r.status})`);
+      assert(r.headers?.['x-c-thru-thinking-tokens'] === undefined,
+        `no thinking-tokens header when thoughtsTokenCount absent (got '${r.headers?.['x-c-thru-thinking-tokens']}')`);
+      assert(r.json?.usage?.output_tokens === 10,
+        `output_tokens=10 (visible-only, no thoughts to add) (got ${r.json?.usage?.output_tokens})`);
+    });
+
+    // ── 20d. Auto-enable without max_tokens → maxOutputTokens stays unset ─
+    console.log('\n20d. Auto-enable but no max_tokens — maxOutputTokens absent, no budget-added header');
+    {
+      const proConfigPath = writeConfigFresh(tmpDir, 'nomax', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-pro-latest': 'gemini_stub' },
+      });
+      let captured = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: proConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-pro-latest',
+          messages: [{ role: 'user', content: 'go' }],
+          stream: false,
+          // no max_tokens
+        });
+        assert(r.status === 200, `20d status 200 (got ${r.status})`);
+        assert(captured?.generationConfig?.maxOutputTokens === undefined,
+          `maxOutputTokens absent when caller omits max_tokens (got ${captured?.generationConfig?.maxOutputTokens})`);
+        assert(captured?.generationConfig?.thinkingConfig?.thinkingLevel === 'low',
+          `auto-enable still fires (thinkingLevel='low') (got ${captured?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+        assert(r.headers?.['x-c-thru-thinking-budget-added'] === undefined,
+          `no budget-added header when max_tokens absent (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
+        assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === '1',
+          `auto-enable header still set (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
+      });
+    }
+
+    // ── 20e. count_tokens path — auto-enable telemetry NOT leaked ─────────
+    console.log('\n20e. count_tokens — auto-enable / budget-added headers must NOT leak (no model invocation)');
+    {
+      const proConfigPath = writeConfigFresh(tmpDir, 'counttok', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-pro-latest': 'gemini_stub' },
+      });
+      let capturedUrl = null;
+      let capturedBody = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':countTokens')) {
+          capturedUrl = req.url;
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ totalTokens: 7 }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: proConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages/count_tokens', {
+          model: 'gemini-pro-latest',
+          messages: [{ role: 'user', content: 'count me' }],
+          max_tokens: 100,
+        });
+        assert(r.status === 200, `20e status 200 (got ${r.status})`);
+        assert(r.json?.input_tokens === 7, `input_tokens passed through (got ${r.json?.input_tokens})`);
+        // generationConfig stripped: no thinkingConfig forwarded.
+        assert(capturedBody?.generationConfig === undefined,
+          `generationConfig absent on countTokens (got ${JSON.stringify(capturedBody?.generationConfig)})`);
+        // Headers must NOT advertise auto-enable since no model invocation occurred.
+        assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === undefined,
+          `count_tokens: auto-enable header absent (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
+        assert(r.headers?.['x-c-thru-thinking-budget-added'] === undefined,
+          `count_tokens: budget-added header absent (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
+      });
+    }
+
+    // ── 21. budgetToThinkingLevel mapping — high budget on gemini-3.1-pro ─
+    console.log('\n21. thinkingLevel mapping — high budget (16384+) on Gemini 3.1 Pro → "high"');
+    let captured21 = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          captured21 = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,  // gemini-3.1-pro supports low/medium/high
+        thinking: { type: 'enabled', budget_tokens: 16384 },
+        messages: [{ role: 'user', content: 'go' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(r.status === 200, `21 status 200 (got ${r.status})`);
+      assert(captured21?.generationConfig?.thinkingConfig?.thinkingLevel === 'high',
+        `budget=16384 → thinkingLevel='high' (got ${captured21?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+      assert(r.headers?.['x-c-thru-thinking-level'] === 'high',
+        `x-c-thru-thinking-level=high (got '${r.headers?.['x-c-thru-thinking-level']}')`);
+    });
+
+    // ── 21b. mid budget on gemini-3.1-pro → "medium" (model supports it) ──
+    console.log('\n21b. thinkingLevel mapping — mid budget (4096) on Gemini 3.1 Pro → "medium"');
+    let captured21b = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          captured21b = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        thinking: { type: 'enabled', budget_tokens: 4096 },
+        messages: [{ role: 'user', content: 'go' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(r.status === 200, `21b status 200 (got ${r.status})`);
+      assert(captured21b?.generationConfig?.thinkingConfig?.thinkingLevel === 'medium',
+        `budget=4096 on 3.1-pro → 'medium' (got ${captured21b?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+    });
+
+    // ── 21c. mid budget on gemini-3-pro (no medium support) → "high" ───────
+    console.log('\n21c. thinkingLevel mapping — mid budget (4096) on Gemini 3 Pro (no medium) → "high"');
+    {
+      const proConfigPath = writeConfigFresh(tmpDir, 'pro3medium', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-3-pro-preview': 'gemini_stub' },
+      });
+      let captured = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: proConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-3-pro-preview',
+          thinking: { type: 'enabled', budget_tokens: 4096 },
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 100,
+          stream: false,
+        });
+        assert(r.status === 200, `21c status 200 (got ${r.status})`);
+        assert(captured?.generationConfig?.thinkingConfig?.thinkingLevel === 'high',
+          `gemini-3-pro doesn't support 'medium' → falls to 'high' (got ${captured?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+      });
+    }
+
+    // ── 21d. budget=0 on gemini-3-flash → "minimal" ───────────────────────
+    console.log('\n21d. thinkingLevel mapping — budget=0 on Gemini 3 Flash → "minimal"');
+    {
+      const flashConfigPath = writeConfigFresh(tmpDir, 'flashminimal', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-3-flash-preview': 'gemini_stub' },
+      });
+      let captured = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: flashConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-3-flash-preview',
+          thinking: { type: 'enabled', budget_tokens: 0 },
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 100,
+          stream: false,
+        });
+        assert(r.status === 200, `21d status 200 (got ${r.status})`);
+        assert(captured?.generationConfig?.thinkingConfig?.thinkingLevel === 'minimal',
+          `gemini-3-flash + budget=0 → 'minimal' (got ${captured?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+      });
+    }
+
+    // ── 21e. Gemini 2.5 keeps legacy thinkingBudget ───────────────────────
+    console.log('\n21e. Gemini 2.5 retains legacy thinkingBudget (no thinkingLevel migration)');
+    {
+      const v25ConfigPath = writeConfigFresh(tmpDir, 'gemini25', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-2.5-pro': 'gemini_stub' },
+      });
+      let captured = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: v25ConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-2.5-pro',
+          thinking: { type: 'enabled', budget_tokens: 4096 },
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 200,
+          stream: false,
+        });
+        assert(r.status === 200, `21e status 200 (got ${r.status})`);
+        assert(captured?.generationConfig?.thinkingConfig?.thinkingBudget === 4096,
+          `gemini-2.5-pro: legacy thinkingBudget=4096 (got ${captured?.generationConfig?.thinkingConfig?.thinkingBudget})`);
+        assert(captured?.generationConfig?.thinkingConfig?.thinkingLevel === undefined,
+          `gemini-2.5-pro: NO thinkingLevel (got ${captured?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+        assert(captured?.generationConfig?.maxOutputTokens === 4296,
+          `2.5 budget arithmetic: max_tokens(200)+budget(4096)=4296 (got ${captured?.generationConfig?.maxOutputTokens})`);
+        assert(r.headers?.['x-c-thru-thinking-level'] === undefined,
+          `gemini-2.5: no thinking-level header (got '${r.headers?.['x-c-thru-thinking-level']}')`);
+      });
+    }
+
+    // 15b. No redacted_thinking -> header absent.
+    console.log('\n15b. Wave 4: no redacted_thinking -> no x-c-thru-redacted-thinking-dropped header');
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 10,
+        stream: false,
+      });
+      assert(r.status === 200, `15b status 200 (got ${r.status})`);
+      assert(r.headers?.['x-c-thru-redacted-thinking-dropped'] === undefined,
+        `x-c-thru-redacted-thinking-dropped absent (got '${r.headers?.['x-c-thru-redacted-thinking-dropped']}')`);
     });
 
   } finally {

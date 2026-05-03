@@ -115,8 +115,8 @@ const OLLAMA_KEEP_ALIVE = process.env.CLAUDE_PROXY_OLLAMA_KEEP_ALIVE || '60m';
 // idleness.
 const OLLAMA_TTFT_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_TTFT_MS', 11000);
 // Maximum fallback chain depth. Default 20 — long chains are legitimate
-// when users compose redundancy across many providers (anthropic →
-// openrouter → bedrock → glm-cloud → local-large → local-small → ...).
+// when users compose redundancy across many providers (anthropic ->
+// openrouter -> bedrock -> glm-cloud -> local-large -> local-small -> ...).
 // Acts in concert with the per-backend cycle detection (visited Set) —
 // the depth cap is a belt-and-suspenders safety net, the cycle Set is
 // the primary loop-prevention mechanism.
@@ -146,7 +146,7 @@ const OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL = process.env.OLLAMA_CLOUD_LOCAL_FALLBAC
 //     so a misbehaving config can't grow it unbounded.
 const FAILED_BACKEND_TTL_MS = numberFromEnv('CLAUDE_PROXY_FAILED_BACKEND_TTL_MS', 60000);
 const FAILED_BACKEND_CACHE_MAX = 100;
-const failedBackendUntil = new Map();  // backend.id → timestamp_ms_to_skip_until
+const failedBackendUntil = new Map();  // backend.id -> timestamp_ms_to_skip_until
 function isInCooldown(backendId) {
   if (!failedBackendUntil.has(backendId)) return false;
   const until = failedBackendUntil.get(backendId);
@@ -170,7 +170,7 @@ function isInCooldown(backendId) {
 //               action will keep failing the same way. Debatable: a 404
 //               could in principle mean "model briefly unloaded by Ollama"
 //               (then a retry might work later), but in practice the
-//               cloud→local rewrite path runs first for Ollama, and 404 from
+//               cloud->local rewrite path runs first for Ollama, and 404 from
 //               a configured backend almost always means the route graph is
 //               wrong, not transient. Classify permanent and let the operator
 //               re-pull / fix routes; the cooldown adds nothing.
@@ -485,8 +485,8 @@ function writeJournalEntry(entry) {
 const BACKEND_SIGIL_RE = /^(.*)@([a-zA-Z0-9_-]+)$/;
 
 // Normalize a raw backend/endpoint entry to schema v2 shape.
-// Converts legacy kind:"ollama"→format:"anthropic"+auth:"none",
-// kind:"openai"→format:"openai". No-op when format is already set.
+// Converts legacy kind:"ollama"->format:"anthropic"+auth:"none",
+// kind:"openai"->format:"openai". No-op when format is already set.
 function normalizeBackend(id, raw) {
   const hasFormat = raw.format != null;
   const format = hasFormat ? raw.format :
@@ -545,10 +545,10 @@ function injectSamplingDefaults(body, effectiveModel, capability, backend) {
 }
 
 // Apply auth for an outbound request based on endpoint auth config.
-//   auth:"none"       → strip auth headers, inject nothing
-//   auth_env present  → inject Authorization: Bearer <env value>
-//   auth object       → use header/scheme/env fields
-//   (no auth config)  → passthrough: forward incoming auth verbatim
+//   auth:"none"       -> strip auth headers, inject nothing
+//   auth_env present  -> inject Authorization: Bearer <env value>
+//   auth object       -> use header/scheme/env fields
+//   (no auth config)  -> passthrough: forward incoming auth verbatim
 function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders) {
   const auth = backend.auth;
   const incomingAuth = incomingHeaders['authorization'];
@@ -613,14 +613,18 @@ function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders) {
   }
 }
 
-function resolveBackend(model, cfg, tier, mode, _seen) {
+function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
   const endpointsOrBackends = cfg.endpoints || cfg.backends || {};
   const modelRoutes = cfg.model_routes || {};
   // Cycle/depth guard: model_routes can chain (target = another model name that
-  // recurses through resolveRouteTarget → resolveBackend). A misconfigured map
+  // recurses through resolveRouteTarget -> resolveBackend). A misconfigured map
   // like {"a":"b","b":"a"} would otherwise stack-overflow. Track visited model
   // names and bail with a clean 400 if we revisit one or exceed depth 8.
   const seen = _seen || new Set();
+  // Resolution-chain trace for x-c-thru-resolution-chain header. Mutated as a
+  // shared reference across recursive calls so all hops accumulate in order.
+  // First call seeds with the original requested model.
+  const chain = _chain || [`req:${model}`];
   if (seen.has(model)) return { error: `model_routes resolution cycle detected at '${model}'`, status: 400 };
   if (seen.size >= 8) return { error: `model_routes resolution depth exceeded at '${model}' (chain too long)`, status: 400 };
   seen.add(model);
@@ -629,8 +633,8 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
   //   string  — either a backend id (terminal) or another model name (recurse).
   //   object  — mode-conditional: { connected: <target>, offline: <target>, ... }.
   //             Picks active mode, falls back to `connected`, then any value.
-  //             Allows mixing backend ids and model names per mode (e.g. claude-* → "anthropic"
-  //             when connected, → "qwen3.6@ollama_local" when offline).
+  //             Allows mixing backend ids and model names per mode (e.g. claude-* -> "anthropic"
+  //             when connected, -> "qwen3.6@ollama_local" when offline).
   const resolveRouteTarget = (target, routingKey) => {
     if (target && typeof target === 'object' && !Array.isArray(target)) {
       target = target[mode] || target.connected || target.default || Object.values(target)[0];
@@ -641,10 +645,12 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
     }
     const raw = endpointsOrBackends[target];
     if (raw) {
-      return { backend: normalizeBackend(target, raw), effectiveModel: model, terminalLabel: model, routingKey };
+      chain.push(`route(${routingKey}->${target})`);
+      return { backend: normalizeBackend(target, raw), effectiveModel: model, terminalLabel: model, routingKey, chain };
     }
     // Not a backend id — treat as a model name and recurse (handles sigil syntax + further model_routes).
-    return resolveBackend(target, cfg, tier, mode, seen);
+    chain.push(`route(${routingKey}->${target})`);
+    return resolveBackend(target, cfg, tier, mode, seen, chain);
   };
 
   let id = modelRoutes[model];
@@ -653,7 +659,8 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
     if (id && typeof id === 'object' && typeof id.endpoint === 'string') {
       const raw = endpointsOrBackends[id.endpoint];
       if (!raw) return { error: `model_routes['${model}'].endpoint references unknown endpoint '${id.endpoint}'`, status: 400 };
-      return { backend: normalizeBackend(id.endpoint, raw), effectiveModel: id.name, terminalLabel: id.name, routingKey: model };
+      chain.push(`alias(${model}->${id.endpoint}/${id.name})`);
+      return { backend: normalizeBackend(id.endpoint, raw), effectiveModel: id.name, terminalLabel: id.name, routingKey: model, chain };
     }
     return resolveRouteTarget(id, model);
   }
@@ -669,7 +676,10 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
   if (sigilMatch) {
     const [, baseModel, backendId] = sigilMatch;
     const raw = endpointsOrBackends[backendId];
-    if (raw) return { backend: normalizeBackend(backendId, raw), effectiveModel: baseModel, terminalLabel: baseModel, routingKey: backendId };
+    if (raw) {
+      chain.push(`sigil(${baseModel}@${backendId})`);
+      return { backend: normalizeBackend(backendId, raw), effectiveModel: baseModel, terminalLabel: baseModel, routingKey: backendId, chain };
+    }
   }
 
   const capAlias = resolveCapabilityAlias(model, cfg, tier);
@@ -679,18 +689,20 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
       if (!pinnedModel.trim()) {
         return { error: `agent_to_capability resolves to 'model:' with empty model name`, status: 400 };
       }
-      const nested = resolveBackend(pinnedModel, cfg, tier, mode, seen);
+      chain.push(`pin(${model}->${pinnedModel})`);
+      const nested = resolveBackend(pinnedModel, cfg, tier, mode, seen, chain);
       if (nested.error) return nested;
-      return { ...nested, logicalRole: nested.logicalRole || model, capability: model };
+      return { ...nested, logicalRole: nested.logicalRole || model, capability: model, chain };
     }
     // New schema: llm_profiles[capability] (capability-outer, not tier-outer)
     const entry = (cfg.llm_profiles || {})[capAlias] || null;
     if (entry) {
       const resolved = resolveProfileModel(entry, tier, mode);
       if (resolved) {
-        const nested = resolveBackend(resolved, cfg, tier, mode, seen);
+        chain.push(`cap(${capAlias}->${mode}/${tier}->${resolved})`);
+        const nested = resolveBackend(resolved, cfg, tier, mode, seen, chain);
         if (nested.error) return nested;
-        return { ...nested, logicalRole: capAlias, capability: capAlias };
+        return { ...nested, logicalRole: capAlias, capability: capAlias, chain };
       } else {
         return { error: `no model resolved for capability '${capAlias}' in mode '${mode}' at tier '${tier}'`, status: 503 };
       }
@@ -701,11 +713,13 @@ function resolveBackend(model, cfg, tier, mode, _seen) {
     return { error: `'${model}' not in model_routes and C_THRU_STRICT_MODELS=1 is set`, status: 400 };
   }
   console.error(`c-thru: '${model}' not in model_routes — assuming local Ollama at ${DEFAULT_OLLAMA_URL}`);
+  chain.push(`fallback:ollama(${model})`);
   return {
     backend: { id: '__ollama_fallback__', format: 'anthropic', auth: 'none', url: DEFAULT_OLLAMA_URL, _ollamaFallback: true },
     effectiveModel: model,
     terminalLabel: model,
-    routingKey: 'ollama-fallback'
+    routingKey: 'ollama-fallback',
+    chain
   };
 }
 
@@ -729,7 +743,7 @@ function send(res, code, obj) {
 }
 
 // ── Anthropic-fidelity helpers ───────────────────────────────────────────
-// Make our Ollama→Anthropic-translated responses indistinguishable from real
+// Make our Ollama->Anthropic-translated responses indistinguishable from real
 // api.anthropic.com responses. These are used by forwardOllamaLegacy only; the
 // forwardAnthropic path passes upstream output through verbatim.
 
@@ -755,7 +769,33 @@ function mapStopReason(ollamaDoneReason) {
 }
 
 // Map an HTTP status code to Anthropic's error-type taxonomy.
-function anthropicErrorType(statusCode) {
+//
+// Optional second arg: raw upstream error body (string). If parseable as JSON
+// and shaped like a Google API error ({error: {status, code, ...}}), the gRPC
+// status string is preferred over the HTTP code — Gemini frequently returns
+// 400 for `RESOURCE_EXHAUSTED` (a true rate-limit), and Claude Code branches
+// on the Anthropic error `type` to choose backoff behavior. Falls back to the
+// status-code mapping when the body is missing/unparseable.
+function anthropicErrorType(statusCode, errBody) {
+  if (typeof errBody === 'string' && errBody.length > 0) {
+    try {
+      const parsed = JSON.parse(errBody);
+      const grpcStatus = parsed && parsed.error && parsed.error.status;
+      if (typeof grpcStatus === 'string') {
+        switch (grpcStatus) {
+          case 'RESOURCE_EXHAUSTED': return 'rate_limit_error';
+          case 'PERMISSION_DENIED': return 'permission_error';
+          case 'UNAUTHENTICATED':   return 'authentication_error';
+          case 'INVALID_ARGUMENT':  return 'invalid_request_error';
+          case 'NOT_FOUND':         return 'not_found_error';
+          case 'UNAVAILABLE':
+          case 'DEADLINE_EXCEEDED': return 'overloaded_error';
+          case 'INTERNAL':
+          case 'UNKNOWN':           return 'api_error';
+        }
+      }
+    } catch {}
+  }
   if (statusCode === 400) return 'invalid_request_error';
   if (statusCode === 401) return 'authentication_error';
   if (statusCode === 403) return 'permission_error';
@@ -809,7 +849,7 @@ function flattenMessagesForOllama(body) {
   });
 }
 
-// Scrub headers on the REQUEST side only (client → upstream). The response side
+// Scrub headers on the REQUEST side only (client -> upstream). The response side
 // either writes its own headers (streaming SSE, non-streaming JSON) or pipes
 // upstream headers verbatim with an unmodified body, so no scrub is needed there.
 function scrubCthruHeaders(headers) {
@@ -847,7 +887,7 @@ function scrubCthruHeaders(headers) {
 // fallback_to wiring, we transparently retry the same request against a local
 // model named by OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL.
 //
-// Returns true if the cloud→local rewrite fired and the request was
+// Returns true if the cloud->local rewrite fired and the request was
 // re-dispatched. Returns false if the case doesn't apply (not :cloud-suffixed,
 // already retried, or env var unset/empty) — the caller should fall through to
 // tryFallbackOrFail in that case.
@@ -855,7 +895,7 @@ function scrubCthruHeaders(headers) {
 // Edge cases handled:
 //  - body.model already rewritten by previous fallback hop (suffix gone)
 //  - requestMeta._cloudFallbackTried defensive flag against double-fire
-//  - OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL unset/empty → skip entirely
+//  - OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL unset/empty -> skip entirely
 function tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta) {
   if (res.headersSent) return false;
   if (!OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL) return false;
@@ -917,6 +957,7 @@ function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
   requestMeta._localTerminalAppended = true;
   requestMeta._fallbackFrom = requestMeta._fallbackFrom || termResolved.backend.id;
   body.model = termResolved.effectiveModel;
+  if (termResolved.chain) requestMeta.resolutionChain = termResolved.chain;
   ctxLog(ctx, 'fallback.local_terminal', { model: termModel, backend: termResolved.backend.id, capability: capKey });
   dispatchOllamaBackend(ctx, req, res, body, termResolved.backend, termResolved.effectiveModel, requestMeta);
   return true;
@@ -996,6 +1037,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
     });
     requestMeta._fallbackFrom = requestMeta._fallbackFrom || backend.id;
     body.model = resolved.effectiveModel;
+    if (resolved.chain) requestMeta.resolutionChain = resolved.chain;
     if (isOllamaLegacy(resolved.backend)) {
       dispatchOllamaBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
     } else {
@@ -1030,6 +1072,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
       });
       requestMeta._fallbackFrom = requestMeta._fallbackFrom || backend.id;
       body.model = candidateResolved.effectiveModel;
+      if (candidateResolved.chain) requestMeta.resolutionChain = candidateResolved.chain;
       if (isOllamaLegacy(candidateResolved.backend)) {
         dispatchOllamaBackend(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
       } else {
@@ -1072,6 +1115,7 @@ function tryGlobalDefaultFallback(ctx, req, res, body, requestMeta) {
   });
   chain.add(resolved.backend.id);
   body.model = resolved.effectiveModel;
+  if (resolved.chain) requestMeta.resolutionChain = resolved.chain;
   if (isOllamaLegacy(resolved.backend)) {
     dispatchOllamaBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
   } else {
@@ -1118,8 +1162,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   applyOutboundAuth(backend, req.headers, headers);
 
   // Combine the backend's optional base path with the client's request path.
-  // - Anthropic backend url=https://api.anthropic.com → pathname='/' → use req.url verbatim ("/v1/messages?beta=true")
-  // - OpenRouter backend url=https://openrouter.ai/api/v1 → pathname='/api/v1' → prefix req.url ("/api/v1/v1/messages?beta=true")
+  // - Anthropic backend url=https://api.anthropic.com -> pathname='/' -> use req.url verbatim ("/v1/messages?beta=true")
+  // - OpenRouter backend url=https://openrouter.ai/api/v1 -> pathname='/api/v1' -> prefix req.url ("/api/v1/v1/messages?beta=true")
   // Treating backend.url as origin+optional-prefix (rather than full endpoint) handles both cases.
   const basePrefix = (targetUrl.pathname === '/' ? '' : targetUrl.pathname.replace(/\/$/, ''));
   const forwardedPath = basePrefix + req.url;
@@ -1167,6 +1211,9 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     }
     outHeaders['x-c-thru-served-by'] = effectiveModel || '';
     outHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
+    if (Array.isArray(requestMeta.resolutionChain) && requestMeta.resolutionChain.length) {
+      outHeaders['x-c-thru-resolution-chain'] = requestMeta.resolutionChain.join(' -> ');
+    }
     if (requestMeta._fallbackFrom) outHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
     if (requestMeta._fallbackFrom) outHeaders['x-claude-proxy-fallback-from'] = requestMeta._fallbackFrom;
     res.writeHead(upRes.statusCode, outHeaders);
@@ -1298,7 +1345,7 @@ function buildOllamaRequestBody(body, effectiveModel) {
 }
 
 // Handle a non-200 response from Ollama. Re-shapes native Ollama errors into
-// Anthropic's error envelope, then tries cloud→local rewrite and fallback chain
+// Anthropic's error envelope, then tries cloud->local rewrite and fallback chain
 // before falling back to surfacing the original status to the client.
 // ARCH: 400 is excluded from fallback (shouldFallbackOnStatus guard) so
 //       caller-malformed requests don't loop through the fallback chain.
@@ -1314,7 +1361,7 @@ function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
       }
     } catch {}
     if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
-      // Cloud→local rewrite first: if the failing model is :cloud-suffixed
+      // Cloud->local rewrite first: if the failing model is :cloud-suffixed
       // (e.g. user has no Ollama subscription), swap in the configured
       // local fallback model and retry against the same backend before
       // walking the per-backend fallback_to chain.
@@ -1364,6 +1411,9 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
   }
   streamHeaders['x-c-thru-served-by'] = effectiveModel || '';
   streamHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
+  if (Array.isArray(requestMeta.resolutionChain) && requestMeta.resolutionChain.length) {
+    streamHeaders['x-c-thru-resolution-chain'] = requestMeta.resolutionChain.join(' -> ');
+  }
   if (requestMeta._fallbackFrom) streamHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
   if (requestMeta._fallbackFrom) streamHeaders['x-claude-proxy-fallback-from'] = requestMeta._fallbackFrom;
   res.writeHead(200, streamHeaders);
@@ -1987,10 +2037,13 @@ async function handleFilesApi(req, res) {
 // Centralises G7 (beta-dropped), G10 (request-id), G13 (schema-scrubbed) so
 // streaming / non-streaming / count_tokens response paths all set the same
 // telemetry. Caller adds streaming-specific headers afterwards.
-function buildCthruResponseHeaders(req, geminiBody, effectiveModel) {
+function buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta) {
   const h = {
     'x-c-thru-served-by': effectiveModel || '',
   };
+  if (requestMeta && Array.isArray(requestMeta.resolutionChain) && requestMeta.resolutionChain.length) {
+    h['x-c-thru-resolution-chain'] = requestMeta.resolutionChain.join(' -> ');
+  }
   // G13: schema-scrubbed (set when mapAnthropicToGemini stripped any fields).
   if (geminiBody && geminiBody._schemaRemoved && geminiBody._schemaRemoved.length) {
     h['x-c-thru-schema-scrubbed'] = geminiBody._schemaRemoved.join(',');
@@ -1999,6 +2052,33 @@ function buildCthruResponseHeaders(req, geminiBody, effectiveModel) {
   // after maybeApplyGeminiCache. Absent on Files-API and other non-cached paths.
   if (geminiBody && geminiBody._cacheStatus && geminiBody._cacheStatus !== 'none') {
     h['x-c-thru-cache-status'] = geminiBody._cacheStatus;
+  }
+  // Wave 4: per-user attribution. Anthropic's metadata.user_id has no Gemini
+  // equivalent on :generateContent, so we surface it as a response header for
+  // journals + downstream telemetry (purely additive — request to Gemini is
+  // unchanged). Stamped by forwardGemini before this call.
+  if (geminiBody && typeof geminiBody._userId === 'string' && geminiBody._userId) {
+    h['x-c-thru-user-id'] = geminiBody._userId;
+  }
+  // Wave 4: redacted_thinking blocks are dropped (Gemini cannot decrypt
+  // Anthropic-encrypted opaque blobs). Surface the omission so journals +
+  // clients can detect that conversation history was lossy.
+  if (geminiBody && geminiBody._redactedThinkingDropped) {
+    h['x-c-thru-redacted-thinking-dropped'] = '1';
+  }
+  // Thinking observability: surface auto-enable, budget expansion, and the
+  // upstream-reported thoughtsTokenCount so callers can see what was paid.
+  if (geminiBody && geminiBody._thinkingAutoEnabled) {
+    h['x-c-thru-thinking-auto-enabled'] = '1';
+  }
+  if (geminiBody && typeof geminiBody._thinkingLevel === 'string') {
+    h['x-c-thru-thinking-level'] = geminiBody._thinkingLevel;
+  }
+  if (geminiBody && typeof geminiBody._thinkingBudgetAdded === 'number') {
+    h['x-c-thru-thinking-budget-added'] = String(geminiBody._thinkingBudgetAdded);
+  }
+  if (geminiBody && typeof geminiBody._thinkingTokens === 'number') {
+    h['x-c-thru-thinking-tokens'] = String(geminiBody._thinkingTokens);
   }
   // G7: anthropic-beta tokens are not honored on Gemini upstream — all
   // incoming tokens are effectively dropped. Surface so callers can detect
@@ -2031,7 +2111,7 @@ function buildCthruResponseHeaders(req, geminiBody, effectiveModel) {
 //
 // Hash key: sha256({model, system, messages-up-to-last-cache_control, tools}).
 // Content-addressed; cross-conversation reuse requires byte-identical prefix.
-const GEMINI_CACHE_MAP = new Map(); // hash → { name, expiresAt, model }
+const GEMINI_CACHE_MAP = new Map(); // hash -> { name, expiresAt, model }
 // Aggregate counters for /ping observability. Incremented inline at each
 // status transition. Single object so /ping returns a coherent snapshot.
 const GEMINI_CACHE_STATS = {
@@ -2131,7 +2211,7 @@ function maybeApplyGeminiCache(body, geminiBody, model, ctx) {
     // non-overlapping so /ping consumers can sum them without double-counting.
     GEMINI_CACHE_STATS.empty_prefix++;
     if (ctx) ctxLog(ctx, 'gemini.cache.empty_prefix', {
-      reason: 'cache_control marker present but cacheable prefix is empty after Anthropic→Gemini translation (system blocks may have had cache_control but no text)',
+      reason: 'cache_control marker present but cacheable prefix is empty after Anthropic->Gemini translation (system blocks may have had cache_control but no text)',
       systemHasCache: info.systemIncluded,
       prefixMessageCount: info.prefixMessageCount,
     });
@@ -2155,7 +2235,22 @@ function createGeminiCacheAsync(ctx, backend, model, hash, payload) {
     ...(payload.tools ? { tools: payload.tools } : {}),
     ttl: payload.ttl,
   });
-  geminiHttpRequest(backend, 'POST', '/v1beta/cachedContents', reqBody, {
+  // Wave 3: Vertex parity. AI Studio uses /v1beta/cachedContents on the
+  // generativelanguage host. Vertex uses
+  //   POST /v1/projects/{p}/locations/{l}/cachedContents
+  // on the regional aiplatform host. backend.url for Vertex points at
+  //   .../v1/projects/{p}/locations/{l}/publishers/google/models
+  // (the generate-content prefix), so we strip that suffix to recover the
+  // location-scoped root and append /cachedContents.
+  let cachePath, cacheBackend = backend;
+  if (backend.vertex) {
+    const stripped = (backend.url || '').replace(/\/publishers\/google\/models\/?$/, '');
+    cacheBackend = Object.assign({}, backend, { url: stripped });
+    cachePath = '/cachedContents';
+  } else {
+    cachePath = '/v1beta/cachedContents';
+  }
+  geminiHttpRequest(cacheBackend, 'POST', cachePath, reqBody, {
     'Content-Type': 'application/json',
   }).then(result => {
     if (result.statusCode >= 200 && result.statusCode < 300) {
@@ -2184,25 +2279,38 @@ function createGeminiCacheAsync(ctx, backend, model, hash, payload) {
 }
 
 async function forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta) {
-  // /v1/messages/count_tokens → Gemini :countTokens (no model invocation, no SSE).
-  // Translate {totalTokens:N} → Anthropic {type:"message_count", input_tokens:N}.
+  // /v1/messages/count_tokens -> Gemini :countTokens (no model invocation, no SSE).
+  // Translate {totalTokens:N} -> Anthropic {type:"message_count", input_tokens:N}.
   const isCountTokens = typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens');
   const isStream = !isCountTokens && !!body.stream;
-  const geminiBody = mapAnthropicToGemini(body);
+  const geminiBody = mapAnthropicToGemini(body, effectiveModel);
   if (isCountTokens) {
     // countTokens accepts only contents/systemInstruction/tools — strip generationConfig.
     delete geminiBody.generationConfig;
+    // Clear thinking telemetry: count_tokens never invokes the model, so
+    // auto-enable / budget-expansion didn't actually happen. Leaking these
+    // headers would falsely suggest thinking occurred.
+    delete geminiBody._thinkingAutoEnabled;
+    delete geminiBody._thinkingBudgetAdded;
   }
-  // G4: lazy fire-and-forget context caching. Skip for countTokens and Vertex
-  // (Vertex caching uses a different URL prefix; out of scope until parity).
+  // G4: lazy fire-and-forget context caching. Wave 3 enables this for Vertex
+  // — createGeminiCacheAsync branches on backend.vertex to choose the correct
+  // {region}-aiplatform .../cachedContents URL vs /v1beta/cachedContents.
   let cacheResult = { status: 'none' };
-  if (!isCountTokens && !backend.vertex) {
+  if (!isCountTokens) {
     try { cacheResult = maybeApplyGeminiCache(body, geminiBody, effectiveModel, ctx); }
     catch (e) { ctxLog(ctx, 'gemini.cache.apply_error', { error: e.message }); cacheResult = { status: 'none' }; }
   }
   // Mark for buildCthruResponseHeaders to surface as x-c-thru-cache-status.
   // Non-enumerable so JSON.stringify doesn't leak it to upstream.
   Object.defineProperty(geminiBody, '_cacheStatus', { value: cacheResult.status, enumerable: false, configurable: true });
+  // Wave 4: stash metadata.user_id (Anthropic's per-user attribution) as a
+  // non-enumerable property so buildCthruResponseHeaders can stamp it as a
+  // response header. Gemini has no inbound equivalent — request body is
+  // unchanged. Pure passthrough observability.
+  if (body && body.metadata && typeof body.metadata.user_id === 'string') {
+    Object.defineProperty(geminiBody, '_userId', { value: body.metadata.user_id, enumerable: false, configurable: true });
+  }
   const baseUrl = (backend.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
   const action = isCountTokens ? 'countTokens' : (isStream ? 'streamGenerateContent' : 'generateContent');
   // If streaming, Google's SSE format for streamGenerateContent uses alt=sse query param
@@ -2235,6 +2343,16 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
   const messageId = 'msg_gemini_' + crypto.randomBytes(12).toString('hex');
   const startedAt = Date.now();
 
+  // Wave 1: client-disconnect cancellation. When the Claude Code client closes
+  // mid-flight (Ctrl-C, network drop, page reload), we must tear down the
+  // upstream HTTPS request to Gemini so it stops streaming + billing tokens
+  // no client will read. Mirrors the Ollama path's up.destroy() pattern.
+  // stopGeminiPingFn is a late-bound ref because the keepalive interval is
+  // declared inside the streaming branch — we install one cancellation hook
+  // up here that fires both for pre-upRes disconnects and post-upRes ones.
+  let stopGeminiPingFn = () => {};
+  let upstreamCancelled = false;
+
   const up = lib.request(options, (upRes) => {
     const statusCode = upRes.statusCode;
     if (statusCode >= 400) {
@@ -2253,7 +2371,27 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           return forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
         ctxLog(ctx, 'gemini.error', { statusCode, body: errBody });
-        sendAnthropicError(res, statusCode, `Gemini error: ${errBody}`);
+        // Wave 2: parse Gemini gRPC status from body for an accurate Anthropic
+        // error type (RESOURCE_EXHAUSTED->rate_limit_error etc.). Propagate
+        // Retry-After verbatim, and synthesize anthropic-ratelimit-requests-
+        // remaining: 0 on 429 so Claude Code's backoff sees a concrete signal.
+        const errType = anthropicErrorType(statusCode, errBody);
+        const extraHeaders = {};
+        if (upRes.headers && upRes.headers['retry-after']) {
+          extraHeaders['Retry-After'] = String(upRes.headers['retry-after']);
+        }
+        if (statusCode === 429 || errType === 'rate_limit_error') {
+          extraHeaders['anthropic-ratelimit-requests-remaining'] = '0';
+        }
+        if (res.headersSent) return;
+        res.writeHead(statusCode, Object.assign(
+          { 'Content-Type': 'application/json' },
+          extraHeaders,
+        ));
+        res.end(JSON.stringify({
+          type: 'error',
+          error: { type: errType, message: `Gemini error: ${errBody}` },
+        }));
       });
       return;
     }
@@ -2274,7 +2412,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
         },
-        buildCthruResponseHeaders(req, geminiBody, effectiveModel)
+        buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta)
       );
       res.writeHead(200, streamHeaders);
 
@@ -2302,6 +2440,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         try { res.write(`event: ping\ndata: ${JSON.stringify({ type: 'ping' })}\n\n`); } catch {}
       }, SSE_PING_INTERVAL_MS);
       const stopGeminiPing = () => { try { clearInterval(geminiPingTick); } catch {} };
+      stopGeminiPingFn = stopGeminiPing;
 
       // Streaming state machine — Anthropic SSE has one open content block at a
       // time. Gemini chunks may interleave text and functionCall parts across
@@ -2420,10 +2559,28 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
                 const hasToolUse = wasToolUseTrailing || lastClosedBlockType === 'tool_use';
                 const { stop_reason, stop_sequence } = mapGeminiFinishReason(candidate.finishReason, { hasToolUse, ctx });
 
+                // Gemini's usageMetadata only appears on the last stream chunk
+                // (confirmed in API docs). Read thoughtsTokenCount here for
+                // (a) Anthropic-parity output_tokens (visible + thinking) and
+                // (b) journaling/observability via the geminiBody stash.
+                // The header x-c-thru-thinking-tokens cannot be set in
+                // streaming responses (writeHead already flushed), so the
+                // streamed message_delta surfaces it via the usage object —
+                // strict Anthropic clients ignore unknown usage fields.
+                const candidatesCount = (geminiData.usageMetadata || {}).candidatesTokenCount || 0;
+                const thoughtsCount = (geminiData.usageMetadata || {}).thoughtsTokenCount || 0;
+                if (thoughtsCount > 0) {
+                  Object.defineProperty(geminiBody, '_thinkingTokens', {
+                    value: thoughtsCount, enumerable: false, configurable: true,
+                  });
+                }
                 res.write(`event: message_delta\ndata: ${JSON.stringify({
                   type: 'message_delta',
                   delta: { stop_reason, stop_sequence },
-                  usage: { output_tokens: (geminiData.usageMetadata || {}).candidatesTokenCount || 0 }
+                  usage: {
+                    output_tokens: candidatesCount + thoughtsCount,
+                    ...(thoughtsCount > 0 ? { thinking_output_tokens: thoughtsCount } : {}),
+                  },
                 })}\n\n`);
               }
             } catch (e) {
@@ -2441,7 +2598,10 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         scheduleCacheCreate();
       });
       upRes.on('error', stopGeminiPing);
-      res.on('close', stopGeminiPing);
+      // Note: client-disconnect handling is wired at the function level via
+      // cancelUpstream (req/res 'close' -> up.destroy() + stopGeminiPing).
+      // This branch's old `res.on('close', stopGeminiPing)` was removed in
+      // Wave 1 to consolidate cleanup into the single cancelUpstream path.
     } else {
       // Non-streaming
       let respBody = '';
@@ -2450,7 +2610,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         try {
           const geminiData = JSON.parse(respBody);
           if (isCountTokens) {
-            // Gemini :countTokens → {totalTokens, ...}. Map to Anthropic
+            // Gemini :countTokens -> {totalTokens, ...}. Map to Anthropic
             // /v1/messages/count_tokens shape: {input_tokens}. (Anthropic
             // historically returned {input_tokens:N}; the type:"message_count"
             // wrapper was added later — emit both for forward compatibility.)
@@ -2458,7 +2618,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
             const anthropicRes = { input_tokens: inputTokens };
             res.writeHead(200, Object.assign(
               { 'Content-Type': 'application/json' },
-              buildCthruResponseHeaders(req, geminiBody, effectiveModel)
+              buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta)
             ));
             res.end(JSON.stringify(anthropicRes));
             clearBackendCooldown(backend.id);
@@ -2470,7 +2630,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           
           // Gemini may interleave thought parts with text/functionCall parts.
           // Anthropic clients expect thinking blocks before any text/tool_use.
-          // Partition + reassemble so order is: thinking[] → text/tool_use[].
+          // Partition + reassemble so order is: thinking[] -> text/tool_use[].
           //
           // G12 emission policy: thought parts only appear here when the client
           // opted in upstream — mapAnthropicToGemini sets
@@ -2531,7 +2691,15 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
             stop_sequence,
             usage: {
               input_tokens: (geminiData.usageMetadata || {}).promptTokenCount || 0,
-              output_tokens: (geminiData.usageMetadata || {}).candidatesTokenCount || 0,
+              // Anthropic parity: output_tokens INCLUDES thinking tokens
+              // (Anthropic's API rolls thinking into output_tokens for
+              // billing/observability). Gemini reports them separately as
+              // candidatesTokenCount (visible) + thoughtsTokenCount (thinking).
+              // Sum them so SDK clients see token totals matching Anthropic
+              // semantics; the breakdown surfaces via x-c-thru-thinking-tokens.
+              output_tokens:
+                ((geminiData.usageMetadata || {}).candidatesTokenCount || 0)
+                + ((geminiData.usageMetadata || {}).thoughtsTokenCount || 0),
               // G4: Gemini surfaces cache-served tokens as cachedContentTokenCount.
               // cache_creation_input_tokens stays 0 — Gemini doesn't report this in
               // usage and the create happens asynchronously.
@@ -2540,9 +2708,18 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
             }
           };
 
+          // Stash thoughtsTokenCount so buildCthruResponseHeaders can surface
+          // it as x-c-thru-thinking-tokens. Anthropic has no native field for
+          // "thinking output tokens" (output_tokens covers visible only).
+          const thoughtsTokenCount = (geminiData.usageMetadata || {}).thoughtsTokenCount;
+          if (typeof thoughtsTokenCount === 'number' && thoughtsTokenCount > 0) {
+            Object.defineProperty(geminiBody, '_thinkingTokens', {
+              value: thoughtsTokenCount, enumerable: false, configurable: true,
+            });
+          }
           const respHeaders = Object.assign(
             { 'Content-Type': 'application/json' },
-            buildCthruResponseHeaders(req, geminiBody, effectiveModel)
+            buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta)
           );
           res.writeHead(200, respHeaders);
           res.end(JSON.stringify(anthropicRes));
@@ -2560,6 +2737,15 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
     ctxLog(ctx, 'gemini.request_error', { error: e.message });
     tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, { reason: e.message, statusCode: 502 });
   });
+
+  const cancelUpstream = () => {
+    if (upstreamCancelled) return;
+    upstreamCancelled = true;
+    try { stopGeminiPingFn(); } catch {}
+    try { if (!up.destroyed) up.destroy(); } catch {}
+  };
+  req.on('close', cancelUpstream);
+  res.on('close', cancelUpstream);
 
   up.write(payload);
   up.end();
@@ -2580,19 +2766,19 @@ function dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, req
 // GEMINI TRANSLATION
 // =============================================================================
 
-// Process-wide cache: tool_use_id → Gemini thoughtSignature. Required because
+// Process-wide cache: tool_use_id -> Gemini thoughtSignature. Required because
 // Gemini 3+ tool_use rejects subsequent turns whose functionCall parts don't
 // echo back the original signature ("Function call is missing a
 // thought_signature" 400). Anthropic's tool_use schema has no field for
 // vendor-specific blobs, so we stash the signature here on the response path
-// and re-attach it on the next request's tool_use → functionCall translation.
+// and re-attach it on the next request's tool_use -> functionCall translation.
 //
 // Bounded by GEMINI_THOUGHT_SIG_MAX_ENTRIES (default 10000) with FIFO
 // eviction, plus TTL of GEMINI_THOUGHT_SIG_TTL_MS (default 1h). Both override
 // via env for testing.
 const GEMINI_THOUGHT_SIG_MAX_ENTRIES = Number(process.env.GEMINI_THOUGHT_SIG_MAX_ENTRIES || 10000);
 const GEMINI_THOUGHT_SIG_TTL_MS = Number(process.env.GEMINI_THOUGHT_SIG_TTL_MS || 3600000);
-const GEMINI_THOUGHT_SIG_CACHE = new Map(); // tool_use_id → { sig, ts }
+const GEMINI_THOUGHT_SIG_CACHE = new Map(); // tool_use_id -> { sig, ts }
 function rememberThoughtSignature(toolUseId, sig) {
   if (!toolUseId || !sig) return;
   GEMINI_THOUGHT_SIG_CACHE.set(toolUseId, { sig, ts: Date.now() });
@@ -2616,7 +2802,7 @@ function lookupThoughtSignature(toolUseId) {
   return entry.sig;
 }
 
-// Map Gemini finishReason → Anthropic stop_reason.
+// Map Gemini finishReason -> Anthropic stop_reason.
 // Returns { stop_reason, stop_sequence }. Safety/recitation/blocklist surface
 // as stop_sequence='gemini_safety_block' so clients can distinguish a refusal
 // from a normal end_turn.
@@ -2729,7 +2915,51 @@ function mapToolChoice(toolChoice) {
   return { functionCallingConfig: cfg };
 }
 
-function mapAnthropicToGemini(body) {
+// Gemini 3 family detection. The thinkingLevel parameter is the preferred
+// API for Gemini 3+; thinkingBudget is back-compat only and mixing both
+// (in the same request) returns 400. Includes the *-latest aliases that
+// Google currently resolves to Gemini 3.
+function isGemini3FamilyModel(modelName) {
+  if (typeof modelName !== 'string') return false;
+  if (/^gemini-3(\.\d+)?-/i.test(modelName)) return true;
+  return modelName === 'gemini-pro-latest'
+    || modelName === 'gemini-flash-latest'
+    || modelName === 'gemini-flash-lite-latest'
+    || modelName === 'gemini-pro'
+    || modelName === 'gemini-flash';
+}
+
+// Map Anthropic numeric `budget_tokens` to Gemini's `thinkingLevel` enum.
+// Per-model support varies: gemini-3-pro supports only 'low'/'high';
+// gemini-3.1-pro adds 'medium'; gemini-3-flash adds 'minimal'. We pick the
+// nearest level the target model supports.
+function budgetToThinkingLevel(budgetTokens, modelName) {
+  // Auto-enable default (no explicit budget) → 'low'.
+  if (budgetTokens == null) return 'low';
+  const supportsMinimal = /^gemini-3.*flash/i.test(modelName);
+  // gemini-3-pro (NOT gemini-3.1-pro) supports only low/high — no medium.
+  const supportsMedium = !/^gemini-3-pro($|-)/i.test(modelName);
+  if (budgetTokens === 0) return supportsMinimal ? 'minimal' : 'low';
+  if (budgetTokens <= 2048) return 'low';
+  if (budgetTokens >= 16384) return 'high';
+  return supportsMedium ? 'medium' : 'high';
+}
+
+// Approximate per-level budget for maxOutputTokens expansion. Gemini 3
+// counts thinking against maxOutputTokens, so when caller set max_tokens we
+// expand by an estimate of the level's typical consumption. Conservative
+// upper-bound estimates so visible answers don't get truncated.
+function thinkingLevelToApproxBudget(level) {
+  switch (level) {
+    case 'minimal': return 256;
+    case 'low':     return 2048;
+    case 'medium':  return 8192;
+    case 'high':    return 16384;
+    default:        return 1024;
+  }
+}
+
+function mapAnthropicToGemini(body, effectiveModel) {
   const geminiReq = {
     contents: [],
     generationConfig: {}
@@ -2741,15 +2971,81 @@ function mapAnthropicToGemini(body) {
   if (body.max_tokens != null) geminiReq.generationConfig.maxOutputTokens = body.max_tokens;
   if (body.stop_sequences != null) geminiReq.generationConfig.stopSequences = body.stop_sequences;
 
-  // Anthropic `thinking: {type:'enabled', budget_tokens:N}` → Gemini
+  // Anthropic `thinking: {type:'enabled', budget_tokens:N}` -> Gemini
   // `generationConfig.thinkingConfig`. Older Gemini models (2.0, flash-lite)
   // silently ignore — no model-version gate. Caller-wins: omit if absent so
   // we don't override capability_sampling_defaults.
-  if (body.thinking && body.thinking.type === 'enabled') {
-    geminiReq.generationConfig.thinkingConfig = {
-      thinkingBudget: Number(body.thinking.budget_tokens) || 1024,
-      includeThoughts: true,
-    };
+  //
+  // Auto-enable on Gemini 3 Pro: the model's flagship reasoning is gated
+  // behind opt-in upstream, so absent any thinking field we default it on
+  // with a 1024-token budget. Explicit {type:'disabled'} respected as opt-out.
+  let thinkingEnabled = body.thinking && body.thinking.type === 'enabled';
+  let autoEnabled = false;
+  let thinkingBudget = 0;
+  // Detection: explicit Gemini 3 Pro tags (gemini-3-pro, gemini-3.1-pro,
+  // gemini-3-pro-preview, gemini-3.1-pro-preview), or the
+  // `gemini-pro-latest` / `gemini-pro` aliases that Google currently
+  // resolves to Gemini 3 Pro. The hyphen-delimited `-pro(-|$)` anchor avoids
+  // matching `gemini-3-flash-*`, where /pro/i would substring-match "p..r"
+  // false positives in unusual future names.
+  const isGemini3Pro = typeof effectiveModel === 'string' && (
+    /^gemini-3(\.\d+)?-pro(-|$)/i.test(effectiveModel)
+    || effectiveModel === 'gemini-pro-latest'
+    || effectiveModel === 'gemini-pro'
+  );
+  const explicitDisabled = body.thinking && body.thinking.type === 'disabled';
+  if (!thinkingEnabled && !explicitDisabled && isGemini3Pro
+      && (!body.thinking || !body.thinking.type)) {
+    thinkingEnabled = true;
+    autoEnabled = true;
+    thinkingBudget = 1024;
+  } else if (thinkingEnabled) {
+    thinkingBudget = Number(body.thinking.budget_tokens) || 1024;
+  }
+  if (thinkingEnabled) {
+    // Gemini 3+ uses `thinkingLevel` (low/medium/high/minimal); older
+    // Gemini models keep the legacy numeric `thinkingBudget`. Mixing both
+    // returns 400 from upstream.
+    const useLevel = isGemini3FamilyModel(effectiveModel);
+    let appliedBudget;
+    if (useLevel) {
+      // Preserve explicit 0 (→ 'minimal' on flash); only treat absent budget
+      // as null. `|| null` would coerce 0 to null and lose the signal.
+      const explicitBudget = body.thinking?.budget_tokens;
+      const budgetArg = autoEnabled || explicitBudget == null
+        ? null
+        : Number(explicitBudget);
+      const level = budgetToThinkingLevel(budgetArg, effectiveModel);
+      geminiReq.generationConfig.thinkingConfig = {
+        thinkingLevel: level,
+        includeThoughts: true,
+      };
+      appliedBudget = thinkingLevelToApproxBudget(level);
+      Object.defineProperty(geminiReq, '_thinkingLevel', {
+        value: level, enumerable: false, configurable: true,
+      });
+    } else {
+      geminiReq.generationConfig.thinkingConfig = {
+        thinkingBudget,
+        includeThoughts: true,
+      };
+      appliedBudget = thinkingBudget;
+    }
+    // Budget arithmetic: Gemini 3 counts thinking against maxOutputTokens.
+    // Expand the cap by the (approximate, level-derived) budget so
+    // max_tokens means "visible answer length" — matching Anthropic
+    // semantics — rather than "pooled budget".
+    if (body.max_tokens != null) {
+      geminiReq.generationConfig.maxOutputTokens = Number(body.max_tokens) + appliedBudget;
+      Object.defineProperty(geminiReq, '_thinkingBudgetAdded', {
+        value: appliedBudget, enumerable: false, configurable: true,
+      });
+    }
+    if (autoEnabled) {
+      Object.defineProperty(geminiReq, '_thinkingAutoEnabled', {
+        value: true, enumerable: false, configurable: true,
+      });
+    }
   }
 
   if (body.system) {
@@ -2765,6 +3061,7 @@ function mapAnthropicToGemini(body) {
   }
 
   const schemaRemoved = new Set();
+  let redactedThinkingDropped = false;
   if (body.tools) {
     geminiReq.tools = [{
       functionDeclarations: body.tools.map(t => ({
@@ -2778,7 +3075,7 @@ function mapAnthropicToGemini(body) {
   const toolConfig = mapToolChoice(body.tool_choice);
   if (toolConfig) geminiReq.toolConfig = toolConfig;
 
-  // Build tool_use_id → name lookup for tool_result → functionResponse mapping.
+  // Build tool_use_id -> name lookup for tool_result -> functionResponse mapping.
   // Gemini's functionResponse must include the same id used in the original
   // functionCall when one was supplied (parallel calls disambiguation).
   const toolIdToName = {};
@@ -2807,7 +3104,7 @@ function mapAnthropicToGemini(body) {
           // Gemini 3+ requires the original thoughtSignature to be echoed back
           // when this tool_use appears in conversation history. Look it up by
           // tool_use_id from our process-wide cache populated on the response
-          // path. Missing → omit (works for non-3 models, fails for 3+).
+          // path. Missing -> omit (works for non-3 models, fails for 3+).
           const part = { functionCall: fc };
           if (block.id) {
             const sig = lookupThoughtSignature(block.id);
@@ -2844,6 +3141,11 @@ function mapAnthropicToGemini(body) {
           const tp = { text: block.thinking || '', thought: true };
           if (block.signature) tp.thoughtSignature = block.signature;
           parts.push(tp);
+        } else if (block.type === 'redacted_thinking') {
+          // Anthropic-encrypted opaque blob. Gemini cannot decrypt, would 400
+          // if forwarded. Skip the part and surface the omission via header.
+          redactedThinkingDropped = true;
+          continue;
         } else if (block.type === 'image') {
           // Anthropic image blocks: base64 inline, url, or file_id (post-G9).
           const src = block.source || {};
@@ -2878,6 +3180,12 @@ function mapAnthropicToGemini(body) {
   if (schemaRemoved.size > 0) {
     Object.defineProperty(geminiReq, '_schemaRemoved', {
       value: Array.from(schemaRemoved), enumerable: false
+    });
+  }
+
+  if (redactedThinkingDropped) {
+    Object.defineProperty(geminiReq, '_redactedThinkingDropped', {
+      value: true, enumerable: false
     });
   }
 
@@ -2955,7 +3263,7 @@ async function forwardOllamaLegacy(ctx, req, res, body, backend, effectiveModel,
   // a big model" (the latter still gets the full upTimeoutMs budget once
   // headers arrive). Cleared in the upRes callback on first response.
   // On fire: destroy the request, which routes through up.on('error')
-  // → tryFallbackOrFail for transparent fallback to the configured
+  // -> tryFallbackOrFail for transparent fallback to the configured
   // backup backend.
   let ttftTimer = setTimeout(() => {
     ttftTimer = null;
@@ -3019,8 +3327,8 @@ async function forwardOllamaLegacy(ctx, req, res, body, backend, effectiveModel,
     // through dispatchOllamaBackend or forwardAnthropic depending on the fallback
     // target's backend kind.
     //
-    // Cloud→local rewrite first: if the failing model is :cloud-suffixed
-    // (network down → localhost can't reach Ollama's hosted infra), swap in
+    // Cloud->local rewrite first: if the failing model is :cloud-suffixed
+    // (network down -> localhost can't reach Ollama's hosted infra), swap in
     // the configured local fallback model and retry against the same backend
     // before walking the per-backend fallback_to chain.
     if (tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta)) {
@@ -3059,7 +3367,7 @@ async function forwardOllamaLegacy(ctx, req, res, body, backend, effectiveModel,
 
 // ── Network Watcher ──────────────────────────────────────────────────
 // On macOS (Darwin), monitors internet reachability via `scutil -r google.com`.
-// When connectivity transitions from Not Reachable → Reachable, immediately
+// When connectivity transitions from Not Reachable -> Reachable, immediately
 // clear all backend cooldowns.
 let isOnlineLast = true;
 function startNetworkWatcher() {
@@ -3446,7 +3754,7 @@ const server = http.createServer((req, res) => {
           if (!m) continue;
           const sigilMatch = m.match(BACKEND_SIGIL_RE);
           const base = sigilMatch ? sigilMatch[1] : m;
-          // Determine locality: explicit @sigil → check backend kind; bare model →
+          // Determine locality: explicit @sigil -> check backend kind; bare model ->
           // check backends dict, then route target name (ollama* = local, else cloud).
           let isLocal = false;
           const epOrBk = CONFIG.endpoints || CONFIG.backends;
@@ -3587,6 +3895,10 @@ const server = http.createServer((req, res) => {
           startedAt: requestStartedAt,
           onFailure,
           originalModel: body.model,  // captured before body.model is rewritten to effectiveModel
+          // Resolution-chain trace from resolveBackend (req:X -> route(...) -> ...).
+          // Surfaced as x-c-thru-resolution-chain on the response. Updated by
+          // fallback paths if a different model is ultimately dispatched.
+          resolutionChain: resolved.chain || null,
         };
 
         ctxLog(ctx, 'dispatch', {

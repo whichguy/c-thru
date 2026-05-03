@@ -348,6 +348,48 @@ console.log('\n21. target JS wrapper allowed when enabled + trusted');
   assert(errs.length === 0, 'enabled trusted JS wrapper → no error');
 }
 
+// ── 22. endpoint.vertex must be boolean ────────────────────────────────────
+console.log('\n22. endpoint.vertex must be boolean');
+{
+  const ok = JSON.parse(JSON.stringify(VALID_BASE));
+  ok.endpoints = { vert: { format: 'gemini', vertex: true, url: 'https://x.example', auth_env: 'X' } };
+  delete ok.backends;
+  const errsOk = validate(ok);
+  assert(!errsOk.some(e => /vertex/.test(e)), `vertex:true + format:gemini → no vertex error (got: ${errsOk.join('; ')})`);
+
+  const bad = JSON.parse(JSON.stringify(VALID_BASE));
+  bad.endpoints = { vert: { format: 'gemini', vertex: 'true', url: 'https://x.example', auth_env: 'X' } };
+  delete bad.backends;
+  const errsBad = validate(bad);
+  assert(errsBad.some(e => /vertex.*boolean/.test(e)), `vertex:'true' → boolean error (got: ${errsBad.join('; ')})`);
+
+  const warn = JSON.parse(JSON.stringify(VALID_BASE));
+  warn.endpoints = { vert: { format: 'anthropic', vertex: true, url: 'https://x.example', auth_env: 'X' } };
+  delete warn.backends;
+  const errsWarn = validate(warn);
+  assert(!errsWarn.some(e => /vertex/.test(e)), `vertex:true + format:anthropic → no hard error, only warning (got: ${errsWarn.join('; ')})`);
+}
+
+// ── 23. /model picker exposure: claude-via-gemini-* aliases resolve to gemini_ai
+console.log('\n23. claude-via-gemini-* aliases resolve to gemini_ai');
+{
+  const shippedConfig = require('../config/model-map.json');
+  const routes = shippedConfig.model_routes || {};
+  const proRoute = routes['claude-via-gemini-pro'];
+  const flashRoute = routes['claude-via-gemini-flash'];
+  assert(proRoute && proRoute.endpoint === 'gemini_ai',
+    `claude-via-gemini-pro routes to gemini_ai (got ${JSON.stringify(proRoute)})`);
+  assert(proRoute && proRoute.name === 'gemini-pro-latest',
+    `claude-via-gemini-pro names gemini-pro-latest (got ${proRoute && proRoute.name})`);
+  assert(flashRoute && flashRoute.endpoint === 'gemini_ai',
+    `claude-via-gemini-flash routes to gemini_ai (got ${JSON.stringify(flashRoute)})`);
+  assert(flashRoute && flashRoute.name === 'gemini-flash-latest',
+    `claude-via-gemini-flash names gemini-flash-latest (got ${flashRoute && flashRoute.name})`);
+  // The shipped config must validate cleanly with the new aliases in place.
+  const errs = validate(shippedConfig);
+  assert(errs.length === 0, `shipped config validates with new aliases (errs: ${errs.slice(0,3).join('; ')})`);
+}
+
 // ── Summary ────────────────────────────────────────────────────────────────
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
