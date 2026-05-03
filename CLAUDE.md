@@ -262,6 +262,18 @@ bash tools/c-thru-contract-check.sh   # exit 0 = clean; exit 1 = contract violat
 ```
 Catches dangling `subagent_type` references, missing prompt keys vs. declared `Input:` lines, and accidental `Skill("review-plan")` invocations. Symlinked by `install.sh` to `~/.claude/tools/c-thru-contract-check`.
 
+## Working-tree hygiene
+
+Before starting a non-trivial task (or before opening a PR), run:
+```sh
+bash tools/c-thru-hygiene-check.sh    # exit 0 clean / 1 warnings / 2 critical
+```
+Catches: cross-user `/Users/<other>` paths in tracked files, broken symlinks,
+secret-shaped strings (AKIA/ghp_/sk-/AIza), accumulated experiment-artifact
+directories, large unstaged WIP, and local commits ahead of `origin/main`
+(which would be invisible to isolated-worktree agents). Symlinked by
+`install.sh` to `~/.claude/tools/c-thru-hygiene-check`.
+
 ## Agentic plan/wave system
 
 Invoke with `/c-thru-plan <intent>`. State in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/`. Completed plans archived to `~/.claude/c-thru-archive/`.
