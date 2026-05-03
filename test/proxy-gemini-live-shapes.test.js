@@ -705,21 +705,14 @@ async function main() {
     assert(!r.json?.content && !r.json?.usage, 'S17 no content/usage (no model invocation)');
   });
 
-  // ── S18. /v1/models returns clean error envelope ───────────────────────
-  console.log('\nS18. /v1/models returns Anthropic-shape error (proxy has no handler)');
+  // ── S18/S28. /v1/models lists configured routes (Anthropic shape) ──────
+  console.log('\nS18/S28. /v1/models -> Anthropic {data:[{type:model,id}]} (after G2)');
   await withProxy({ configPath: cfgPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY } }, async ({ port }) => {
     const r = await httpJson(port, 'GET', '/v1/models', null, {}, 15000);
-    if (r.status === 200) {
-      // Some proxies might list Anthropic models passthrough — pin to error envelope
-      assert(typeof r.json === 'object' && r.json !== null, `S18 returned JSON-shaped success (proxy implemented /v1/models)`);
-    } else {
-      assert(r.status >= 400 && r.status < 600, `S18 returned an error status (got ${r.status})`);
-      if (r.json) {
-        assert(r.json?.type === 'error', `S18 Anthropic error envelope (got type=${r.json?.type})`);
-      } else {
-        skip(`S18: response not JSON (got '${(r.bodyText || '').slice(0,80)}') — flag for handler`);
-      }
-    }
+    assert(r.status === 200, `S28 status 200 (got ${r.status})`);
+    assert(Array.isArray(r.json?.data), `S28 data is array (got ${typeof r.json?.data})`);
+    assert((r.json.data || []).every(m => m.type === 'model' && typeof m.id === 'string'), 'S28 all entries shape {type:"model",id:string}');
+    assert((r.json.data || []).length > 0, 'S28 at least one configured model listed');
   });
 
   // ── S19. anthropic-beta header acknowledged ────────────────────────────

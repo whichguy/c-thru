@@ -899,6 +899,21 @@ async function main() {
       assert(!countBody?.generationConfig, 'generationConfig stripped');
     });
 
+    // ── T-models. /v1/models lists configured routes (Anthropic shape) ──────
+    console.log('\nT-models. GET /v1/models -> Anthropic {data:[{type:model,id}]} from model_routes');
+    await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
+      const r = await httpJson(port, 'GET', '/v1/models');
+      assert(r.status === 200, '/v1/models status 200');
+      assert(Array.isArray(r.json?.data), 'data is array');
+      const ids = (r.json.data || []).map(m => m.id);
+      assert(ids.includes('gemini-latest'), `gemini-latest enumerated (got ${JSON.stringify(ids)})`);
+      assert(ids.includes('gemini-flash'), 'gemini-flash enumerated');
+      assert(!ids.some(id => id.startsWith('re:')), 'regex routes excluded');
+      const first = (r.json.data || [])[0];
+      assert(first?.type === 'model', 'each entry type=model');
+      assert(typeof first?.created_at === 'string', 'created_at present');
+    });
+
     // ── T-explain-model. c-thru explain --model walks model_routes ───────────
     console.log('\nT-explain-model. c-thru explain --model resolves through model_routes');
     const explainBin = path.join(__dirname, '..', 'tools', 'c-thru-explain.js');

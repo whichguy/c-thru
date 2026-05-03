@@ -2958,6 +2958,27 @@ const server = http.createServer((req, res) => {
         });
       }
 
+      // /v1/models — Anthropic-shape model listing. Static enumeration over
+      // CONFIG.model_routes (preferred over a Gemini API call: works offline,
+      // surfaces routes the proxy *actually* serves rather than upstream catalog).
+      if (req.method === 'GET' && (req.url === '/v1/models' || req.url === '/v1/models/' || req.url.startsWith('/v1/models?'))) {
+        const routes = CONFIG.model_routes || {};
+        const data = [];
+        const seen = new Set();
+        for (const key of Object.keys(routes)) {
+          if (key.startsWith('re:')) continue; // regex routes have no canonical id
+          if (seen.has(key)) continue;
+          seen.add(key);
+          data.push({
+            type: 'model',
+            id: key,
+            display_name: key,
+            created_at: '2024-01-01T00:00:00Z',
+          });
+        }
+        return send(res, 200, { data, has_more: false, first_id: data[0]?.id || null, last_id: data[data.length - 1]?.id || null });
+      }
+
       if (req.method === 'GET' && (req.url === '/v1/active-models' || req.url === '/v1/active-models/')) {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
