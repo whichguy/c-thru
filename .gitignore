@@ -12,3 +12,7 @@ docs/planning/review-manifests/
 # Defensive — see commit a0083bf and follow-up
 temp_gas_prod/
 .worktrees/
+
+# Claude Code agent worktrees (locked, managed by `git worktree` —
+# untracked otherwise; we don't want them polluting git status).
+.claude/worktrees/
