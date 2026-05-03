@@ -40,10 +40,8 @@ async function main() {
       backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
       model_routes: { 'test-model': 'stub' },
       llm_profiles: {
-        '128gb': {
-          workhorse: { connected_model: 'test-model', disconnect_model: 'test-model' },
-          coder:     { connected_model: 'test-model', disconnect_model: 'test-model' },
-        },
+        workhorse: { 'best-cloud': 'test-model@stub' },
+        coder:     { 'best-cloud': 'test-model@stub' },
       },
     };
     const configPath = writeConfig(tmpDir, config);
@@ -58,7 +56,7 @@ async function main() {
     console.log('1. default off — no journal directory created');
     const journalDir1 = path.join(tmpDir, 'journal-off');
     await withProxy({
-      configPath, profile: '128gb', mode: 'connected',
+      configPath,
       env: { CLAUDE_PROXY_JOURNAL_DIR: journalDir1 /* CLAUDE_PROXY_JOURNAL not set */ },
     }, async ({ port }) => {
       await send(port, 'workhorse');
@@ -71,7 +69,7 @@ async function main() {
     console.log('\n2. CLAUDE_PROXY_JOURNAL=1 — entry written with schema');
     const journalDir2 = path.join(tmpDir, 'journal-on');
     await withProxy({
-      configPath, profile: '128gb', mode: 'connected',
+      configPath,
       env: { CLAUDE_PROXY_JOURNAL: '1', CLAUDE_PROXY_JOURNAL_DIR: journalDir2 },
     }, async ({ port }) => {
       await send(port, 'workhorse');
@@ -81,7 +79,7 @@ async function main() {
       const e = entries[0];
       assertEq(e.schema_version, 1, 'schema_version = 1');
       assertEq(e.capability, 'workhorse', 'capability captured');
-      assertEq(e.mode, 'connected', 'mode captured');
+      assertEq(e.mode, 'best-cloud', 'mode is best-cloud (default when no CLAUDE_LLM_MODE set)');
       assertEq(e.served_by, 'test-model', 'served_by captured');
       assertEq(e.endpoint, '/v1/messages', 'endpoint captured');
       assert(typeof e.id === 'string' && e.id.startsWith('j_'), 'id has j_ prefix');
@@ -109,7 +107,7 @@ async function main() {
     console.log('\n4. INCLUDE filter limits to specified capabilities');
     const journalDir4 = path.join(tmpDir, 'journal-include');
     await withProxy({
-      configPath, profile: '128gb', mode: 'connected',
+      configPath,
       env: {
         CLAUDE_PROXY_JOURNAL: '1',
         CLAUDE_PROXY_JOURNAL_DIR: journalDir4,
@@ -129,7 +127,7 @@ async function main() {
     console.log('\n5. EXCLUDE filter skips specified capabilities');
     const journalDir5 = path.join(tmpDir, 'journal-exclude');
     await withProxy({
-      configPath, profile: '128gb', mode: 'connected',
+      configPath,
       env: {
         CLAUDE_PROXY_JOURNAL: '1',
         CLAUDE_PROXY_JOURNAL_DIR: journalDir5,
@@ -163,12 +161,12 @@ async function main() {
           backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${sseStub.port}` } },
           model_routes: { 'sse-model': 'stub' },
           llm_profiles: {
-            '128gb': { workhorse: { connected_model: 'sse-model', disconnect_model: 'sse-model' } },
+            workhorse: { 'best-cloud': 'sse-model@stub' },
           },
         };
         const sseConfigPath = writeConfig(sseTmpDir, sseConfig);
         await withProxy({
-          configPath: sseConfigPath, profile: '128gb', mode: 'connected',
+          configPath: sseConfigPath,
           env: { CLAUDE_PROXY_JOURNAL: '1', CLAUDE_PROXY_JOURNAL_DIR: journalDir5b },
         }, async ({ port }) => {
           await httpStream(port, 'POST', '/v1/messages', {
@@ -204,14 +202,12 @@ async function main() {
           backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaStub.port}`, legacy_ollama_chat: true } },
           model_routes: { 'ollama-model': 'stub_ollama' },
           llm_profiles: {
-            '128gb': {
-              workhorse: { connected_model: 'ollama-model', disconnect_model: 'ollama-model' },
-            },
+            workhorse: { 'best-cloud': 'ollama-model@stub_ollama' },
           },
         };
         const ollamaConfigPath = writeConfig(ollamaTmpDir, ollamaConfig);
         await withProxy({
-          configPath: ollamaConfigPath, profile: '128gb', mode: 'connected',
+          configPath: ollamaConfigPath,
           env: { CLAUDE_PROXY_JOURNAL: '1', CLAUDE_PROXY_JOURNAL_DIR: journalDir7 },
         }, async ({ port }) => {
           await httpJson(port, 'POST', '/v1/messages', {
@@ -248,14 +244,12 @@ async function main() {
           backends: { stub_ollama: { kind: 'ollama', url: `http://127.0.0.1:${ollamaStreamStub.port}`, legacy_ollama_chat: true } },
           model_routes: { 'ollama-stream-model': 'stub_ollama' },
           llm_profiles: {
-            '128gb': {
-              workhorse: { connected_model: 'ollama-stream-model', disconnect_model: 'ollama-stream-model' },
-            },
+            workhorse: { 'best-cloud': 'ollama-stream-model@stub_ollama' },
           },
         };
         const ollamaStreamConfigPath = writeConfig(ollamaStreamTmpDir, ollamaStreamConfig);
         await withProxy({
-          configPath: ollamaStreamConfigPath, profile: '128gb', mode: 'connected',
+          configPath: ollamaStreamConfigPath,
           env: { CLAUDE_PROXY_JOURNAL: '1', CLAUDE_PROXY_JOURNAL_DIR: journalDir8 },
         }, async ({ port }) => {
           await httpStream(port, 'POST', '/v1/messages', {
@@ -275,13 +269,67 @@ async function main() {
       }
     }
 
+    // ── Test 9: journal rotation at JOURNAL_MAX_BYTES threshold ──────────────
+    console.log('\n9. CLAUDE_PROXY_JOURNAL_MAX_BYTES: file rotated to .1.jsonl when size exceeded');
+    {
+      const rotTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-journal-rot-'));
+      const journalDirRot = path.join(rotTmpDir, 'journal-rot');
+      try {
+        const rotConfig = {
+          backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
+          model_routes: { 'test-model': 'stub' },
+          llm_profiles: {
+            workhorse: { 'best-cloud': 'test-model@stub' },
+          },
+        };
+        const rotConfigPath = writeConfig(rotTmpDir, rotConfig);
+        await withProxy({
+          configPath: rotConfigPath,
+          env: {
+            CLAUDE_PROXY_JOURNAL: '1',
+            CLAUDE_PROXY_JOURNAL_DIR: journalDirRot,
+            CLAUDE_PROXY_JOURNAL_MAX_BYTES: '700',  // allows 1 entry (~638B); 2nd appends to 1276B,
+                                                     // rotation fires on 3rd request's pre-append check
+          },
+        }, async ({ port }) => {
+          // Send three requests — first two fill the file past threshold, third triggers rotation
+          for (let i = 0; i < 3; i++) {
+            await send(port, 'workhorse');
+          }
+          await new Promise(r => setTimeout(r, 300));
+
+          // Scan the written directory rather than re-computing date from wall clock
+          // (avoids midnight-boundary flake where date changes between requests and assertion)
+          const dayDirs = fs.readdirSync(journalDirRot).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+          assert(dayDirs.length >= 1, 'rotation: journal day directory created');
+          const dayDir = path.join(journalDirRot, dayDirs[0]);
+          const mainFile = path.join(dayDir, 'workhorse.jsonl');
+          const backupFile = path.join(dayDir, 'workhorse.1.jsonl');
+
+          assert(fs.existsSync(mainFile), 'rotation: main .jsonl exists after requests');
+          assert(fs.existsSync(backupFile), 'rotation: .1.jsonl backup created after size exceeded');
+
+          // Backup should be non-empty (it was renamed from the full file)
+          const backupSize = fs.statSync(backupFile).size;
+          assert(backupSize > 0, `rotation: backup file is non-empty (got ${backupSize} bytes)`);
+
+          // Main file should be fresh (only contain entries written after the rotation)
+          const mainSize = fs.statSync(mainFile).size;
+          assert(mainSize < backupSize,
+            `rotation: main file (${mainSize}B) is smaller than backup (${backupSize}B) — fresh after rotation`);
+        });
+      } finally {
+        try { fs.rmSync(rotTmpDir, { recursive: true, force: true }); } catch {}
+      }
+    }
+
     // ── Test 6: failure isolation — read-only journal dir doesn't break request ──
     console.log('\n6. journal write failure does not break user request');
     // Use a path that's not writable (a file pretending to be a dir)
     const blockerFile = path.join(tmpDir, 'journal-readonly');
     fs.writeFileSync(blockerFile, '');  // file, not directory; mkdir will fail
     await withProxy({
-      configPath, profile: '128gb', mode: 'connected',
+      configPath,
       env: { CLAUDE_PROXY_JOURNAL: '1', CLAUDE_PROXY_JOURNAL_DIR: blockerFile },
     }, async ({ port }) => {
       const r = await send(port, 'workhorse');

@@ -281,12 +281,176 @@ async function testMultipleRequests() {
   }
 }
 
+// ── Config with capability-outer llm_profiles for agent tracking tests ───────
+
+function buildCapabilityConfig(stubPort) {
+  return {
+    backends: {
+      stub: { kind: 'anthropic', url: `http://127.0.0.1:${stubPort}` },
+    },
+    model_routes: {
+      [CONCRETE_MODEL]: 'stub',
+    },
+    llm_profiles: {
+      workhorse: {
+        'best-cloud': `${CONCRETE_MODEL}@stub`,
+      },
+    },
+    agent_to_capability: {},
+  };
+}
+
+// ── Test D: by_agent.served_by increments per request ────────────────────
+
+async function testByAgentServedBy() {
+  console.log('\nTest D: by_agent.served_by increments when capability resolves to concrete model');
+  let state;
+  try {
+    const stub = await stubBackend();
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-usage-'));
+    const statsFile = path.join(tmpHome, 'usage-stats.json');
+    const configPath = writeConfig(tmpHome, buildCapabilityConfig(stub.port));
+    const { child, port } = await spawnProxy({ configPath, tmpHome, env: { CLAUDE_PROXY_USAGE_STATS_FILE: statsFile } });
+    await waitForPing(port, 5000);
+    state = { child, port, statsFile, tmpHome, stub };
+
+    // Send request using capability name 'workhorse' — it resolves to CONCRETE_MODEL via llm_profiles
+    const { status } = await httpJson(port, 'POST', '/v1/messages', {
+      model: 'workhorse',
+      messages: [{ role: 'user', content: 'ping' }],
+      max_tokens: 10,
+    }, { 'x-api-key': 'test', 'anthropic-version': '2023-06-01' });
+    assertEq(status, 200, 'Test D: /v1/messages returned 200');
+
+    await killAndWait(child, 'SIGTERM');
+
+    assert(fs.existsSync(statsFile), 'Test D: stats file written after SIGTERM');
+    const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+
+    assert(stats.by_agent && stats.by_agent['workhorse'],
+      'Test D: by_agent.workhorse entry exists');
+    assertEq(stats.by_agent['workhorse'].calls, 1,
+      'Test D: by_agent.workhorse.calls === 1');
+    assert(stats.by_agent['workhorse'].served_by,
+      'Test D: by_agent.workhorse.served_by map exists');
+    assertEq(stats.by_agent['workhorse'].served_by[CONCRETE_MODEL], 1,
+      `Test D: by_agent.workhorse.served_by[${CONCRETE_MODEL}] === 1`);
+
+    await stub.close();
+    cleanup(tmpHome);
+  } catch (e) {
+    if (state) {
+      try { state.child.kill('SIGKILL'); } catch {}
+      try { await state.stub.close(); } catch {}
+      cleanup(state.tmpHome);
+    }
+    throw e;
+  }
+}
+
+// ── Test E: double-count guard — literal model name skips by_agent ────────
+
+async function testDoubleCountGuard() {
+  console.log('\nTest E: double-count guard — literal model name does not populate by_agent');
+  let state;
+  try {
+    state = await spawnUsageProxy();
+    const { child, port, statsFile, tmpHome, stub } = state;
+
+    // Send with literal CONCRETE_MODEL — agentName === model, so by_agent must not be populated
+    const { status } = await httpJson(port, 'POST', '/v1/messages', MSG_BODY, {
+      'x-api-key': 'test',
+      'anthropic-version': '2023-06-01',
+    });
+    assertEq(status, 200, 'Test E: /v1/messages returned 200');
+
+    await killAndWait(child, 'SIGTERM');
+
+    assert(fs.existsSync(statsFile), 'Test E: stats file written after SIGTERM');
+    const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+
+    // by_model entry must exist (the concrete model was used)
+    assert(stats.by_model && stats.by_model[CONCRETE_MODEL],
+      'Test E: by_model entry exists for literal model name');
+
+    // by_agent must NOT be populated — literal model name is not a capability alias
+    const byAgentKeys = Object.keys(stats.by_agent || {});
+    assertEq(byAgentKeys.length, 0,
+      `Test E: by_agent is empty when literal model name sent (got keys: ${byAgentKeys.join(', ')})`);
+
+    await stub.close();
+    cleanup(tmpHome);
+  } catch (e) {
+    if (state) {
+      try { state.child.kill('SIGKILL'); } catch {}
+      try { await state.stub.close(); } catch {}
+      cleanup(state.tmpHome);
+    }
+    throw e;
+  }
+}
+
+// ── Test F: POST /c-thru/stats/clear resets all counters ─────────────────
+
+async function testStatsClear() {
+  console.log('\nTest F: POST /c-thru/stats/clear resets total_input, by_model, by_agent, by_backend');
+  let state;
+  try {
+    state = await spawnUsageProxy();
+    const { child, port, statsFile, tmpHome, stub } = state;
+
+    // Accumulate some stats
+    for (let i = 0; i < 2; i++) {
+      const { status } = await httpJson(port, 'POST', '/v1/messages', MSG_BODY, {
+        'x-api-key': 'test',
+        'anthropic-version': '2023-06-01',
+      });
+      assertEq(status, 200, `Test F: request ${i + 1} returned 200`);
+    }
+
+    // Wait briefly for in-memory accumulation (no need to wait for debounce flush)
+    await sleep(200);
+
+    // Clear via HTTP
+    const clearResp = await httpJson(port, 'POST', '/c-thru/stats/clear', null, {}, 3000);
+    assertEq(clearResp.status, 200, 'Test F: /c-thru/stats/clear returned 200');
+    assert(clearResp.body && clearResp.body.ok === true, 'Test F: clear response body has ok:true');
+
+    // After clear, flush via SIGTERM and read the written file
+    await killAndWait(child, 'SIGTERM');
+
+    assert(fs.existsSync(statsFile), 'Test F: stats file written by SIGTERM after clear');
+    const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    assertEq(stats.total_input, 0, 'Test F: total_input === 0 after clear');
+    assertEq(stats.total_output, 0, 'Test F: total_output === 0 after clear');
+    assertEq(Object.keys(stats.by_model || {}).length, 0,
+      'Test F: by_model is empty after clear');
+    assertEq(Object.keys(stats.by_agent || {}).length, 0,
+      'Test F: by_agent is empty after clear');
+    assertEq(Object.keys(stats.by_backend || {}).length, 0,
+      'Test F: by_backend is empty after clear');
+
+    await stub.close();
+    cleanup(tmpHome);
+  } catch (e) {
+    if (state) {
+      try { state.child.kill('SIGKILL'); } catch {}
+      try { await state.stub.close(); } catch {}
+      cleanup(state.tmpHome);
+    }
+    throw e;
+  }
+}
+
 // ── main ───────────────────────────────────────────────────────────────────
 
 async function main() {
   await testDebounceFlush();
   await testSigtermFlush();
   await testMultipleRequests();
+  await testByAgentServedBy();
+  await testDoubleCountGuard();
+  await testStatsClear();
 
   const failed = summary();
   process.exit(failed ? 1 : 0);

@@ -267,11 +267,17 @@ setup_ephemeral_session() {
   # 3. Additive Agents: link c-thru agents (namespaced) and build --agents JSON.
   if [[ "${NO_AGENTS:-0}" != "1" ]]; then
     mkdir -p "$EPHEMERAL_SESSION_DIR/agents"
-    # Link user's existing agents first
+    # Link user's existing agents first.
+    # `-e` dereferences symlinks, so dangling symlinks in the source dir are
+    # skipped instead of being faithfully re-created (which would later spam
+    # ENOENT from Node's readFileSync). Common when a vendor agents repo
+    # (e.g. claude-craft) is moved or deleted but the user's symlinks remain.
     if [[ -d "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" ]]; then
       while IFS= read -r name; do
         [[ -z "$name" ]] && continue
-        ln -s "$ORIGINAL_CLAUDE_PROFILE_DIR/agents/$name" "$EPHEMERAL_SESSION_DIR/agents/$name" 2>/dev/null || true
+        src="$ORIGINAL_CLAUDE_PROFILE_DIR/agents/$name"
+        [[ -e "$src" ]] || continue
+        ln -s "$src" "$EPHEMERAL_SESSION_DIR/agents/$name" 2>/dev/null || true
       done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" 2>/dev/null)
     fi
     # Link c-thru agents
@@ -1076,6 +1082,36 @@ log_llm_profile_selection() {
   printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-12s ${GRAY}(%s)${NC}\n" "profile" "$profile" "$summary_context" >&2
   printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-12s\n" "mode" "$llm_mode" >&2
 
+  # Default-model row. Resolution order matches `c-thru` itself: --model flag
+  # (captured in launch_model) wins; otherwise fall back to routes.default in
+  # config. Resolve through model_routes once so the row shows the concrete
+  # name + endpoint the proxy will actually hit (matches what
+  # x-c-thru-served-by + x-c-thru-resolution-chain emit at request time).
+  local _dm_requested _dm_resolved _dm_endpoint
+  _dm_requested="$launch_model"
+  if [[ -z "$_dm_requested" && -f "$CONFIG" ]]; then
+    _dm_requested="$(jq -r '.routes.default // empty' "$CONFIG" 2>/dev/null)"
+  fi
+  if [[ -n "$_dm_requested" && -f "$CONFIG" ]]; then
+    # jq reads model_routes[name]: returns a 2-line tab-separated record
+    # "<concrete-name>\t<endpoint>". Falls back to the request itself if not in
+    # model_routes (e.g. raw concrete model name like "gemini-pro-latest").
+    local _dm_record
+    _dm_record="$(jq -r --arg m "$_dm_requested" '
+      (.model_routes // {})[$m] as $r |
+      if   $r == null              then "\($m)\t?"
+      elif ($r | type) == "string" then "\($m)\t\($r)"
+      elif ($r | type) == "object" then
+        ((($r.name) // $m) + "\t" + (($r.endpoint) // (
+          $r | to_entries | map(select(.value | type == "string")) | .[0].value // "?"
+        )))
+      else "\($m)\t?" end
+    ' "$CONFIG" 2>/dev/null)"
+    IFS=$'\t' read -r _dm_resolved _dm_endpoint <<< "$_dm_record"
+    if [[ -z "$_dm_resolved" ]]; then _dm_resolved="$_dm_requested"; _dm_endpoint="?"; fi
+    printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-22s ${GRAY}→${NC} %-38s ${GRAY}[%s]${NC}\n" \
+      "default" "$_dm_requested" "$_dm_resolved" "$_dm_endpoint" >&2
+  fi
 
   if profile_has_capability_assignments "$launch_model"; then
     local _sl_assignments
