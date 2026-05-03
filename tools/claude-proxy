@@ -2032,6 +2032,11 @@ function buildCthruResponseHeaders(req, geminiBody, effectiveModel) {
 // Hash key: sha256({model, system, messages-up-to-last-cache_control, tools}).
 // Content-addressed; cross-conversation reuse requires byte-identical prefix.
 const GEMINI_CACHE_MAP = new Map(); // hash → { name, expiresAt, model }
+// Aggregate counters for /ping observability. Incremented inline at each
+// status transition. Single object so /ping returns a coherent snapshot.
+const GEMINI_CACHE_STATS = {
+  hit: 0, miss: 0, none: 0, empty_prefix: 0, created: 0, stale_retry: 0,
+};
 
 function _gcacheParseTtl(ttl) {
   if (!ttl) return '300s';
@@ -2095,18 +2100,23 @@ function _gcacheHash(model, body, info) {
 }
 
 // Returns { status: 'hit'|'miss'|'none', hash?, pendingCreate? } and mutates
-// geminiBody on hit (sets cachedContent, strips cached prefix).
-function maybeApplyGeminiCache(body, geminiBody, model) {
-  if (body._geminiCacheRetried) return { status: 'none' };
+// geminiBody on hit (sets cachedContent, strips cached prefix). `ctx` may be
+// undefined for callers that don't have one (status counters are still
+// updated; only ctxLog calls are skipped).
+function maybeApplyGeminiCache(body, geminiBody, model, ctx) {
+  if (body._geminiCacheRetried) { GEMINI_CACHE_STATS.none++; return { status: 'none' }; }
   const info = _gcacheExtractPrefix(body);
-  if (!info) return { status: 'none' };
-  if (info.prefixMessageCount > (geminiBody.contents || []).length) return { status: 'none' };
+  if (!info) { GEMINI_CACHE_STATS.none++; return { status: 'none' }; }
+  if (info.prefixMessageCount > (geminiBody.contents || []).length) {
+    GEMINI_CACHE_STATS.none++; return { status: 'none' };
+  }
   const hash = _gcacheHash(model, body, info);
   const entry = GEMINI_CACHE_MAP.get(hash);
   if (entry && entry.expiresAt > Date.now() && entry.model === model) {
     geminiBody.contents.splice(0, info.prefixMessageCount);
     if (info.systemIncluded) delete geminiBody.systemInstruction;
     geminiBody.cachedContent = entry.name;
+    GEMINI_CACHE_STATS.hit++;
     return { status: 'hit', hash, name: entry.name };
   }
   // Miss: snapshot the prefix for async create after the response succeeds.
@@ -2114,10 +2124,19 @@ function maybeApplyGeminiCache(body, geminiBody, model) {
   const prefixSystem = info.systemIncluded ? (geminiBody.systemInstruction || null) : null;
   // Skip when there's effectively nothing to cache (e.g. cache_control-only
   // blocks whose text was stripped). Empty cache entries waste a round-trip
-  // and Gemini rejects them anyway.
+  // and Gemini rejects them anyway. Log + count so users debugging
+  // "why isn't my cache working" can find an explanation in the journal.
   if (prefixContents.length === 0 && !prefixSystem) {
+    GEMINI_CACHE_STATS.empty_prefix++;
+    GEMINI_CACHE_STATS.none++;
+    if (ctx) ctxLog(ctx, 'gemini.cache.empty_prefix', {
+      reason: 'cache_control marker present but cacheable prefix is empty after Anthropic→Gemini translation (system blocks may have had cache_control but no text)',
+      systemHasCache: info.systemIncluded,
+      prefixMessageCount: info.prefixMessageCount,
+    });
     return { status: 'none' };
   }
+  GEMINI_CACHE_STATS.miss++;
   const pendingCreate = {
     contents: prefixContents,
     systemInstruction: prefixSystem,
@@ -2148,6 +2167,7 @@ function createGeminiCacheAsync(ctx, backend, model, hash, payload) {
             expiresAt: Date.now() + (ttlSec * 1000),
             model,
           });
+          GEMINI_CACHE_STATS.created++;
           ctxLog(ctx, 'gemini.cache.created', { name: parsed.name, ttl: payload.ttl });
         }
       } catch (e) {
@@ -2176,7 +2196,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
   // (Vertex caching uses a different URL prefix; out of scope until parity).
   let cacheResult = { status: 'none' };
   if (!isCountTokens && !backend.vertex) {
-    try { cacheResult = maybeApplyGeminiCache(body, geminiBody, effectiveModel); }
+    try { cacheResult = maybeApplyGeminiCache(body, geminiBody, effectiveModel, ctx); }
     catch (e) { ctxLog(ctx, 'gemini.cache.apply_error', { error: e.message }); cacheResult = { status: 'none' }; }
   }
   // Mark for buildCthruResponseHeaders to surface as x-c-thru-cache-status.
@@ -2225,6 +2245,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         // once with a clean body. Costs an extra round-trip, only at the TTL
         // boundary.
         if (cacheResult.status === 'hit' && (statusCode === 404 || /cached[_ ]?content|not found/i.test(errBody))) {
+          GEMINI_CACHE_STATS.stale_retry++;
           ctxLog(ctx, 'gemini.cache.stale', { statusCode, hash: cacheResult.hash });
           GEMINI_CACHE_MAP.delete(cacheResult.hash);
           body._geminiCacheRetried = true;
@@ -3279,7 +3300,12 @@ const server = http.createServer((req, res) => {
         }
       });
 
-      if (req.url === '/ping') return send(res, 200, { ok: true, pid: process.pid, config_path: CONFIG_PATH, active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG), bind_address: server.address().address });
+      if (req.url === '/ping') return send(res, 200, {
+        ok: true, pid: process.pid, config_path: CONFIG_PATH,
+        active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG),
+        bind_address: server.address().address,
+        gemini_cache: { ...GEMINI_CACHE_STATS, entries: GEMINI_CACHE_MAP.size },
+      });
 
       if (req.method === 'POST' && (req.url === '/c-thru/stats/clear' || req.url === '/c-thru/stats/clear/')) {
         const clearedAt = new Date().toISOString();

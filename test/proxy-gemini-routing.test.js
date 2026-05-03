@@ -24,6 +24,22 @@ function assert(condition, message) {
   }
 }
 
+// Wrap a stub handler so it only fires for requests matching a URL substring
+// (typically ':generateContent'). Side-requests (cache creates, future status
+// probes, retries) get a generic 200 {} so they don't pollute order-indexed
+// captures. Hardens tests against silent breakage when the proxy gains new
+// out-of-band traffic.
+function onlyPath(substr, fn) {
+  return (req, res, body) => {
+    if (!req.url || !req.url.includes(substr)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+      return;
+    }
+    return fn(req, res, body);
+  };
+}
+
 // Start a programmable Gemini stub that records every request and responds
 // with whatever the active handler returns. The handler default emits a
 // minimal Gemini non-streaming success.
@@ -321,14 +337,14 @@ async function main() {
     ];
     for (const tc of tc_cases) {
       let captured = null;
-      stub.setHandler((req, res, body) => {
+      stub.setHandler(onlyPath(':generateContent', (req, res, body) => {
         captured = body;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
           usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
         }));
-      });
+      }));
       await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
         await httpJson(port, 'POST', '/v1/messages', {
           model: 'gemini-latest',
@@ -351,14 +367,14 @@ async function main() {
     console.log('\nT12. JSON Schema scrubber for input_schema');
     let capturedT12 = null;
     let respHeadersT12 = null;
-    stub.setHandler((req, res, body) => {
+    stub.setHandler(onlyPath(':generateContent', (req, res, body) => {
       capturedT12 = body;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
         usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
       }));
-    });
+    }));
     await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
       const r = await httpJson(port, 'POST', '/v1/messages', {
         model: 'gemini-latest',
@@ -411,14 +427,14 @@ async function main() {
     console.log('\nT12b. additionalProperties/propertyNames/const/exclusiveMin/llmGuidance/examples stripped');
     let capturedT12b = null;
     let respHeadersT12b = null;
-    stub.setHandler((req, res, body) => {
+    stub.setHandler(onlyPath(':generateContent', (req, res, body) => {
       capturedT12b = body;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
         usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
       }));
-    });
+    }));
     await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
       const r = await httpJson(port, 'POST', '/v1/messages', {
         model: 'gemini-latest',
@@ -583,14 +599,14 @@ async function main() {
     // ── T16. functionResponse.id propagated for parallel tool_result ─────────
     console.log('\nT16. tool_result tool_use_id propagated to functionResponse.id');
     let capturedT16 = null;
-    stub.setHandler((req, res, body) => {
+    stub.setHandler(onlyPath(':generateContent', (req, res, body) => {
       capturedT16 = body;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         candidates: [{ content: { parts: [{ text: 'done' }] }, finishReason: 'STOP' }],
         usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
       }));
-    });
+    }));
     await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
       await httpJson(port, 'POST', '/v1/messages', {
         model: 'gemini-latest',
@@ -647,7 +663,7 @@ async function main() {
     console.log('\nT-thought-sig. thoughtSignature captured + re-attached on tool_use round-trip');
     let capturedTSReq2 = null;
     let turn = 0;
-    stub.setHandler((req, res, body) => {
+    stub.setHandler(onlyPath(':generateContent', (req, res, body) => {
       turn++;
       if (turn === 1) {
         // Turn 1: respond with functionCall + thoughtSignature
@@ -670,7 +686,7 @@ async function main() {
           usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
         }));
       }
-    });
+    }));
     await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
       // Turn 1: tool definition + user prompt → triggers functionCall response
       const r1 = await httpJson(port, 'POST', '/v1/messages', {
@@ -997,14 +1013,14 @@ async function main() {
     // ── T-files-reference. file_id source -> fileData with reconstructed URI
     console.log('\nT-files-reference. image/document source.type=file -> fileData{fileUri}');
     let captured = null;
-    stub.setHandler((req, res, body) => {
+    stub.setHandler(onlyPath(':generateContent', (req, res, body) => {
       captured = body;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
         usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
       }));
-    });
+    }));
     await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
       await httpJson(port, 'POST', '/v1/messages', {
         model: 'gemini-latest',

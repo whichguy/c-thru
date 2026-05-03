@@ -638,6 +638,16 @@ async function main() {
       assert(generateRequests[1]?.systemInstruction === undefined, 'G4 turn2 systemInstruction stripped (cached)');
       assert(r2.json?.usage?.cache_read_input_tokens === 95, `G4 cache_read_input_tokens=95 (got ${r2.json?.usage?.cache_read_input_tokens})`);
       assert(r2.json?.usage?.cache_creation_input_tokens === 0, 'G4 cache_creation_input_tokens=0');
+
+      // /ping observability: counters reflect the two turns + create.
+      const ping = await httpJson(port, 'GET', '/ping');
+      assert(ping.status === 200, 'G4 /ping status 200');
+      const gc = ping.json?.gemini_cache;
+      assert(gc != null, 'G4 /ping has gemini_cache field');
+      assert(gc?.miss >= 1, `G4 /ping miss >= 1 (got ${gc?.miss})`);
+      assert(gc?.hit >= 1, `G4 /ping hit >= 1 (got ${gc?.hit})`);
+      assert(gc?.created >= 1, `G4 /ping created >= 1 (got ${gc?.created})`);
+      assert(gc?.entries >= 1, `G4 /ping entries >= 1 (got ${gc?.entries})`);
     });
 
   } finally {
