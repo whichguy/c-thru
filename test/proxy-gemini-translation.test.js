@@ -529,6 +529,45 @@ async function main() {
       assert(parts[0]?.fileData?.mimeType === 'image/jpeg', 'fileData.mimeType set');
     });
 
+    // ── 9. Document content blocks (PDF base64 -> inlineData) ──────────────
+    console.log('\n9. Document block (PDF base64) -> Gemini inlineData with application/pdf');
+    let captured9 = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          captured9 = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'document received' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      // Minimal valid PDF header (base64). Just enough bytes to roundtrip.
+      const tinyPdf = Buffer.from('%PDF-1.4\n%fakeminimal\n').toString('base64');
+      await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Summarize this PDF.' },
+            { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: tinyPdf } },
+          ],
+        }],
+        stream: false,
+      });
+      const parts = captured9?.contents?.[0]?.parts || [];
+      assert(parts.length === 2, `2 parts mapped (got ${parts.length})`);
+      assert(parts[1]?.inlineData?.mimeType === 'application/pdf', `document -> inlineData.mimeType=application/pdf (got '${parts[1]?.inlineData?.mimeType}')`);
+      assert(parts[1]?.inlineData?.data === tinyPdf, 'document base64 data preserved');
+    });
+
   } finally {
     if (stub) await stub.close().catch(() => {});
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}

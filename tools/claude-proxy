@@ -2447,6 +2447,16 @@ function mapAnthropicToGemini(body) {
           } else if (src.type === 'url' && src.url) {
             parts.push({ fileData: { fileUri: src.url, mimeType: src.media_type } });
           }
+        } else if (block.type === 'document') {
+          // PDF/document blocks (Anthropic's PDF reader sends these). Same
+          // shape as image: base64 inline or url. Switch to fileData{fileUri}
+          // when G9 Files API lands and source.type === 'file'.
+          const src = block.source || {};
+          if (src.type === 'base64' && src.data) {
+            parts.push({ inlineData: { mimeType: src.media_type || 'application/pdf', data: src.data } });
+          } else if (src.type === 'url' && src.url) {
+            parts.push({ fileData: { fileUri: src.url, mimeType: src.media_type || 'application/pdf' } });
+          }
         }
       }
     } else if (typeof msg.content === 'string') {
