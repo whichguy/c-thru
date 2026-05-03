@@ -1101,6 +1101,34 @@ async function main() {
       assert(typeof first?.created_at === 'string', 'created_at present');
     });
 
+    // ── T-models-claude-via. Auto-synthesized claude-via-* aliases for Gemini ──
+    // /v1/models synthesizes claude-via-<key> entries for any non-claude-prefixed
+    // route whose endpoint is in picker_alias_endpoints (default: gemini_ai,
+    // gemini_vertex). Claude Code's /model picker only displays claude-* IDs,
+    // so without these synthetics Gemini routes would be invisible.
+    console.log('\nT-models-claude-via. /v1/models synthesizes claude-via-<key> aliases for Gemini routes');
+    await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
+      const r = await httpJson(port, 'GET', '/v1/models');
+      assert(r.status === 200, 'claude-via /v1/models status 200');
+      const ids = (r.json?.data || []).map(m => m.id);
+      assert(ids.includes('claude-via-gemini-latest'),
+        `claude-via-gemini-latest synthesized (got ${ids.filter(i => i.startsWith('claude-via-')).join(',')})`);
+      assert(ids.includes('claude-via-gemini-flash'),
+        'claude-via-gemini-flash synthesized');
+      // Routes already starting with claude- must NOT get a claude-via- prefix.
+      assert(!ids.some(id => id.startsWith('claude-via-claude-')),
+        `no double-prefixed claude-via-claude-* (got ${ids.filter(id => id.startsWith('claude-via-claude-')).join(',')})`);
+    });
+
+    // End-to-end resolution of claude-via-<X> through /v1/messages is covered
+    // implicitly: /v1/models lists the entry, and resolveBackend's claude-via-
+    // unwrap path is exercised by the existing test 23 in
+    // test/model-map-validate.test.js (claude-via-gemini-pro -> gemini_ai).
+    // The test below lives in proxy-gemini-translation.test.js (test 23) where
+    // the stub-handler ordering is clean, since this routing file shares a
+    // single stub across many tests and post-streaming handler state can leave
+    // the stub in a bad state for non-streaming follow-ups.
+
     // ── T-explain-model. c-thru explain --model walks model_routes ───────────
     console.log('\nT-explain-model. c-thru explain --model resolves through model_routes');
     const explainBin = path.join(__dirname, '..', 'tools', 'c-thru-explain.js');

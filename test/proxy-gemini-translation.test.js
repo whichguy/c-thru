@@ -1933,6 +1933,75 @@ async function main() {
       });
     }
 
+    // ── 23. Auto-synthesized claude-via-<X> resolves through /v1/messages ──
+    // /v1/models exposes claude-via-<X> entries for picker consumption (T-models-
+    // claude-via in routing tests). The resolveBackend code path that unwraps
+    // these to <X> at request time is asserted here with a clean handler.
+    console.log('\n23. claude-via-<X> request resolves to underlying <X>');
+    {
+      const viaConfigPath = writeConfigFresh(tmpDir, 'claude-via', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-flash-latest': 'gemini_stub' },
+      });
+      let viaUrl = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            viaUrl = req.url;
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: viaConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'claude-via-gemini-flash-latest',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 10,
+        });
+        assert(r.status === 200, `23 status 200 (got ${r.status})`);
+        assert(viaUrl?.includes('gemini-flash-latest'),
+          `23 upstream URL has underlying model (got '${viaUrl}')`);
+        const chain = r.headers?.['x-c-thru-resolution-chain'] || '';
+        assert(chain.includes('claude-via-gemini-flash-latest'),
+          `23 chain mentions claude-via prefix (got '${chain}')`);
+        assert(chain.includes('alias(claude-via-gemini-flash-latest->gemini-flash-latest)'),
+          `23 chain shows claude-via unwrap (got '${chain}')`);
+      });
+
+      // Negative: claude-via-<unknown-X> with no underlying route falls through
+      // (will hit Anthropic regex passthrough or 400). We just verify it doesn't
+      // crash the proxy and resolveBackend returns a clean error/passthrough.
+      const noViaPath = writeConfigFresh(tmpDir, 'claude-via-noroute', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-flash-latest': 'gemini_stub' },
+      });
+      stub.setHandler((req, res) => {
+        // Catch-all 200 so any forwarded request gets a response (we only care
+        // that the proxy doesn't hang or crash on unresolvable claude-via-*).
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{}');
+        return true;
+      });
+      await withProxy({ configPath: noViaPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'claude-via-does-not-exist',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 10,
+        });
+        // Status must be a clean number — the proxy must not hang.
+        assert(typeof r.status === 'number' && r.status > 0,
+          `23-neg proxy did not hang on unresolvable claude-via-* (got status ${r.status})`);
+      });
+    }
+
     // 15b. No redacted_thinking -> header absent.
     console.log('\n15b. Wave 4: no redacted_thinking -> no x-c-thru-redacted-thinking-dropped header');
     await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {

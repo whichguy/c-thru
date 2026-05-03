@@ -653,6 +653,20 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
     return resolveBackend(target, cfg, tier, mode, seen, chain);
   };
 
+  // Auto-synthesized picker aliases: claude-via-<X> resolves the same as <X>.
+  // Mirror of the synthesis in /v1/models so the picker entries actually work
+  // when selected. Only fires when no explicit claude-via-<X> route exists
+  // (user-defined route wins via the modelRoutes[model] lookup below).
+  if (modelRoutes[model] === undefined && model.startsWith('claude-via-')) {
+    const underlying = model.slice('claude-via-'.length);
+    if (modelRoutes[underlying] !== undefined) {
+      chain.push(`alias(${model}->${underlying})`);
+      const nested = resolveBackend(underlying, cfg, tier, mode, seen, chain);
+      if (nested.error) return nested;
+      return nested;
+    }
+  }
+
   let id = modelRoutes[model];
   if (id !== undefined) {
     // v2 alias object form: { endpoint: "...", name: "..." }
@@ -3726,8 +3740,32 @@ const server = http.createServer((req, res) => {
       // surfaces routes the proxy *actually* serves rather than upstream catalog).
       if (req.method === 'GET' && (req.url === '/v1/models' || req.url === '/v1/models/' || req.url.startsWith('/v1/models?'))) {
         const routes = CONFIG.model_routes || {};
+        const endpointsOrBackends = CONFIG.endpoints || CONFIG.backends || {};
         const data = [];
         const seen = new Set();
+        // Resolve a route entry to its terminal endpoint id (best-effort, single hop).
+        // Used to decide which non-claude- routes deserve a synthesized claude-via-*
+        // alias for picker exposure (Claude Code's /model picker only displays
+        // claude-* IDs from /v1/models).
+        const routeEndpointId = (entry) => {
+          if (typeof entry === 'string') return entry;
+          if (entry && typeof entry === 'object') {
+            if (typeof entry.endpoint === 'string') return entry.endpoint;
+            // mode-keyed object → prefer 'connected', else first string value
+            const cand = entry.connected || entry.default || Object.values(entry).find(v => typeof v === 'string');
+            return typeof cand === 'string' ? cand : null;
+          }
+          return null;
+        };
+        // Endpoints whose routes get auto-synthesized claude-via-* aliases.
+        // Default covers cloud-hosted non-Anthropic providers; users can override
+        // via top-level `picker_alias_endpoints` in config. Anthropic-format
+        // endpoints already surface their claude-* IDs natively, so excluded.
+        const aliasEndpoints = new Set(
+          Array.isArray(CONFIG.picker_alias_endpoints)
+            ? CONFIG.picker_alias_endpoints
+            : ['gemini_ai', 'gemini_vertex']
+        );
         for (const key of Object.keys(routes)) {
           if (key.startsWith('re:')) continue; // regex routes have no canonical id
           if (seen.has(key)) continue;
@@ -3736,6 +3774,24 @@ const server = http.createServer((req, res) => {
             type: 'model',
             id: key,
             display_name: key,
+            created_at: '2024-01-01T00:00:00Z',
+          });
+        }
+        // Synthesize claude-via-<key> aliases. Skip keys already starting with
+        // claude- (the picker shows them directly), and skip if a claude-via-<key>
+        // already exists in routes (user-defined wins).
+        for (const key of Object.keys(routes)) {
+          if (key.startsWith('re:')) continue;
+          if (key.startsWith('claude-')) continue;
+          const epId = routeEndpointId(routes[key]);
+          if (!epId || !aliasEndpoints.has(epId)) continue;
+          const aliasId = `claude-via-${key}`;
+          if (seen.has(aliasId)) continue;
+          seen.add(aliasId);
+          data.push({
+            type: 'model',
+            id: aliasId,
+            display_name: aliasId,
             created_at: '2024-01-01T00:00:00Z',
           });
         }
