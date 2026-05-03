@@ -2051,6 +2051,17 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           // Gemini may interleave thought parts with text/functionCall parts.
           // Anthropic clients expect thinking blocks before any text/tool_use.
           // Partition + reassemble so order is: thinking[] → text/tool_use[].
+          //
+          // thoughtSignature placement varies: Gemini 3+ may attach it to a
+          // sibling text/functionCall part rather than the thought part itself.
+          // First-pass collect any thoughtSignature seen on the candidate so we
+          // can backfill thinking blocks whose own part lacked one. Mirrors the
+          // streaming path, which streams thinking_delta then emits
+          // signature_delta from currentThinkingSignature on close.
+          let firstSeenSignature = '';
+          for (const p of parts) {
+            if (p.thoughtSignature && !firstSeenSignature) firstSeenSignature = p.thoughtSignature;
+          }
           const thinkingBlocks = [];
           const otherBlocks = [];
           for (const p of parts) {
@@ -2058,7 +2069,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
               thinkingBlocks.push({
                 type: 'thinking',
                 thinking: p.text || '',
-                signature: p.thoughtSignature || '',
+                signature: p.thoughtSignature || firstSeenSignature || '',
               });
               continue;
             }

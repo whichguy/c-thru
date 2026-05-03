@@ -787,9 +787,10 @@ async function main() {
     const tBlock = blocks.find(b => b.type === 'thinking');
     if (tBlock) {
       assert(typeof tBlock.thinking === 'string' && tBlock.thinking.length > 0, `S21 thinking block has non-empty text`);
-      // Gemini's non-streaming response does not always carry a thoughtSignature;
-      // S21b confirms the (possibly-empty) signature roundtrips cleanly. Pin shape, not size.
-      assert(typeof tBlock.signature === 'string', `S21 thinking block has signature field (string, may be empty)`);
+      // After G6: signature is non-empty when Gemini emitted any thoughtSignature
+      // on the candidate (we backfill from a sibling part if the thought part
+      // itself lacked one). Streaming already does this via currentThinkingSignature.
+      assert(typeof tBlock.signature === 'string' && tBlock.signature.length > 0, `S21 thinking block carries non-empty signature (got '${tBlock.signature?.slice(0,40)}...')`);
       const textIdx = blocks.findIndex(b => b.type === 'text');
       const thinkIdx = blocks.findIndex(b => b.type === 'thinking');
       if (textIdx >= 0) {

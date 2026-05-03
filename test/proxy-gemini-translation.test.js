@@ -312,6 +312,39 @@ async function main() {
       assert(r.json?.content?.[1]?.text === 'final answer', 'text content preserved');
     });
 
+    // ── 6b. Non-streaming: thoughtSignature on sibling part backfills thinking
+    console.log('\n6b. Non-streaming: thoughtSignature on sibling part backfills thinking block (G6)');
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          candidates: [{
+            content: { parts: [
+              // Thought part has NO thoughtSignature; sibling text part carries it.
+              { text: 'analysing...', thought: true },
+              { text: 'final answer', thoughtSignature: 'sig-on-sibling' },
+            ] },
+            finishReason: 'STOP'
+          }],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+        }));
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'go' }],
+        thinking: { type: 'enabled', budget_tokens: 256 },
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(r.status === 200, '6b status 200');
+      const tb = (r.json?.content || []).find(b => b.type === 'thinking');
+      assert(tb?.signature === 'sig-on-sibling', `6b thinking signature backfilled from sibling (got '${tb?.signature}')`);
+    });
+
     // ── 7. Streaming thinking response ──────────────────────────────────────
     console.log('\n7. Streaming thinking events (content_block_start/thinking_delta/signature_delta/stop)');
     stub.setHandler((req, res) => {
