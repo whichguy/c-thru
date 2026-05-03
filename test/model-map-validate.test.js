@@ -28,16 +28,17 @@ function validate(config, options) {
 }
 
 // Minimal valid config used as a base throughout.
+// Schema: llm_profiles[capability][mode][tier] (capability-outer, mode-middle,
+// tier-innermost). Old tier-outer shape with connected_model/disconnect_model
+// is no longer accepted by the validator — tests migrated 2026-05.
 const VALID_BASE = {
   backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
   model_routes: { 'test-model': 'local' },
   llm_profiles: {
-    '16gb': {
-      workhorse: { connected_model: 'test-model', disconnect_model: 'test-model' },
-      judge:     { connected_model: 'test-model', disconnect_model: 'test-model' },
-    },
+    workhorse: { 'best-cloud': { '16gb': 'test-model' } },
+    judge:     { 'best-cloud': { '16gb': 'test-model' } },
   },
-  llm_mode: 'connected',
+  llm_mode: 'best-cloud',
 };
 
 // ── 1. Valid config passes ─────────────────────────────────────────────────
@@ -50,7 +51,7 @@ console.log('1. Valid minimal config');
 // ── 2. Invalid llm_mode value ──────────────────────────────────────────────
 console.log('\n2. Invalid llm_mode value');
 {
-  const cfg = Object.assign({}, VALID_BASE, { llm_mode: 'disconnect' });
+  const cfg = Object.assign({}, VALID_BASE, { llm_mode: 'totally-bogus-mode' });
   const errs = validate(cfg);
   assert(errs.length > 0, 'bad llm_mode → error');
   assert(errs.some(e => e.includes('llm_mode')), `error mentions llm_mode (got: ${errs[0]})`);
@@ -83,19 +84,20 @@ console.log('\n5. agent_to_capability unknown alias');
   assert(errs.some(e => e.includes('agent_to_capability')), `error mentions agent_to_capability (got: ${errs[0]})`);
 }
 
-// ── 6. llm_profiles entry missing connected_model ─────────────────────────
-console.log('\n6. llm_profiles entry missing connected_model');
+// ── 6. llm_profiles capability with no mode keys ──────────────────────────
+console.log('\n6. llm_profiles capability with no mode keys');
 {
   const cfg = {
     backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
     model_routes: { 'test-model': 'local' },
     llm_profiles: {
-      '16gb': { workhorse: { disconnect_model: 'test-model' } }, // connected_model absent
+      workhorse: { on_failure: 'cascade' }, // only reserved key, no mode
     },
   };
   const errs = validate(cfg);
-  assert(errs.length > 0, 'missing connected_model → error');
-  assert(errs.some(e => e.includes('connected_model')), `error mentions connected_model (got: ${errs[0]})`);
+  assert(errs.length > 0, 'no mode keys → error');
+  assert(errs.some(e => e.includes('no mode keys') || e.includes('mode')),
+    `error mentions missing modes (got: ${errs[0]})`);
 }
 
 // ── 7. model_routes @sigil references undeclared backend ──────────────────
@@ -114,6 +116,8 @@ console.log('\n7. model_routes @backend sigil → undeclared backend');
 console.log('\n8. llm_connectivity_mode deprecated key → stderr warning');
 {
   // When llm_mode is absent + llm_connectivity_mode present → warning, no error
+  // llm_connectivity_mode is a legacy key — its allowed values are the legacy
+  // 'connected' / 'disconnect' (NOT the new llm_mode enum like 'best-cloud').
   const cfg = Object.assign({}, VALID_BASE, { llm_connectivity_mode: 'connected' });
   delete cfg.llm_mode;
   let stderrLine = '';
@@ -159,32 +163,32 @@ console.log('\n11. agent_to_capability valid alias passes');
   assert(errs.length === 0, 'valid agent_to_capability → no errors');
 }
 
-// ── 12. llm_profiles modes[] bad mode key ─────────────────────────────────
-console.log('\n12. llm_profiles modes[] invalid mode key');
+// ── 12. llm_profiles invalid mode key ─────────────────────────────────────
+// New schema: modes are direct keys under each capability, not under a
+// `modes` sub-object. An unknown mode key (not best-cloud / best-cloud-oss /
+// best-local-oss / best-cloud-gov / best-local-gov) is flagged.
+console.log('\n12. llm_profiles invalid mode key');
 {
   const cfg = {
     backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
     model_routes: { 'test-model': 'local' },
     llm_profiles: {
-      '16gb': {
-        judge: {
-          connected_model: 'test-model',
-          disconnect_model: 'test-model',
-          modes: { 'disconnected': 'test-model' }, // invalid mode key
-        },
+      judge: {
+        'disconnected': { '16gb': 'test-model' }, // invalid mode key
       },
     },
   };
   const errs = validate(cfg);
-  assert(errs.length > 0, 'bad modes[] key → error');
-  assert(errs.some(e => e.includes('modes')), `error mentions modes (got: ${errs[0]})`);
+  assert(errs.length > 0, 'bad mode key → error');
+  assert(errs.some(e => e.includes('disconnected') || e.includes('valid mode')),
+    `error mentions the bad mode (got: ${errs[0]})`);
 }
 
 // ── 13. CLI process spawn: invalid file exits 1 ───────────────────────────
 console.log('\n13. CLI exit code on invalid config');
 {
   const VALIDATOR = path.resolve(__dirname, '..', 'tools', 'model-map-validate.js');
-  const bad = JSON.stringify({ llm_mode: 'disconnect' });
+  const bad = JSON.stringify({ llm_mode: 'totally-bogus-mode' });
   const tmp = require('os').tmpdir() + '/validate-test-bad.json';
   require('fs').writeFileSync(tmp, bad);
   const result = spawnSync(process.execPath, [VALIDATOR, tmp], { encoding: 'utf8' });
@@ -199,11 +203,11 @@ console.log('\n14. validateRecommendedMappings valid');
   const rec = {
     schema_version: 1,
     updated_at: '2026-01-01',
-    recommendations: { workhorse: { '64gb': 'some-model' } },
+    recommendations: { coder: { '64gb': 'some-model' } },
   };
   const errs = [];
   validateRecommendedMappings(rec, errs);
-  assert(errs.length === 0, 'valid recommended-mappings → no errors');
+  assert(errs.length === 0, `valid recommended-mappings → no errors (got: ${errs.join('; ')})`);
 }
 
 // ── 15. validateRecommendedMappings — unknown capability ──────────────────
@@ -223,7 +227,7 @@ console.log('\n15. validateRecommendedMappings unknown capability');
 console.log('\n16. Invalid on_failure value');
 {
   const cfg = JSON.parse(JSON.stringify(VALID_BASE));
-  cfg.llm_profiles['16gb'].judge.on_failure = 'hard-fial';
+  cfg.llm_profiles.judge.on_failure = 'hard-fial';
   const errs = validate(cfg);
   assert(errs.length > 0, 'bad on_failure → error');
   assert(errs.some(e => e.includes('on_failure')), `error mentions on_failure (got: ${errs[0]})`);
