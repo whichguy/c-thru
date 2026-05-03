@@ -387,6 +387,79 @@ async function main() {
       });
     });
 
+    // ── 8. Image content blocks (Anthropic image -> Gemini inlineData) ──────
+    console.log('\n8. Image content block mapping (base64 -> inlineData / url -> fileData)');
+    let captured8 = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          captured8 = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'red square' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      // 1x1 red PNG (base64). Tiny but valid.
+      const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+      await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What color?' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tinyPng } },
+          ],
+        }],
+        stream: false,
+      });
+      const parts = captured8?.contents?.[0]?.parts || [];
+      assert(parts.length === 2, `2 parts mapped (got ${parts.length})`);
+      assert(parts[0]?.text === 'What color?', 'text part preserved');
+      assert(parts[1]?.inlineData?.mimeType === 'image/png', 'image -> inlineData.mimeType');
+      assert(parts[1]?.inlineData?.data === tinyPng, 'image base64 data preserved');
+    });
+
+    // ── 8b. Image url source -> fileData ─────────────────────────────────────
+    console.log('\n8b. Image url source -> fileData{fileUri}');
+    let captured8b = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          captured8b = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        messages: [{
+          role: 'user',
+          content: [{ type: 'image', source: { type: 'url', url: 'https://example.com/x.jpg', media_type: 'image/jpeg' } }],
+        }],
+        stream: false,
+      });
+      const parts = captured8b?.contents?.[0]?.parts || [];
+      assert(parts[0]?.fileData?.fileUri === 'https://example.com/x.jpg', 'image url -> fileData.fileUri');
+      assert(parts[0]?.fileData?.mimeType === 'image/jpeg', 'fileData.mimeType set');
+    });
+
   } finally {
     if (stub) await stub.close().catch(() => {});
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}

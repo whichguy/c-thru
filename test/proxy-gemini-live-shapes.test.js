@@ -946,6 +946,29 @@ async function main() {
     }
   });
 
+  // ── S26. Image content block (1×1 PNG) → Gemini accepts inlineData ──────
+  console.log('\nS26. image block (1×1 red PNG) → Gemini describes the image');
+  await withProxy({ configPath: cfgPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY } }, async ({ port }) => {
+    // 1×1 red PNG
+    const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+    const r = await httpJson(port, 'POST', '/v1/messages', {
+      model: MODEL, max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'What single dominant color is this image? Reply with just the color name.' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tinyPng } },
+        ],
+      }],
+      stream: false,
+    }, {}, 30000);
+    assert(r.status === 200, `S26 status 200 (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
+    const txt = (r.json?.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ');
+    assert(txt.length > 0, `S26 model returned text (got '${txt.slice(0,80)}')`);
+    // Loose: just verify model engaged with image (color/red/image keyword)
+    assert(/red|image|color|pixel/i.test(txt), `S26 model engaged with image (got '${txt.slice(0,80)}')`);
+  });
+
   // ── E4. invalid_request_error ──────────────────────────────────────────
   console.log('\nE4. invalid Anthropic body (max_tokens:-1) → invalid_request_error envelope');
   await withProxy({ configPath: cfgPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY } }, async ({ port }) => {

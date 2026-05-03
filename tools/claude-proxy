@@ -2393,6 +2393,16 @@ function mapAnthropicToGemini(body) {
           const tp = { text: block.thinking || '', thought: true };
           if (block.signature) tp.thoughtSignature = block.signature;
           parts.push(tp);
+        } else if (block.type === 'image') {
+          // Anthropic image blocks: source.type=base64 (inline) or source.type=url.
+          // Gemini equivalent: inlineData{mimeType,data} for base64, fileData{fileUri}
+          // for url. Files API (G9) handles file_id sources separately.
+          const src = block.source || {};
+          if (src.type === 'base64' && src.data) {
+            parts.push({ inlineData: { mimeType: src.media_type || 'image/png', data: src.data } });
+          } else if (src.type === 'url' && src.url) {
+            parts.push({ fileData: { fileUri: src.url, mimeType: src.media_type } });
+          }
         }
       }
     } else if (typeof msg.content === 'string') {
