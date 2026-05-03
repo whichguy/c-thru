@@ -118,12 +118,25 @@ async function spawnProxy(opts = {}) {
   // T9: prevent host-shell auth keys from silently leaking into the proxy
   // child. Tests assert "no auth header when unset" — but Object.assign only
   // overwrites, never deletes, so a host-set GOOGLE_API_KEY survives into
-  // applyOutboundAuth and gets stamped onto the upstream request. Scrub the
-  // known auth-relevant keys unless the test explicitly provided them.
-  const AUTH_ENV_KEYS = [
+  // applyOutboundAuth and gets stamped onto the upstream request. Scrub
+  // every auth_env value referenced by the active config (so adding a new
+  // backend can't silently re-introduce the leak), plus a small static
+  // fallback for tests that don't pass a configPath.
+  const STATIC_AUTH_KEYS = [
     'GOOGLE_API_KEY', 'GOOGLE_CLOUD_TOKEN', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_REGION',
     'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY',
   ];
+  let configAuthKeys = [];
+  if (configPath) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const endpoints = raw.endpoints || raw.backends || {};
+      configAuthKeys = Object.values(endpoints)
+        .map(e => e && e.auth_env)
+        .filter(Boolean);
+    } catch {}
+  }
+  const AUTH_ENV_KEYS = [...new Set([...STATIC_AUTH_KEYS, ...configAuthKeys])];
   for (const k of AUTH_ENV_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(extraEnv, k)) delete proxyEnv[k];
   }

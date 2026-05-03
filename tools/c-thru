@@ -2243,17 +2243,38 @@ bootstrap_endpoint_auth_env() {
     */bash) rcfile="$HOME/.bashrc" ;;
   esac
 
+  # POSIX single-quote escape so any `$`, backtick, `\`, `&`, `|`, etc. in
+  # the key is treated as a literal when the rc file is sourced. Replace
+  # every ' with '\'' (close-quote, escaped single, reopen) and wrap the
+  # whole thing in single quotes. Written via intermediate vars to avoid
+  # the readability trap of \' \\\' inside double quotes.
+  local _apos="'"
+  local _qrepl="${_apos}\\${_apos}${_apos}"
+  local _qkey="${_apos}${key//${_apos}/${_qrepl}}${_apos}"
+  local _newline="export $envname=$_qkey"
+
   if [[ -f "$rcfile" ]] && grep -q "^export $envname=" "$rcfile" 2>/dev/null; then
-    if sed --version >/dev/null 2>&1; then
-      sed -i "s|^export $envname=.*|export $envname=$key|" "$rcfile"
+    # Use awk (not sed) for the in-place rewrite — sed treats `&` as
+    # match-substitute and `|` as our delimiter, both of which would
+    # corrupt rc files when the key contains those characters.
+    local _tmp
+    _tmp=$(mktemp "${TMPDIR:-/tmp}/c-thru-rc.XXXXXX") || {
+      echo "c-thru: could not create tempfile for $rcfile rewrite — continuing with current shell only." >&2
+      export "$envname=$key"
+      return 0
+    }
+    if awk -v ev="$envname" -v line="$_newline" \
+        '$0 ~ "^export "ev"=" { print line; next } { print }' \
+        "$rcfile" > "$_tmp" && mv "$_tmp" "$rcfile"; then
+      echo "c-thru: updated existing $envname line in $rcfile" >&2
     else
-      sed -i '' "s|^export $envname=.*|export $envname=$key|" "$rcfile"
+      rm -f "$_tmp" 2>/dev/null
+      echo "c-thru: failed to rewrite $rcfile — continuing with current shell only." >&2
     fi
-    echo "c-thru: updated existing $envname line in $rcfile" >&2
   else
     {
       printf '\n# Added by c-thru on %s\n' "$(date +%Y-%m-%d)"
-      printf 'export %s=%s\n' "$envname" "$key"
+      printf '%s\n' "$_newline"
     } >> "$rcfile" 2>/dev/null && \
       echo "c-thru: appended export $envname to $rcfile" >&2 || \
       echo "c-thru: could not write $rcfile — continuing with current shell only." >&2
@@ -4409,7 +4430,12 @@ if [[ -n "$TARGET_BACKEND_ID" ]]; then
     local _bk_fmt _bk_url
     _bk_fmt=$(jq -r '.format // .kind // "anthropic"' <<< "$BACKEND" 2>/dev/null)
     _bk_url=$(jq -r '.url // empty' <<< "$BACKEND" 2>/dev/null)
-    if [[ "$_bk_fmt" == "ollama" ]] || { [[ "$_bk_fmt" == "anthropic" ]] && echo "$_bk_url" | grep -qE '(localhost|127\.0\.0\.1)'; }; then
+    # Gemini routes need apply_resolved_backend so bootstrap_endpoint_auth_env
+    # fires for missing GOOGLE_API_KEY. Without "gemini" in this list,
+    # capability-alias-routed Gemini models silently fall through to the
+    # Ollama fallback block and the user gets an opaque upstream 401.
+    if [[ "$_bk_fmt" == "ollama" ]] || [[ "$_bk_fmt" == "gemini" ]] || \
+       { [[ "$_bk_fmt" == "anthropic" ]] && echo "$_bk_url" | grep -qE '(localhost|127\.0\.0\.1)'; }; then
       apply_resolved_backend "$BACKEND" "$TARGET_PROVIDER_MODEL" "$BACKEND_ID"
     else
       apply_proxy_fallback_client_block "" "{}"

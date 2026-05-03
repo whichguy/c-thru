@@ -2127,8 +2127,9 @@ function maybeApplyGeminiCache(body, geminiBody, model, ctx) {
   // and Gemini rejects them anyway. Log + count so users debugging
   // "why isn't my cache working" can find an explanation in the journal.
   if (prefixContents.length === 0 && !prefixSystem) {
+    // Distinct from `none` (no cache_control marker at all). Counters are
+    // non-overlapping so /ping consumers can sum them without double-counting.
     GEMINI_CACHE_STATS.empty_prefix++;
-    GEMINI_CACHE_STATS.none++;
     if (ctx) ctxLog(ctx, 'gemini.cache.empty_prefix', {
       reason: 'cache_control marker present but cacheable prefix is empty after Anthropic→Gemini translation (system blocks may have had cache_control but no text)',
       systemHasCache: info.systemIncluded,
