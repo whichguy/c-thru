@@ -899,6 +899,42 @@ async function main() {
       assert(!countBody?.generationConfig, 'generationConfig stripped');
     });
 
+    // ── T-obs-headers. G7 + G10 + G13 observability headers ─────────────────
+    console.log('\nT-obs-headers. x-c-thru-beta-dropped + request-id + x-c-thru-schema-scrubbed');
+    stub.setHandler((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+      }));
+    });
+    await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: 'gemini-latest',
+        tools: [{ name: 'x', description: 'd', input_schema: { type: 'object', properties: { q: { oneOf: [{ type: 'string' }, { type: 'number' }] } } } }],
+        messages: [{ role: 'user', content: 'go' }],
+        stream: false,
+      }, { 'anthropic-beta': 'prompt-caching-2024-07-31, computer-use-2024-10-22' });
+      assert(r.status === 200, 'obs-headers status 200');
+      const dropped = r.headers?.['x-c-thru-beta-dropped'] || '';
+      assert(/prompt-caching-2024-07-31/.test(dropped) && /computer-use-2024-10-22/.test(dropped), `beta-dropped lists both tokens (got '${dropped}')`);
+      const rid = r.headers?.['request-id'] || '';
+      assert(/^req_[a-f0-9]+$/i.test(rid), `request-id generated when upstream absent (got '${rid}')`);
+      const scrubbed = r.headers?.['x-c-thru-schema-scrubbed'] || '';
+      assert(scrubbed.length > 0, `schema-scrubbed header set when fields stripped (got '${scrubbed}')`);
+    });
+
+    // ── T-obs-rid-passthrough. Upstream-supplied request-id preserved ───────
+    console.log('\nT-obs-rid-passthrough. valid incoming request-id passes through');
+    await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: 'gemini-latest',
+        messages: [{ role: 'user', content: 'go' }],
+        stream: false,
+      }, { 'request-id': 'req_deadbeef12345678' });
+      assert(r.headers?.['request-id'] === 'req_deadbeef12345678', `upstream req_… preserved (got '${r.headers?.['request-id']}')`);
+    });
+
     // ── T-models. /v1/models lists configured routes (Anthropic shape) ──────
     console.log('\nT-models. GET /v1/models -> Anthropic {data:[{type:model,id}]} from model_routes');
     await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {

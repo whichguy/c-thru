@@ -715,8 +715,8 @@ async function main() {
     assert((r.json.data || []).length > 0, 'S28 at least one configured model listed');
   });
 
-  // ── S19. anthropic-beta header acknowledged ────────────────────────────
-  console.log('\nS19. anthropic-beta header is silently dropped, request still 200');
+  // ── S19. anthropic-beta header dropped, surfaced via x-c-thru-beta-dropped (G7)
+  console.log('\nS19. anthropic-beta header dropped, listed in x-c-thru-beta-dropped response header');
   await withProxy({ configPath: cfgPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY } }, async ({ port }) => {
     const r = await httpJson(port, 'POST', '/v1/messages', {
       model: MODEL, max_tokens: 30,
@@ -724,6 +724,22 @@ async function main() {
       stream: false,
     }, { 'anthropic-beta': 'prompt-caching-2024-07-31, interleaved-thinking-2025-05-14' }, 30000);
     assert(r.status === 200, `S19 status 200 with anthropic-beta header (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
+    const dropped = r.headers?.['x-c-thru-beta-dropped'] || '';
+    assert(/prompt-caching-2024-07-31/.test(dropped), `S19 prompt-caching listed in dropped (got '${dropped}')`);
+    assert(/interleaved-thinking-2025-05-14/.test(dropped), `S19 interleaved-thinking listed in dropped (got '${dropped}')`);
+  });
+
+  // ── S29. request-id present on every response (G10) ──────────────────────
+  console.log('\nS29. response carries request-id matching ^req_[a-f0-9]+$');
+  await withProxy({ configPath: cfgPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY } }, async ({ port }) => {
+    const r = await httpJson(port, 'POST', '/v1/messages', {
+      model: MODEL, max_tokens: 20,
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: false,
+    }, {}, 30000);
+    assert(r.status === 200, `S29 status 200 (got ${r.status})`);
+    const rid = r.headers?.['request-id'] || '';
+    assert(/^req_[a-f0-9]+$/i.test(rid), `S29 request-id matches ^req_[a-f0-9]+$ (got '${rid}')`);
   });
 
   // ── S20. SSE keepalive on long-running streams ─────────────────────────

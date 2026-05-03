@@ -1806,6 +1806,35 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
 // `legacy_ollama_chat` opt-in. The default is forwardAnthropic (verbatim
 // pass-through to <backend.url>/v1/messages) which preserves tool_use /
 // tool_result blocks. The legacy path is for Ollama < 0.4 or LM Studio.
+// Build the observability headers attached to every Gemini-path response.
+// Centralises G7 (beta-dropped), G10 (request-id), G13 (schema-scrubbed) so
+// streaming / non-streaming / count_tokens response paths all set the same
+// telemetry. Caller adds streaming-specific headers afterwards.
+function buildCthruResponseHeaders(req, geminiBody, effectiveModel) {
+  const h = {
+    'x-c-thru-served-by': effectiveModel || '',
+  };
+  // G13: schema-scrubbed (set when mapAnthropicToGemini stripped any fields).
+  if (geminiBody && geminiBody._schemaRemoved && geminiBody._schemaRemoved.length) {
+    h['x-c-thru-schema-scrubbed'] = geminiBody._schemaRemoved.join(',');
+  }
+  // G7: anthropic-beta tokens are not honored on Gemini upstream — all
+  // incoming tokens are effectively dropped. Surface so callers can detect
+  // feature loss (prompt-caching, computer-use, etc.) instead of guessing.
+  const beta = req.headers['anthropic-beta'];
+  if (beta) {
+    const tokens = String(beta).split(',').map(s => s.trim()).filter(Boolean);
+    if (tokens.length) h['x-c-thru-beta-dropped'] = tokens.join(',');
+  }
+  // G10: request-id propagation. Anthropic guarantees one on every response
+  // for client log correlation. Generate req_<hex16> if upstream didn't.
+  const upstreamId = req.headers['request-id'] || req.headers['x-request-id'];
+  h['request-id'] = (upstreamId && /^req_[a-f0-9]+$/i.test(upstreamId))
+    ? upstreamId
+    : 'req_' + crypto.randomBytes(8).toString('hex');
+  return h;
+}
+
 async function forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   // /v1/messages/count_tokens → Gemini :countTokens (no model invocation, no SSE).
   // Translate {totalTokens:N} → Anthropic {type:"message_count", input_tokens:N}.
@@ -1861,15 +1890,14 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
     }
 
     if (isStream) {
-      const streamHeaders = {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'x-c-thru-served-by': effectiveModel,
-      };
-      if (geminiBody._schemaRemoved) {
-        streamHeaders['x-c-thru-schema-scrubbed'] = geminiBody._schemaRemoved.join(',');
-      }
+      const streamHeaders = Object.assign(
+        {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+        buildCthruResponseHeaders(req, geminiBody, effectiveModel)
+      );
       res.writeHead(200, streamHeaders);
 
       // Anthropic message_start
@@ -2036,10 +2064,10 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
             // wrapper was added later — emit both for forward compatibility.)
             const inputTokens = geminiData.totalTokens ?? geminiData.totalTokensCount ?? 0;
             const anthropicRes = { input_tokens: inputTokens };
-            res.writeHead(200, {
-              'Content-Type': 'application/json',
-              'x-c-thru-served-by': effectiveModel,
-            });
+            res.writeHead(200, Object.assign(
+              { 'Content-Type': 'application/json' },
+              buildCthruResponseHeaders(req, geminiBody, effectiveModel)
+            ));
             res.end(JSON.stringify(anthropicRes));
             clearBackendCooldown(backend.id);
             return;
@@ -2106,13 +2134,10 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
             }
           };
 
-          const respHeaders = {
-            'Content-Type': 'application/json',
-            'x-c-thru-served-by': effectiveModel
-          };
-          if (geminiBody._schemaRemoved) {
-            respHeaders['x-c-thru-schema-scrubbed'] = geminiBody._schemaRemoved.join(',');
-          }
+          const respHeaders = Object.assign(
+            { 'Content-Type': 'application/json' },
+            buildCthruResponseHeaders(req, geminiBody, effectiveModel)
+          );
           res.writeHead(200, respHeaders);
           res.end(JSON.stringify(anthropicRes));
           clearBackendCooldown(backend.id);
