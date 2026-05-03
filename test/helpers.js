@@ -189,21 +189,53 @@ async function spawnProxy(opts = {}) {
 
 // ── /ping poller ───────────────────────────────────────────────────────────
 
+// Polls the proxy's /ping endpoint until it returns 200, or `timeoutMs` elapses.
+// Per-attempt timeout grows from 250ms → 1500ms (catches slow first-bind on
+// loaded machines without burning the whole budget on the happy-path first
+// try). Backoff between attempts grows similarly: 30/60/120/250/500ms capped.
+// ECONNREFUSED retries immediately (next event-loop tick) since that
+// definitively means "listener not up yet" and we shouldn't sleep on it.
 function waitForPing(port, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + timeoutMs;
+    const lastError = { kind: null, message: null };
+    let attemptCount = 0;
+    const perAttemptTimeouts = [250, 500, 750, 1000, 1500];
+    const backoffMs        = [30, 60, 120, 250, 500];
     function attempt() {
+      const idx = Math.min(attemptCount, perAttemptTimeouts.length - 1);
+      attemptCount++;
       const req = http.request({ hostname: '127.0.0.1', port, path: '/ping', method: 'GET' }, res => {
+        // Drain so the socket can be released even on non-200.
+        res.resume();
         if (res.statusCode === 200) return resolve();
-        schedule();
+        lastError.kind = 'status';
+        lastError.message = `status=${res.statusCode}`;
+        schedule(false);
       });
-      req.on('error', () => schedule());
-      req.setTimeout(500, () => { req.destroy(); schedule(); });
+      req.on('error', (err) => {
+        lastError.kind = err.code || 'error';
+        lastError.message = err.message;
+        // ECONNREFUSED = listener not bound yet. Retry on next tick instead
+        // of waiting full backoff — saves up to 500ms during proxy startup.
+        schedule(err.code === 'ECONNREFUSED');
+      });
+      req.setTimeout(perAttemptTimeouts[idx], () => {
+        lastError.kind = 'timeout';
+        lastError.message = `per-attempt timeout ${perAttemptTimeouts[idx]}ms`;
+        req.destroy();
+      });
       req.end();
     }
-    function schedule() {
-      if (Date.now() >= deadline) return reject(new Error(`waitForPing: timed out after ${timeoutMs}ms`));
-      setTimeout(attempt, 100);
+    function schedule(immediate) {
+      if (Date.now() >= deadline) {
+        return reject(new Error(
+          `waitForPing: timed out after ${timeoutMs}ms (last: ${lastError.kind || 'none'} ${lastError.message || ''})`,
+        ));
+      }
+      if (immediate) return setImmediate(attempt);
+      const idx = Math.min(attemptCount - 1, backoffMs.length - 1);
+      setTimeout(attempt, backoffMs[Math.max(0, idx)]);
     }
     attempt();
   });
