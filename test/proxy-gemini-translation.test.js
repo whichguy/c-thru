@@ -1760,6 +1760,179 @@ async function main() {
       });
     }
 
+    // ── 22. Vertex AI thinking parity ──────────────────────────────────────
+    // All thinking-related observability (auto-enable, budget arithmetic,
+    // thoughtsTokenCount surfacing, output_tokens parity, streaming
+    // thinking_output_tokens) is also exercised on AI Studio (gemini_ai). The
+    // Vertex endpoint has a different URL prefix, different auth (Bearer
+    // token instead of x-goog-api-key), and Google's forum threads on
+    // thoughtsTokenCount specifically called out Vertex inconsistencies. Mirror
+    // the AI Studio cases through a vertex:true backend to catch regressions.
+    console.log('\n22. Vertex AI thinking parity');
+    {
+      const vertexThinkConfig = {
+        backends: {
+          gemini_vertex_stub: {
+            format: 'gemini',
+            vertex: true,
+            url: `http://127.0.0.1:${stub.port}/v1/projects/test-proj/locations/us-central1/publishers/google/models`,
+            auth: { literal: 'fake-vertex-token' },
+          },
+        },
+        model_routes: {
+          [GEMINI_MODEL]: 'gemini_vertex_stub',
+          'gemini-pro-latest': 'gemini_vertex_stub',
+        },
+      };
+      const vertexThinkConfigPath = writeConfigFresh(tmpDir, 'vertex-think', vertexThinkConfig);
+
+      // 22a. thoughtsTokenCount surfaces via x-c-thru-thinking-tokens on Vertex.
+      let captured22a = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured22a = { url: req.url, body: JSON.parse(body) };
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 10, thoughtsTokenCount: 77 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: vertexThinkConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: GEMINI_MODEL,
+          thinking: { type: 'enabled', budget_tokens: 256 },
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 100,
+          stream: false,
+        });
+        assert(r.status === 200, `22a status 200 (got ${r.status})`);
+        assert(captured22a?.url?.startsWith('/v1/projects/test-proj/'),
+          `22a Vertex regional URL preserved (got '${captured22a?.url}')`);
+        assert(!captured22a?.url?.includes('/v1beta/'),
+          `22a Vertex URL has no /v1beta/ leak (got '${captured22a?.url}')`);
+        assert(r.headers?.['x-c-thru-thinking-tokens'] === '77',
+          `22a Vertex x-c-thru-thinking-tokens=77 (got '${r.headers?.['x-c-thru-thinking-tokens']}')`);
+        assert(r.json?.usage?.output_tokens === 87,
+          `22a Vertex output_tokens parity = 10+77 (got ${r.json?.usage?.output_tokens})`);
+      });
+
+      // 22b. Auto-enable thinking on Gemini 3 Pro through Vertex.
+      let captured22b = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            captured22b = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: vertexThinkConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-pro-latest',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 100,
+          stream: false,
+        });
+        assert(r.status === 200, `22b status 200 (got ${r.status})`);
+        assert(captured22b?.generationConfig?.thinkingConfig?.thinkingLevel === 'low',
+          `22b Vertex auto-enabled thinkingLevel='low' (got ${captured22b?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+        assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === '1',
+          `22b Vertex x-c-thru-thinking-auto-enabled=1 (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
+        assert(r.headers?.['x-c-thru-thinking-budget-added'] === '2048',
+          `22b Vertex x-c-thru-thinking-budget-added=2048 (low approx) (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
+        assert(captured22b?.generationConfig?.maxOutputTokens === 2148,
+          `22b Vertex maxOutputTokens = 100 + 2048 (got ${captured22b?.generationConfig?.maxOutputTokens})`);
+      });
+
+      // 22c. Streaming on Vertex — auto-enable headers + thinking_output_tokens.
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':streamGenerateContent')) {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          res.write('data: ' + JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 12, thoughtsTokenCount: 33 },
+          }) + '\n\n');
+          res.end();
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: vertexThinkConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const sse = await new Promise((resolve, reject) => {
+          const req = http.request({
+            hostname: '127.0.0.1', port, path: '/v1/messages', method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          }, (res) => {
+            let buf = '';
+            res.on('data', d => buf += d);
+            res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: buf }));
+          });
+          req.on('error', reject);
+          req.write(JSON.stringify({
+            model: 'gemini-pro-latest',
+            messages: [{ role: 'user', content: 'go' }],
+            max_tokens: 100,
+            stream: true,
+          }));
+          req.end();
+        });
+        assert(sse.status === 200, `22c streaming status 200 (got ${sse.status})`);
+        assert(sse.headers['x-c-thru-thinking-auto-enabled'] === '1',
+          `22c Vertex streaming auto-enabled header (got '${sse.headers['x-c-thru-thinking-auto-enabled']}')`);
+        const deltaMatch = sse.body.match(/event:\s*message_delta\s*\ndata:\s*(\{[^\n]+\})/);
+        assert(deltaMatch != null, '22c Vertex streaming message_delta present');
+        let delta = null;
+        try { delta = JSON.parse(deltaMatch[1]); } catch {}
+        assert(delta?.usage?.output_tokens === 45,
+          `22c Vertex streaming output_tokens=45 (12+33) (got ${delta?.usage?.output_tokens})`);
+        assert(delta?.usage?.thinking_output_tokens === 33,
+          `22c Vertex streaming thinking_output_tokens=33 (got ${delta?.usage?.thinking_output_tokens})`);
+      });
+
+      // 22d. Vertex count_tokens path does NOT leak thinking-* telemetry.
+      // Mirrors test 20e on AI Studio — the latent leak (auto-enable stamp
+      // surviving when generationConfig is stripped) would also fire on
+      // Vertex if the count_tokens cleanup path missed the regional URL.
+      let countUrl22d = null;
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':countTokens')) {
+          countUrl22d = req.url;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ totalTokens: 11 }));
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: vertexThinkConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages/count_tokens', {
+          model: 'gemini-pro-latest',
+          messages: [{ role: 'user', content: 'count me' }],
+        });
+        assert(r.status === 200, `22d Vertex count_tokens status 200 (got ${r.status})`);
+        assert(countUrl22d?.startsWith('/v1/projects/test-proj/'),
+          `22d Vertex count_tokens regional path (got '${countUrl22d}')`);
+        assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === undefined,
+          `22d Vertex count_tokens: no auto-enable header leak (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
+        assert(r.headers?.['x-c-thru-thinking-budget-added'] === undefined,
+          `22d Vertex count_tokens: no budget-added header leak (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
+      });
+    }
+
     // 15b. No redacted_thinking -> header absent.
     console.log('\n15b. Wave 4: no redacted_thinking -> no x-c-thru-redacted-thinking-dropped header');
     await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
