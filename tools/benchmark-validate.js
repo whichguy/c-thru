@@ -17,7 +17,7 @@
 const fs   = require('fs');
 const path = require('path');
 
-const VALID_PROVIDERS = new Set(['claude', 'openrouter', 'ollama_local', 'ollama_cloud']);
+const VALID_PROVIDERS = new Set(['claude', 'openrouter', 'ollama_local', 'ollama_cloud', 'gemini']);
 const SUPPORTED_VERSION = 1;
 
 // Models that may exist in model_routes without a benchmark entry

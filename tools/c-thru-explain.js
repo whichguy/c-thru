@@ -46,18 +46,20 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help || args.h) {
-  console.log(`Usage: c-thru explain [--capability <cap>] [--agent <name>] [--mode <m>] [--tier <t>]
+  console.log(`Usage: c-thru explain [--capability <cap>] [--agent <name>] [--model <name>] [--mode <m>] [--tier <t>]
 
 Prints the model resolution chain for a hypothetical request, without sending one.
 
   --capability <cap>   capability alias (e.g. workhorse, judge, deep-coder)
   --agent <name>       agent name (resolved through agent_to_capability)
+  --model <name>       raw model name (resolved through model_routes)
   --mode <m>           connectivity / routing mode (default: \$CLAUDE_LLM_MODE or 'connected')
   --tier <t>           hardware tier (default: detected from RAM)
 
 Examples:
   c-thru explain --capability coder --mode best-cloud-oss
   c-thru explain --agent tester --mode best-local-oss --tier 64gb
+  c-thru explain --model gemini-latest
 `);
   process.exit(0);
 }
@@ -91,10 +93,76 @@ try {
 // ── Resolve inputs ─────────────────────────────────────────────────────────
 let capability = args.capability;
 let agent = args.agent;
+const modelName = args.model;
 
-if (!capability && !agent) {
-  console.error('explain: --capability or --agent required (try --help)');
+if (!capability && !agent && !modelName) {
+  console.error('explain: --capability, --agent, or --model required (try --help)');
   process.exit(1);
+}
+
+// --model branch: walk model_routes only, then exit. No capability/profile lookup.
+if (modelName && !capability && !agent) {
+  const cyan   = process.stdout.isTTY ? '\x1b[36m' : '';
+  const gray   = process.stdout.isTTY ? '\x1b[90m' : '';
+  const bold   = process.stdout.isTTY ? '\x1b[1m'  : '';
+  const reset  = process.stdout.isTTY ? '\x1b[0m'  : '';
+  const routes = config.model_routes || {};
+  const endpointsMap = config.endpoints || config.backends || {};
+  const overrides = config.model_overrides || {};
+
+  let working = overrides[modelName] || modelName;
+  console.log(`${bold}Resolution chain — model=${modelName}${reset}\n`);
+  if (overrides[modelName]) {
+    console.log(`  model_overrides   ${cyan}${modelName}${reset} → ${cyan}${working}${reset}`);
+  }
+
+  let endpoint = null;
+  let nameSwap = working;
+  let matchedKey = null;
+  let matchType = null;
+
+  // 1. Direct route key
+  if (routes[working] !== undefined) {
+    matchedKey = working;
+    matchType = 'direct';
+  } else {
+    // 2. Regex route (re:...)
+    for (const [k, v] of Object.entries(routes)) {
+      if (typeof k === 'string' && k.startsWith('re:')) {
+        try {
+          if (new RegExp(k.slice(3)).test(working)) { matchedKey = k; matchType = 'regex'; break; }
+        } catch {}
+      }
+    }
+  }
+
+  if (!matchedKey) {
+    console.log(`  model_routes      ${gray}(no match — model passed through verbatim)${reset}`);
+  } else {
+    const target = routes[matchedKey];
+    console.log(`  model_routes      matched ${cyan}${matchedKey}${reset} ${gray}(${matchType})${reset}`);
+    if (typeof target === 'string') {
+      endpoint = target;
+    } else if (target && typeof target === 'object') {
+      endpoint = target.endpoint;
+      if (target.name) {
+        nameSwap = target.name;
+        console.log(`  name swap         ${cyan}${working}${reset} → ${cyan}${nameSwap}${reset}`);
+      }
+    }
+  }
+
+  console.log('');
+  console.log(`${bold}Final routing${reset}`);
+  console.log(`  endpoint          ${cyan}${endpoint || '(none — fallthrough)'}${reset}`);
+  console.log(`  served_by         ${cyan}${nameSwap}${reset}`);
+  if (endpoint && endpointsMap[endpoint]) {
+    const ep = endpointsMap[endpoint];
+    if (ep.url)    console.log(`  endpoint.url      ${cyan}${ep.url}${reset}`);
+    if (ep.format) console.log(`  endpoint.format   ${cyan}${ep.format}${reset}`);
+    if (ep.vertex) console.log(`  endpoint.vertex   ${cyan}true${reset}`);
+  }
+  process.exit(0);
 }
 
 if (agent && !capability) {

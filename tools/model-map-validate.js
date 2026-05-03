@@ -484,7 +484,7 @@ function validateConfig(config, _errors, options) {
 
   const endpointsOrBackends = config.endpoints || config.backends;
   const endpointsKey = config.endpoints ? 'endpoints' : 'backends';
-  const VALID_FORMATS = new Set(['anthropic', 'openai', 'ollama-legacy']);
+  const VALID_FORMATS = new Set(['anthropic', 'openai', 'ollama-legacy', 'gemini']);
   if (endpointsOrBackends != null && isObject(endpointsOrBackends)) {
     for (const [id, entry] of Object.entries(endpointsOrBackends)) {
       if (!isObject(entry)) { report(`'${endpointsKey}.${id}' must be an object`); continue; }
@@ -507,6 +507,14 @@ function validateConfig(config, _errors, options) {
         const url = entry.url || '';
         if (url && !/localhost|127\.0\.0\.1/.test(url)) {
           console.warn(`model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming auth will be forwarded verbatim`);
+        }
+      }
+      // Vertex flag — boolean only; warn if used outside Gemini.
+      if (entry.vertex !== undefined) {
+        if (typeof entry.vertex !== 'boolean') {
+          report(`'${endpointsKey}.${id}.vertex' must be boolean (got ${typeof entry.vertex})`);
+        } else if (entry.vertex === true && entry.format !== 'gemini') {
+          console.warn(`model-map-validate: warning: endpoint '${id}' has vertex:true but format is '${entry.format || 'anthropic'}' — vertex flag is only meaningful for format:'gemini'`);
         }
       }
     }
