@@ -2090,6 +2090,201 @@ async function main() {
       });
     }
 
+    // ── 25. Multi-turn thoughtSignature roundtrip with interleaved tool_use ──
+    // Validates the GEMINI_THOUGHT_SIG_CACHE handles ≥3 turns where each
+    // assistant response contains a tool_use that must echo its original
+    // Gemini thoughtSignature on subsequent turns. Without this, Gemini 3+
+    // returns "Function call is missing a thought_signature" 400 mid-conversation.
+    //
+    // Turn 1: client → "search for X". Upstream returns thinking+functionCall(id=tu_1, sig=s1).
+    // Turn 2: client echoes turn-1 history (thinking + tool_use) plus tool_result + new user.
+    //         Outbound functionCall for tu_1 must have thoughtSignature=s1.
+    //         Upstream returns thinking+functionCall(id=tu_2, sig=s2).
+    // Turn 3: client echoes turn-1+turn-2 history. Outbound functionCalls for
+    //         BOTH tu_1 AND tu_2 must echo their respective signatures.
+    console.log('\n25. Multi-turn thoughtSignature roundtrip (3 turns, interleaved tool_use)');
+    {
+      const sigConfigPath = writeConfigFresh(tmpDir, 'sig-multi', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { [GEMINI_MODEL]: 'gemini_stub' },
+      });
+      let turn = 0;
+      let capturedTurns = [];
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            turn++;
+            capturedTurns.push(JSON.parse(body));
+            // Turn 1 → tool_use #1; Turn 2 → tool_use #2; Turn 3 → final text.
+            let respParts;
+            if (turn === 1) {
+              respParts = [
+                { text: 'looking up first', thought: true, thoughtSignature: 'sig-tu1' },
+                { functionCall: { name: 'search', args: { q: 'X' }, id: 'tu_1' }, thoughtSignature: 'sig-tu1' },
+              ];
+            } else if (turn === 2) {
+              respParts = [
+                { text: 'looking up second', thought: true, thoughtSignature: 'sig-tu2' },
+                { functionCall: { name: 'search', args: { q: 'Y' }, id: 'tu_2' }, thoughtSignature: 'sig-tu2' },
+              ];
+            } else {
+              respParts = [{ text: 'final answer combining both' }];
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{
+                content: { parts: respParts },
+                finishReason: turn === 3 ? 'STOP' : 'STOP',
+              }],
+              usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 5 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      await withProxy({ configPath: sigConfigPath, profile: '16gb', env }, async ({ port }) => {
+        // Turn 1
+        const r1 = await httpJson(port, 'POST', '/v1/messages', {
+          model: GEMINI_MODEL,
+          messages: [{ role: 'user', content: 'search both X and Y' }],
+          max_tokens: 200,
+          tools: [{ name: 'search', description: 'web search', input_schema: { type: 'object', properties: { q: { type: 'string' } } } }],
+          thinking: { type: 'enabled', budget_tokens: 256 },
+        });
+        assert(r1.status === 200, `25 turn1 status 200 (got ${r1.status})`);
+        const t1ToolUse = (r1.json?.content || []).find(b => b.type === 'tool_use');
+        assert(t1ToolUse?.id === 'tu_1', `25 turn1 tool_use.id=tu_1 (got ${t1ToolUse?.id})`);
+
+        // Turn 2: echo turn-1 history + tool_result, expect signature on outbound functionCall
+        const r2 = await httpJson(port, 'POST', '/v1/messages', {
+          model: GEMINI_MODEL,
+          messages: [
+            { role: 'user', content: 'search both X and Y' },
+            { role: 'assistant', content: [
+              { type: 'thinking', thinking: 'looking up first', signature: 'sig-tu1' },
+              { type: 'tool_use', id: 'tu_1', name: 'search', input: { q: 'X' } },
+            ] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: 'result-X' }] },
+          ],
+          max_tokens: 200,
+          tools: [{ name: 'search', description: 'web search', input_schema: { type: 'object', properties: { q: { type: 'string' } } } }],
+          thinking: { type: 'enabled', budget_tokens: 256 },
+        });
+        assert(r2.status === 200, `25 turn2 status 200 (got ${r2.status})`);
+        // Verify outbound functionCall for tu_1 carries the cached signature.
+        const turn2Body = capturedTurns[1];
+        const turn2Contents = turn2Body?.contents || [];
+        // Find the assistant turn that contains functionCall (role='model').
+        const assistantTurn = turn2Contents.find(c => c.role === 'model' && (c.parts || []).some(p => p.functionCall));
+        const fcPart = (assistantTurn?.parts || []).find(p => p.functionCall);
+        assert(fcPart?.thoughtSignature === 'sig-tu1',
+          `25 turn2 outbound functionCall(tu_1) echoes sig-tu1 (got '${fcPart?.thoughtSignature}')`);
+
+        // Turn 3: full history (turn1 + turn2). Outbound must echo BOTH signatures.
+        const r3 = await httpJson(port, 'POST', '/v1/messages', {
+          model: GEMINI_MODEL,
+          messages: [
+            { role: 'user', content: 'search both X and Y' },
+            { role: 'assistant', content: [
+              { type: 'thinking', thinking: 'looking up first', signature: 'sig-tu1' },
+              { type: 'tool_use', id: 'tu_1', name: 'search', input: { q: 'X' } },
+            ] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: 'result-X' }] },
+            { role: 'assistant', content: [
+              { type: 'thinking', thinking: 'looking up second', signature: 'sig-tu2' },
+              { type: 'tool_use', id: 'tu_2', name: 'search', input: { q: 'Y' } },
+            ] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_2', content: 'result-Y' }] },
+          ],
+          max_tokens: 200,
+          tools: [{ name: 'search', description: 'web search', input_schema: { type: 'object', properties: { q: { type: 'string' } } } }],
+          thinking: { type: 'enabled', budget_tokens: 256 },
+        });
+        assert(r3.status === 200, `25 turn3 status 200 (got ${r3.status})`);
+        const turn3Body = capturedTurns[2];
+        const turn3Assistants = (turn3Body?.contents || []).filter(c => c.role === 'model');
+        const turn3FCs = turn3Assistants.flatMap(a => (a.parts || []).filter(p => p.functionCall));
+        const sigForId = (id) => turn3FCs.find(p => p.functionCall.id === id)?.thoughtSignature;
+        assert(sigForId('tu_1') === 'sig-tu1',
+          `25 turn3 functionCall(tu_1) echoes sig-tu1 (got '${sigForId('tu_1')}')`);
+        assert(sigForId('tu_2') === 'sig-tu2',
+          `25 turn3 functionCall(tu_2) echoes sig-tu2 (got '${sigForId('tu_2')}')`);
+
+        // Final response: text-only completion.
+        const finalText = (r3.json?.content || []).find(b => b.type === 'text');
+        assert(finalText?.text?.includes('final answer'),
+          `25 turn3 returns final text (got '${finalText?.text}')`);
+      });
+    }
+
+    // ── 25b. thoughtSignature TTL eviction ─────────────────────────────────
+    // Setting GEMINI_THOUGHT_SIG_TTL_MS=50 should expire signatures fast enough
+    // that turn 2 sent after a delay omits the signature. Confirms the TTL
+    // path in lookupThoughtSignature actually fires (vs. only being unit-tested).
+    console.log('\n25b. thoughtSignature TTL expiry omits signature on stale turn');
+    {
+      const ttlConfigPath = writeConfigFresh(tmpDir, 'sig-ttl', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { [GEMINI_MODEL]: 'gemini_stub' },
+      });
+      let ttlTurn = 0;
+      let ttlCaptured = [];
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          let body = '';
+          req.on('data', d => body += d);
+          req.on('end', () => {
+            ttlTurn++;
+            ttlCaptured.push(JSON.parse(body));
+            const respParts = ttlTurn === 1
+              ? [{ functionCall: { name: 'search', args: {}, id: 'tu_ttl' }, thoughtSignature: 'sig-ttl' }]
+              : [{ text: 'done' }];
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              candidates: [{ content: { parts: respParts }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            }));
+          });
+          return true;
+        }
+        return false;
+      });
+      // Force TTL = 50ms via env passed to the proxy child.
+      await withProxy({
+        configPath: ttlConfigPath, profile: '16gb',
+        env: Object.assign({}, env, { GEMINI_THOUGHT_SIG_TTL_MS: '50' }),
+      }, async ({ port }) => {
+        await httpJson(port, 'POST', '/v1/messages', {
+          model: GEMINI_MODEL,
+          messages: [{ role: 'user', content: 'q' }],
+          max_tokens: 200,
+          tools: [{ name: 'search', description: 'web search', input_schema: { type: 'object', properties: {} } }],
+        });
+        // Wait past TTL.
+        await new Promise(r => setTimeout(r, 150));
+        await httpJson(port, 'POST', '/v1/messages', {
+          model: GEMINI_MODEL,
+          messages: [
+            { role: 'user', content: 'q' },
+            { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_ttl', name: 'search', input: {} }] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_ttl', content: 'x' }] },
+          ],
+          max_tokens: 200,
+          tools: [{ name: 'search', description: 'web search', input_schema: { type: 'object', properties: {} } }],
+        });
+        const turn2 = ttlCaptured[1];
+        const fcPart = (turn2?.contents || [])
+          .flatMap(c => c.parts || [])
+          .find(p => p.functionCall && p.functionCall.id === 'tu_ttl');
+        assert(fcPart != null, '25b found outbound functionCall(tu_ttl)');
+        assert(fcPart?.thoughtSignature === undefined,
+          `25b post-TTL omits thoughtSignature (got '${fcPart?.thoughtSignature}')`);
+      });
+    }
+
     // 15b. No redacted_thinking -> header absent.
     console.log('\n15b. Wave 4: no redacted_thinking -> no x-c-thru-redacted-thinking-dropped header');
     await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
