@@ -359,6 +359,13 @@ function stubBackend(opts = {}) {
   // Optional custom handler. If set and returns truthy, the stub yields request
   // handling to it (no default 200 response is sent). Used by translation tests
   // that need protocol-specific response shapes (e.g., Gemini SSE).
+  //
+  // Contract: customHandler MUST `return true` if it called res.writeHead /
+  // res.write / res.end. Otherwise the fallthrough below tries to write the
+  // default Anthropic response, hits "Cannot set headers after they are sent",
+  // and the request hangs waiting for a body that will never arrive. Defensive
+  // check: if the handler returned falsy but already started the response,
+  // log loudly and treat as handled so the test surfaces a clear error.
   let customHandler = null;
   const server = http.createServer((req, res) => {
     if (customHandler) {
@@ -374,6 +381,22 @@ function stubBackend(opts = {}) {
       });
       const handled = customHandler(req, res);
       if (handled) return;
+      // Detect cases where the handler "fell through" without `return true`
+      // but had already started a response (sync writeHead) OR registered
+      // async listeners that will eventually finish the response. Either way,
+      // letting the default fallthrough fire would race and crash on
+      // "Cannot set headers after they are sent". Be robust: treat as handled.
+      if (res.headersSent || res.writableEnded || req.listenerCount('data') > 0 || req.listenerCount('end') > 0) {
+        process.stderr.write(
+          `[stubBackend] customHandler did not return true but appears to be handling the response — ` +
+          `treating as handled. Add 'return true' inside your stub.setHandler callback to silence this.\n` +
+          `  request: ${req.method} ${req.url}\n`
+        );
+        // Belt-and-suspenders: if the handler never closes the response, the
+        // client times out. We can't know its async timing here, so just
+        // let it run; the warning identifies the test that needs fixing.
+        return;
+      }
     }
     const chunks = [];
     req.on('data', c => chunks.push(c));
