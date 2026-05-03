@@ -568,6 +568,78 @@ async function main() {
       assert(parts[1]?.inlineData?.data === tinyPdf, 'document base64 data preserved');
     });
 
+    // ── G4. Lazy fire-and-forget context caching (miss → create → hit) ────
+    console.log('\nG4. Context caching: turn 1 miss + create, turn 2 hit with prefix stripped');
+    const generateRequests = [];
+    let cacheCreatePayload = null;
+    stub.setHandler((req, res) => {
+      let body = '';
+      req.on('data', d => body += d);
+      req.on('end', () => {
+        let parsed = null;
+        try { parsed = JSON.parse(body); } catch {}
+        if (req.url.includes('/v1beta/cachedContents') && req.method === 'POST') {
+          cacheCreatePayload = parsed;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            name: 'cachedContents/abc123',
+            model: `models/${GEMINI_MODEL}`,
+            expireTime: new Date(Date.now() + 300000).toISOString(),
+          }));
+          return;
+        }
+        if (req.url.includes(':generateContent')) {
+          generateRequests.push(parsed);
+          const turn = generateRequests.length;
+          // Turn 2+ (cachedContent attached): surface cachedContentTokenCount.
+          const usage = (turn >= 2 && parsed && parsed.cachedContent)
+            ? { promptTokenCount: 100, candidatesTokenCount: 5, cachedContentTokenCount: 95 }
+            : { promptTokenCount: 100, candidatesTokenCount: 5 };
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: `t${turn}` }] }, finishReason: 'STOP' }],
+            usageMetadata: usage,
+          }));
+          return;
+        }
+        res.writeHead(404); res.end();
+      });
+      return true;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const longSystem = 'You are a helpful assistant. ' + 'x'.repeat(2000);
+      const reqBody = {
+        model: GEMINI_MODEL,
+        system: [{ type: 'text', text: longSystem, cache_control: { type: 'ephemeral', ttl: '5m' } }],
+        messages: [{ role: 'user', content: 'q1' }],
+        max_tokens: 100,
+        stream: false,
+      };
+
+      // Turn 1
+      const r1 = await httpJson(port, 'POST', '/v1/messages', reqBody);
+      assert(r1.status === 200, 'G4 turn1 status 200');
+      assert(r1.headers?.['x-c-thru-cache-status'] === 'miss', `G4 turn1 cache-status=miss (got '${r1.headers?.['x-c-thru-cache-status']}')`);
+      assert(generateRequests[0]?.cachedContent === undefined, 'G4 turn1 outbound has no cachedContent');
+
+      // Wait for fire-and-forget cache create to land (poll up to 1s).
+      const deadline = Date.now() + 1000;
+      while (cacheCreatePayload === null && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 20));
+      }
+      assert(cacheCreatePayload !== null, 'G4 cache create POST received');
+      assert(cacheCreatePayload?.ttl === '300s', `G4 cache ttl '5m' translated to '300s' (got '${cacheCreatePayload?.ttl}')`);
+
+      // Turn 2 — same prefix, expect hit.
+      const r2 = await httpJson(port, 'POST', '/v1/messages', reqBody);
+      assert(r2.status === 200, 'G4 turn2 status 200');
+      assert(r2.headers?.['x-c-thru-cache-status'] === 'hit', `G4 turn2 cache-status=hit (got '${r2.headers?.['x-c-thru-cache-status']}')`);
+      assert(generateRequests[1]?.cachedContent === 'cachedContents/abc123', `G4 turn2 cachedContent ref attached (got '${generateRequests[1]?.cachedContent}')`);
+      assert(generateRequests[1]?.systemInstruction === undefined, 'G4 turn2 systemInstruction stripped (cached)');
+      assert(r2.json?.usage?.cache_read_input_tokens === 95, `G4 cache_read_input_tokens=95 (got ${r2.json?.usage?.cache_read_input_tokens})`);
+      assert(r2.json?.usage?.cache_creation_input_tokens === 0, 'G4 cache_creation_input_tokens=0');
+    });
+
   } finally {
     if (stub) await stub.close().catch(() => {});
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}

@@ -1995,6 +1995,11 @@ function buildCthruResponseHeaders(req, geminiBody, effectiveModel) {
   if (geminiBody && geminiBody._schemaRemoved && geminiBody._schemaRemoved.length) {
     h['x-c-thru-schema-scrubbed'] = geminiBody._schemaRemoved.join(',');
   }
+  // G4: context-caching status (hit | miss | none). Stamped by forwardGemini
+  // after maybeApplyGeminiCache. Absent on Files-API and other non-cached paths.
+  if (geminiBody && geminiBody._cacheStatus && geminiBody._cacheStatus !== 'none') {
+    h['x-c-thru-cache-status'] = geminiBody._cacheStatus;
+  }
   // G7: anthropic-beta tokens are not honored on Gemini upstream — all
   // incoming tokens are effectively dropped. Surface so callers can detect
   // feature loss (prompt-caching, computer-use, etc.) instead of guessing.
@@ -2012,6 +2017,151 @@ function buildCthruResponseHeaders(req, geminiBody, effectiveModel) {
   return h;
 }
 
+// =============================================================================
+// G4: GEMINI CONTEXT CACHING (lazy, fire-and-forget)
+// =============================================================================
+//
+// Three rules: never add a round-trip on the critical path (turn 1 always
+// pays full cost; turn 2+ benefits), fail silent (any cache failure ⇒ no
+// caching this turn, never an error to the client), one in-memory state
+// structure per proxy process. See `docs/gemini-gap-roadmap.md` G4 for the
+// design rationale and the explicit list of skipped behaviors (persistent
+// store, multi-breakpoint support, eviction sweep, accurate
+// cache_creation_input_tokens, etc.).
+//
+// Hash key: sha256({model, system, messages-up-to-last-cache_control, tools}).
+// Content-addressed; cross-conversation reuse requires byte-identical prefix.
+const GEMINI_CACHE_MAP = new Map(); // hash → { name, expiresAt, model }
+
+function _gcacheParseTtl(ttl) {
+  if (!ttl) return '300s';
+  if (typeof ttl === 'string') {
+    if (/^\d+s$/.test(ttl)) return ttl;
+    if (ttl === '5m') return '300s';
+    if (ttl === '1h') return '3600s';
+    const m = ttl.match(/^(\d+)m$/);
+    if (m) return String(Number(m[1]) * 60) + 's';
+    const h = ttl.match(/^(\d+)h$/);
+    if (h) return String(Number(h[1]) * 3600) + 's';
+  }
+  return '300s';
+}
+
+// Scan body for the last cache_control breakpoint. Returns null if none.
+// Otherwise returns { systemIncluded, prefixMessageCount, ttl } where the
+// cacheable prefix is body.system (if systemIncluded) plus
+// body.messages[0..prefixMessageCount-1].
+function _gcacheExtractPrefix(body) {
+  let lastTtl = null;
+  let systemHasCache = false;
+  if (Array.isArray(body.system)) {
+    for (const s of body.system) {
+      if (s && typeof s === 'object' && s.cache_control) {
+        systemHasCache = true;
+        if (s.cache_control.ttl) lastTtl = s.cache_control.ttl;
+      }
+    }
+  }
+  let lastMsgWithCache = -1;
+  if (Array.isArray(body.messages)) {
+    for (let i = 0; i < body.messages.length; i++) {
+      const msg = body.messages[i];
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block && typeof block === 'object' && block.cache_control) {
+            lastMsgWithCache = i;
+            if (block.cache_control.ttl) lastTtl = block.cache_control.ttl;
+          }
+        }
+      }
+    }
+  }
+  if (!systemHasCache && lastMsgWithCache < 0) return null;
+  return {
+    systemIncluded: systemHasCache || lastMsgWithCache >= 0, // system is always part of the prefix
+    prefixMessageCount: lastMsgWithCache + 1,
+    ttl: _gcacheParseTtl(lastTtl),
+  };
+}
+
+function _gcacheHash(model, body, info) {
+  const obj = {
+    m: model,
+    s: info.systemIncluded ? (body.system || null) : null,
+    msgs: (body.messages || []).slice(0, info.prefixMessageCount),
+    t: body.tools || null,
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(obj)).digest('hex');
+}
+
+// Returns { status: 'hit'|'miss'|'none', hash?, pendingCreate? } and mutates
+// geminiBody on hit (sets cachedContent, strips cached prefix).
+function maybeApplyGeminiCache(body, geminiBody, model) {
+  if (body._geminiCacheRetried) return { status: 'none' };
+  const info = _gcacheExtractPrefix(body);
+  if (!info) return { status: 'none' };
+  if (info.prefixMessageCount > (geminiBody.contents || []).length) return { status: 'none' };
+  const hash = _gcacheHash(model, body, info);
+  const entry = GEMINI_CACHE_MAP.get(hash);
+  if (entry && entry.expiresAt > Date.now() && entry.model === model) {
+    geminiBody.contents.splice(0, info.prefixMessageCount);
+    if (info.systemIncluded) delete geminiBody.systemInstruction;
+    geminiBody.cachedContent = entry.name;
+    return { status: 'hit', hash, name: entry.name };
+  }
+  // Miss: snapshot the prefix for async create after the response succeeds.
+  const prefixContents = (geminiBody.contents || []).slice(0, info.prefixMessageCount);
+  const prefixSystem = info.systemIncluded ? (geminiBody.systemInstruction || null) : null;
+  // Skip when there's effectively nothing to cache (e.g. cache_control-only
+  // blocks whose text was stripped). Empty cache entries waste a round-trip
+  // and Gemini rejects them anyway.
+  if (prefixContents.length === 0 && !prefixSystem) {
+    return { status: 'none' };
+  }
+  const pendingCreate = {
+    contents: prefixContents,
+    systemInstruction: prefixSystem,
+    tools: geminiBody.tools || null,
+    ttl: info.ttl,
+  };
+  return { status: 'miss', hash, pendingCreate };
+}
+
+function createGeminiCacheAsync(ctx, backend, model, hash, payload) {
+  const reqBody = JSON.stringify({
+    model: `models/${model}`,
+    contents: payload.contents,
+    ...(payload.systemInstruction ? { systemInstruction: payload.systemInstruction } : {}),
+    ...(payload.tools ? { tools: payload.tools } : {}),
+    ttl: payload.ttl,
+  });
+  geminiHttpRequest(backend, 'POST', '/v1beta/cachedContents', reqBody, {
+    'Content-Type': 'application/json',
+  }).then(result => {
+    if (result.statusCode >= 200 && result.statusCode < 300) {
+      try {
+        const parsed = JSON.parse(result.body.toString('utf8'));
+        if (parsed && parsed.name) {
+          const ttlSec = Number(String(payload.ttl).replace(/s$/, '')) || 300;
+          GEMINI_CACHE_MAP.set(hash, {
+            name: parsed.name,
+            expiresAt: Date.now() + (ttlSec * 1000),
+            model,
+          });
+          ctxLog(ctx, 'gemini.cache.created', { name: parsed.name, ttl: payload.ttl });
+        }
+      } catch (e) {
+        ctxLog(ctx, 'gemini.cache.parse_error', { error: e.message });
+      }
+    } else {
+      // Most common: 400 "content too small to cache". Silent by design.
+      ctxLog(ctx, 'gemini.cache.create_failed', { statusCode: result.statusCode });
+    }
+  }).catch(e => {
+    ctxLog(ctx, 'gemini.cache.create_error', { error: e.message });
+  });
+}
+
 async function forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   // /v1/messages/count_tokens → Gemini :countTokens (no model invocation, no SSE).
   // Translate {totalTokens:N} → Anthropic {type:"message_count", input_tokens:N}.
@@ -2022,6 +2172,16 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
     // countTokens accepts only contents/systemInstruction/tools — strip generationConfig.
     delete geminiBody.generationConfig;
   }
+  // G4: lazy fire-and-forget context caching. Skip for countTokens and Vertex
+  // (Vertex caching uses a different URL prefix; out of scope until parity).
+  let cacheResult = { status: 'none' };
+  if (!isCountTokens && !backend.vertex) {
+    try { cacheResult = maybeApplyGeminiCache(body, geminiBody, effectiveModel); }
+    catch (e) { ctxLog(ctx, 'gemini.cache.apply_error', { error: e.message }); cacheResult = { status: 'none' }; }
+  }
+  // Mark for buildCthruResponseHeaders to surface as x-c-thru-cache-status.
+  // Non-enumerable so JSON.stringify doesn't leak it to upstream.
+  Object.defineProperty(geminiBody, '_cacheStatus', { value: cacheResult.status, enumerable: false, configurable: true });
   const baseUrl = (backend.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
   const action = isCountTokens ? 'countTokens' : (isStream ? 'streamGenerateContent' : 'generateContent');
   // If streaming, Google's SSE format for streamGenerateContent uses alt=sse query param
@@ -2060,11 +2220,30 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
       let errBody = '';
       upRes.on('data', d => errBody += d);
       upRes.on('end', () => {
+        // G4: stale-cache retry. If we attached a cachedContent ref and the
+        // upstream rejected (404 / cache-not-found), drop the entry and retry
+        // once with a clean body. Costs an extra round-trip, only at the TTL
+        // boundary.
+        if (cacheResult.status === 'hit' && (statusCode === 404 || /cached[_ ]?content|not found/i.test(errBody))) {
+          ctxLog(ctx, 'gemini.cache.stale', { statusCode, hash: cacheResult.hash });
+          GEMINI_CACHE_MAP.delete(cacheResult.hash);
+          body._geminiCacheRetried = true;
+          return forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta);
+        }
         ctxLog(ctx, 'gemini.error', { statusCode, body: errBody });
         sendAnthropicError(res, statusCode, `Gemini error: ${errBody}`);
       });
       return;
     }
+    // G4: schedule fire-and-forget cache creation on miss after we know the
+    // upstream call has begun returning success. Runs in parallel with the
+    // response stream — no critical-path latency.
+    const scheduleCacheCreate = () => {
+      if (cacheResult.status === 'miss' && cacheResult.pendingCreate && cacheResult.hash) {
+        try { createGeminiCacheAsync(ctx, backend, effectiveModel, cacheResult.hash, cacheResult.pendingCreate); }
+        catch (e) { ctxLog(ctx, 'gemini.cache.schedule_error', { error: e.message }); }
+      }
+    };
 
     if (isStream) {
       const streamHeaders = Object.assign(
@@ -2237,6 +2416,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         res.write(`event: message_stop\ndata: {"type": "message_stop"}\n\n`);
         res.end();
         clearBackendCooldown(backend.id);
+        scheduleCacheCreate();
       });
       upRes.on('error', stopGeminiPing);
       res.on('close', stopGeminiPing);
@@ -2329,7 +2509,12 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
             stop_sequence,
             usage: {
               input_tokens: (geminiData.usageMetadata || {}).promptTokenCount || 0,
-              output_tokens: (geminiData.usageMetadata || {}).candidatesTokenCount || 0
+              output_tokens: (geminiData.usageMetadata || {}).candidatesTokenCount || 0,
+              // G4: Gemini surfaces cache-served tokens as cachedContentTokenCount.
+              // cache_creation_input_tokens stays 0 — Gemini doesn't report this in
+              // usage and the create happens asynchronously.
+              cache_read_input_tokens: (geminiData.usageMetadata || {}).cachedContentTokenCount || 0,
+              cache_creation_input_tokens: 0,
             }
           };
 
@@ -2340,6 +2525,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           res.writeHead(200, respHeaders);
           res.end(JSON.stringify(anthropicRes));
           clearBackendCooldown(backend.id);
+          scheduleCacheCreate();
         } catch (e) {
           ctxLog(ctx, 'gemini.parse_error', { error: e.message, body: respBody });
           sendAnthropicError(res, 502, `failed to parse Gemini response: ${e.message}`);

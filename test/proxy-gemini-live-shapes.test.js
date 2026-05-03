@@ -742,6 +742,30 @@ async function main() {
     assert(/^req_[a-f0-9]+$/i.test(rid), `S29 request-id matches ^req_[a-f0-9]+$ (got '${rid}')`);
   });
 
+  // ── S30. Context-cache hit on second turn (G4) ───────────────────────────
+  console.log('\nS30. cache_control prefix → cache_read_input_tokens > 0 on turn 2');
+  await withProxy({ configPath: cfgPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY } }, async ({ port }) => {
+    // Need a >32k-token system prompt for Gemini to accept the cache create.
+    // ~140KB of stable text → safely above the threshold for any Gemini variant.
+    const stableSystem = 'You are a careful assistant. ' + ('Lorem ipsum dolor sit amet. '.repeat(5000));
+    const reqBody = {
+      model: MODEL, max_tokens: 20,
+      system: [{ type: 'text', text: stableSystem, cache_control: { type: 'ephemeral', ttl: '5m' } }],
+      messages: [{ role: 'user', content: 'Reply with just OK.' }],
+      stream: false,
+    };
+    const r1 = await httpJson(port, 'POST', '/v1/messages', reqBody, {}, 60000);
+    assert(r1.status === 200, `S30 turn1 status 200 (got ${r1.status})`);
+    assert(r1.headers?.['x-c-thru-cache-status'] === 'miss', `S30 turn1 cache-status=miss (got '${r1.headers?.['x-c-thru-cache-status']}')`);
+    // Allow time for the fire-and-forget cachedContents.create to settle upstream.
+    await new Promise(r => setTimeout(r, 4000));
+    const r2 = await httpJson(port, 'POST', '/v1/messages', reqBody, {}, 60000);
+    assert(r2.status === 200, `S30 turn2 status 200 (got ${r2.status})`);
+    assert(r2.headers?.['x-c-thru-cache-status'] === 'hit', `S30 turn2 cache-status=hit (got '${r2.headers?.['x-c-thru-cache-status']}')`);
+    const cacheRead = r2.json?.usage?.cache_read_input_tokens || 0;
+    assert(cacheRead > 0, `S30 turn2 cache_read_input_tokens > 0 (got ${cacheRead})`);
+  });
+
   // ── S20. SSE keepalive on long-running streams ─────────────────────────
   console.log('\nS20. long stream (>15s) emits at least one SSE keepalive — skip if upstream too fast');
   await withProxy({ configPath: cfgPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY } }, async ({ port }) => {

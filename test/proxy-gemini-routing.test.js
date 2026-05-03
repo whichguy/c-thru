@@ -791,7 +791,11 @@ async function main() {
     console.log('\nT-system-cache. system cache_control stripped before forwarding to Gemini');
     let capturedSysA = null, capturedSysB = null;
     stub.setHandler((req, res, body) => {
-      if (capturedSysA === null) capturedSysA = body; else capturedSysB = body;
+      // Only capture user-facing :generateContent calls; ignore any
+      // /v1beta/cachedContents fire-and-forget creates that may land here.
+      if (req.url && req.url.includes(':generateContent')) {
+        if (capturedSysA === null) capturedSysA = body; else capturedSysB = body;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
