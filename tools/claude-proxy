@@ -1915,6 +1915,16 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         }
       })}\n\n`);
 
+      // G11: keepalive on long-running quiet streams. Without this an upstream
+      // that buffers internally for >30s will let intermediate proxies (k8s
+      // ingress, cloudflare, etc.) idle-timeout the SSE connection, hanging
+      // the claude CLI client. Mirrors the Anthropic forwarder's pingTick.
+      const geminiPingTick = setInterval(() => {
+        if (!res.writable) return;
+        try { res.write(`event: ping\ndata: ${JSON.stringify({ type: 'ping' })}\n\n`); } catch {}
+      }, SSE_PING_INTERVAL_MS);
+      const stopGeminiPing = () => { try { clearInterval(geminiPingTick); } catch {} };
+
       // Streaming state machine — Anthropic SSE has one open content block at a
       // time. Gemini chunks may interleave text and functionCall parts across
       // candidates, so we track the currently-open block and close it before
@@ -2046,10 +2056,13 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
       });
 
       upRes.on('end', () => {
+        stopGeminiPing();
         res.write(`event: message_stop\ndata: {"type": "message_stop"}\n\n`);
         res.end();
         clearBackendCooldown(backend.id);
       });
+      upRes.on('error', stopGeminiPing);
+      res.on('close', stopGeminiPing);
     } else {
       // Non-streaming
       let respBody = '';

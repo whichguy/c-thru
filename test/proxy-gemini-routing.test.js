@@ -935,6 +935,37 @@ async function main() {
       assert(r.headers?.['request-id'] === 'req_deadbeef12345678', `upstream req_… preserved (got '${r.headers?.['request-id']}')`);
     });
 
+    // ── T-keepalive. Gemini streaming emits SSE ping during quiet upstream (G11)
+    console.log('\nT-keepalive. Gemini streaming emits "event: ping" while upstream is quiet');
+    stub.setHandler((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      // Flush headers + a tiny SSE comment so the proxy receives the response
+      // head immediately and arms its ping timer. Then hold quietly.
+      res.write(': open\n\n');
+      setTimeout(() => {
+        res.write('data: ' + JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'late' }] }, finishReason: 'STOP' }],
+          usageMetadata: { candidatesTokenCount: 1 }
+        }) + '\n\n');
+        res.end();
+      }, 800);
+    });
+    await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k', CLAUDE_PROXY_PING_INTERVAL_MS: '200' } }, async ({ port }) => {
+      await new Promise((resolve) => {
+        let raw = '';
+        const req = http.request({ port, method: 'POST', path: '/v1/messages', headers: { 'Content-Type': 'application/json' } }, (res) => {
+          res.on('data', d => { raw += d.toString(); });
+          res.on('end', () => {
+            const sawPing = /event:\s*ping\b/.test(raw);
+            assert(sawPing, `Gemini stream emitted at least one ping during quiet upstream (excerpt: ${raw.slice(-300)})`);
+            resolve();
+          });
+        });
+        req.write(JSON.stringify({ model: 'gemini-latest', messages: [{ role: 'user', content: 'go' }], stream: true }));
+        req.end();
+      });
+    });
+
     // ── T-models. /v1/models lists configured routes (Anthropic shape) ──────
     console.log('\nT-models. GET /v1/models -> Anthropic {data:[{type:model,id}]} from model_routes');
     await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
