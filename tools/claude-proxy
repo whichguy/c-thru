@@ -2624,23 +2624,29 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
                 // (confirmed in API docs). Read thoughtsTokenCount here for
                 // (a) Anthropic-parity output_tokens (visible + thinking) and
                 // (b) journaling/observability via the geminiBody stash.
-                // The header x-c-thru-thinking-tokens cannot be set in
-                // streaming responses (writeHead already flushed), so the
-                // streamed message_delta surfaces it via the usage object —
-                // strict Anthropic clients ignore unknown usage fields.
+                // The header x-c-thru-thinking-tokens cannot be set on a
+                // streaming response (writeHead already flushed). We emit a
+                // custom `c-thru-thinking-tokens` SSE event before
+                // message_delta so callers that opt in can read it without
+                // relying on a non-spec field inside Anthropic's usage object.
+                // Per the SSE spec, unknown event types are ignored by strict
+                // clients (Anthropic SDK falls into that bucket).
                 const candidatesCount = (geminiData.usageMetadata || {}).candidatesTokenCount || 0;
                 const thoughtsCount = (geminiData.usageMetadata || {}).thoughtsTokenCount || 0;
                 if (thoughtsCount > 0) {
                   Object.defineProperty(geminiBody, '_thinkingTokens', {
                     value: thoughtsCount, enumerable: false, configurable: true,
                   });
+                  res.write(`event: c-thru-thinking-tokens\ndata: ${JSON.stringify({
+                    type: 'c-thru-thinking-tokens',
+                    thinking_tokens: thoughtsCount,
+                  })}\n\n`);
                 }
                 res.write(`event: message_delta\ndata: ${JSON.stringify({
                   type: 'message_delta',
                   delta: { stop_reason, stop_sequence },
                   usage: {
                     output_tokens: candidatesCount + thoughtsCount,
-                    ...(thoughtsCount > 0 ? { thinking_output_tokens: thoughtsCount } : {}),
                   },
                 })}\n\n`);
               }

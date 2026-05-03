@@ -1412,8 +1412,22 @@ async function main() {
       try { delta = JSON.parse(deltaMatch[1]); } catch {}
       assert(delta?.usage?.output_tokens === 45,
         `streaming output_tokens=45 (12+33) (got ${delta?.usage?.output_tokens})`);
-      assert(delta?.usage?.thinking_output_tokens === 33,
-        `streaming thinking_output_tokens=33 (got ${delta?.usage?.thinking_output_tokens})`);
+      // Custom c-thru-thinking-tokens event precedes message_delta. Anthropic's
+      // usage object stays spec-compliant (output_tokens only).
+      assert(delta?.usage?.thinking_output_tokens === undefined,
+        `message_delta.usage stays spec-compliant — no thinking_output_tokens (got ${delta?.usage?.thinking_output_tokens})`);
+      const cthruEvtMatch = sseBody.body.match(/event:\s*c-thru-thinking-tokens\s*\ndata:\s*(\{[^\n]+\})/);
+      assert(cthruEvtMatch != null, 'c-thru-thinking-tokens event present');
+      let evt = null;
+      try { evt = JSON.parse(cthruEvtMatch[1]); } catch {}
+      assert(evt?.thinking_tokens === 33,
+        `c-thru-thinking-tokens event carries 33 (got ${evt?.thinking_tokens})`);
+      // Ordering: custom event must precede message_delta so clients see the
+      // signal as part of the same logical "stream end" cluster.
+      const cthruIdx = sseBody.body.indexOf('event: c-thru-thinking-tokens');
+      const deltaIdx = sseBody.body.indexOf('event: message_delta');
+      assert(cthruIdx >= 0 && deltaIdx > cthruIdx,
+        `c-thru-thinking-tokens precedes message_delta (cthru=${cthruIdx}, delta=${deltaIdx})`);
     });
 
     // ── 20b. Streaming: auto-enable + budget-added headers at writeHead ───
@@ -1900,8 +1914,13 @@ async function main() {
         try { delta = JSON.parse(deltaMatch[1]); } catch {}
         assert(delta?.usage?.output_tokens === 45,
           `22c Vertex streaming output_tokens=45 (12+33) (got ${delta?.usage?.output_tokens})`);
-        assert(delta?.usage?.thinking_output_tokens === 33,
-          `22c Vertex streaming thinking_output_tokens=33 (got ${delta?.usage?.thinking_output_tokens})`);
+        assert(delta?.usage?.thinking_output_tokens === undefined,
+          `22c Vertex message_delta.usage spec-compliant (got ${delta?.usage?.thinking_output_tokens})`);
+        const cthruMatch = sse.body.match(/event:\s*c-thru-thinking-tokens\s*\ndata:\s*(\{[^\n]+\})/);
+        assert(cthruMatch != null, '22c Vertex c-thru-thinking-tokens event present');
+        const evt = (() => { try { return JSON.parse(cthruMatch[1]); } catch { return null; } })();
+        assert(evt?.thinking_tokens === 33,
+          `22c Vertex custom event carries 33 (got ${evt?.thinking_tokens})`);
       });
 
       // 22d. Vertex count_tokens path does NOT leak thinking-* telemetry.

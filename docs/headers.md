@@ -44,13 +44,26 @@ mid-stream.
 | `x-c-thru-thinking-auto-enabled` | Proxy auto-enabled thinking on Gemini 3 Pro family | `1`. Suppressed on `/v1/messages/count_tokens` (no model invocation) | Yes |
 | `x-c-thru-thinking-level` | Gemini 3+ used `thinkingLevel` enum | `minimal` \| `low` \| `medium` \| `high`. Per-model variance: gemini-3-pro lacks `medium` (falls back to `high`), only flash supports `minimal` (falls back to `low`) | Yes |
 | `x-c-thru-thinking-budget-added` | Proxy expanded `maxOutputTokens` to fit thinking | `<N>` (added budget). On Gemini 3 N is the level's approx budget (minimal=256, low=2048, medium=8192, high=16384); on Gemini 2.5 N equals the explicit `thinkingBudget`. Suppressed on count_tokens. | Yes |
-| `x-c-thru-thinking-tokens` | Upstream returned `usageMetadata.thoughtsTokenCount` | `<N>`. **Non-streaming only** — headers can't be set after SSE `writeHead`. Streaming surfaces this inside `message_delta.usage.thinking_output_tokens` | No |
+| `x-c-thru-thinking-tokens` | Upstream returned `usageMetadata.thoughtsTokenCount` | `<N>`. **Non-streaming only** — headers can't be set after SSE `writeHead`. Streaming surfaces this via a custom `c-thru-thinking-tokens` SSE event (see below). | No |
 
 `output_tokens` includes thinking tokens (Anthropic parity):
 `candidatesTokenCount + thoughtsTokenCount`. Streaming and non-streaming
-both follow this convention. The non-spec
-`message_delta.usage.thinking_output_tokens` SSE field is a temporary
-workaround pending a proper custom SSE event (TODO: Task #8).
+both follow this convention.
+
+### Streaming-only: `c-thru-thinking-tokens` SSE event
+
+When `thoughtsTokenCount > 0` on a streaming response, the proxy emits
+a custom event before `message_delta`:
+
+```
+event: c-thru-thinking-tokens
+data: {"type":"c-thru-thinking-tokens","thinking_tokens":33}
+```
+
+Strict Anthropic clients ignore unknown event types per the SSE spec,
+so this is safe to emit unconditionally. Anthropic's `message_delta.usage`
+stays spec-compliant (`output_tokens` only). Callers that want the
+breakdown read the custom event; everyone else sees normal Anthropic SSE.
 
 ## Standard Anthropic headers
 
