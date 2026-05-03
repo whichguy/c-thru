@@ -2090,6 +2090,9 @@ function logDeprecationOnce(modelName, advice) {
   console.error(`c-thru: deprecated model '${modelName}' — ${advice}`);
 }
 
+// Stamps the Gemini response with the x-c-thru-* observability + routing
+// header family. See docs/headers.md for the full reference (which headers
+// fire when, streaming vs non-streaming constraints, where to add new ones).
 function buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta) {
   const h = {
     'x-c-thru-served-by': effectiveModel || '',

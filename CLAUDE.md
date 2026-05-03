@@ -207,17 +207,10 @@ were not available to the agent.
 
 Per-profile `on_failure` field in `llm_profiles[hw][profile]`: `"cascade"` (default) walks the fallback chain; `"hard_fail"` returns null immediately so the proxy returns a clean error instead of a non-equivalent substitute.
 
-**Gemini thinking headers** (Anthropic↔Gemini translation):
-- `x-c-thru-thinking-auto-enabled: 1` — proxy auto-enabled thinking on Gemini 3 Pro (model match: `gemini-3*-pro*`, `gemini-pro-latest`, `gemini-pro`). Default `thinkingLevel='low'`. Opt out with `thinking:{type:'disabled'}`.
-- `x-c-thru-thinking-level: <minimal|low|medium|high>` — Gemini 3+ uses the `thinkingLevel` enum (replaces legacy `thinkingBudget`). Anthropic's `budget_tokens` is mapped: 0→minimal (flash only), ≤2048→low, ≤8192→medium (3.1+ only — `gemini-3-pro` falls back to `high`), >8192→high. Gemini 2.5 still uses numeric `thinkingBudget` (mixing both = 400 from upstream).
-- `x-c-thru-thinking-budget-added: <N>` — proxy expanded `maxOutputTokens` to `max_tokens + N` because Gemini 3 counts thinking against `maxOutputTokens` (Anthropic's `max_tokens` means visible-answer length). On Gemini 3 N is the level's approximate budget (minimal=256, low=2048, medium=8192, high=16384); on Gemini 2.5 N equals the explicit `thinkingBudget`.
-- `x-c-thru-thinking-tokens: <N>` — upstream `usageMetadata.thoughtsTokenCount`. Non-streaming only (headers can't be set after SSE writeHead). Streaming surfaces it inside `message_delta.usage.thinking_output_tokens`.
-- `output_tokens` includes thinking tokens (Anthropic parity): `candidatesTokenCount + thoughtsTokenCount`.
-- Auto-enable / budget-added headers are suppressed on `/v1/messages/count_tokens` since no model invocation occurs.
-
-**`/model` picker exposure**: Claude Code's runtime `/model` picker only displays `claude-*` IDs from `/v1/models`. The proxy auto-synthesizes `claude-via-<key>` entries for every non-`claude-*` route whose endpoint is in `picker_alias_endpoints` (top-level config, default `["gemini_ai", "gemini_vertex"]`). At request time, `claude-via-<X>` resolves through `resolveBackend` the same as `<X>`. Direct `gemini-*` IDs still work for shell users.
-
-**Deprecated model warning**: `x-c-thru-deprecated-model: <advice>` response header is set when the resolved model is in the built-in deprecation list (`gemini-1.0-*`, `gemini-1.5-*`, `gemini-pro-vision`, `gemini-2.0-flash-exp`, etc.) or the user's `deprecated_models` config map. Set a config entry to `false` to un-deprecate a built-in default. Each unique (model, advice) pair logs once per process.
+**Response headers**: see `docs/headers.md` for the full `x-c-thru-*` reference (routing, cache, translation gaps, thinking observability, deprecation warnings). Key callouts:
+- Gemini 3 thinking is auto-enabled on Pro family via the `thinkingLevel` enum (Gemini 2.5 keeps legacy `thinkingBudget`); `output_tokens` includes thinking tokens for Anthropic parity. Streaming surfaces `thoughtsTokenCount` inside `message_delta.usage.thinking_output_tokens` since headers can't be set after SSE writeHead.
+- `claude-via-<X>` aliases are auto-synthesized at `/v1/models` for routes whose endpoint is in `picker_alias_endpoints` (default `["gemini_ai", "gemini_vertex"]`). `claude-via-<X>` resolves the same as `<X>` at request time.
+- Deprecated model tags trigger `x-c-thru-deprecated-model` (built-in list covers `gemini-1.x-*` and other retired tags; user `deprecated_models` config extends or overrides — set to `false` to un-deprecate).
 
 Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3) auth headers (via `applyOutboundAuth` — strips or injects based on endpoint `auth`/`auth_env` config; absent = passthrough), (4) SSE `usage` injection, (5) protocol translation (gated on `format: "openai"` — 501 stub until implemented), (6) `x-c-thru-resolved-via` response header, (7) `model_overrides` unconditional name substitution before route graph traversal, (8) `@<backend>` sigil stripping — suffix stripped before forwarding so the provider only sees the base model name.
 
