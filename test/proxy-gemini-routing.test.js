@@ -935,6 +935,106 @@ async function main() {
       assert(r.headers?.['request-id'] === 'req_deadbeef12345678', `upstream req_… preserved (got '${r.headers?.['request-id']}')`);
     });
 
+    // ── T-files-upload. POST /v1/files multipart -> Gemini upload, Anthropic shape
+    console.log('\nT-files-upload. POST /v1/files multipart -> Gemini upload + Anthropic-shape response');
+    let uploadReq = null;
+    stub.setHandler((req, res /*, parsed */) => {
+      // The geminiStub harness has already consumed the request body before
+      // calling the handler. We can only see headers + path here; the body
+      // bytes are recorded into stub.requests[] (we don't need to verify).
+      if (req.url.startsWith('/upload/v1beta/files')) {
+        uploadReq = { url: req.url, headers: req.headers };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          file: {
+            name: 'files/abcdef-123',
+            displayName: 'photo.png',
+            mimeType: 'image/png',
+            sizeBytes: 4,
+            createTime: '2026-05-03T00:00:00Z',
+            uri: 'https://generativelanguage.googleapis.com/v1beta/files/abcdef-123',
+          },
+        }));
+      } else {
+        res.writeHead(404); res.end();
+      }
+    });
+    await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
+      const boundary = 'pBoundary' + Date.now();
+      const fileBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]); // PNG magic
+      const body = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="photo.png"\r\nContent-Type: image/png\r\n\r\n`),
+        fileBytes,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
+      const r = await new Promise((resolve) => {
+        const req = http.request({
+          port, method: 'POST', path: '/v1/files',
+          headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': body.length },
+        }, (res) => {
+          let raw = '';
+          res.on('data', d => raw += d.toString());
+          res.on('end', () => {
+            try { resolve({ status: res.statusCode, json: JSON.parse(raw), bodyText: raw }); }
+            catch { resolve({ status: res.statusCode, bodyText: raw }); }
+          });
+        });
+        req.write(body); req.end();
+      });
+      assert(r.status === 200, `upload status 200 (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
+      assert(r.json?.id === 'file_abcdef-123', `id mapped from Gemini name (got '${r.json?.id}')`);
+      assert(r.json?.type === 'file', 'type=file');
+      assert(r.json?.mime_type === 'image/png', 'mime_type preserved');
+      assert(r.json?.filename === 'photo.png', 'filename preserved from upload');
+      assert(uploadReq?.url?.includes('uploadType=media'), 'forwarded with uploadType=media');
+      assert(uploadReq?.headers?.['x-goog-api-key'] === 'k', 'auth applied');
+    });
+
+    // ── T-files-reference. file_id source -> fileData with reconstructed URI
+    console.log('\nT-files-reference. image/document source.type=file -> fileData{fileUri}');
+    let captured = null;
+    stub.setHandler((req, res, body) => {
+      captured = body;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+      }));
+    });
+    await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
+      await httpJson(port, 'POST', '/v1/messages', {
+        model: 'gemini-latest',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'file', file_id: 'file_abcdef-123', media_type: 'image/png' } },
+            { type: 'document', source: { type: 'file', file_id: 'file_pdf-789', media_type: 'application/pdf' } },
+          ],
+        }],
+        stream: false,
+      });
+      const parts = captured?.contents?.[0]?.parts || [];
+      assert(parts[0]?.fileData?.fileUri?.endsWith('/v1beta/files/abcdef-123'), `image file_id -> fileUri (got '${parts[0]?.fileData?.fileUri}')`);
+      assert(parts[0]?.fileData?.mimeType === 'image/png', 'image fileData.mimeType');
+      assert(parts[1]?.fileData?.fileUri?.endsWith('/v1beta/files/pdf-789'), `document file_id -> fileUri (got '${parts[1]?.fileData?.fileUri}')`);
+      assert(parts[1]?.fileData?.mimeType === 'application/pdf', 'document fileData.mimeType');
+    });
+
+    // ── T-files-delete. DELETE /v1/files/{id} -> Gemini delete ──────────────
+    console.log('\nT-files-delete. DELETE /v1/files/file_xyz -> Gemini /v1beta/files/xyz');
+    let delPath = null;
+    stub.setHandler((req, res) => {
+      delPath = req.url;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({}));
+    });
+    await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
+      const r = await httpJson(port, 'DELETE', '/v1/files/file_xyz-1', null);
+      assert(r.status === 200, `delete status 200 (got ${r.status})`);
+      assert(r.json?.deleted === true, 'deleted:true');
+      assert(delPath === '/v1beta/files/xyz-1', `Gemini path mapped (got '${delPath}')`);
+    });
+
     // ── T-keepalive. Gemini streaming emits SSE ping during quiet upstream (G11)
     console.log('\nT-keepalive. Gemini streaming emits "event: ping" while upstream is quiet');
     stub.setHandler((req, res) => {

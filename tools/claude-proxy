@@ -1806,6 +1806,183 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
 // `legacy_ollama_chat` opt-in. The default is forwardAnthropic (verbatim
 // pass-through to <backend.url>/v1/messages) which preserves tool_use /
 // tool_result blocks. The legacy path is for Ollama < 0.4 or LM Studio.
+// =============================================================================
+// G9: FILES API (Anthropic /v1/files <-> Gemini Files API)
+// =============================================================================
+//
+// Anthropic shape:  POST /v1/files (multipart, name="file") -> {id:"file_…", type:"file", mime_type, size_bytes, filename, created_at}
+// Gemini shape:     POST /upload/v1beta/files?uploadType=media + raw bytes -> {file:{name:"files/…", mimeType, sizeBytes, uri, createTime}}
+//
+// id mapping: Anthropic "file_<x>" <-> Gemini "files/<x>" — symmetrical, no
+// state required to round-trip. fileData uri is reconstructed at chat time.
+
+// Pick the first Gemini-format endpoint from CONFIG. Files API is an aux path,
+// not a chat dispatch — it doesn't go through resolveBackend / model routes.
+function pickGeminiBackend(config) {
+  const eps = config.endpoints || config.backends || {};
+  for (const [id, ep] of Object.entries(eps)) {
+    if (ep && ep.format === 'gemini') {
+      return Object.assign({ id }, ep);
+    }
+  }
+  return null;
+}
+
+// Best-effort multipart parser for Anthropic's /v1/files upload shape.
+// Anthropic's SDK sends a single "file" field; we extract its bytes,
+// content-type, and filename. Returns null if no file part found.
+function parseMultipartFile(buf, boundary) {
+  const haystack = buf.toString('binary');
+  const sep = `--${boundary}`;
+  const segments = haystack.split(sep);
+  for (const seg of segments) {
+    if (!/Content-Disposition/i.test(seg)) continue;
+    if (!/name="file"/i.test(seg)) continue;
+    const headerEnd = seg.indexOf('\r\n\r\n');
+    if (headerEnd < 0) continue;
+    const headers = seg.slice(0, headerEnd);
+    let body = seg.slice(headerEnd + 4);
+    // Trailing CRLF before next boundary
+    if (body.endsWith('\r\n')) body = body.slice(0, -2);
+    const ctMatch = headers.match(/Content-Type:\s*([^\r\n;]+)/i);
+    const fnMatch = headers.match(/filename="([^"]+)"/);
+    return {
+      bytes: Buffer.from(body, 'binary'),
+      contentType: ctMatch ? ctMatch[1].trim() : 'application/octet-stream',
+      filename: fnMatch ? fnMatch[1] : 'upload',
+    };
+  }
+  return null;
+}
+
+// Translate a Gemini Files API resource into Anthropic-shape file metadata.
+function geminiFileToAnthropic(file) {
+  if (!file || !file.name) return null;
+  // Gemini name "files/abc-123" -> Anthropic id "file_abc-123"
+  const shortName = String(file.name).replace(/^files\//, '');
+  return {
+    type: 'file',
+    id: 'file_' + shortName,
+    mime_type: file.mimeType || 'application/octet-stream',
+    size_bytes: Number(file.sizeBytes || 0),
+    filename: file.displayName || shortName,
+    created_at: file.createTime || new Date().toISOString(),
+  };
+}
+
+// id <-> Gemini name conversion. file_abc -> files/abc
+function anthropicFileIdToGeminiName(id) {
+  if (!id || !id.startsWith('file_')) return null;
+  return 'files/' + id.slice('file_'.length);
+}
+
+// Inverse: given an Anthropic file_id (or Gemini name), build the canonical
+// Gemini fileData.fileUri the chat path can reference.
+function fileIdToGeminiUri(id, baseUrl) {
+  const name = anthropicFileIdToGeminiName(id);
+  if (!name) return null;
+  const base = (baseUrl || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
+  return `${base}/v1beta/${name}`;
+}
+
+function geminiBaseUrl(backend) {
+  return (backend.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
+}
+
+// Forward a request to Gemini. Returns {statusCode, headers, body:Buffer}.
+function geminiHttpRequest(backend, method, urlPath, body, extraHeaders) {
+  return new Promise((resolve, reject) => {
+    const targetUrl = new URL(geminiBaseUrl(backend) + urlPath);
+    const isHttps = targetUrl.protocol === 'https:';
+    const lib = isHttps ? https : http;
+    const headers = Object.assign({}, extraHeaders || {});
+    applyOutboundAuth(backend, {}, headers);
+    const opts = {
+      hostname: targetUrl.hostname,
+      port: targetUrl.port || (isHttps ? 443 : 80),
+      path: targetUrl.pathname + targetUrl.search,
+      method,
+      headers,
+      timeout: 60000,
+    };
+    const req = lib.request(opts, (resp) => {
+      const chunks = [];
+      resp.on('data', d => chunks.push(d));
+      resp.on('end', () => resolve({ statusCode: resp.statusCode, headers: resp.headers, body: Buffer.concat(chunks) }));
+      resp.on('error', reject);
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function handleFilesApi(req, res) {
+  const backend = pickGeminiBackend(CONFIG);
+  if (!backend) return sendAnthropicError(res, 503, 'no Gemini endpoint configured for /v1/files');
+  if (backend.vertex) return sendAnthropicError(res, 501, 'Files API not implemented for Vertex endpoints (see roadmap)');
+
+  // POST /v1/files — upload
+  if (req.method === 'POST' && (req.url === '/v1/files' || req.url === '/v1/files/')) {
+    const ct = req.headers['content-type'] || '';
+    const boundaryMatch = ct.match(/boundary="?([^";]+)"?/);
+    if (!boundaryMatch) return sendAnthropicError(res, 400, 'multipart/form-data boundary required');
+    const buf = await readBody(req);
+    const file = parseMultipartFile(buf, boundaryMatch[1]);
+    if (!file) return sendAnthropicError(res, 400, 'no "file" field in multipart body');
+    // Simple media upload: ?uploadType=media, raw bytes, Content-Type=mime.
+    // Gemini fills in the resource name; we don't supply one.
+    const upPath = '/upload/v1beta/files?uploadType=media';
+    const result = await geminiHttpRequest(backend, 'POST', upPath, file.bytes, {
+      'Content-Type': file.contentType,
+      'X-Goog-Upload-Protocol': 'raw',
+    }).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
+    if (result.statusCode >= 400) {
+      return sendAnthropicError(res, result.statusCode, `Gemini Files upload error: ${result.body.toString('utf8').slice(0, 500)}`);
+    }
+    let parsed = null;
+    try { parsed = JSON.parse(result.body.toString('utf8')); } catch {}
+    const anthropic = geminiFileToAnthropic(parsed?.file || parsed);
+    if (!anthropic) return sendAnthropicError(res, 502, 'Gemini Files upload returned unrecognized payload');
+    // Override filename from the upload (Gemini drops it on simple media uploads).
+    anthropic.filename = file.filename;
+    return send(res, 200, anthropic);
+  }
+
+  // GET /v1/files — list
+  if (req.method === 'GET' && (req.url === '/v1/files' || req.url === '/v1/files/' || req.url.startsWith('/v1/files?'))) {
+    const result = await geminiHttpRequest(backend, 'GET', '/v1beta/files', null).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
+    if (result.statusCode >= 400) return sendAnthropicError(res, result.statusCode, `Gemini Files list error: ${result.body.toString('utf8').slice(0, 500)}`);
+    let parsed = null;
+    try { parsed = JSON.parse(result.body.toString('utf8')); } catch {}
+    const data = (parsed?.files || []).map(geminiFileToAnthropic).filter(Boolean);
+    return send(res, 200, { data, has_more: false, first_id: data[0]?.id || null, last_id: data[data.length - 1]?.id || null });
+  }
+
+  // GET /v1/files/{id} or DELETE /v1/files/{id}
+  const idMatch = req.url.match(/^\/v1\/files\/(file_[A-Za-z0-9_-]+)\/?$/);
+  if (idMatch) {
+    const geminiName = anthropicFileIdToGeminiName(idMatch[1]);
+    if (!geminiName) return sendAnthropicError(res, 400, `invalid file id: ${idMatch[1]}`);
+    if (req.method === 'GET') {
+      const result = await geminiHttpRequest(backend, 'GET', '/v1beta/' + geminiName, null).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
+      if (result.statusCode >= 400) return sendAnthropicError(res, result.statusCode, `Gemini Files get error: ${result.body.toString('utf8').slice(0, 500)}`);
+      let parsed = null;
+      try { parsed = JSON.parse(result.body.toString('utf8')); } catch {}
+      const anthropic = geminiFileToAnthropic(parsed);
+      if (!anthropic) return sendAnthropicError(res, 502, 'Gemini Files get returned unrecognized payload');
+      return send(res, 200, anthropic);
+    }
+    if (req.method === 'DELETE') {
+      const result = await geminiHttpRequest(backend, 'DELETE', '/v1beta/' + geminiName, null).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
+      if (result.statusCode >= 400) return sendAnthropicError(res, result.statusCode, `Gemini Files delete error: ${result.body.toString('utf8').slice(0, 500)}`);
+      return send(res, 200, { id: idMatch[1], deleted: true });
+    }
+  }
+
+  return sendAnthropicError(res, 404, `not found: ${req.method} ${req.url}`);
+}
+
 // Build the observability headers attached to every Gemini-path response.
 // Centralises G7 (beta-dropped), G10 (request-id), G13 (schema-scrubbed) so
 // streaming / non-streaming / count_tokens response paths all set the same
@@ -2451,24 +2628,26 @@ function mapAnthropicToGemini(body) {
           if (block.signature) tp.thoughtSignature = block.signature;
           parts.push(tp);
         } else if (block.type === 'image') {
-          // Anthropic image blocks: source.type=base64 (inline) or source.type=url.
-          // Gemini equivalent: inlineData{mimeType,data} for base64, fileData{fileUri}
-          // for url. Files API (G9) handles file_id sources separately.
+          // Anthropic image blocks: base64 inline, url, or file_id (post-G9).
           const src = block.source || {};
           if (src.type === 'base64' && src.data) {
             parts.push({ inlineData: { mimeType: src.media_type || 'image/png', data: src.data } });
           } else if (src.type === 'url' && src.url) {
             parts.push({ fileData: { fileUri: src.url, mimeType: src.media_type } });
+          } else if (src.type === 'file' && src.file_id) {
+            const uri = fileIdToGeminiUri(src.file_id);
+            if (uri) parts.push({ fileData: { fileUri: uri, mimeType: src.media_type } });
           }
         } else if (block.type === 'document') {
-          // PDF/document blocks (Anthropic's PDF reader sends these). Same
-          // shape as image: base64 inline or url. Switch to fileData{fileUri}
-          // when G9 Files API lands and source.type === 'file'.
+          // PDF/document blocks. base64 inline, url, or file_id (post-G9).
           const src = block.source || {};
           if (src.type === 'base64' && src.data) {
             parts.push({ inlineData: { mimeType: src.media_type || 'application/pdf', data: src.data } });
           } else if (src.type === 'url' && src.url) {
             parts.push({ fileData: { fileUri: src.url, mimeType: src.media_type || 'application/pdf' } });
+          } else if (src.type === 'file' && src.file_id) {
+            const uri = fileIdToGeminiUri(src.file_id);
+            if (uri) parts.push({ fileData: { fileUri: uri, mimeType: src.media_type || 'application/pdf' } });
           }
         }
       }
@@ -3004,6 +3183,12 @@ const server = http.createServer((req, res) => {
             additionalContext: `(c-thru) routing active. Profile: ${tier}, Mode: ${mode}.`
           }
         });
+      }
+
+      // /v1/files* — Gemini Files API proxy (upload, list, get, delete).
+      // Anthropic file_<x> <-> Gemini files/<x> mapping is symmetrical.
+      if (req.url === '/v1/files' || req.url === '/v1/files/' || req.url.startsWith('/v1/files?') || req.url.startsWith('/v1/files/')) {
+        return handleFilesApi(req, res);
       }
 
       // /v1/models — Anthropic-shape model listing. Static enumeration over
