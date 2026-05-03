@@ -1,1 +1,0 @@
-/Users/jameswiese/src/c-thru/agents/code-reviewer.md
