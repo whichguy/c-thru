@@ -24,7 +24,8 @@
   "gemini_ai": {
    "url": "https://generativelanguage.googleapis.com",
    "format": "gemini",
-   "auth_env": "GOOGLE_API_KEY"
+   "auth_env": "GOOGLE_API_KEY",
+   "fallback_to": "claude-sonnet-4-6"
   },
   "gemini_vertex": {
    "url": "https://${GOOGLE_CLOUD_REGION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_REGION}/publishers/google/models",
@@ -123,11 +124,11 @@
   },
   "coder": {
    "best-cloud": {
-    "16gb": "claude-sonnet-4-6",
-    "32gb": "claude-sonnet-4-6",
-    "48gb": "claude-sonnet-4-6",
-    "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
+    "16gb": "gemini-pro",
+    "32gb": "gemini-pro",
+    "48gb": "gemini-pro",
+    "64gb": "gemini-pro",
+    "128gb": "gemini-pro"
    },
    "best-cloud-oss": {
     "16gb": "deepseek-v4-pro:cloud",
@@ -304,11 +305,11 @@
   },
   "debugger-hypothesis": {
    "best-cloud": {
-    "16gb": "claude-sonnet-4-6",
-    "32gb": "claude-sonnet-4-6",
-    "48gb": "claude-sonnet-4-6",
-    "64gb": "claude-sonnet-4-6",
-    "128gb": "claude-sonnet-4-6"
+    "16gb": "gemini-pro",
+    "32gb": "gemini-pro",
+    "48gb": "gemini-pro",
+    "64gb": "gemini-pro",
+    "128gb": "gemini-pro"
    },
    "best-cloud-oss": {
     "16gb": "deepseek-v4-pro:cloud",
@@ -342,11 +343,11 @@
   },
   "debugger-investigate": {
    "best-cloud": {
-    "16gb": "claude-sonnet-4-6",
-    "32gb": "claude-sonnet-4-6",
-    "48gb": "claude-sonnet-4-6",
-    "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
+    "16gb": "gemini-pro",
+    "32gb": "gemini-pro",
+    "48gb": "gemini-pro",
+    "64gb": "gemini-pro",
+    "128gb": "gemini-pro"
    },
    "best-cloud-oss": {
     "16gb": "deepseek-v4-pro:cloud",
