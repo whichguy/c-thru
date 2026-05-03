@@ -18,6 +18,7 @@ const PROXY_BIN = path.resolve(__dirname, '..', 'tools', 'claude-proxy');
 
 let _passed = 0;
 let _failed = 0;
+let _skipped = 0;
 
 function assert(condition, message) {
   if (condition) {
@@ -35,9 +36,17 @@ function assertEq(actual, expected, label) {
   assert(actual === expected, `${label} (got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)})`);
 }
 
+// skip(message) — record a self-skipped test case (e.g., upstream did not
+// exercise the path under inspection). Counted separately from passes.
+function skip(message) {
+  console.log(`  SKIP  ${message}`);
+  _skipped++;
+}
+
 function summary() {
   const total = _passed + _failed;
-  console.log(`\n${_passed}/${total} passed${_failed ? ` — ${_failed} FAILED` : ''}`);
+  const skipNote = _skipped ? ` (${_skipped} skipped)` : '';
+  console.log(`\n${_passed}/${total} passed${skipNote}${_failed ? ` — ${_failed} FAILED` : ''}`);
   return _failed;
 }
 
@@ -62,6 +71,14 @@ function writeConfig(dir, overrides) {
   const configPath = path.join(dir, 'model-map.json');
   fs.writeFileSync(configPath, JSON.stringify(config));
   return configPath;
+}
+
+// Like writeConfig, but creates a fresh subdirectory under parentDir so multiple
+// configs in the same test don't silently overwrite each other (the bug that bit
+// us with phase1Path/phase2Path both pointing to the same model-map.json).
+function writeConfigFresh(parentDir, label, overrides) {
+  const dir = fs.mkdtempSync(path.join(parentDir, `${label}-`));
+  return writeConfig(dir, overrides);
 }
 
 // ── Random free port helper ────────────────────────────────────────────────
@@ -276,7 +293,25 @@ function collectStderr(child) {
 function stubBackend(opts = {}) {
   const { failWith, responseBody } = opts;
   const requests = [];
+  // Optional custom handler. If set and returns truthy, the stub yields request
+  // handling to it (no default 200 response is sent). Used by translation tests
+  // that need protocol-specific response shapes (e.g., Gemini SSE).
+  let customHandler = null;
   const server = http.createServer((req, res) => {
+    if (customHandler) {
+      // Record basic request metadata up-front so tests can assert on
+      // headers/path even when the handler consumes the body itself.
+      requests.push({
+        method:      req.method,
+        path:        req.url,
+        headers:     req.headers,
+        body:        null,
+        model_used:  null,
+        serving_url: `http://127.0.0.1:${server.address().port}${req.url}`,
+      });
+      const handled = customHandler(req, res);
+      if (handled) return;
+    }
     const chunks = [];
     req.on('data', c => chunks.push(c));
     req.on('end', () => {
@@ -318,6 +353,7 @@ function stubBackend(opts = {}) {
         port,
         requests,
         lastRequest: () => requests[requests.length - 1] || null,
+        setHandler: (fn) => { customHandler = fn; },
         close: () => new Promise(r => server.close(r)),
       });
     });
@@ -664,9 +700,11 @@ process.on('unhandledRejection', err => {
 module.exports = {
   assert,
   assertEq,
+  skip,
   summary,
   withTmpDir,
   writeConfig,
+  writeConfigFresh,
   getFreePort,
   spawnProxy,
   waitForPing,

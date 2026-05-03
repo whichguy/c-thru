@@ -410,6 +410,7 @@ const JOURNAL_DIR = process.env.CLAUDE_PROXY_JOURNAL_DIR || path.join(os.homedir
 const JOURNAL_STREAM_EVENT_CAP = 1000;
 const JOURNAL_INCLUDE = (process.env.CLAUDE_PROXY_JOURNAL_INCLUDE || '').split(',').filter(Boolean);
 const JOURNAL_EXCLUDE = (process.env.CLAUDE_PROXY_JOURNAL_EXCLUDE || '').split(',').filter(Boolean);
+const JOURNAL_MAX_BYTES = numberFromEnv('CLAUDE_PROXY_JOURNAL_MAX_BYTES', 100 * 1024 * 1024);
 const SCRUB_HEADERS = new Set(['authorization', 'x-api-key', 'cookie', 'set-cookie']);
 
 function scrubHeaders(headers) {
@@ -456,6 +457,22 @@ function writeJournalEntry(entry) {
     fs.mkdirSync(dir, { recursive: true });
     const safeCap = String(entry.capability || 'unknown').replace(/[^A-Za-z0-9_.-]/g, '_');
     const file = path.join(dir, `${safeCap}.jsonl`);
+    try {
+      const stat = fs.statSync(file);
+      if (stat.size >= JOURNAL_MAX_BYTES) {
+        const backupPath = path.join(dir, `${safeCap}.1.jsonl`);
+        try { fs.unlinkSync(backupPath); } catch (e2) { if (e2.code !== 'ENOENT') throw e2; }
+        try {
+          fs.renameSync(file, backupPath);
+        } catch (renameErr) {
+          // Rotation failed — preserve entry in oversized file rather than dropping it
+          fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+          throw renameErr;
+        }
+      }
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
     fs.appendFileSync(file, JSON.stringify(entry) + '\n');
   } catch (e) {
     proxyLog('journal.write_error', { error: e.message });
@@ -539,24 +556,37 @@ function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders) {
 
   // Priority 1: Incoming Bearer token from the client.
   // "only in the case we don't have incoming bearer, then use the key."
+  // SECURITY: only forward incoming Bearer to Anthropic-shaped backends.
+  // Forwarding an ambient ANTHROPIC_API_KEY to Gemini/Ollama would leak
+  // the Anthropic key to a third-party provider.
   if (incomingAuth && incomingAuth.startsWith('Bearer ')) {
-    outgoingHeaders['authorization'] = incomingAuth;
-    return;
+    const isGemini = backend.format === 'gemini' || backend.kind === 'gemini';
+    const isOllama = backend.kind === 'ollama';
+    if (!isGemini && !isOllama) {
+      outgoingHeaders['authorization'] = incomingAuth;
+      return;
+    }
+    // Gemini/Ollama: drop incoming Bearer (so the Anthropic key never leaks
+    // to a third-party provider), then fall through to auth_env / auth object.
+    delete outgoingHeaders['authorization'];
+    delete outgoingHeaders['Authorization'];
   }
 
   // Priority 2: Configured auth via auth_env or auth object.
   if (backend.auth_env) {
     const value = process.env[backend.auth_env] || '';
     if (value) {
-      if (backend.kind === 'anthropic') {
+      if ((backend.format === 'gemini' || backend.kind === 'gemini') && !backend.vertex) {
+        outgoingHeaders['x-goog-api-key'] = value;
+      } else if (backend.kind === 'anthropic') {
         outgoingHeaders['x-api-key'] = value;
       } else {
         outgoingHeaders['authorization'] = `Bearer ${value}`;
       }
     }
   } else if (auth && typeof auth === 'object') {
-    const header = (auth.header || 'Authorization').toLowerCase();
-    const schemeDefault = header === 'authorization' ? 'Bearer' : '';
+    const header = (auth.header || ((backend.format === 'gemini' || backend.kind === 'gemini') && !backend.vertex ? 'x-goog-api-key' : 'Authorization')).toLowerCase();
+    const schemeDefault = (header === 'authorization') ? 'Bearer' : '';
     const scheme = auth.scheme != null ? auth.scheme : schemeDefault;
     const value = auth.literal != null ? auth.literal : (auth.env ? process.env[auth.env] || '' : '');
     if (value) outgoingHeaders[header] = scheme ? `${scheme} ${value}` : value;
@@ -566,7 +596,13 @@ function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders) {
       outgoingHeaders['authorization'] = incomingAuth;
     }
     if (incomingKey && !outgoingHeaders['x-api-key']) {
-      outgoingHeaders['x-api-key'] = incomingKey;
+      if ((backend.format === 'gemini' || backend.kind === 'gemini') && !backend.vertex) {
+        outgoingHeaders['x-goog-api-key'] = incomingKey;
+      } else if (backend.vertex) {
+        outgoingHeaders['authorization'] = `Bearer ${incomingKey}`;
+      } else {
+        outgoingHeaders['x-api-key'] = incomingKey;
+      }
     }
   }
 
@@ -1770,11 +1806,623 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
 // `legacy_ollama_chat` opt-in. The default is forwardAnthropic (verbatim
 // pass-through to <backend.url>/v1/messages) which preserves tool_use /
 // tool_result blocks. The legacy path is for Ollama < 0.4 or LM Studio.
+async function forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta) {
+  const isStream = !!body.stream;
+  const geminiBody = mapAnthropicToGemini(body);
+  const baseUrl = (backend.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
+  const action = isStream ? 'streamGenerateContent' : 'generateContent';
+  // If streaming, Google's SSE format for streamGenerateContent uses alt=sse query param
+  const urlSuffix = isStream ? '?alt=sse' : '';
+  const url = backend.vertex
+    ? `${baseUrl}/${effectiveModel}:${action}${urlSuffix}`
+    : `${baseUrl}/v1beta/models/${effectiveModel}:${action}${urlSuffix}`;
+  
+  const targetUrl = new URL(url);
+  const isHttps = targetUrl.protocol === 'https:';
+  const lib = isHttps ? https : http;
+
+  const headers = scrubCthruHeaders(req.headers);
+  headers['content-type'] = 'application/json';
+  // x-goog-api-key will be applied by applyOutboundAuth based on Phase 2 changes
+  applyOutboundAuth(backend, req.headers, headers);
+
+  ctxLog(ctx, 'gemini.request', { backend: backend.id, url, model: effectiveModel, stream: isStream });
+
+  const payload = JSON.stringify(geminiBody);
+  const options = {
+    hostname: targetUrl.hostname,
+    port: targetUrl.port,
+    path: targetUrl.pathname + targetUrl.search,
+    method: 'POST',
+    headers: headers,
+    timeout: 60000,
+  };
+
+  const messageId = 'msg_gemini_' + crypto.randomBytes(12).toString('hex');
+  const startedAt = Date.now();
+
+  const up = lib.request(options, (upRes) => {
+    const statusCode = upRes.statusCode;
+    if (statusCode >= 400) {
+      let errBody = '';
+      upRes.on('data', d => errBody += d);
+      upRes.on('end', () => {
+        ctxLog(ctx, 'gemini.error', { statusCode, body: errBody });
+        sendAnthropicError(res, statusCode, `Gemini error: ${errBody}`);
+      });
+      return;
+    }
+
+    if (isStream) {
+      const streamHeaders = {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'x-c-thru-served-by': effectiveModel,
+      };
+      if (geminiBody._schemaRemoved) {
+        streamHeaders['x-c-thru-schema-scrubbed'] = geminiBody._schemaRemoved.join(',');
+      }
+      res.writeHead(200, streamHeaders);
+
+      // Anthropic message_start
+      res.write(`event: message_start\ndata: ${JSON.stringify({
+        type: 'message_start',
+        message: {
+          id: messageId,
+          type: 'message',
+          role: 'assistant',
+          model: effectiveModel,
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 }
+        }
+      })}\n\n`);
+
+      // Streaming state machine — Anthropic SSE has one open content block at a
+      // time. Gemini chunks may interleave text and functionCall parts across
+      // candidates, so we track the currently-open block and close it before
+      // opening a new one of a different type.
+      let currentBlockIndex = 0;
+      let openBlockType = null; // null | 'thinking' | 'text' | 'tool_use'
+      let lastClosedBlockType = null;
+      let toolBlockEmittedInputDelta = false;
+      let currentThinkingSignature = '';
+
+      const closeOpenBlock = () => {
+        if (openBlockType === null) return;
+        // For thinking blocks, emit signature_delta immediately before
+        // content_block_stop (Anthropic spec: signature ships inline).
+        if (openBlockType === 'thinking') {
+          res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+            type: 'content_block_delta',
+            index: currentBlockIndex,
+            delta: { type: 'signature_delta', signature: currentThinkingSignature || '' }
+          })}\n\n`);
+          currentThinkingSignature = '';
+        }
+        res.write(`event: content_block_stop\ndata: ${JSON.stringify({
+          type: 'content_block_stop',
+          index: currentBlockIndex
+        })}\n\n`);
+        lastClosedBlockType = openBlockType;
+        openBlockType = null;
+        toolBlockEmittedInputDelta = false;
+        currentBlockIndex++;
+      };
+
+      // Gemini SSE format is "data: {...}\n\n"
+      let buffer = '';
+      upRes.on('data', (chunk) => {
+        buffer += chunk.toString();
+        let lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const geminiData = JSON.parse(line.slice(6));
+              const candidate = (geminiData.candidates && geminiData.candidates[0]) || {};
+              const parts = (candidate.content && candidate.content.parts) || [];
+
+              for (const part of parts) {
+                if (part.thought === true) {
+                  // Thinking part: open thinking block lazily, stream as
+                  // thinking_delta. Track the most recent thoughtSignature so
+                  // closeOpenBlock can emit signature_delta on close.
+                  if (openBlockType !== 'thinking') {
+                    closeOpenBlock();
+                    res.write(`event: content_block_start\ndata: ${JSON.stringify({
+                      type: 'content_block_start',
+                      index: currentBlockIndex,
+                      content_block: { type: 'thinking', thinking: '' }
+                    })}\n\n`);
+                    openBlockType = 'thinking';
+                  }
+                  if (part.text) {
+                    res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+                      type: 'content_block_delta',
+                      index: currentBlockIndex,
+                      delta: { type: 'thinking_delta', thinking: part.text }
+                    })}\n\n`);
+                  }
+                  if (part.thoughtSignature) currentThinkingSignature = part.thoughtSignature;
+                } else if (part.text) {
+                  if (openBlockType !== 'text') {
+                    closeOpenBlock();
+                    res.write(`event: content_block_start\ndata: ${JSON.stringify({
+                      type: 'content_block_start',
+                      index: currentBlockIndex,
+                      content_block: { type: 'text', text: '' }
+                    })}\n\n`);
+                    openBlockType = 'text';
+                  }
+                  res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+                    type: 'content_block_delta',
+                    index: currentBlockIndex,
+                    delta: { type: 'text_delta', text: part.text }
+                  })}\n\n`);
+                } else if (part.functionCall) {
+                  // Gemini emits the complete functionCall (with full args) in a
+                  // single chunk. Translate to Anthropic's two-stage shape:
+                  // content_block_start with empty input, then a single
+                  // input_json_delta carrying the full args as JSON, then stop.
+                  closeOpenBlock();
+                  const fc = part.functionCall;
+                  const toolId = fc.id || ('call_' + crypto.randomBytes(4).toString('hex'));
+                  // Stash thoughtSignature for round-trip on next turn.
+                  if (part.thoughtSignature) rememberThoughtSignature(toolId, part.thoughtSignature);
+                  res.write(`event: content_block_start\ndata: ${JSON.stringify({
+                    type: 'content_block_start',
+                    index: currentBlockIndex,
+                    content_block: { type: 'tool_use', id: toolId, name: fc.name, input: {} }
+                  })}\n\n`);
+                  openBlockType = 'tool_use';
+                  if (fc.args !== undefined) {
+                    res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+                      type: 'content_block_delta',
+                      index: currentBlockIndex,
+                      delta: { type: 'input_json_delta', partial_json: JSON.stringify(fc.args || {}) }
+                    })}\n\n`);
+                    toolBlockEmittedInputDelta = true;
+                  }
+                }
+              }
+
+              if (candidate.finishReason && candidate.finishReason !== 'NONE') {
+                const wasToolUseTrailing = openBlockType === 'tool_use';
+                closeOpenBlock();
+
+                const hasToolUse = wasToolUseTrailing || lastClosedBlockType === 'tool_use';
+                const { stop_reason, stop_sequence } = mapGeminiFinishReason(candidate.finishReason, { hasToolUse, ctx });
+
+                res.write(`event: message_delta\ndata: ${JSON.stringify({
+                  type: 'message_delta',
+                  delta: { stop_reason, stop_sequence },
+                  usage: { output_tokens: (geminiData.usageMetadata || {}).candidatesTokenCount || 0 }
+                })}\n\n`);
+              }
+            } catch (e) {
+              ctxLog(ctx, 'gemini.stream.parse_error', { error: e.message, line });
+            }
+          }
+        }
+      });
+
+      upRes.on('end', () => {
+        res.write(`event: message_stop\ndata: {"type": "message_stop"}\n\n`);
+        res.end();
+        clearBackendCooldown(backend.id);
+      });
+    } else {
+      // Non-streaming
+      let respBody = '';
+      upRes.on('data', d => respBody += d);
+      upRes.on('end', () => {
+        try {
+          const geminiData = JSON.parse(respBody);
+          const candidate = (geminiData.candidates && geminiData.candidates[0]) || {};
+          const content = candidate.content || {};
+          const parts = content.parts || [];
+          
+          // Gemini may interleave thought parts with text/functionCall parts.
+          // Anthropic clients expect thinking blocks before any text/tool_use.
+          // Partition + reassemble so order is: thinking[] → text/tool_use[].
+          const thinkingBlocks = [];
+          const otherBlocks = [];
+          for (const p of parts) {
+            if (p.thought === true) {
+              thinkingBlocks.push({
+                type: 'thinking',
+                thinking: p.text || '',
+                signature: p.thoughtSignature || '',
+              });
+              continue;
+            }
+            if (p.text) {
+              otherBlocks.push({ type: 'text', text: p.text });
+              continue;
+            }
+            if (p.functionCall) {
+              // Preserve Gemini-supplied id when present; synthesize otherwise.
+              // Anthropic clients reference this id back via tool_result.tool_use_id.
+              const id = p.functionCall.id || ('call_' + crypto.randomBytes(4).toString('hex'));
+              // Stash Gemini's thoughtSignature so the next turn's request can
+              // re-attach it (Gemini 3+ rejects multi-turn tool flows otherwise).
+              if (p.thoughtSignature) rememberThoughtSignature(id, p.thoughtSignature);
+              otherBlocks.push({ type: 'tool_use', id, name: p.functionCall.name, input: p.functionCall.args || {} });
+            }
+          }
+          const anthropicContent = [...thinkingBlocks, ...otherBlocks];
+
+          const hasToolUse = anthropicContent.some(b => b.type === 'tool_use');
+          const { stop_reason, stop_sequence } = mapGeminiFinishReason(candidate.finishReason, { hasToolUse, ctx });
+
+          const anthropicRes = {
+            id: messageId,
+            type: 'message',
+            role: 'assistant',
+            model: effectiveModel,
+            content: anthropicContent,
+            stop_reason,
+            stop_sequence,
+            usage: {
+              input_tokens: (geminiData.usageMetadata || {}).promptTokenCount || 0,
+              output_tokens: (geminiData.usageMetadata || {}).candidatesTokenCount || 0
+            }
+          };
+
+          const respHeaders = {
+            'Content-Type': 'application/json',
+            'x-c-thru-served-by': effectiveModel
+          };
+          if (geminiBody._schemaRemoved) {
+            respHeaders['x-c-thru-schema-scrubbed'] = geminiBody._schemaRemoved.join(',');
+          }
+          res.writeHead(200, respHeaders);
+          res.end(JSON.stringify(anthropicRes));
+          clearBackendCooldown(backend.id);
+        } catch (e) {
+          ctxLog(ctx, 'gemini.parse_error', { error: e.message, body: respBody });
+          sendAnthropicError(res, 502, `failed to parse Gemini response: ${e.message}`);
+        }
+      });
+    }
+  });
+
+  up.on('error', (e) => {
+    ctxLog(ctx, 'gemini.request_error', { error: e.message });
+    tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, { reason: e.message, statusCode: 502 });
+  });
+
+  up.write(payload);
+  up.end();
+}
+
+function dispatchGeminiBackend(ctx, req, res, body, backend, effectiveModel, requestMeta) {
+  return forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta);
+}
+
 function dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   if (backend.format === 'ollama-legacy' || backend.legacy_ollama_chat === true) {
     return forwardOllamaLegacy(ctx, req, res, body, backend, effectiveModel, requestMeta);
   }
   return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
+}
+
+// =============================================================================
+// GEMINI TRANSLATION
+// =============================================================================
+
+// Process-wide cache: tool_use_id → Gemini thoughtSignature. Required because
+// Gemini 3+ tool_use rejects subsequent turns whose functionCall parts don't
+// echo back the original signature ("Function call is missing a
+// thought_signature" 400). Anthropic's tool_use schema has no field for
+// vendor-specific blobs, so we stash the signature here on the response path
+// and re-attach it on the next request's tool_use → functionCall translation.
+//
+// Bounded by GEMINI_THOUGHT_SIG_MAX_ENTRIES (default 10000) with FIFO
+// eviction, plus TTL of GEMINI_THOUGHT_SIG_TTL_MS (default 1h). Both override
+// via env for testing.
+const GEMINI_THOUGHT_SIG_MAX_ENTRIES = Number(process.env.GEMINI_THOUGHT_SIG_MAX_ENTRIES || 10000);
+const GEMINI_THOUGHT_SIG_TTL_MS = Number(process.env.GEMINI_THOUGHT_SIG_TTL_MS || 3600000);
+const GEMINI_THOUGHT_SIG_CACHE = new Map(); // tool_use_id → { sig, ts }
+function rememberThoughtSignature(toolUseId, sig) {
+  if (!toolUseId || !sig) return;
+  GEMINI_THOUGHT_SIG_CACHE.set(toolUseId, { sig, ts: Date.now() });
+  if (GEMINI_THOUGHT_SIG_CACHE.size > GEMINI_THOUGHT_SIG_MAX_ENTRIES) {
+    // Evict oldest 10% (FIFO via insertion order).
+    const drop = Math.ceil(GEMINI_THOUGHT_SIG_MAX_ENTRIES * 0.1);
+    let i = 0;
+    for (const k of GEMINI_THOUGHT_SIG_CACHE.keys()) {
+      if (i++ >= drop) break;
+      GEMINI_THOUGHT_SIG_CACHE.delete(k);
+    }
+  }
+}
+function lookupThoughtSignature(toolUseId) {
+  const entry = GEMINI_THOUGHT_SIG_CACHE.get(toolUseId);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > GEMINI_THOUGHT_SIG_TTL_MS) {
+    GEMINI_THOUGHT_SIG_CACHE.delete(toolUseId);
+    return null;
+  }
+  return entry.sig;
+}
+
+// Map Gemini finishReason → Anthropic stop_reason.
+// Returns { stop_reason, stop_sequence }. Safety/recitation/blocklist surface
+// as stop_sequence='gemini_safety_block' so clients can distinguish a refusal
+// from a normal end_turn.
+const GEMINI_SAFETY_REASONS = new Set(['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII']);
+function mapGeminiFinishReason(finishReason, opts) {
+  const o = opts || {};
+  if (finishReason === 'MAX_TOKENS') return { stop_reason: 'max_tokens', stop_sequence: null };
+  if (finishReason === 'STOP' || !finishReason || finishReason === 'NONE') {
+    return { stop_reason: o.hasToolUse ? 'tool_use' : 'end_turn', stop_sequence: null };
+  }
+  if (GEMINI_SAFETY_REASONS.has(finishReason)) {
+    return { stop_reason: 'stop_sequence', stop_sequence: 'gemini_safety_block' };
+  }
+  // OTHER / unknown — log for observability and fall through to end_turn.
+  if (o.ctx) ctxLog(o.ctx, 'gemini.unknown_finish_reason', { finishReason });
+  return { stop_reason: o.hasToolUse ? 'tool_use' : 'end_turn', stop_sequence: null };
+}
+
+// Strip JSON Schema features Gemini doesn't support (oneOf/anyOf/allOf/$ref/$defs).
+// - oneOf/anyOf: collapse to the first variant (best-effort; preserves the most-likely shape).
+// - allOf: shallow-merge all variants into the parent object.
+// - $ref / $defs / $schema / $id: dropped (Gemini can't dereference).
+// Returns the scrubbed schema and a list of removed feature names (for observability).
+function scrubGeminiSchema(schema, removed) {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(s => scrubGeminiSchema(s, removed));
+  const out = {};
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === '$schema' || k === '$id' || k === '$defs' || k === 'definitions') {
+      removed.add(k);
+      continue;
+    }
+    if (k === '$ref') {
+      removed.add('$ref');
+      continue;
+    }
+    // Gemini's JSON Schema dialect is much stricter than standard. Each of
+    // these fields triggers an INVALID_ARGUMENT 400 even though they're
+    // valid JSON Schema. Discovered via live e2e against Claude Code's
+    // default tool definitions. Drop silently and surface in
+    // x-c-thru-schema-scrubbed for observability.
+    //
+    // Gemini-rejected (drop): additionalProperties, propertyNames, const,
+    //   exclusiveMinimum, exclusiveMaximum, llmGuidance (Claude Code custom),
+    //   examples (Claude Code custom; differs from Gemini's `example` singular).
+    // Gemini-supported (keep): type, format, description, nullable, enum,
+    //   minimum, maximum, minItems, maxItems, minLength, maxLength, pattern,
+    //   properties, required, items, default, example, propertyOrdering.
+    //
+    // TODO: switch to allowlist if more fields surface. Blacklist is
+    // whack-a-mole but safer for now (no risk of stripping a supported field).
+    if (k === 'additionalProperties' || k === 'propertyNames' ||
+        k === 'const' || k === 'exclusiveMinimum' || k === 'exclusiveMaximum' ||
+        k === 'llmGuidance' || k === 'examples') {
+      removed.add(k);
+      continue;
+    }
+    if (k === 'oneOf' || k === 'anyOf') {
+      removed.add(k);
+      if (Array.isArray(v) && v.length > 0) {
+        const first = scrubGeminiSchema(v[0], removed);
+        if (first && typeof first === 'object' && !Array.isArray(first)) {
+          for (const [fk, fv] of Object.entries(first)) {
+            if (out[fk] == null) out[fk] = fv;
+          }
+        }
+      }
+      continue;
+    }
+    if (k === 'allOf') {
+      removed.add(k);
+      if (Array.isArray(v)) {
+        for (const variant of v) {
+          const sv = scrubGeminiSchema(variant, removed);
+          if (sv && typeof sv === 'object' && !Array.isArray(sv)) {
+            for (const [vk, vv] of Object.entries(sv)) {
+              if (vk === 'properties' && typeof vv === 'object') {
+                out.properties = Object.assign({}, out.properties || {}, vv);
+              } else if (vk === 'required' && Array.isArray(vv)) {
+                out.required = Array.from(new Set([...(out.required || []), ...vv]));
+              } else if (out[vk] == null) {
+                out[vk] = vv;
+              }
+            }
+          }
+        }
+      }
+      continue;
+    }
+    out[k] = scrubGeminiSchema(v, removed);
+  }
+  return out;
+}
+
+// Map Anthropic tool_choice to Gemini toolConfig.functionCallingConfig.
+// Anthropic shapes: {type:'auto'} | {type:'any'} | {type:'tool', name} | {type:'none'}
+// Gemini modes: AUTO (model decides), ANY (must call a function), NONE (must not call)
+// allowedFunctionNames restricts which functions can be called when mode is ANY.
+function mapToolChoice(toolChoice) {
+  if (!toolChoice) return null;
+  const tc = typeof toolChoice === 'string' ? { type: toolChoice } : toolChoice;
+  let mode = 'AUTO';
+  let allowedFunctionNames = null;
+  if (tc.type === 'auto') mode = 'AUTO';
+  else if (tc.type === 'any') mode = 'ANY';
+  else if (tc.type === 'tool' && tc.name) { mode = 'ANY'; allowedFunctionNames = [tc.name]; }
+  else if (tc.type === 'none') mode = 'NONE';
+  const cfg = { mode };
+  if (allowedFunctionNames) cfg.allowedFunctionNames = allowedFunctionNames;
+  return { functionCallingConfig: cfg };
+}
+
+function mapAnthropicToGemini(body) {
+  const geminiReq = {
+    contents: [],
+    generationConfig: {}
+  };
+
+  if (body.temperature != null) geminiReq.generationConfig.temperature = body.temperature;
+  if (body.top_p != null) geminiReq.generationConfig.topP = body.top_p;
+  if (body.top_k != null) geminiReq.generationConfig.topK = body.top_k;
+  if (body.max_tokens != null) geminiReq.generationConfig.maxOutputTokens = body.max_tokens;
+  if (body.stop_sequences != null) geminiReq.generationConfig.stopSequences = body.stop_sequences;
+
+  // Anthropic `thinking: {type:'enabled', budget_tokens:N}` → Gemini
+  // `generationConfig.thinkingConfig`. Older Gemini models (2.0, flash-lite)
+  // silently ignore — no model-version gate. Caller-wins: omit if absent so
+  // we don't override capability_sampling_defaults.
+  if (body.thinking && body.thinking.type === 'enabled') {
+    geminiReq.generationConfig.thinkingConfig = {
+      thinkingBudget: Number(body.thinking.budget_tokens) || 1024,
+      includeThoughts: true,
+    };
+  }
+
+  if (body.system) {
+    // Anthropic system blocks may carry cache_control (a Claude-specific feature).
+    // Strip cache_control entirely; keep only the text. If a block has only
+    // cache_control and no text, skip it rather than emitting empty parts.
+    const systemText = Array.isArray(body.system)
+      ? body.system.map(s => (s && typeof s === 'object' ? (s.text || '') : String(s || ''))).filter(Boolean).join('\n')
+      : body.system;
+    if (systemText) {
+      geminiReq.systemInstruction = { parts: [{ text: systemText }] };
+    }
+  }
+
+  const schemaRemoved = new Set();
+  if (body.tools) {
+    geminiReq.tools = [{
+      functionDeclarations: body.tools.map(t => ({
+        name: t.name,
+        description: t.description,
+        parameters: scrubGeminiSchema(t.input_schema, schemaRemoved)
+      }))
+    }];
+  }
+
+  const toolConfig = mapToolChoice(body.tool_choice);
+  if (toolConfig) geminiReq.toolConfig = toolConfig;
+
+  // Build tool_use_id → name lookup for tool_result → functionResponse mapping.
+  // Gemini's functionResponse must include the same id used in the original
+  // functionCall when one was supplied (parallel calls disambiguation).
+  const toolIdToName = {};
+  if (body.messages) {
+    for (const msg of body.messages) {
+      if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block.type === 'tool_use') {
+            toolIdToName[block.id] = block.name;
+          }
+        }
+      }
+    }
+  }
+
+  for (const msg of body.messages) {
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+    const parts = [];
+    if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === 'text') {
+          parts.push({ text: block.text });
+        } else if (block.type === 'tool_use') {
+          const fc = { name: block.name, args: block.input };
+          if (block.id) fc.id = block.id;
+          // Gemini 3+ requires the original thoughtSignature to be echoed back
+          // when this tool_use appears in conversation history. Look it up by
+          // tool_use_id from our process-wide cache populated on the response
+          // path. Missing → omit (works for non-3 models, fails for 3+).
+          const part = { functionCall: fc };
+          if (block.id) {
+            const sig = lookupThoughtSignature(block.id);
+            if (sig) part.thoughtSignature = sig;
+          }
+          parts.push(part);
+        } else if (block.type === 'tool_result') {
+          const name = toolIdToName[block.tool_use_id] || 'unknown_tool';
+          let responseObj = block.content;
+          if (typeof responseObj === 'string') {
+            try { responseObj = JSON.parse(responseObj); } catch { responseObj = { content: responseObj }; }
+          } else if (Array.isArray(responseObj)) {
+            // tool_result.content can be an array of content blocks (e.g., [{type:'text', text:'...'}]).
+            // Gemini wants a flat object — extract text and stringify other types.
+            const textParts = responseObj.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n');
+            responseObj = { content: textParts || JSON.stringify(responseObj) };
+          }
+          const fr = { name, response: responseObj };
+          if (block.tool_use_id) fr.id = block.tool_use_id;
+          parts.push({ functionResponse: fr });
+        } else if (block.type === 'thinking') {
+          // Echo prior thinking back to Gemini as a structured part so multi-turn
+          // thinking sessions verify against the original signature on Gemini 3+.
+          // Older Gemini models (2.5, 2.0) accept `thought:true` parts but do
+          // not enforce signature presence — safe to send unconditionally.
+          const tp = { text: block.thinking || '', thought: true };
+          if (block.signature) tp.thoughtSignature = block.signature;
+          parts.push(tp);
+        }
+      }
+    } else if (typeof msg.content === 'string') {
+      parts.push({ text: msg.content });
+    }
+    geminiReq.contents.push({ role, parts });
+  }
+
+  // Stash schema-scrubbing telemetry so the caller can emit a header.
+  if (schemaRemoved.size > 0) {
+    Object.defineProperty(geminiReq, '_schemaRemoved', {
+      value: Array.from(schemaRemoved), enumerable: false
+    });
+  }
+
+  return geminiReq;
+}
+
+function translateGeminiCandidateToAnthropic(candidate, messageId, modelName, isLast = false) {
+  const events = [];
+  const content = candidate.content || {};
+  const parts = content.parts || [];
+
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (part.text) {
+      events.push({
+        type: 'content_block_delta',
+        index: i,
+        delta: { type: 'text_delta', text: part.text }
+      });
+    } else if (part.functionCall) {
+      // Gemini functionCall is a single part. Anthropic tool_use is a block.
+      // In SSE, this is trickier because we need message_start first.
+      // This helper is for deltas.
+    }
+  }
+
+  if (isLast && candidate.finishReason) {
+    let stopReason = 'end_turn';
+    if (candidate.finishReason === 'STOP') stopReason = 'end_turn';
+    else if (candidate.finishReason === 'MAX_TOKENS') stopReason = 'max_tokens';
+    else if (candidate.finishReason === 'SAFETY') stopReason = 'stop_sequence'; // closest match
+    
+    events.push({
+      type: 'message_delta',
+      delta: { stop_reason: stopReason, stop_sequence: null },
+      usage: { output_tokens: 0 } // usage usually comes in separate metadata
+    });
+  }
+
+  return events;
 }
 
 // =============================================================================
@@ -1937,13 +2585,38 @@ function startNetworkWatcher() {
 }
 
 // ── Config loading & reload ────────────────────────────────────────────
+// Substitute ${VAR} in endpoint URLs at config-load time only (not per-request).
+// Scope: endpoints.*.url. Unset vars become empty strings + a stderr warning.
+// Mutates config in place; returns same reference.
+function interpolateEndpointUrls(config) {
+  const eps = (config && (config.endpoints || config.backends)) || {};
+  for (const [id, entry] of Object.entries(eps)) {
+    if (!entry || typeof entry.url !== 'string') continue;
+    const original = entry.url;
+    if (!original.includes('${')) continue;
+    const seenMissing = new Set();
+    entry.url = original.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_, name) => {
+      const v = process.env[name];
+      if (v == null || v === '') {
+        if (!seenMissing.has(name)) {
+          console.error(`c-thru: warning: endpoint '${id}'.url references unset env var \${${name}}`);
+          seenMissing.add(name);
+        }
+        return '';
+      }
+      return v;
+    });
+  }
+  return config;
+}
+
 function loadConfig() {
   const resolved = resolveConfigSelectionForReload();
   if (!resolved) { console.error('c-thru: no model-map.json found'); process.exit(1); }
   CONFIG_PATH = resolved.path;
   CONFIG_SOURCE = resolved.source;
   try {
-    GLOBAL_CONFIG = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    GLOBAL_CONFIG = interpolateEndpointUrls(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')));
     CONFIG_MTIME_MS = Math.floor(fs.statSync(CONFIG_PATH).mtimeMs);
   } catch (e) {
     console.error(`c-thru: failed to load ${CONFIG_PATH}: ${e.message}`);
@@ -1992,6 +2665,29 @@ function maybeRegenerateMergedConfig() {
   const systemPath = path.join(claudeDir, 'model-map.system.json');
   const overridesPath = path.join(claudeDir, 'model-map.overrides.json');
   const mergedPath = path.join(claudeDir, 'model-map.json');
+
+  // Step 0: if the shipped repo config (config/model-map.json) is newer than
+  // the installed system.json, refresh system.json from it. Otherwise edits
+  // to the repo's shipped config never reach a running c-thru session until
+  // ./install.sh is re-run — silent staleness, hard to debug.
+  const shippedPath = path.join(__dirname, '..', 'config', 'model-map.json');
+  try {
+    const shippedMtime = fs.statSync(shippedPath).mtimeMs;
+    let systemMtime = 0;
+    try { systemMtime = fs.statSync(systemPath).mtimeMs; } catch {}
+    if (shippedMtime > systemMtime) {
+      // Validate before copying — never overwrite a working system.json with a
+      // broken shipped config (would brick the proxy on next reload).
+      try {
+        JSON.parse(fs.readFileSync(shippedPath, 'utf8'));
+        fs.copyFileSync(shippedPath, systemPath);
+        console.error(`c-thru: refreshed system.json from shipped config (${shippedPath})`);
+      } catch (e) {
+        console.error(`c-thru: shipped config invalid (${e.message}) — keeping existing system.json`);
+      }
+    }
+  } catch {}
+
   let mergedMtime = 0;
   try { mergedMtime = fs.statSync(mergedPath).mtimeMs; } catch {}
 
@@ -2024,7 +2720,7 @@ function reloadConfigFromDisk() {
     maybeRegenerateMergedConfig();
     const resolved = resolveConfigSelectionForReload();
     if (!resolved) throw new Error('no model-map.json found');
-    const nextConfig = JSON.parse(fs.readFileSync(resolved.path, 'utf8'));
+    const nextConfig = interpolateEndpointUrls(JSON.parse(fs.readFileSync(resolved.path, 'utf8')));
     const nextMtime = Math.floor(fs.statSync(resolved.path).mtimeMs);
     GLOBAL_CONFIG = nextConfig;
     CONFIG_PATH = resolved.path;
@@ -2393,8 +3089,11 @@ const server = http.createServer((req, res) => {
         if (isOllamaLegacy(backend)) {
           return dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
+        if (backend.format === 'gemini') {
+          return dispatchGeminiBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
+        }
         if (backend.format === 'openai') {
-          return sendAnthropicError(res, 501, 'openai format not yet implemented — use a gateway');
+          return sendAnthropicError(res, 501, 'format:"openai" not yet implemented — configure an OpenRouter endpoint with format:"anthropic" instead, or use a separate OpenAI-compat gateway');
         }
         return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
       }
