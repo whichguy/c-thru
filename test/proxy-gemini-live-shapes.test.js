@@ -690,21 +690,19 @@ async function main() {
     assert(/5|five/i.test(txt), `S16 model continued the conversation (text='${txt.slice(0,80)}')`);
   });
 
-  // ── S17. /v1/messages/count_tokens returns clean error envelope ────────
-  console.log('\nS17. /v1/messages/count_tokens returns Anthropic-shape error (proxy has no handler)');
+  // ── S17. /v1/messages/count_tokens routes to Gemini :countTokens ───────
+  // After G1: proxy translates count_tokens to Gemini :countTokens and returns
+  // {input_tokens:N}. Should never invoke the model (no candidates/usage).
+  console.log('\nS17. /v1/messages/count_tokens → Gemini :countTokens, returns input_tokens');
   await withProxy({ configPath: cfgPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY } }, async ({ port }) => {
     const r = await httpJson(port, 'POST', '/v1/messages/count_tokens', {
       model: MODEL,
-      messages: [{ role: 'user', content: 'Hello.' }],
+      messages: [{ role: 'user', content: 'Hello, world.' }],
     }, {}, 15000);
-    // Observed: proxy currently treats /v1/messages/count_tokens like /v1/messages
-    // (returns type=message). Pin current behavior; tighten when a real handler lands.
-    if (r.status >= 400 && r.status < 600) {
-      if (r.json) assert(r.json?.type === 'error', `S17 error envelope when error returned (got type=${r.json?.type})`);
-      else skip(`S17: error w/o JSON body (got '${(r.bodyText || '').slice(0,80)}')`);
-    } else {
-      skip(`S17: proxy answered count_tokens with status=${r.status} type=${r.json?.type} — handler not yet enforced`);
-    }
+    assert(r.status === 200, `S17 status 200 (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
+    assert(typeof r.json?.input_tokens === 'number' && r.json.input_tokens > 0, `S17 input_tokens>0 (got ${r.json?.input_tokens})`);
+    assert(r.json?.type !== 'message', `S17 not a message response (got type=${r.json?.type})`);
+    assert(!r.json?.content && !r.json?.usage, 'S17 no content/usage (no model invocation)');
   });
 
   // ── S18. /v1/models returns clean error envelope ───────────────────────

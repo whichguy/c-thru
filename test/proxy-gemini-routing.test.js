@@ -877,6 +877,28 @@ async function main() {
       assert(last?.path?.includes('/projects//locations//') || r.status >= 400, `unset vars produce empty segments (got ${last?.path}, status ${r.status})`);
     });
 
+    // ── T-count-tokens. /v1/messages/count_tokens → Gemini :countTokens ─────
+    console.log('\nT-count-tokens. /v1/messages/count_tokens routes to :countTokens with translated response');
+    let countBody = null;
+    stub.setHandler((req, res, body) => {
+      countBody = body;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ totalTokens: 42 }));
+    });
+    await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'test-key' } }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages/count_tokens', {
+        model: 'gemini-latest',
+        messages: [{ role: 'user', content: 'hello world' }],
+      });
+      const last = stub.lastRequest();
+      assert(r.status === 200, 'count_tokens status 200');
+      assert(last?.path === '/v1beta/models/gemini-pro-latest:countTokens', `:countTokens URL (got ${last?.path})`);
+      assert(r.json?.input_tokens === 42, `input_tokens=42 (got ${r.json?.input_tokens})`);
+      assert(r.json?.type !== 'message', 'response is not type:message (no model invocation)');
+      assert(countBody?.contents?.length === 1, 'contents forwarded');
+      assert(!countBody?.generationConfig, 'generationConfig stripped');
+    });
+
     // ── T-explain-model. c-thru explain --model walks model_routes ───────────
     console.log('\nT-explain-model. c-thru explain --model resolves through model_routes');
     const explainBin = path.join(__dirname, '..', 'tools', 'c-thru-explain.js');

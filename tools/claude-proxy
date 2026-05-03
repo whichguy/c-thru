@@ -1807,10 +1807,17 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
 // pass-through to <backend.url>/v1/messages) which preserves tool_use /
 // tool_result blocks. The legacy path is for Ollama < 0.4 or LM Studio.
 async function forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta) {
-  const isStream = !!body.stream;
+  // /v1/messages/count_tokens → Gemini :countTokens (no model invocation, no SSE).
+  // Translate {totalTokens:N} → Anthropic {type:"message_count", input_tokens:N}.
+  const isCountTokens = typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens');
+  const isStream = !isCountTokens && !!body.stream;
   const geminiBody = mapAnthropicToGemini(body);
+  if (isCountTokens) {
+    // countTokens accepts only contents/systemInstruction/tools — strip generationConfig.
+    delete geminiBody.generationConfig;
+  }
   const baseUrl = (backend.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
-  const action = isStream ? 'streamGenerateContent' : 'generateContent';
+  const action = isCountTokens ? 'countTokens' : (isStream ? 'streamGenerateContent' : 'generateContent');
   // If streaming, Google's SSE format for streamGenerateContent uses alt=sse query param
   const urlSuffix = isStream ? '?alt=sse' : '';
   const url = backend.vertex
@@ -2022,6 +2029,21 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
       upRes.on('end', () => {
         try {
           const geminiData = JSON.parse(respBody);
+          if (isCountTokens) {
+            // Gemini :countTokens → {totalTokens, ...}. Map to Anthropic
+            // /v1/messages/count_tokens shape: {input_tokens}. (Anthropic
+            // historically returned {input_tokens:N}; the type:"message_count"
+            // wrapper was added later — emit both for forward compatibility.)
+            const inputTokens = geminiData.totalTokens ?? geminiData.totalTokensCount ?? 0;
+            const anthropicRes = { input_tokens: inputTokens };
+            res.writeHead(200, {
+              'Content-Type': 'application/json',
+              'x-c-thru-served-by': effectiveModel,
+            });
+            res.end(JSON.stringify(anthropicRes));
+            clearBackendCooldown(backend.id);
+            return;
+          }
           const candidate = (geminiData.candidates && geminiData.candidates[0]) || {};
           const content = candidate.content || {};
           const parts = content.parts || [];
