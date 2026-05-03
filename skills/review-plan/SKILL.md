@@ -79,7 +79,7 @@ Apply a 3-layer review: general quality, code-change quality, and GAS specializa
      - `plan_slug` = filename stem of plan_path (no extension); scopes memo file
        ```
        plan_slug = basename(plan_path, ".md")
-       # Example: /Users/jameswiese/.claude/plans/snug-jumping-yao.md → snug-jumping-yao
+       # Example: ~/.claude/plans/snug-jumping-yao.md → snug-jumping-yao
        # Used to scope memo file to this specific plan invocation.
        ```
      - `questions_path` = `~/.claude/skills/review-plan/QUESTIONS.md`

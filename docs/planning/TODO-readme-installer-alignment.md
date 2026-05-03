@@ -2,8 +2,7 @@
 
 ## Problem
 
-Both `/Users/jameswiese/src/c-thru/README.md` and
-`/Users/jameswiese/src/c-thru/install.sh` were written earlier in the
+Both `README.md` and `install.sh` were written earlier in the
 project's life and may no longer reflect the current code surface. Recent
 changes that likely need to be documented/installed:
 
