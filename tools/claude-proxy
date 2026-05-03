@@ -2270,6 +2270,15 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           // Anthropic clients expect thinking blocks before any text/tool_use.
           // Partition + reassemble so order is: thinking[] → text/tool_use[].
           //
+          // G12 emission policy: thought parts only appear here when the client
+          // opted in upstream — mapAnthropicToGemini sets
+          // generationConfig.thinkingConfig.includeThoughts=true iff
+          // body.thinking.type==='enabled' (see L2531). Without that flag Gemini
+          // won't emit thought:true parts, so the "double-render on
+          // non-thinking models" concern is gated at the request-build site,
+          // not here. Pass thought parts through unconditionally so that any
+          // future upstream-initiated thinking still surfaces to the client.
+          //
           // thoughtSignature placement varies: Gemini 3+ may attach it to a
           // sibling text/functionCall part rather than the thought part itself.
           // First-pass collect any thoughtSignature seen on the candidate so we
