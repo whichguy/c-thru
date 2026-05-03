@@ -115,6 +115,18 @@ async function spawnProxy(opts = {}) {
     CLAUDE_PROXY_SKIP_OLLAMA_WARMUP: '1',
     CLAUDE_PROXY_HOOKS_PORT: String(hooksPort || await getFreePort()),
   }, extraEnv);
+  // T9: prevent host-shell auth keys from silently leaking into the proxy
+  // child. Tests assert "no auth header when unset" — but Object.assign only
+  // overwrites, never deletes, so a host-set GOOGLE_API_KEY survives into
+  // applyOutboundAuth and gets stamped onto the upstream request. Scrub the
+  // known auth-relevant keys unless the test explicitly provided them.
+  const AUTH_ENV_KEYS = [
+    'GOOGLE_API_KEY', 'GOOGLE_CLOUD_TOKEN', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_REGION',
+    'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY',
+  ];
+  for (const k of AUTH_ENV_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(extraEnv, k)) delete proxyEnv[k];
+  }
 
   const child = spawn(process.execPath, [PROXY_BIN, ...args], {
     env: proxyEnv,
