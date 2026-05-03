@@ -2051,10 +2051,54 @@ async function handleFilesApi(req, res) {
 // Centralises G7 (beta-dropped), G10 (request-id), G13 (schema-scrubbed) so
 // streaming / non-streaming / count_tokens response paths all set the same
 // telemetry. Caller adds streaming-specific headers afterwards.
+// Built-in Gemini deprecation list. Maps deprecated model name → advice.
+// Override / extend via top-level `deprecated_models` in config — user entries
+// merge over these defaults. Sources: ai.google.dev model card pages and the
+// Gemini API release notes (gemini-1.5-* family deprecated 2025-09; -001/-002
+// dated tags retired 2024-Q4). Keep keys exact; substring matching would
+// false-positive on -latest aliases that route to a newer concrete name.
+const GEMINI_DEPRECATED_DEFAULTS = {
+  'gemini-1.0-pro': 'use gemini-pro-latest (gemini-1.0-pro retired)',
+  'gemini-1.0-pro-001': 'use gemini-pro-latest',
+  'gemini-1.0-pro-002': 'use gemini-pro-latest',
+  'gemini-1.0-pro-vision': 'use gemini-pro-latest (multimodal merged into Pro family)',
+  'gemini-pro-vision': 'use gemini-pro-latest',
+  'gemini-1.5-pro': 'use gemini-pro-latest (gemini-1.5-* deprecated 2025-09)',
+  'gemini-1.5-pro-001': 'use gemini-pro-latest',
+  'gemini-1.5-pro-002': 'use gemini-pro-latest',
+  'gemini-1.5-flash': 'use gemini-flash-latest (gemini-1.5-* deprecated 2025-09)',
+  'gemini-1.5-flash-001': 'use gemini-flash-latest',
+  'gemini-1.5-flash-002': 'use gemini-flash-latest',
+  'gemini-1.5-flash-8b': 'use gemini-flash-lite-latest',
+  'gemini-2.0-flash-exp': 'use gemini-flash-latest (the -exp suffix is preview-only)',
+  'gemini-pro': 'prefer gemini-pro-latest (unversioned alias may route to older variant)',
+};
+function getDeprecatedModelAdvice(modelName, cfg) {
+  if (typeof modelName !== 'string' || !modelName) return null;
+  const overrides = (cfg && typeof cfg.deprecated_models === 'object' && cfg.deprecated_models) || {};
+  if (Object.prototype.hasOwnProperty.call(overrides, modelName)) {
+    const v = overrides[modelName];
+    return v === false || v == null ? null : String(v); // false = un-deprecate
+  }
+  return GEMINI_DEPRECATED_DEFAULTS[modelName] || null;
+}
+const DEPRECATION_LOGGED = new Set(); // dedupe per-process
+function logDeprecationOnce(modelName, advice) {
+  const key = `${modelName}|${advice}`;
+  if (DEPRECATION_LOGGED.has(key)) return;
+  DEPRECATION_LOGGED.add(key);
+  console.error(`c-thru: deprecated model '${modelName}' — ${advice}`);
+}
+
 function buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta) {
   const h = {
     'x-c-thru-served-by': effectiveModel || '',
   };
+  const advice = getDeprecatedModelAdvice(effectiveModel, GLOBAL_CONFIG);
+  if (advice) {
+    h['x-c-thru-deprecated-model'] = advice;
+    logDeprecationOnce(effectiveModel, advice);
+  }
   if (requestMeta && Array.isArray(requestMeta.resolutionChain) && requestMeta.resolutionChain.length) {
     h['x-c-thru-resolution-chain'] = requestMeta.resolutionChain.join(' -> ');
   }

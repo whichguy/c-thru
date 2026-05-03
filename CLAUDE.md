@@ -215,7 +215,9 @@ Per-profile `on_failure` field in `llm_profiles[hw][profile]`: `"cascade"` (defa
 - `output_tokens` includes thinking tokens (Anthropic parity): `candidatesTokenCount + thoughtsTokenCount`.
 - Auto-enable / budget-added headers are suppressed on `/v1/messages/count_tokens` since no model invocation occurs.
 
-**`/model` picker exposure**: Claude Code's runtime `/model` picker only displays `claude-*` IDs from `/v1/models`. The aliases `claude-via-gemini-pro` and `claude-via-gemini-flash` route to `gemini_ai` and surface in the picker; direct `gemini-*` IDs still work for shell users.
+**`/model` picker exposure**: Claude Code's runtime `/model` picker only displays `claude-*` IDs from `/v1/models`. The proxy auto-synthesizes `claude-via-<key>` entries for every non-`claude-*` route whose endpoint is in `picker_alias_endpoints` (top-level config, default `["gemini_ai", "gemini_vertex"]`). At request time, `claude-via-<X>` resolves through `resolveBackend` the same as `<X>`. Direct `gemini-*` IDs still work for shell users.
+
+**Deprecated model warning**: `x-c-thru-deprecated-model: <advice>` response header is set when the resolved model is in the built-in deprecation list (`gemini-1.0-*`, `gemini-1.5-*`, `gemini-pro-vision`, `gemini-2.0-flash-exp`, etc.) or the user's `deprecated_models` config map. Set a config entry to `false` to un-deprecate a built-in default. Each unique (model, advice) pair logs once per process.
 
 Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3) auth headers (via `applyOutboundAuth` — strips or injects based on endpoint `auth`/`auth_env` config; absent = passthrough), (4) SSE `usage` injection, (5) protocol translation (gated on `format: "openai"` — 501 stub until implemented), (6) `x-c-thru-resolved-via` response header, (7) `model_overrides` unconditional name substitution before route graph traversal, (8) `@<backend>` sigil stripping — suffix stripped before forwarding so the provider only sees the base model name.
 

@@ -2002,6 +2002,94 @@ async function main() {
       });
     }
 
+    // ── 24. Deprecated model warning header (Task #5) ──────────────────────
+    // Built-in deprecation list maps gemini-1.0-pro, gemini-1.5-* etc. to
+    // current-generation advice. Surface as x-c-thru-deprecated-model on the
+    // response so callers + journals can detect retired-model usage instead of
+    // discovering it via 4xx after Google retires the endpoint.
+    console.log('\n24. Deprecated model surfaces x-c-thru-deprecated-model header');
+    {
+      const depConfigPath = writeConfigFresh(tmpDir, 'deprecated', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: {
+          'gemini-1.5-pro': 'gemini_stub',
+          'gemini-flash-latest': 'gemini_stub',
+        },
+      });
+      stub.setHandler((req, res) => {
+        if (req.url.includes(':generateContent')) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }));
+          return true;
+        }
+        return false;
+      });
+
+      // Deprecated model: header present.
+      await withProxy({ configPath: depConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-1.5-pro',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 10,
+        });
+        assert(r.status === 200, `24 status 200 (got ${r.status})`);
+        const dep = r.headers?.['x-c-thru-deprecated-model'];
+        assert(typeof dep === 'string' && dep.length > 0,
+          `24 x-c-thru-deprecated-model present (got '${dep}')`);
+        assert(/gemini-1\.5|gemini-pro-latest/.test(dep),
+          `24 advice text mentions migration target (got '${dep}')`);
+      });
+
+      // Current-generation model: header absent.
+      await withProxy({ configPath: depConfigPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-flash-latest',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 10,
+        });
+        assert(r.status === 200, `24-current status 200 (got ${r.status})`);
+        assert(r.headers?.['x-c-thru-deprecated-model'] === undefined,
+          `24-current: no deprecation header on -latest (got '${r.headers?.['x-c-thru-deprecated-model']}')`);
+      });
+
+      // Override: config can opt out a default deprecation.
+      const optOutPath = writeConfigFresh(tmpDir, 'dep-optout', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-1.5-pro': 'gemini_stub' },
+        deprecated_models: { 'gemini-1.5-pro': false },
+      });
+      await withProxy({ configPath: optOutPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-1.5-pro',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 10,
+        });
+        assert(r.status === 200, `24-optout status 200 (got ${r.status})`);
+        assert(r.headers?.['x-c-thru-deprecated-model'] === undefined,
+          `24-optout: deprecated_models:false un-deprecates (got '${r.headers?.['x-c-thru-deprecated-model']}')`);
+      });
+
+      // Override: user-defined deprecation is respected.
+      const userDepPath = writeConfigFresh(tmpDir, 'dep-user', {
+        backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
+        model_routes: { 'gemini-flash-latest': 'gemini_stub' },
+        deprecated_models: { 'gemini-flash-latest': 'project-policy: switch to vertex' },
+      });
+      await withProxy({ configPath: userDepPath, profile: '16gb', env }, async ({ port }) => {
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-flash-latest',
+          messages: [{ role: 'user', content: 'go' }],
+          max_tokens: 10,
+        });
+        assert(r.status === 200, `24-user status 200 (got ${r.status})`);
+        assert(r.headers?.['x-c-thru-deprecated-model'] === 'project-policy: switch to vertex',
+          `24-user: user advice surfaces verbatim (got '${r.headers?.['x-c-thru-deprecated-model']}')`);
+      });
+    }
+
     // 15b. No redacted_thinking -> header absent.
     console.log('\n15b. Wave 4: no redacted_thinking -> no x-c-thru-redacted-thinking-dropped header');
     await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
