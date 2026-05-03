@@ -420,6 +420,42 @@ async function main() {
       });
     });
 
+    // ── G5. tool_result.is_error -> functionResponse.response.error ─────────
+    console.log('\nG5. tool_result.is_error=true -> Gemini functionResponse.response.error');
+    let capturedG5 = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          capturedG5 = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'retry?' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        tools: [{ name: 'calc', description: 'd', input_schema: { type: 'object' } }],
+        messages: [
+          { role: 'user', content: 'compute' },
+          { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_x', name: 'calc', input: { x: 1 } }] },
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_x', content: 'division by zero', is_error: true }] },
+        ],
+        stream: false,
+      });
+      const fr = capturedG5?.contents?.[2]?.parts?.[0]?.functionResponse;
+      assert(fr?.name === 'calc', 'functionResponse.name resolved');
+      assert(fr?.response?.error != null, `is_error=true wraps response under .error (got ${JSON.stringify(fr?.response)})`);
+      assert(fr?.response?.error?.content === 'division by zero', `error payload preserved (got ${JSON.stringify(fr?.response?.error)})`);
+    });
+
     // ── 8. Image content blocks (Anthropic image -> Gemini inlineData) ──────
     console.log('\n8. Image content block mapping (base64 -> inlineData / url -> fileData)');
     let captured8 = null;

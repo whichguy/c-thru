@@ -2393,6 +2393,14 @@ function mapAnthropicToGemini(body) {
             const textParts = responseObj.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n');
             responseObj = { content: textParts || JSON.stringify(responseObj) };
           }
+          // Anthropic tool_result.is_error=true signals upstream that the tool
+          // failed and the model should consider retry/error handling. Gemini's
+          // functionResponse uses an `error` field on response. Wrap the original
+          // content under .error so the model still sees the failure detail.
+          if (block.is_error === true) {
+            const baseContent = (responseObj && typeof responseObj === 'object') ? responseObj : { content: String(responseObj || '') };
+            responseObj = { error: baseContent };
+          }
           const fr = { name, response: responseObj };
           if (block.tool_use_id) fr.id = block.tool_use_id;
           parts.push({ functionResponse: fr });
