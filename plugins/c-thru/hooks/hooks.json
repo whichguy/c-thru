@@ -1,0 +1,30 @@
+{
+  "description": "c-thru proxy lifecycle hooks. SessionStart probes proxy + Ollama health (silent on happy path). UserPromptSubmit health-checks the proxy and injects classify_intent context. PostToolUse re-validates model-map.json on edit. PostCompact re-injects context after Claude Code compresses history.",
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "*",
+      "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-session-start.sh", "timeout": 15 }
+      ]
+    }],
+    "UserPromptSubmit": [{
+      "matcher": "*",
+      "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-proxy-health.sh", "timeout": 5 },
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-classify.sh", "timeout": 8, "async": true }
+      ]
+    }],
+    "PostToolUse": [{
+      "matcher": "Write|Edit",
+      "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-map-changed.sh", "timeout": 5 }
+      ]
+    }],
+    "PostCompact": [{
+      "matcher": "*",
+      "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-postcompact-context.sh", "timeout": 10 }
+      ]
+    }]
+  }
+}
