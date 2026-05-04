@@ -1,5 +1,5 @@
 {
-  "description": "c-thru proxy lifecycle hooks. SessionStart probes proxy + Ollama health (silent on happy path). UserPromptSubmit health-checks the proxy and injects classify_intent context. PostToolUse re-validates model-map.json on edit. PostCompact re-injects context after Claude Code compresses history.",
+  "description": "c-thru proxy lifecycle hooks. SessionStart probes proxy + Ollama health (silent on happy path). UserPromptSubmit health-checks the proxy and injects classify_intent context. PostToolUse re-validates model-map.json on edit. PreCompact re-injects context before Claude Code compresses history.",
   "hooks": {
     "SessionStart": [{
       "matcher": "*",
