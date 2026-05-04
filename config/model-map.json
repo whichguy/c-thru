@@ -97,13 +97,7 @@
    "on_failure": "cascade"
   },
   "explore": {
-   "best-cloud": {
-    "16gb": "gemma4:e4b",
-    "32gb": "devstral-small-2:24b",
-    "48gb": "devstral-small-2:24b",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
-   },
+   "best-cloud": "gemini-pro-latest",
    "best-cloud-oss": {
     "16gb": "gemma4:e4b",
     "32gb": "devstral-small-2:24b",
@@ -162,13 +156,7 @@
    "fallback_to": "coder-fallback"
   },
   "coder-fallback": {
-   "best-cloud": {
-    "16gb": "claude-haiku-4-5-20251001",
-    "32gb": "claude-haiku-4-5-20251001",
-    "48gb": "claude-sonnet-4-6",
-    "64gb": "qwen3-coder-next:latest",
-    "128gb": "qwen3-coder-next:latest"
-   },
+   "best-cloud": "gemini-pro-latest",
    "best-cloud-oss": "deepseek-v4-flash:cloud",
    "best-local-oss": {
     "16gb": "gemma4:e4b",
