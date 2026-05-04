@@ -394,7 +394,7 @@ console.log('\n14. Shipped config has identity agent_to_capability for all 12 pi
     const profiles = shipped.llm_profiles || {};
     const pipelineAgents = [
       'planner', 'planner-hard', 'explore', 'coder', 'coder-fallback',
-      'tester', 'docs', 'reviewer-routine', 'reviewer-security',
+      'tester', 'docs', 'code-reviewer', 'reviewer-security',
       'debugger-hypothesis', 'debugger-investigate', 'debugger-hard',
     ];
     for (const agent of pipelineAgents) {

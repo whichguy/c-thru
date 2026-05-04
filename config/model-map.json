@@ -233,7 +233,7 @@
    "best-local-gov": "phi4-mini:3.8b",
    "on_failure": "cascade"
   },
-  "reviewer-routine": {
+  "code-reviewer": {
    "best-cloud": {
     "16gb": "claude-sonnet-4-6",
     "32gb": "claude-sonnet-4-6",
@@ -640,7 +640,7 @@
   "coder-fallback": "coder-fallback",
   "tester": "tester",
   "docs": "docs",
-  "reviewer-routine": "reviewer-routine",
+  "code-reviewer": "code-reviewer",
   "reviewer-security": "reviewer-security",
   "debugger-hypothesis": "debugger-hypothesis",
   "debugger-investigate": "debugger-investigate",
@@ -814,7 +814,7 @@
    "model": "fast-scout"
   },
   "review_quality": {
-   "model": "reviewer-routine"
+   "model": "code-reviewer"
   },
   "critique_plan": {
    "model": "planner-hard"
@@ -835,7 +835,7 @@
    "model": "planner-hard"
   },
   "code_review_lint": {
-   "model": "reviewer-routine"
+   "model": "code-reviewer"
   },
   "summarize_light": {
    "model": "fast-scout"
@@ -847,7 +847,7 @@
    "model": "planner"
   },
   "review_code_full": {
-   "model": "reviewer-routine"
+   "model": "code-reviewer"
   },
   "hard_reasoning": {
    "model": "planner-hard"
@@ -857,18 +857,18 @@
   "classify_intent": "fast-scout",
   "explore_local": "explore",
   "explore_web": "fast-scout",
-  "review_quality": "reviewer-routine",
+  "review_quality": "code-reviewer",
   "critique_plan": "planner-hard",
   "detect_bugs": "debugger-hypothesis",
   "navigate_codebase": "explore",
   "generate_tests": "tester",
   "deep_review": "reviewer-security",
   "heavy_coder": "planner-hard",
-  "code_review_lint": "reviewer-routine",
+  "code_review_lint": "code-reviewer",
   "summarize_light": "fast-scout",
   "code_fix": "coder",
   "plan_review": "planner",
-  "review_code_full": "reviewer-routine",
+  "review_code_full": "code-reviewer",
   "hard_reasoning": "planner-hard"
  },
  "models": [],
@@ -904,7 +904,7 @@
   "planner-hard": {
    "temperature": 0.6
   },
-  "reviewer-routine": {
+  "code-reviewer": {
    "temperature": 0.6
   },
   "reviewer-security": {

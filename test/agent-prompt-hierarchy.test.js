@@ -236,9 +236,9 @@ async function run() {
 
   console.log('\n--- Phase 3: Review & Synthesis ---');
 
-  // 6. reviewer-routine
+  // 6. code-reviewer
   {
-    const name = 'reviewer-routine';
+    const name = 'code-reviewer';
     const sys = readSystemPrompt(name);
     const user = buildWorkerDigest(name, 'item-004', [SCENARIO.target, 'src/auth/utils.test.js'], `Review the implementation and tests for the palindrome checker.
 Implementation:
@@ -249,7 +249,7 @@ ${artifacts.tests}`);
     console.log(`  [${name}] calling...`);
     const resp = await postMessages(name, sys, user);
     const block = parseStatusBlock(resp);
-    // reviewer-routine might return PARTIAL if it finds something, but for a simple case COMPLETE is expected.
+    // code-reviewer might return PARTIAL if it finds something, but for a simple case COMPLETE is expected.
     if (!['COMPLETE', 'PARTIAL'].includes(block.STATUS)) fail(name, `Expected COMPLETE or PARTIAL, got ${block.STATUS}`);
     ok(`${name}: STATUS=${block.STATUS}`);
     artifacts.waveReview = resp;
@@ -315,9 +315,9 @@ ${artifacts.discovery}`;
     artifacts.currentPlan = resp;
   }
 
-  // 10. reviewer-routine (plan review)
+  // 10. code-reviewer (plan review)
   {
-    const name = 'reviewer-routine';
+    const name = 'code-reviewer';
     const sys = readSystemPrompt(name);
     const user = `Review the following plan for intent: ${SCENARIO.intent}
 
@@ -328,9 +328,9 @@ ${artifacts.currentPlan}`;
     ok(`${name}: VERDICT=${v ? v[1] : 'unknown'}`);
   }
 
-  // 11. reviewer-routine (final review)
+  // 11. code-reviewer (final review)
   {
-    const name = 'reviewer-routine';
+    const name = 'code-reviewer';
     const sys = readSystemPrompt(name);
     const user = `intent: ${SCENARIO.intent}
 plan:

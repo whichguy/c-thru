@@ -150,9 +150,9 @@ echo "3" > $PLAN_DIR/.c-thru-contract-version
 
 ## Phase 3 — Plan review loop
 
-<!-- This invokes reviewer-routine (APPROVED/NEEDS_REVISION verdict expected in response).
-     reviewer-routine treats plan review as a structural review with approve/reject output. -->
-Invoke the `reviewer-routine` agent in a loop capped at 20 rounds.
+<!-- This invokes code-reviewer (APPROVED/NEEDS_REVISION verdict expected in response).
+     code-reviewer treats plan review as a structural review with approve/reject output. -->
+Invoke the `code-reviewer` agent in a loop capped at 20 rounds.
 
 ```
 # Read persisted counter from disk on entry — guards against Phase-5 re-entry
@@ -163,7 +163,7 @@ meta.revision_rounds = meta.revision_rounds ?? 0
 write $PLAN_DIR/meta.json
 
 while meta.revision_rounds < 20:
-    result = Agent(subagent_type: "reviewer-routine",
+    result = Agent(subagent_type: "code-reviewer",
                    prompt: "current.md:  $PLAN_DIR/current.md
                             INDEX:       $PLAN_DIR/INDEX.md
                             round:       <meta.revision_rounds>
@@ -336,7 +336,7 @@ h. Emit structured log line to `$PLAN_DIR/pre-processor.log`:
 When the wave loop exits (all items done):
 
 ```
-Agent(subagent_type: "reviewer-routine",
+Agent(subagent_type: "code-reviewer",
   prompt: "intent:         <original user intent>
            current.md:     $PLAN_DIR/current.md
            INDEX:          $PLAN_DIR/INDEX.md
@@ -400,7 +400,7 @@ Increment on each review-plan or final-reviewer→planner cycle. At 20: pause an
 - *Does this wave need migration?* → `MIGRATION_REQUIRED: yes` + dedicated migration wave inserted before this one
 - *Could this wave break CI?* → `ci_risk: yes` annotated in wave frontmatter
 
-**CI-safety final wave**: appended as the last wave of the plan whenever any wave carries `ci_risk: yes` — not gated on complexity. Runs the project's test/lint/build commands from `TEST_FRAMEWORKS`; falls back to `node --check`. Items dispatched to `tester` + `reviewer-routine` tiers.
+**CI-safety final wave**: appended as the last wave of the plan whenever any wave carries `ci_risk: yes` — not gated on complexity. Runs the project's test/lint/build commands from `TEST_FRAMEWORKS`; falls back to `node --check`. Items dispatched to `tester` + `code-reviewer` tiers.
 
 **State migration** (`MIGRATION_REQUIRED`): triggered by the per-wave self-question, not by complexity tier. Any plan can get a migration wave — even a trivial one if it touches stored data. Absent field → `no`.
 

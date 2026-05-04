@@ -83,7 +83,7 @@ const SNAPSHOT = {
     "best-cloud-gov": { "16gb": "phi4-mini", "32gb": "phi4-mini", "48gb": "phi4-mini", "64gb": "phi4-mini", "128gb": "phi4-mini" },
     "best-local-gov": { "16gb": "phi4-mini", "32gb": "phi4-mini", "48gb": "phi4-mini", "64gb": "phi4-mini", "128gb": "phi4-mini" },
   },
-  "reviewer-routine": {
+  "code-reviewer": {
     "best-cloud": { "16gb": "claude-sonnet-4-6", "32gb": "claude-sonnet-4-6", "48gb": "claude-sonnet-4-6", "64gb": "qwen3:30b", "128gb": "qwen3:30b" },
     "best-cloud-oss": { "16gb": "deepseek-v4-pro:cloud", "32gb": "deepseek-v4-pro:cloud", "48gb": "deepseek-v4-pro:cloud", "64gb": "qwen3:30b", "128gb": "qwen3:30b" },
     "best-local-oss": { "16gb": "phi4-reasoning:plus", "32gb": "qwen3:14b", "48gb": "qwen3:30b", "64gb": "qwen3:30b", "128gb": "qwen3:30b" },
@@ -264,7 +264,7 @@ for (const cap of Object.keys(SNAPSHOT)) {
 console.log('\n2. agent_to_capability identity map');
 const PIPELINE_CAPS = [
   'planner', 'planner-hard', 'explore', 'coder', 'coder-fallback',
-  'tester', 'docs', 'reviewer-routine', 'reviewer-security',
+  'tester', 'docs', 'code-reviewer', 'reviewer-security',
   'debugger-hypothesis', 'debugger-investigate', 'debugger-hard',
 ];
 const a2c = cfg.agent_to_capability || {};

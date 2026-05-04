@@ -16,13 +16,13 @@ The **reviewer-security** performs adversarial security review. It looks specifi
 - Any change to input validation or sanitization
 - Any change to HTTP request/response handling with external parties
 - Any change involving crypto or hashing
-- After reviewer-routine flags a CRITICAL security concern
+- After code-reviewer flags a CRITICAL security concern
 
 ## When NOT to Invoke
 
 - Pure internal refactors with no external surface change
 - Documentation-only changes
-- Routine code review without security-sensitive components (use reviewer-routine)
+- Routine code review without security-sensitive components (use code-reviewer)
 
 ## Recusal Check
 

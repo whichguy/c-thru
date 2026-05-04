@@ -8,7 +8,7 @@ const path = require('path');
 // 12 pipeline agents + 8 utility agents. Fallback for test fixtures.
 const PROFILE_KEYS = [
   'planner', 'planner-hard', 'explore', 'coder', 'coder-fallback', 'tester',
-  'docs', 'reviewer-routine', 'reviewer-security',
+  'docs', 'code-reviewer', 'reviewer-security',
   'debugger-hypothesis', 'debugger-investigate', 'debugger-hard',
   'vision', 'pdf', 'writer', 'edge', 'generalist', 'fast-generalist', 'fast-scout', 'long-context',
 ];

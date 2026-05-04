@@ -687,7 +687,7 @@ function cmdInjectContract(cliArgs) {
                  'RATIONALE: [One sentence explaining why the local output is accepted or why escalation is needed]\n' +
                  'SUMMARY: [≤20 words summary]\n';
     } else {
-      // Standard worker (coder, tester, reviewer-routine, etc)
+      // Standard worker (coder, tester, code-reviewer, etc)
       template += 'CONFIDENCE: [high|medium|low]\n' +
                   'UNCERTAINTY_REASONS: [List rubric bullets if medium/low; omit if high]\n' +
                   'WROTE: [comma-separated paths from target_resources]\n' +

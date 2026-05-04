@@ -52,5 +52,5 @@ INCOMPLETE:
   - <bulleted: work started but not finished, with reason and where it stalled>
   - (omit section if empty)
 
-HANDOFF: tester | reviewer-routine | none
+HANDOFF: tester | code-reviewer | none
 NEXT: <one sentence on what the next agent should do, or "user" if no handoff>

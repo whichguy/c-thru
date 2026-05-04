@@ -63,7 +63,7 @@ agent by a natural-language role, resolve to the canonical key:
 | "explorer", "explore", "discovery", "search" | `explore` |
 | "tester", "test writer", "tests" | `tester` |
 | "docs", "documentation writer" | `docs` |
-| "reviewer", "review", "routine review", "code review" | `reviewer-routine` |
+| "reviewer", "review", "routine review", "code review" | `code-reviewer` |
 | "security reviewer", "security review", "sec review" | `reviewer-security` |
 | "hypothesis", "debug hypothesis" | `debugger-hypothesis` |
 | "investigator", "debug investigate" | `debugger-investigate` |
@@ -106,7 +106,7 @@ that subcommand's block exactly as if the user had typed it directly.
 **Usage:** `/c-thru-config resolve <capability>`
 
 Answers "under the current mode and hardware tier, what concrete model will
-`<capability>` use?" Accepts capability keys (`coder`, `planner`, `reviewer-routine`) and agent names.
+`<capability>` use?" Accepts capability keys (`coder`, `planner`, `code-reviewer`) and agent names.
 
 Extract capability name from `$ARGUMENTS`. If missing, print usage and stop.
 
@@ -487,7 +487,7 @@ try {
 // Capability → model table
 const CAPS = [
   'planner','planner-hard','explore','coder','coder-fallback',
-  'tester','docs','reviewer-routine','reviewer-security',
+  'tester','docs','code-reviewer','reviewer-security',
   'debugger-hypothesis','debugger-investigate','debugger-hard',
   'vision','pdf','writer','edge','generalist','fast-generalist','fast-scout','long-context',
 ];

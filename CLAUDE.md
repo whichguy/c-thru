@@ -295,7 +295,7 @@ The agent fleet uses a flat identity mapping: each agent's `model` frontmatter f
 | `coder-fallback` | Backup coder from different training distribution | 10000 |
 | `tester` | Test generation; same models as explore | 10000 |
 | `docs` | Documentation writing; Gemma E4B / Phi (gov) | 10000 |
-| `reviewer-routine` | Routine code review; Sonnet/local-27B | 50000 |
+| `code-reviewer` | Routine code review; Sonnet/local-27B | 50000 |
 | `reviewer-security` | Security review; always Opus / Kimi K2.6, hard_fail | 999999 |
 | `debugger-hypothesis` | Parallel hypothesis testing; Sonnet/local-27B | 50000 |
 | `debugger-investigate` | Investigation; same shape as coder | 50000 |
@@ -322,7 +322,7 @@ rather than memorizing a fixed pipeline sequence.
 
 Typical flow:
   planner → (UNBLOCKED_TASKS) → coder
-  coder   → (UNBLOCKED_TASKS) → tester → reviewer-routine
+  coder   → (UNBLOCKED_TASKS) → tester → code-reviewer
   any agent → (UNBLOCKED_TASKS) → debugger-hypothesis (on failure)
 
 Debug subloop (triggered by coder/tester failure):

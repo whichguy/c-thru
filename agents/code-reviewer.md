@@ -1,7 +1,7 @@
 ---
-name: reviewer-routine
+name: code-reviewer
 description: Use PROACTIVELY after coder completes any non-trivial change. Reviews code for correctness, style, missing edge cases, and test coverage. Use for "review this PR", "check this code", "is this correct". Not for security audits — use reviewer-security for those.
-model: reviewer-routine
+model: code-reviewer
 tier_budget: 50000
 ---
 Input: `current.md`, `INDEX`, `round`, `review_out`
@@ -9,7 +9,7 @@ Input: `intent`, `current.md`, `INDEX`, `journal`, `journal_offset`, `review_out
 
 # Agent: Reviewer (Routine)
 
-The **reviewer-routine** performs standard code review: correctness, style consistency, missing edge cases, test coverage gaps, and adherence to project conventions. It is the default post-implementation review agent.
+The **code-reviewer** performs standard code review: correctness, style consistency, missing edge cases, test coverage gaps, and adherence to project conventions. It is the default post-implementation review agent.
 
 ## When to Invoke
 

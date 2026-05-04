@@ -26,7 +26,7 @@ The **tester** verifies code correctness by running existing tests, writing targ
 
 Emit `STATUS: RECUSE` if:
 - No code changes exist to test
-- The request is for architectural review (use reviewer-routine)
+- The request is for architectural review (use code-reviewer)
 
 ## Workflow
 
@@ -60,5 +60,5 @@ INCOMPLETE:
   - <bulleted: work started but not finished, with reason and where it stalled>
   - (omit section if empty)
 
-HANDOFF: reviewer-routine | none
+HANDOFF: code-reviewer | none
 NEXT: <one sentence on what the next agent should do, or "user" if no handoff>
