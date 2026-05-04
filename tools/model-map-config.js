@@ -84,7 +84,35 @@ function maybeSyncLayeredProfileModelMap(options = {}) {
   if (!claudeDir) return;
 
   const systemPath = path.join(claudeDir, 'model-map.system.json');
-  const defaultsPath = fs.existsSync(systemPath) ? systemPath : repoDefaultsPath(baseDir);
+  // Refresh system.json from the shipped repo config when the shipped one is
+  // newer (e.g. user pulled a config update without re-running install.sh).
+  // Without this, edits to config/model-map.json never reach the active
+  // routing table — `c-thru --list` and the proxy both read from the merged
+  // model-map.json which is built from system.json + overrides. Mirror of
+  // the proxy-side check in tools/claude-proxy:maybeRegenerateMergedConfig
+  // — replicated here so non-proxy code paths (e.g. `c-thru --list` which
+  // doesn't spawn the proxy) also pick up shipped-config updates.
+  const shippedPath = repoDefaultsPath(baseDir);
+  if (shippedPath) {
+    try {
+      const shippedMtime = fs.statSync(shippedPath).mtimeMs;
+      let systemMtime = 0;
+      try { systemMtime = fs.statSync(systemPath).mtimeMs; } catch {}
+      if (shippedMtime > systemMtime) {
+        // Validate before copying — never overwrite a working system.json
+        // with a broken shipped config (would brick the proxy on reload).
+        try {
+          JSON.parse(fs.readFileSync(shippedPath, 'utf8'));
+          fs.copyFileSync(shippedPath, systemPath);
+        } catch (e) {
+          if (typeof onSyncFailure === 'function') {
+            onSyncFailure({ stderr: `shipped config invalid: ${e.message}`, status: 1 });
+          }
+        }
+      }
+    } catch {}
+  }
+  const defaultsPath = fs.existsSync(systemPath) ? systemPath : shippedPath;
   if (!defaultsPath) return;
 
   const overridesPath = path.join(claudeDir, 'model-map.overrides.json');
