@@ -263,6 +263,24 @@ bash tools/c-thru-contract-check.sh   # exit 0 = clean; exit 1 = contract violat
 ```
 Catches dangling `subagent_type` references, missing prompt keys vs. declared `Input:` lines, and accidental `Skill("review-plan")` invocations. Symlinked by `install.sh` to `~/.claude/tools/c-thru-contract-check`.
 
+## Plugin bundle sync
+
+`plugins/c-thru/` is the claude-craft marketplace bundle. It must mirror the source files:
+
+```
+Source                              Bundle copy
+tools/<hook>.sh          →  plugins/c-thru/hooks/<hook>.sh
+skills/<name>/SKILL.md   →  plugins/c-thru/skills/<name>/SKILL.md
+```
+
+After editing a source file, sync:
+```sh
+tools/sync-plugin-bundle.sh          # copy changed files into bundle
+```
+
+The pre-commit hook (`.githooks/pre-commit`) runs `--check` mode automatically.
+Activate it once: `git config core.hooksPath .githooks`
+
 ## Working-tree hygiene
 
 Before starting a non-trivial task (or before opening a PR), run:
