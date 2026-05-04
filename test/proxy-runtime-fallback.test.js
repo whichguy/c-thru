@@ -682,6 +682,124 @@ async function main() {
       }
     }
 
+    // ── Test 12: gemini-pro → sonnet fallback (commit d9bc6d3) ──────────────
+    // The shipped config (config/model-map.json:24) sets
+    //   endpoints.gemini_ai.fallback_to = "claude-sonnet-4-6"
+    // so when the gemini endpoint fails (5xx, auth, quota), the proxy walks
+    // the backend chain to anthropic and the client gets a Sonnet response
+    // instead of the upstream error. Verify end-to-end with two stubs.
+    console.log('\n12. gemini_ai 5xx → falls back to anthropic Sonnet');
+    {
+      const gemini = await stubBackend({ failWith: 503 });
+      const anthropic = await stubBackend({
+        responseBody: {
+          id: 'msg_sonnet_fb',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'sonnet-fallback-served' }],
+          model: 'claude-sonnet-4-6',
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      });
+      try {
+        const cfg = {
+          endpoints: {
+            gemini_ai: {
+              format: 'gemini',
+              url: `http://127.0.0.1:${gemini.port}`,
+              auth: 'none',
+              fallback_to: 'claude-sonnet-4-6',
+            },
+            anthropic: {
+              kind: 'anthropic',
+              url: `http://127.0.0.1:${anthropic.port}`,
+            },
+          },
+          model_routes: {
+            'gemini-pro':         { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
+            'claude-sonnet-4-6':  'anthropic',
+          },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'gemini-pro', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r.status, 200, '12 gemini 5xx → proxy returned 200 after fallback');
+          const text = (r.json?.content || []).map(b => b.text).join('');
+          assert(text.includes('sonnet-fallback-served'),
+            `12 response came from anthropic stub, not gemini (got: ${text})`);
+          assertEq(gemini.requests.length, 1, '12 gemini was tried once');
+          assertEq(anthropic.requests.length, 1, '12 anthropic fallback hit once');
+          // Resolution chain header surfaces the fallback hop for observability.
+          assert((r.headers?.['x-c-thru-fallback-from'] || '').includes('gemini') ||
+                 (r.headers?.['x-c-thru-resolution-chain'] || '').includes('gemini'),
+            `12 fallback hop visible in response headers (chain: '${r.headers?.['x-c-thru-resolution-chain']}', fallback-from: '${r.headers?.['x-c-thru-fallback-from']}')`);
+        });
+      } finally {
+        await gemini.close().catch(() => {});
+        await anthropic.close().catch(() => {});
+      }
+    }
+
+    // ── Test 12b: gemini connection refused → falls back to Sonnet ──────────
+    // Network errors (ECONNREFUSED) classify the same as 5xx for fallback
+    // purposes. Verifies the same chain works when gemini_ai is entirely
+    // unreachable, not just returning errors.
+    console.log('\n12b. gemini_ai unreachable → falls back to Sonnet');
+    {
+      const anthropic = await stubBackend({
+        responseBody: {
+          id: 'msg_sonnet_fb2',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'sonnet-after-net-error' }],
+          model: 'claude-sonnet-4-6',
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      });
+      try {
+        // Pick a port that won't accept connections (1 is privileged + bind-disallowed).
+        const cfg = {
+          endpoints: {
+            gemini_ai: {
+              format: 'gemini',
+              url: 'http://127.0.0.1:1',
+              auth: 'none',
+              fallback_to: 'claude-sonnet-4-6',
+            },
+            anthropic: {
+              kind: 'anthropic',
+              url: `http://127.0.0.1:${anthropic.port}`,
+            },
+          },
+          model_routes: {
+            'gemini-pro':         { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
+            'claude-sonnet-4-6':  'anthropic',
+          },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'gemini-pro', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          }, {}, 10000);
+          assertEq(r.status, 200, '12b connection error → fallback succeeded with 200');
+          const text = (r.json?.content || []).map(b => b.text).join('');
+          assert(text.includes('sonnet-after-net-error'),
+            `12b response from anthropic after network error (got: ${text})`);
+          assertEq(anthropic.requests.length, 1, '12b anthropic fallback hit once');
+        });
+      } finally {
+        await anthropic.close().catch(() => {});
+      }
+    }
+
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

@@ -2445,6 +2445,41 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           extraHeaders['anthropic-ratelimit-requests-remaining'] = '0';
         }
         if (res.headersSent) return;
+        // Backend-level fallback on retryable upstream errors. Mirrors the
+        // forwardAnthropic path (~line 1202): mark the backend as failed
+        // (puts it in cooldown if appropriate) and ask tryFallbackOrFail to
+        // walk the configured chain. Only fires when the endpoint declares
+        // fallback_to — otherwise relays the error directly. Without this,
+        // gemini_ai's `fallback_to: claude-sonnet-4-6` would only kick in
+        // on network errors, not 5xx / auth / quota responses.
+        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(statusCode, errBody));
+        if (backend.fallback_to) {
+          tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
+            reason: `gemini ${statusCode}: ${errBody.slice(0, 200)}`,
+            statusCode,
+          }).then(handled => {
+            if (handled || res.headersSent) return;
+            res.writeHead(statusCode, Object.assign(
+              { 'Content-Type': 'application/json' },
+              extraHeaders,
+            ));
+            res.end(JSON.stringify({
+              type: 'error',
+              error: { type: errType, message: `Gemini error: ${errBody}` },
+            }));
+          }).catch(() => {
+            if (res.headersSent) return;
+            res.writeHead(statusCode, Object.assign(
+              { 'Content-Type': 'application/json' },
+              extraHeaders,
+            ));
+            res.end(JSON.stringify({
+              type: 'error',
+              error: { type: errType, message: `Gemini error: ${errBody}` },
+            }));
+          });
+          return;
+        }
         res.writeHead(statusCode, Object.assign(
           { 'Content-Type': 'application/json' },
           extraHeaders,
