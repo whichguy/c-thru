@@ -23,7 +23,8 @@ check_or_copy() {
       drift=1
     fi
   else
-    cp "$src" "$dst"
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst" || { echo "FAIL: could not copy $src → $dst"; drift=1; }
   fi
 }
 

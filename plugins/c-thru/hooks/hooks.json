@@ -20,7 +20,7 @@
         { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-map-changed.sh", "timeout": 5 }
       ]
     }],
-    "PostCompact": [{
+    "PreCompact": [{
       "matcher": "*",
       "hooks": [
         { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-postcompact-context.sh", "timeout": 10 }
