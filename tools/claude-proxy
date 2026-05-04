@@ -4087,7 +4087,7 @@ const server = http.createServer((req, res) => {
         const anthropicCfg = (CONFIG.endpoints || CONFIG.backends || {}).anthropic;
         if (anthropicCfg) {
           const backend = normalizeBackend('anthropic', anthropicCfg);
-          proxyLog('v1_passthrough', { method: req.method, path: req.url });
+          proxyLog('v1_passthrough', { method: req.method, path: req.url, backend: 'anthropic' });
           const targetUrl = new URL(backend.url);
           const isHttps = targetUrl.protocol === 'https:';
           const lib = isHttps ? https : http;
