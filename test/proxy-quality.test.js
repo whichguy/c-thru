@@ -232,24 +232,22 @@ async function runV1PassthroughTests() {
     const configPath = writeConfig(tmpDir, config);
 
     await withProxy({ configPath, profile: '16gb', env: { ANTHROPIC_API_KEY: api_key } }, async ({ port }) => {
-      // 3.1 GET /v1/me should be forwarded (not 404)
       console.log('3.1 GET /v1/me forwarded to Anthropic backend');
-      const r = await httpJson(port, 'GET', '/v1/me', null, { 'x-api-key': 'proxied-placeholder' });
-      assertEq(r.status, 200, '/v1/me returns 200 (forwarded, not 404)');
+      const meRes = await httpJson(port, 'GET', '/v1/me', null, { 'x-api-key': 'proxied-placeholder' });
+      assertEq(meRes.status, 200, '/v1/me returns 200 (forwarded, not 404)');
       assertEq(anthropicStub.requests.length, 1, 'Anthropic stub received the request');
 
       const fwd = anthropicStub.lastRequest();
+      assert(fwd !== null, 'lastRequest is non-null');
       assertEq(fwd.path, '/v1/me', 'Path forwarded verbatim');
       assertEq(fwd.method, 'GET', 'Method forwarded verbatim');
-      // Real key injected — placeholder must not reach the upstream
       assert(fwd.headers['x-api-key'] === api_key || fwd.headers['authorization'] === `Bearer ${api_key}`,
         'Real API key injected by applyOutboundAuth (placeholder not forwarded)');
       assert(fwd.headers['x-api-key'] !== 'proxied-placeholder', 'Placeholder key not forwarded');
 
-      // 3.2 Unknown non-/v1/ path still 404s
       console.log('3.2 Unknown non-/v1/ path still returns 404');
-      const r2 = await httpJson(port, 'GET', '/unknown-path', null);
-      assertEq(r2.status, 404, 'Non-/v1/ unknown path returns 404');
+      const unknownRes = await httpJson(port, 'GET', '/unknown-path', null);
+      assertEq(unknownRes.status, 404, 'Non-/v1/ unknown path returns 404');
       assertEq(anthropicStub.requests.length, 1, 'Stub not hit for non-/v1/ path');
     });
 

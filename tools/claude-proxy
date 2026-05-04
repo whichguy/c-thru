@@ -4081,19 +4081,18 @@ const server = http.createServer((req, res) => {
         return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
       }
 
-      // Passthrough: forward unknown /v1/* requests to the Anthropic backend so Claude Code
-      // auth checks (e.g. /v1/me, /v1/organizations) resolve with the real API key.
+      // Forward unhandled /v1/* to Anthropic so Claude Code auth checks (/v1/me,
+      // /v1/organizations) resolve with the real key rather than getting a 404.
       if (req.url.startsWith('/v1/')) {
         const anthropicCfg = (CONFIG.endpoints || CONFIG.backends || {}).anthropic;
         if (anthropicCfg) {
           const backend = normalizeBackend('anthropic', anthropicCfg);
-          proxyLog('v1_passthrough', { method: req.method, path: req.url, backend: 'anthropic' });
+          proxyLog('v1_passthrough', { method: req.method, path: req.url });
           const targetUrl = new URL(backend.url);
           const isHttps = targetUrl.protocol === 'https:';
           const lib = isHttps ? https : http;
           const fwdHeaders = scrubCthruHeaders(req.headers);
           applyOutboundAuth(backend, req.headers, fwdHeaders);
-          delete fwdHeaders['host'];
           const up = lib.request({
             hostname: targetUrl.hostname,
             port: targetUrl.port || (isHttps ? 443 : 80),
@@ -4104,6 +4103,7 @@ const server = http.createServer((req, res) => {
             res.writeHead(upRes.statusCode, upRes.headers);
             upRes.pipe(res);
           });
+          up.setTimeout(15000, () => up.destroy(new Error('v1-passthrough timeout')));
           up.on('error', err => {
             if (!res.headersSent) sendAnthropicError(res, 502, `v1-passthrough error: ${err.message}`);
           });
