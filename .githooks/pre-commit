@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Pre-commit: verify plugins/c-thru/ bundle is in sync with source files.
+set -o pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+if [ -f "$REPO_ROOT/tools/sync-plugin-bundle.sh" ]; then
+  bash "$REPO_ROOT/tools/sync-plugin-bundle.sh" --check || {
+    echo "Run: tools/sync-plugin-bundle.sh"
+    exit 1
+  }
+fi
