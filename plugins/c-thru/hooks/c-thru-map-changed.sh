@@ -25,9 +25,15 @@ case "$file_path" in
     *) exit 0 ;;  # not a model-map file — exit silently
 esac
 
-# Locate validator
-script_dir="$(cd "$(dirname "$0")" && pwd)"
-validator="${script_dir}/model-map-validate.js"
+# Locate validator — BASH_SOURCE resolver works from symlink, repo direct, or plugin bundle
+_src="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_src" ]; do
+    _dir=$(cd -P "$(dirname "$_src")" && pwd)
+    _src=$(readlink "$_src")
+    case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+_hook_dir=$(cd -P "$(dirname "$_src")" && pwd)
+validator="$(cd "$_hook_dir/.." && pwd)/tools/model-map-validate.js"
 
 if ! command -v node >/dev/null 2>&1 || [ ! -f "$validator" ]; then
     exit 0  # validator unavailable — skip silently

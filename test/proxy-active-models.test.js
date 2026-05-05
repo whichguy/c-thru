@@ -2,6 +2,7 @@
 'use strict';
 // Integration tests for GET /v1/active-models proxy endpoint.
 // Verifies tier/mode resolution, local vs cloud filtering, and mode-switching.
+// Uses new capability-outer llm_profiles schema.
 // Run with: node test/proxy-active-models.test.js
 
 const fs   = require('fs');
@@ -13,37 +14,33 @@ const { assert, assertEq, summary, writeConfig, httpJson, withProxy } = require(
 console.log('proxy-active-models endpoint tests\n');
 
 // ── Fixture config ─────────────────────────────────────────────────────────
-// Two local models and one cloud model across two capabilities.
-// model_routes distinguishes local vs cloud.
+// Two local models and one cloud model across three capabilities.
+// model_routes + backends distinguish local vs cloud.
 
 function buildConfig({ tier = '64gb', extra = {} } = {}) {
   return Object.assign({
+    backends: {
+      ollama_local: { kind: 'ollama',    url: 'http://localhost:11434' },
+      anthropic:    { kind: 'anthropic', url: 'https://api.anthropic.com' },
+    },
     model_routes: {
-      'local-a:7b':   'ollama_local',
-      'local-b:13b':  'ollama_local',
-      'cloud-x:big':  'anthropic',
-      'local-c:70b':  'ollama_local',
+      'local-a:7b':  'ollama_local',
+      'local-b:13b': 'ollama_local',
+      'cloud-x:big': 'anthropic',
+      'local-c:70b': 'ollama_local',
     },
     llm_profiles: {
-      [tier]: {
-        workhorse: {
-          connected_model:  'cloud-x:big',
-          disconnect_model: 'local-a:7b',
-        },
-        coder: {
-          connected_model:  'local-b:13b',
-          disconnect_model: 'local-b:13b',
-        },
-        judge: {
-          connected_model:  'cloud-x:big',
-          disconnect_model: 'local-c:70b',
-          cloud_best_model: 'cloud-x:big',
-          local_best_model: 'local-c:70b',
-          modes: {
-            'semi-offload':    'cloud-x:big',
-            'cloud-judge-only': 'cloud-x:big',
-          },
-        },
+      workhorse: {
+        'best-cloud':     { [tier]: 'cloud-x:big' },
+        'best-local-oss': { [tier]: 'local-a:7b'  },
+      },
+      coder: {
+        'best-cloud':     { [tier]: 'local-b:13b' },
+        'best-local-oss': { [tier]: 'local-b:13b' },
+      },
+      judge: {
+        'best-cloud':     { [tier]: 'cloud-x:big' },
+        'best-local-oss': { [tier]: 'local-c:70b' },
       },
     },
   }, extra);
@@ -54,138 +51,130 @@ async function main() {
 
   try {
 
-    // ── Test 1: connected mode — cloud models excluded from local_models ─────
-    console.log('1. connected mode: cloud models not in local_models');
+    // ── Test 1: best-cloud mode — cloud models excluded from local_models ─────
+    console.log('1. best-cloud mode: cloud models not in local_models');
     await withProxy(
-      { configPath: writeConfig(tmpDir, buildConfig()), profile: '64gb', mode: 'connected' },
+      { configPath: writeConfig(tmpDir, buildConfig()), profile: '64gb', mode: 'best-cloud' },
       async ({ port }) => {
         const r = await httpJson(port, 'GET', '/v1/active-models');
         assertEq(r.status, 200, 'status 200');
         assertEq(r.json?.tier, '64gb', 'tier');
-        assertEq(r.json?.mode, 'connected', 'mode');
+        assertEq(r.json?.mode, 'best-cloud', 'mode');
         assert(Array.isArray(r.json?.capabilities), 'capabilities is array');
         assert(Array.isArray(r.json?.local_models), 'local_models is array');
 
-        // In connected mode: workhorse→cloud-x, coder→local-b, judge→cloud-x
-        // cloud-x is anthropic → not in local_models
+        // workhorse→cloud-x (cloud), coder→local-b (local), judge→cloud-x (cloud)
         const localModels = r.json.local_models;
         assert(!localModels.includes('cloud-x:big'), 'cloud model excluded from local_models');
-        assert(localModels.includes('local-b:13b'), 'local coder in local_models');
+        assert(localModels.includes('local-b:13b'), 'local coder model in local_models');
 
-        // capabilities array has an entry per profile key
         const caps = r.json.capabilities.map(c => c.capability);
         assert(caps.includes('workhorse'), 'workhorse in capabilities');
         assert(caps.includes('coder'), 'coder in capabilities');
         assert(caps.includes('judge'), 'judge in capabilities');
 
-        // workhorse connected_model is cloud-x — local: false
         const wh = r.json.capabilities.find(c => c.capability === 'workhorse');
-        assertEq(wh?.model, 'cloud-x:big', 'workhorse model in connected');
+        assertEq(wh?.model, 'cloud-x:big', 'workhorse model in best-cloud');
         assertEq(wh?.local, false, 'workhorse local=false for cloud model');
 
-        // coder connected_model is local-b — local: true
         const coder = r.json.capabilities.find(c => c.capability === 'coder');
         assertEq(coder?.model, 'local-b:13b', 'coder model');
         assertEq(coder?.local, true, 'coder local=true');
       }
     );
 
-    // ── Test 2: offline mode — uses disconnect_model, only local models ──────
-    console.log('\n2. offline mode: local_models contains all offline models');
+    // ── Test 2: best-local-oss mode — only local models ──────────────────────
+    console.log('\n2. best-local-oss mode: all models local, cloud model absent');
     await withProxy(
-      { configPath: writeConfig(tmpDir, buildConfig()), profile: '64gb', mode: 'offline' },
+      { configPath: writeConfig(tmpDir, buildConfig()), profile: '64gb', mode: 'best-local-oss' },
       async ({ port }) => {
         const r = await httpJson(port, 'GET', '/v1/active-models');
-        assertEq(r.json?.mode, 'offline', 'mode=offline');
+        assertEq(r.json?.mode, 'best-local-oss', 'mode=best-local-oss');
         const localModels = r.json.local_models;
-        assert(localModels.includes('local-a:7b'), 'workhorse disconnect in local_models');
-        assert(localModels.includes('local-b:13b'), 'coder disconnect in local_models');
-        assert(localModels.includes('local-c:70b'), 'judge disconnect in local_models');
-        assert(!localModels.includes('cloud-x:big'), 'cloud model absent in offline');
+        assert(localModels.includes('local-a:7b'), 'workhorse local model in local_models');
+        assert(localModels.includes('local-b:13b'), 'coder local model in local_models');
+        assert(localModels.includes('local-c:70b'), 'judge local model in local_models');
+        assert(!localModels.includes('cloud-x:big'), 'cloud model absent in best-local-oss');
 
         const wh = r.json.capabilities.find(c => c.capability === 'workhorse');
-        assertEq(wh?.model, 'local-a:7b', 'workhorse uses disconnect_model in offline');
-      }
-    );
+        assertEq(wh?.model, 'local-a:7b', 'workhorse uses best-local-oss slot');
+        assertEq(wh?.local, true, 'workhorse local=true in best-local-oss');
 
-    // ── Test 3: local-best-quality — uses local_best_model ──────────────────
-    console.log('\n3. local-best-quality mode: uses local_best_model');
-    await withProxy(
-      { configPath: writeConfig(tmpDir, buildConfig()), profile: '64gb', mode: 'local-best-quality' },
-      async ({ port }) => {
-        const r = await httpJson(port, 'GET', '/v1/active-models');
-        assertEq(r.json?.mode, 'local-best-quality', 'mode=local-best-quality');
         const j = r.json.capabilities.find(c => c.capability === 'judge');
-        // judge has local_best_model=local-c:70b
-        assertEq(j?.model, 'local-c:70b', 'judge uses local_best_model');
+        assertEq(j?.model, 'local-c:70b', 'judge uses best-local-oss slot');
       }
     );
 
-    // ── Test 4: cloud-judge-only — modes[] override for judge ────────────────
-    console.log('\n4. cloud-judge-only: judge uses modes[cloud-judge-only] override');
+    // ── Test 3: mode fallback — missing mode falls back to best-cloud ─────────
+    console.log('\n3. mode fallback: missing best-cloud-oss falls back to best-cloud');
     await withProxy(
-      { configPath: writeConfig(tmpDir, buildConfig()), profile: '64gb', mode: 'cloud-judge-only' },
+      { configPath: writeConfig(tmpDir, buildConfig()), profile: '64gb', mode: 'best-cloud-oss' },
       async ({ port }) => {
         const r = await httpJson(port, 'GET', '/v1/active-models');
-        assertEq(r.json?.mode, 'cloud-judge-only', 'mode=cloud-judge-only');
+        // Config has no best-cloud-oss entries; resolveProfileModel falls back to best-cloud
+        const wh = r.json.capabilities.find(c => c.capability === 'workhorse');
+        assertEq(wh?.model, 'cloud-x:big', 'workhorse falls back to best-cloud when best-cloud-oss absent');
         const j = r.json.capabilities.find(c => c.capability === 'judge');
-        // judge.modes['cloud-judge-only'] = cloud-x:big
-        assertEq(j?.model, 'cloud-x:big', 'judge overridden to cloud via modes[]');
-        assertEq(j?.local, false, 'cloud-judge-only model is not local');
-        // coder has no modes[] override → falls back to disconnect_model
-        const c = r.json.capabilities.find(c => c.capability === 'coder');
-        assertEq(c?.model, 'local-b:13b', 'coder falls back to disconnect_model');
+        assertEq(j?.model, 'cloud-x:big', 'judge falls back to best-cloud when best-cloud-oss absent');
       }
     );
 
-    // ── Test 5: deduplication — same model used by multiple capabilities ─────
-    console.log('\n5. local_models is deduplicated when multiple caps share a model');
-    const sharedConfig = buildConfig();
-    // Make coder use same model as workhorse in offline mode
-    sharedConfig.llm_profiles['64gb'].coder.disconnect_model = 'local-a:7b';
+    // ── Test 4: deduplication — same model used by multiple capabilities ──────
+    console.log('\n4. local_models is deduplicated when multiple caps share a model');
+    const sharedCfg = buildConfig();
+    // Make workhorse share local-b:13b with coder in best-local-oss mode
+    sharedCfg.llm_profiles.workhorse['best-local-oss'] = { '64gb': 'local-b:13b' };
     await withProxy(
-      { configPath: writeConfig(tmpDir, sharedConfig), profile: '64gb', mode: 'offline' },
+      { configPath: writeConfig(tmpDir, sharedCfg), profile: '64gb', mode: 'best-local-oss' },
       async ({ port }) => {
         const r = await httpJson(port, 'GET', '/v1/active-models');
-        const count = r.json.local_models.filter(m => m === 'local-a:7b').length;
-        assertEq(count, 1, 'local-a:7b appears exactly once despite multiple caps using it');
+        const count = r.json.local_models.filter(m => m === 'local-b:13b').length;
+        assertEq(count, 1, 'local-b:13b appears exactly once despite multiple caps using it');
       }
     );
 
-    // ── Test 6: thin config (one capability) and no-profiles-for-tier case ──
-    console.log('\n6a. thin config: single-capability tier resolves correctly');
+    // ── Test 5: thin config (one capability) resolves correctly ───────────────
+    console.log('\n5. thin config: single-capability resolves correctly');
     const thinConfig = {
+      backends: { ollama_local: { kind: 'ollama', url: 'http://localhost:11434' } },
       model_routes: { 'tiny:1b': 'ollama_local' },
       llm_profiles: {
-        '128gb': { workhorse: { connected_model: 'tiny:1b', disconnect_model: 'tiny:1b' } },
+        workhorse: { 'best-cloud': { '128gb': 'tiny:1b' } },
       },
     };
     await withProxy(
-      { configPath: writeConfig(tmpDir, thinConfig), profile: '128gb', mode: 'connected' },
+      { configPath: writeConfig(tmpDir, thinConfig), profile: '128gb', mode: 'best-cloud' },
       async ({ port }) => {
         const r = await httpJson(port, 'GET', '/v1/active-models');
         assertEq(r.status, 200, 'status 200 for thin config');
         assert(r.json?.local_models?.includes('tiny:1b'), 'tiny:1b in local_models');
         assertEq(r.json?.capabilities?.length, 1, 'exactly 1 capability entry');
+        const wh = r.json.capabilities.find(c => c.capability === 'workhorse');
+        assertEq(wh?.model, 'tiny:1b', 'thin config capability model correct');
+        assertEq(wh?.local, true, 'ollama model is local');
       }
     );
 
-    console.log('\n6b. tier with no profiles: returns empty capabilities and local_models');
-    // Config has profiles for 64gb only; force proxy to 128gb so profiles[128gb] is undefined.
+    // ── Test 6: empty llm_profiles → empty capabilities and local_models ──────
+    console.log('\n6. empty llm_profiles: returns empty capabilities and local_models');
+    const emptyCfg = {
+      backends: { stub: { kind: 'anthropic', url: 'https://api.anthropic.com' } },
+      llm_profiles: {},
+    };
     await withProxy(
-      { configPath: writeConfig(tmpDir, buildConfig({ tier: '64gb' })), profile: '128gb', mode: 'connected' },
+      { configPath: writeConfig(tmpDir, emptyCfg), profile: '64gb', mode: 'best-cloud' },
       async ({ port }) => {
         const r = await httpJson(port, 'GET', '/v1/active-models');
-        assertEq(r.status, 200, 'status 200 when tier has no profiles');
-        assertEq(r.json?.capabilities?.length, 0, 'empty capabilities for missing tier');
-        assertEq(r.json?.local_models?.length, 0, 'empty local_models for missing tier');
+        assertEq(r.status, 200, 'status 200 for empty profiles');
+        assertEq(r.json?.capabilities?.length, 0, 'empty capabilities');
+        assertEq(r.json?.local_models?.length, 0, 'empty local_models');
       }
     );
 
-    // ── Test 7: /ping and /v1/active-models agree on tier and mode ───────────
+    // ── Test 7: /ping and /v1/active-models agree on tier and mode ────────────
     console.log('\n7. /ping and /v1/active-models report same tier and mode');
     await withProxy(
-      { configPath: writeConfig(tmpDir, buildConfig()), profile: '64gb', mode: 'offline' },
+      { configPath: writeConfig(tmpDir, buildConfig()), profile: '64gb', mode: 'best-local-oss' },
       async ({ port }) => {
         const [ping, am] = await Promise.all([
           httpJson(port, 'GET', '/ping'),

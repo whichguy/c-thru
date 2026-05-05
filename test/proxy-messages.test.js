@@ -32,19 +32,15 @@ function buildConfig(stubPort) {
       [CONCRETE_MODEL]: 'stub',
     },
     llm_profiles: {
-      '16gb': {
-        workhorse: {
-          connected_model:  `${CONCRETE_MODEL}@stub`,
-          disconnect_model: `${CONCRETE_MODEL}@stub`,
-        },
-        judge: {
-          connected_model:  `${CONCRETE_MODEL}@stub`,
-          disconnect_model: `${CONCRETE_MODEL}@stub`,
-          modes: {
-            'semi-offload':     `${CONCRETE_MODEL}@stub`,
-            'cloud-judge-only': `${CONCRETE_MODEL}@stub`,
-          },
-        },
+      workhorse: {
+        'best-cloud':     { '16gb': `${CONCRETE_MODEL}@stub` },
+        'best-local-oss': { '16gb': `${CONCRETE_MODEL}@stub` },
+        'best-cloud-oss': { '16gb': `${CONCRETE_MODEL}@stub` },
+      },
+      judge: {
+        'best-cloud':     { '16gb': `${CONCRETE_MODEL}@stub` },
+        'best-local-oss': { '16gb': `${CONCRETE_MODEL}@stub` },
+        'best-cloud-oss': { '16gb': `${CONCRETE_MODEL}@stub` },
       },
     },
     agent_to_capability: {
@@ -109,7 +105,7 @@ async function main() {
 
     // ── Test 2: Capability alias — x-c-thru-resolved-via header ────────────
     console.log('\n2. Capability alias (workhorse → concrete model) — response headers');
-    await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'connected' } }, async ({ port }) => {
+    await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'best-cloud' } }, async ({ port }) => {
       const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
       const r = await httpJson(port, 'POST', '/v1/messages', body);
 
@@ -135,7 +131,7 @@ async function main() {
 
     // ── Test 3: agent_to_capability chain ───────────────────────────────────
     console.log('\n3. agent_to_capability chain (test-agent → workhorse → concrete model)');
-    await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'connected' } }, async ({ port }) => {
+    await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'best-cloud' } }, async ({ port }) => {
       const body = Object.assign({ model: 'test-agent' }, MSG_BODY);
       const r = await httpJson(port, 'POST', '/v1/messages', body);
 
@@ -153,9 +149,9 @@ async function main() {
         `agent chain: stub received model_used === ${CONCRETE_MODEL}`);
     });
 
-    // ── Test 4: offline mode → disconnect_model ─────────────────────────────
-    console.log('\n4. Offline mode (workhorse → disconnect_model)');
-    await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'offline' } }, async ({ port }) => {
+    // ── Test 4: best-local-oss mode → local model ───────────────────────────
+    console.log('\n4. best-local-oss mode (workhorse → local model)');
+    await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'best-local-oss' } }, async ({ port }) => {
       const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
       const r = await httpJson(port, 'POST', '/v1/messages', body);
 
@@ -163,24 +159,24 @@ async function main() {
 
       const via = parseResolvedVia(r.headers);
       assert(via && via.served_by === CONCRETE_MODEL,
-        `offline: x-c-thru-resolved-via.served_by === ${CONCRETE_MODEL} (disconnect_model)`);
+        `best-local-oss: x-c-thru-resolved-via.served_by === ${CONCRETE_MODEL}`);
       assert(via && via.capability === 'workhorse',
-        'offline: x-c-thru-resolved-via.capability === workhorse');
+        'best-local-oss: x-c-thru-resolved-via.capability === workhorse');
     });
 
-    // ── Test 5: semi-offload modes[] sub-map ────────────────────────────────
-    console.log('\n5. semi-offload mode (judge modes[] sub-map)');
-    await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'semi-offload' } }, async ({ port }) => {
+    // ── Test 5: best-cloud-oss mode ─────────────────────────────────────────
+    console.log('\n5. best-cloud-oss mode (judge → cloud-oss model)');
+    await withProxy({ configPath, profile: '16gb', env: { ...proxyEnv, CLAUDE_LLM_MODE: 'best-cloud-oss' } }, async ({ port }) => {
       const body = Object.assign({ model: 'judge' }, MSG_BODY);
       const r = await httpJson(port, 'POST', '/v1/messages', body);
 
-      assert(r.status === 200, `semi-offload: status 200 (got ${r.status})`);
+      assert(r.status === 200, `best-cloud-oss: status 200 (got ${r.status})`);
 
       const via = parseResolvedVia(r.headers);
       assert(via && via.served_by === CONCRETE_MODEL,
-        `semi-offload: x-c-thru-resolved-via.served_by === ${CONCRETE_MODEL}`);
+        `best-cloud-oss: x-c-thru-resolved-via.served_by === ${CONCRETE_MODEL}`);
       assert(via && via.capability === 'judge',
-        'semi-offload: x-c-thru-resolved-via.capability === judge');
+        'best-cloud-oss: x-c-thru-resolved-via.capability === judge');
     });
 
     // ── Test 6: unknown model → 400 ────────────────────────────────────────

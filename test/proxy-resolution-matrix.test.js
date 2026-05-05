@@ -25,23 +25,16 @@ console.log('proxy-resolution-matrix integration tests\n');
 
 // ── Fixture helpers ────────────────────────────────────────────────────────
 
-// Build a tier profile entry. Model names encode tier+capability+mode for
-// unambiguous assertion: e.g. "wh-64gb-conn@stub".
-function profileEntry(cap, tier, stubSuffix) {
-  const base = `${cap}-${tier}`;
-  const entry = {
-    connected_model:  `${base}-conn@${stubSuffix}`,
-    disconnect_model: `${base}-disc@${stubSuffix}`,
+// Build a capability profile entry in the new [cap][mode][tier] schema.
+// Model names encode cap+tier+mode-suffix for unambiguous assertion.
+function profileEntry(cap, stubSuffix) {
+  return {
+    'best-cloud':     Object.fromEntries(TIERS.map(t => [t, `${cap}-${t}-conn@${stubSuffix}`])),
+    'best-local-oss': Object.fromEntries(TIERS.map(t => [t, `${cap}-${t}-disc@${stubSuffix}`])),
+    'best-cloud-oss': Object.fromEntries(TIERS.map(t => [t, `${cap}-${t}-oss@${stubSuffix}`])),
+    'best-cloud-gov': Object.fromEntries(TIERS.map(t => [t, `${cap}-${t}-gov@${stubSuffix}`])),
+    'best-local-gov': Object.fromEntries(TIERS.map(t => [t, `${cap}-${t}-lgov@${stubSuffix}`])),
   };
-  // judge gets explicit modes[] entries so semi-offload and cloud-judge-only
-  // select different models than connected/offline.
-  if (cap === 'judge') {
-    entry.modes = {
-      'semi-offload':      `${base}-semi@${stubSuffix}`,
-      'cloud-judge-only':  `${base}-cjo@${stubSuffix}`,
-    };
-  }
-  return entry;
 }
 
 const TIERS       = ['16gb', '32gb', '48gb', '64gb', '128gb'];
@@ -51,17 +44,8 @@ const CAPABILITIES = ['workhorse', 'judge', 'deep-coder'];
 function buildFixtureConfig(stubPort) {
   const stubSuffix = 'stub';
   const llm_profiles = {};
-  for (const tier of TIERS) {
-    llm_profiles[tier] = {};
-    for (const cap of CAPABILITIES) {
-      const entry = profileEntry(cap, tier, stubSuffix);
-      // Add best-quality convenience fields on the 64gb tier for new-mode tests
-      if (tier === '64gb') {
-        entry.cloud_best_model = `${cap}-${tier}-cloud-best@${stubSuffix}`;
-        entry.local_best_model = `${cap}-${tier}-local-best@${stubSuffix}`;
-      }
-      llm_profiles[tier][cap] = entry;
-    }
+  for (const cap of CAPABILITIES) {
+    llm_profiles[cap] = profileEntry(cap, stubSuffix);
   }
   return {
     backends: {
@@ -86,7 +70,7 @@ async function runMatrix(stub, configPath) {
   // ── 1. Tier × mode matrix (workhorse, judge, deep-coder) ───────────────
   console.log('1. Tier × mode matrix');
   for (const tier of TIERS) {
-    for (const [mode, suffix] of [['connected', 'conn'], ['offline', 'disc']]) {
+    for (const [mode, suffix] of [['best-cloud', 'conn'], ['best-local-oss', 'disc'], ['best-cloud-oss', 'oss']]) {
       await withProxy(
         { configPath, profile: tier, env: { CLAUDE_LLM_MODE: mode } },
         async ({ port }) => {
@@ -109,28 +93,10 @@ async function runMatrix(stub, configPath) {
     }
   }
 
-  // ── 2. modes[] sub-map: semi-offload and cloud-judge-only ──────────────
-  console.log('\n2. modes[] sub-map (64gb × semi-offload + cloud-judge-only)');
-  for (const [mode, suffix] of [['semi-offload', 'semi'], ['cloud-judge-only', 'cjo']]) {
-    await withProxy(
-      { configPath, profile: '64gb', env: { CLAUDE_LLM_MODE: mode } },
-      async ({ port }) => {
-        const body = Object.assign({ model: 'judge' }, MSG_BODY);
-        await httpJson(port, 'POST', '/v1/messages', body);
-        const req = stub.lastRequest();
-        const expected = `judge-64gb-${suffix}`;
-        assert(
-          req && req.model_used === expected,
-          `tier=64gb mode=${mode} cap=judge → model_used=${expected} (got ${req && req.model_used})`
-        );
-      }
-    );
-  }
-
-  // ── 3. agent_to_capability chain ────────────────────────────────────────
-  console.log('\n3. agent_to_capability chain (test-agent → workhorse)');
+  // ── 2. agent_to_capability chain ────────────────────────────────────────
+  console.log('\n2. agent_to_capability chain (test-agent → workhorse)');
   await withProxy(
-    { configPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'connected' } },
+    { configPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } },
     async ({ port }) => {
       const body = Object.assign({ model: 'test-agent' }, MSG_BODY);
       await httpJson(port, 'POST', '/v1/messages', body);
@@ -147,46 +113,10 @@ async function runMatrix(stub, configPath) {
     }
   );
 
-  // ── 4. cloud-best-quality: uses cloud_best_model ─────────────────────
-  console.log('\n4. cloud-best-quality uses cloud_best_model field');
+  // ── 3. x-c-thru-resolved-via header includes mode and local_terminal_appended ─
+  console.log('\n3. x-c-thru-resolved-via header includes mode + local_terminal_appended');
   await withProxy(
-    { configPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'cloud-best-quality' } },
-    async ({ port }) => {
-      for (const cap of CAPABILITIES) {
-        const body = Object.assign({ model: cap }, MSG_BODY);
-        await httpJson(port, 'POST', '/v1/messages', body);
-        const req = stub.lastRequest();
-        const expected = `${cap}-64gb-cloud-best`;
-        assert(
-          req && req.model_used === expected,
-          `cloud-best-quality cap=${cap} → model_used=${expected} (got ${req && req.model_used})`
-        );
-      }
-    }
-  );
-
-  // ── 5. local-best-quality: uses local_best_model ─────────────────────
-  console.log('\n5. local-best-quality uses local_best_model field');
-  await withProxy(
-    { configPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'local-best-quality' } },
-    async ({ port }) => {
-      for (const cap of CAPABILITIES) {
-        const body = Object.assign({ model: cap }, MSG_BODY);
-        await httpJson(port, 'POST', '/v1/messages', body);
-        const req = stub.lastRequest();
-        const expected = `${cap}-64gb-local-best`;
-        assert(
-          req && req.model_used === expected,
-          `local-best-quality cap=${cap} → model_used=${expected} (got ${req && req.model_used})`
-        );
-      }
-    }
-  );
-
-  // ── 6. x-c-thru-resolved-via header includes mode and local_terminal_appended ─
-  console.log('\n6. x-c-thru-resolved-via header includes mode + local_terminal_appended');
-  await withProxy(
-    { configPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'cloud-best-quality' } },
+    { configPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } },
     async ({ port }) => {
       const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
       const resp = await httpJson(port, 'POST', '/v1/messages', body);
@@ -194,8 +124,8 @@ async function runMatrix(stub, configPath) {
       if (headerStr) {
         let parsed;
         try { parsed = JSON.parse(headerStr); } catch {}
-        assert(parsed && parsed.mode === 'cloud-best-quality',
-          `x-c-thru-resolved-via.mode is 'cloud-best-quality' (got ${parsed && parsed.mode})`);
+        assert(parsed && parsed.mode === 'best-cloud',
+          `x-c-thru-resolved-via.mode is 'best-cloud' (got ${parsed && parsed.mode})`);
         assert(parsed && 'local_terminal_appended' in parsed,
           `x-c-thru-resolved-via includes local_terminal_appended key`);
       } else {
@@ -314,11 +244,9 @@ async function main() {
         'wh-fallback': 'smart',
       },
       llm_profiles: {
-        '64gb': {
-          workhorse: {
-            connected_model: 'wh-primary',
-            disconnect_model: 'wh-fallback',
-          },
+        workhorse: {
+          'best-cloud':     { '64gb': 'wh-primary'  },
+          'best-local-oss': { '64gb': 'wh-fallback' },
         },
       },
       fallback_chains: {
@@ -332,7 +260,7 @@ async function main() {
     };
     const fallbackConfigPath = writeConfig(tmpDir, fallbackConfig);
     await withProxy(
-      { configPath: fallbackConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'connected' } },
+      { configPath: fallbackConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } },
       async ({ port }) => {
         const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
         const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 5000);
@@ -374,11 +302,9 @@ async function main() {
           'wh-local-terminal':  'local',
         },
         llm_profiles: {
-          '64gb': {
-            workhorse: {
-              connected_model:  'wh-cloud-primary',
-              disconnect_model: 'wh-local-terminal',  // guard appends this
-            },
+          workhorse: {
+            'best-cloud':     { '64gb': 'wh-cloud-primary'   },
+            'best-local-oss': { '64gb': 'wh-local-terminal'  },
           },
         },
         fallback_chains: {
@@ -393,7 +319,7 @@ async function main() {
       };
       const ltConfigPath = writeConfig(tmpDir, ltConfig);
       await withProxy(
-        { configPath: ltConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'connected' } },
+        { configPath: ltConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } },
         async ({ port }) => {
           const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
           const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 6000);
@@ -413,21 +339,10 @@ async function main() {
     } finally {
       if (localTerminalStub) await localTerminalStub.close().catch(() => {});
     }
-    // ── 9. Active-path tiebreaker: speed-sort within quality band ────────
-    // Chain (raw config order): [A(q=90,s=20), B(q=87,s=95), C(q=60,s=99)]
-    // terminatedModel = A (fails with 429).
-    // Without tiebreaker: filtered=[B,C], walk order B→C.
-    // With tiebreaker (5% tolerance): threshold=87*0.95=82.65; in-band: B(87). Out: C(60).
-    // Wait — B is first in filtered so topScore=87, threshold=82.65. In-band: B(87). Out: C(60).
-    // Only one in-band so sort is no-op → result [B, C]. Same as raw.
-    // Need a case where in-band has ≥2 entries with different speeds.
-    // Chain: [A(q=90,s=20), B(q=87,s=30), C(q=86,s=99), D(q=60,s=50)]
-    // filtered=[B(87,30), C(86,99), D(60,50)]. topScore=87. threshold=87*0.95=82.65.
-    // In-band: B(87), C(86). Out: D(60). Speed-sort in-band: C(99)>B(30) → [C,B].
-    // Result: [C, B, D]. Raw order would be [B, C, D].
-    // So tiebreaker promotes C (lower quality but MUCH faster) above B.
-    // Test: A fails → first call is C (not B). If tiebreaker missing: first call is B.
-    console.log('\n9. Active-path tiebreaker: speed-sort within quality band promotes faster candidate');
+    // ── 9. Active-path fallback chain ordering ────────────────────────────
+    // Chain order is preserved when primary fails: B comes before C since
+    // chain is [A, B, C, D] and A fails → next is B in declaration order.
+    console.log('\n9. Active-path fallback: chain walked in declaration order when primary fails');
     let tiebreakerStub;
     try {
       tiebreakerStub = await multiModelSelectiveStub(['tb-primary'], 429);
@@ -437,11 +352,11 @@ async function main() {
           'tb-primary': 'tb', 'tb-B': 'tb', 'tb-C': 'tb', 'tb-D': 'tb',
         },
         llm_profiles: {
-          '64gb': {
-            workhorse: { connected_model: 'tb-primary', disconnect_model: 'tb-D' },
+          workhorse: {
+            'best-cloud':     { '64gb': 'tb-primary' },
+            'best-local-oss': { '64gb': 'tb-D'       },
           },
         },
-        quality_tolerance_pct: 5,
         fallback_chains: {
           '64gb': {
             workhorse: [
@@ -455,21 +370,20 @@ async function main() {
       };
       const tbConfigPath = writeConfig(tmpDir, tbConfig);
       await withProxy(
-        { configPath: tbConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'cloud-best-quality' } },
+        { configPath: tbConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } },
         async ({ port }) => {
           const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
           const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 5000);
           assert(resp.status === 200,
-            `tiebreaker test: request succeeds after primary fails (got status=${resp.status})`);
-          // With tiebreaker: B(q=87,s=30) and C(q=86,s=99) are in-band (threshold=87*0.95=82.65).
-          // Speed sort promotes C before B → first fallback is C.
-          // Without tiebreaker: raw order B then C → first fallback is B.
+            `chain ordering test: request succeeds after primary fails (got status=${resp.status})`);
+          // Without speed-sort tiebreaker (best-cloud mode), chain is walked in raw declaration order.
+          // A fails → first fallback is B (second entry in chain).
           const reqs = tiebreakerStub.requests;
           assert(reqs.length >= 2, `≥2 calls: primary + fallback (got ${reqs.length})`);
           assert(reqs[0] && reqs[0].model_used === 'tb-primary',
             `first call was tb-primary (got ${reqs[0] && reqs[0].model_used})`);
-          assert(reqs[1] && reqs[1].model_used === 'tb-C',
-            `second call was tb-C (speed-promoted over tb-B by tiebreaker; got ${reqs[1] && reqs[1].model_used})`);
+          assert(reqs[1] && reqs[1].model_used === 'tb-B',
+            `second call was tb-B (declaration order, no tiebreaker; got ${reqs[1] && reqs[1].model_used})`);
         }
       );
     } finally {
@@ -490,11 +404,9 @@ async function main() {
         },
         model_routes: { 'se-primary': 'cloud', 'se-local': 'local' },
         llm_profiles: {
-          '64gb': {
-            workhorse: {
-              connected_model:  'se-primary',
-              disconnect_model: 'se-local',   // guard appends this
-            },
+          workhorse: {
+            'best-cloud':     { '64gb': 'se-primary' },
+            'best-local-oss': { '64gb': 'se-local'   },
           },
         },
         fallback_chains: {
@@ -506,7 +418,7 @@ async function main() {
       };
       const seConfigPath = writeConfig(tmpDir, seConfig);
       await withProxy(
-        { configPath: seConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'connected' } },
+        { configPath: seConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } },
         async ({ port }) => {
           const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
           const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 5000);

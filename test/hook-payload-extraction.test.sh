@@ -17,8 +17,11 @@ source "$REPO_DIR/test/helpers.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-HOOK_COPY="$WORK/c-thru-map-changed.sh"
-STUB_VALIDATOR="$WORK/model-map-validate.js"
+# Layout mirrors the plugin bundle: hooks/c-thru-map-changed.sh + tools/model-map-validate.js
+# The BASH_SOURCE resolver in the hook resolves validator as ../tools/model-map-validate.js
+mkdir -p "$WORK/hooks" "$WORK/tools"
+HOOK_COPY="$WORK/hooks/c-thru-map-changed.sh"
+STUB_VALIDATOR="$WORK/tools/model-map-validate.js"
 RECORDER="$WORK/recorder.txt"
 
 cp "$REPO_DIR/tools/c-thru-map-changed.sh" "$HOOK_COPY"

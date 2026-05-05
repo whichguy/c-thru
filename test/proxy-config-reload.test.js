@@ -32,9 +32,7 @@ function mkConfig(stubPort, model) {
       [model]: 'stub',
     },
     llm_profiles: {
-      '16gb': {
-        workhorse: { connected_model: model, disconnect_model: model },
-      },
+      workhorse: { 'best-cloud': { '16gb': model } },
     },
   };
 }
@@ -58,7 +56,7 @@ async function main() {
       const configPath = path.join(tmpRoot, 'watch-config.json');
       fs.writeFileSync(configPath, JSON.stringify(mkConfig(stub.port, 'watch-before')));
 
-      await withProxy({ configPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'connected' } }, async ({ port, child }) => {
+      await withProxy({ configPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } }, async ({ port, child }) => {
         const stderr = collectStderr(child);
 
         await assertResolvedModel(port, stub, 'watch-before', 'before fs.watch write');
@@ -78,7 +76,7 @@ async function main() {
       const configPath = path.join(tmpRoot, 'invalid-selected.json');
       fs.writeFileSync(configPath, JSON.stringify(mkConfig(stub.port, 'selected-still-good')));
 
-      await withProxy({ configPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'connected' } }, async ({ port, child }) => {
+      await withProxy({ configPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } }, async ({ port, child }) => {
         const stderr = collectStderr(child);
 
         await assertResolvedModel(port, stub, 'selected-still-good', 'before invalid selected-config write');
@@ -108,7 +106,7 @@ async function main() {
         profile: '16gb',
         cwd: projectDir,
         env: {
-          CLAUDE_LLM_MODE: 'connected',
+          CLAUDE_LLM_MODE: 'best-cloud',
           CLAUDE_PROFILE_DIR: profileClaude,
         },
       }, async ({ port, child }) => {
@@ -146,7 +144,7 @@ async function main() {
         profile: '16gb',
         cwd: projectDir,
         env: {
-          CLAUDE_LLM_MODE: 'connected',
+          CLAUDE_LLM_MODE: 'best-cloud',
           CLAUDE_PROFILE_DIR: profileClaude,
           CLAUDE_MODEL_MAP_PATH: overridePath,
         },
@@ -183,7 +181,7 @@ async function main() {
         profile: '16gb',
         cwd: projectDir,
         env: {
-          CLAUDE_LLM_MODE: 'connected',
+          CLAUDE_LLM_MODE: 'best-cloud',
           CLAUDE_PROFILE_DIR: profileClaude,
           CLAUDE_MODEL_MAP_PATH: overridePath,
         },
@@ -224,7 +222,7 @@ async function main() {
         profile: '16gb',
         cwd: projectDir,
         env: {
-          CLAUDE_LLM_MODE: 'connected',
+          CLAUDE_LLM_MODE: 'best-cloud',
           CLAUDE_PROFILE_DIR: profileClaude,
           CLAUDE_MODEL_MAP_PATH: overridePath,
         },

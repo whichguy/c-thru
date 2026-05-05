@@ -10,9 +10,8 @@ if C_THRU_STRICT_MODELS=1 ./tools/c-thru --model unknown-999 --version >/dev/nul
 fi
 echo "✅ OK: Unknown model rejected with STRICT=1"
 
-# 2. Known model (from model-map.json) should pass with STRICT=1
-# We'll use 'classifier' alias which resolves to a model in the default map.
-if ! C_THRU_STRICT_MODELS=1 ./tools/c-thru --model classifier --version >/dev/null 2>&1; then
+# 2. Known capability (from llm_profiles in model-map.json) should pass with STRICT=1
+if ! C_THRU_STRICT_MODELS=1 ./tools/c-thru --model planner --version >/dev/null 2>&1; then
   echo "❌ FAILED: Known capability alias rejected with C_THRU_STRICT_MODELS=1"
   exit 1
 fi

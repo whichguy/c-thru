@@ -65,7 +65,7 @@ function buildConfig(stubPort) {
     backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stubPort}` } },
     model_routes: { 'tool-model': 'stub' },
     llm_profiles: {
-      '128gb': { workhorse: { connected_model: 'tool-model', disconnect_model: 'tool-model' } },
+      workhorse: { 'best-cloud': { '128gb': 'tool-model' } },
     },
   };
 }
@@ -90,7 +90,7 @@ async function main() {
       const stub = await toolStubBackend();
       try {
         const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           const r = await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',
             tools: TOOLS_DECL,
@@ -111,7 +111,7 @@ async function main() {
       const stub = await toolStubBackend();
       try {
         const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           const r = await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',
             tools: TOOLS_DECL,
@@ -135,7 +135,7 @@ async function main() {
       const stub = await toolStubBackend();
       try {
         const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           // Second turn: client sends tool_result
           const r = await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',
@@ -169,7 +169,7 @@ async function main() {
       const stub = await toolStubBackend();
       try {
         const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           // Turn 1: ask, get tool_use
           const r1 = await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse', tools: TOOLS_DECL,
@@ -205,7 +205,7 @@ async function main() {
       const stub = await toolStubBackend();
       try {
         const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',
             tools: TOOLS_DECL,

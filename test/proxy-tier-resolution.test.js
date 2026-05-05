@@ -14,9 +14,10 @@ console.log('proxy-tier-resolution integration tests\n');
 
 const TIER_CONFIG = {
   llm_profiles: {
-    '16gb':  { workhorse: { connected_model: 'qwen3:1.7b',  disconnect_model: 'qwen3:1.7b'  } },
-    '64gb':  { workhorse: { connected_model: 'qwen3:27b',   disconnect_model: 'qwen3:1.7b'  } },
-    '128gb': { workhorse: { connected_model: 'qwen3:122b',  disconnect_model: 'qwen3:1.7b'  } },
+    workhorse: {
+      'best-cloud':     { '16gb': 'qwen3:1.7b', '64gb': 'qwen3:27b',  '128gb': 'qwen3:122b' },
+      'best-local-oss': { '16gb': 'qwen3:1.7b', '64gb': 'qwen3:1.7b', '128gb': 'qwen3:1.7b' },
+    },
   },
   agent_to_capability: { 'test-agent': 'workhorse' },
 };
@@ -62,22 +63,19 @@ async function main() {
     assert(r.json && r.json.active_tier === '16gb', '--profile wins over CLAUDE_LLM_MEMORY_GB');
   });
 
-  // ── Tests 6-11: --mode flag forces LLM mode end-to-end ─────────────────
-  // Fixture has all optional fields so every mode resolves to a distinct model.
+  // ── Tests 6-10: --mode flag forces LLM mode end-to-end ─────────────────
+  // Fixture has all 5 current modes so every mode resolves to a distinct model.
   const stub = await stubBackend();
   const modeConfig = writeConfig(tmpDir, {
     backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
     llm_profiles: {
-      '128gb': { workhorse: {
-        connected_model:  'mode-conn@stub',
-        disconnect_model: 'mode-disc@stub',
-        cloud_best_model: 'mode-cbq@stub',
-        local_best_model: 'mode-lbq@stub',
-        modes: {
-          'semi-offload':    'mode-semi@stub',
-          'cloud-judge-only': 'mode-cjo@stub',
-        },
-      } },
+      workhorse: {
+        'best-cloud':     { '128gb': 'mode-conn@stub' },
+        'best-local-oss': { '128gb': 'mode-disc@stub' },
+        'best-cloud-oss': { '128gb': 'mode-semi@stub' },
+        'best-cloud-gov': { '128gb': 'mode-gov@stub'  },
+        'best-local-gov': { '128gb': 'mode-lgov@stub' },
+      },
     },
   });
 
@@ -87,12 +85,11 @@ async function main() {
   const MSG = { model: 'workhorse', messages: [{ role: 'user', content: 'hi' }], max_tokens: 5 };
 
   const modeCases = [
-    { mode: 'offline',            expectedModel: 'mode-disc', label: 'disconnect_model' },
-    { mode: 'connected',          expectedModel: 'mode-conn', label: 'connected_model'  },
-    { mode: 'semi-offload',       expectedModel: 'mode-semi', label: 'modes[semi-offload]' },
-    { mode: 'cloud-judge-only',   expectedModel: 'mode-cjo',  label: 'modes[cloud-judge-only]' },
-    { mode: 'cloud-best-quality', expectedModel: 'mode-cbq',  label: 'cloud_best_model' },
-    { mode: 'local-best-quality', expectedModel: 'mode-lbq',  label: 'local_best_model' },
+    { mode: 'best-cloud',     expectedModel: 'mode-conn', label: 'best-cloud'     },
+    { mode: 'best-local-oss', expectedModel: 'mode-disc', label: 'best-local-oss' },
+    { mode: 'best-cloud-oss', expectedModel: 'mode-semi', label: 'best-cloud-oss' },
+    { mode: 'best-cloud-gov', expectedModel: 'mode-gov',  label: 'best-cloud-gov' },
+    { mode: 'best-local-gov', expectedModel: 'mode-lgov', label: 'best-local-gov' },
   ];
 
   let testNum = 6;

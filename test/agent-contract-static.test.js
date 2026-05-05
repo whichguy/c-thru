@@ -51,71 +51,35 @@ const VALID_RECOMMEND = new Set([...KNOWN_AGENTS, 'judge']);
 // warnOnly:        true  = judge/orchestrator/utility tier; only model: field checked
 
 const ROSTER = {
-  // ── Full-contract worker agents ──────────────────────────────────────────────
-  'implementer':       { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'uplift-decider',  extraFields: ['LINT_ITERATIONS'] },
-  'implementer-heavy': { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'judge',            extraFields: ['LINT_ITERATIONS'] },
-  'wave-reviewer':     { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer-heavy', extraFields: ['ITERATIONS'] },
-  'test-writer':       { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'test-writer-heavy' },
-  'test-writer-heavy': { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'judge' },
-  'scaffolder':        { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer' },
-  'converger':         { needsStatus: true, needsRecuse: 'fail', recommendTarget: 'implementer-heavy' },
+  // ── Pipeline agents (planner → coder → tester → reviewer flow) ───────────────
+  'planner':              { warnOnly: true },
+  'planner-hard':         { warnOnly: true },
+  'explore':              { warnOnly: true },
+  'coder':                { warnOnly: true },
+  'coder-fallback':       { warnOnly: true },
+  'tester':               { warnOnly: true },
+  'docs':                 { warnOnly: true },
+  'code-reviewer':        { warnOnly: true },
+  'reviewer-security':    { warnOnly: true },
+  'debugger-hypothesis':  { warnOnly: true },
+  'debugger-investigate': { warnOnly: true },
+  'debugger-hard':        { warnOnly: true },
 
-  // ── Spec-gap agents: STATUS required, RECUSE not yet declared ────────────────
-  'integrator':       { needsStatus: true, needsRecuse: 'warn' },
-  'doc-writer':       { needsStatus: true, needsRecuse: 'warn' },
-  // planner-local uses CYCLE/VERDICT grammar — RECUSE not yet declared (spec gap)
-  'planner-local':    { needsStatus: true, needsRecuse: 'warn' },
-
-  // ── Recon agents ─────────────────────────────────────────────────────────────
-  // TEST_FRAMEWORKS is conditional for explorer (CI questions only) — extraFields check verifies it's documented, not always emitted
-  'explorer':          { needsStatus: true, needsRecuse: 'exempt', extraFields: ['TEST_FRAMEWORKS'] },
-  // discovery-advisor: minimal STATUS grammar (COMPLETE|ERROR only); RECUSE spec gap; TEST_FRAMEWORKS always emitted
-  'discovery-advisor': { needsStatus: true, needsRecuse: 'warn', extraFields: ['TEST_FRAMEWORKS'] },
-
-  // ── Special contracts ─────────────────────────────────────────────────────────
-  'uplift-decider':    { needsStatus: false, special: 'uplift-decider' },
-  // security-reviewer: RECUSE present but RECOMMEND must be absent (no cascade target)
-  'security-reviewer': { needsStatus: true, needsRecuse: 'fail', recuseException: true },
-
-  // ── Judge tier: warn-only (no STATUS contract defined) ───────────────────────
-  'auditor':            { warnOnly: true },
-  'final-reviewer':     { warnOnly: true },
-  'review-plan':        { warnOnly: true },
-  'planner':            { warnOnly: true },
-  'journal-digester':   { warnOnly: true },
-  'evaluator':          { warnOnly: true },
-  'supervisor':         { warnOnly: true },
-  'supervisor-debug':   { warnOnly: true },
-
-  // ── Orchestrator / utility tiers: warn-only ───────────────────────────────────
-  'plan-orchestrator':      { warnOnly: true, extraFields: ['TEST_FRAMEWORKS', 'COMPLEXITY', 'MIGRATION_REQUIRED'] },
-  'wave-synthesizer':       { warnOnly: true },
-  'learnings-consolidator': { warnOnly: true },
-
-  // ── General roles: warn-only (no STATUS contract defined) ───────────────────
-  'generalist':             { warnOnly: true },
-  'coder':                  { warnOnly: true },
-  'agentic-coder':          { warnOnly: true },
-  'debugger':               { warnOnly: true },
-  'long-context':           { warnOnly: true },
-  'fast-generalist':        { warnOnly: true },
-  'vision':                 { warnOnly: true },
-  'pdf':                    { warnOnly: true },
-  'large-general':          { warnOnly: true },
-  'edge':                   { warnOnly: true },
-  'judge':                  { warnOnly: true },
-  'reviewer':               { warnOnly: true },
-  'refactor':               { warnOnly: true },
-  'context-manager':        { warnOnly: true },
-  'reasoner':               { warnOnly: true },
-  'fast-scout':             { warnOnly: true },
-  'code-analyst-light':     { warnOnly: true },
-  'deep-coder-precise':     { warnOnly: true },
-  'orchestrator':           { warnOnly: true },
+  // ── Utility agents ────────────────────────────────────────────────────────────
+  'vision':               { warnOnly: true },
+  'pdf':                  { warnOnly: true },
+  'writer':               { warnOnly: true },
+  'edge':                 { warnOnly: true },
+  'generalist':           { warnOnly: true },
+  'fast-generalist':      { warnOnly: true },
+  'fast-scout':           { warnOnly: true },
+  'long-context':         { warnOnly: true },
 
   // ── Routing-only entries: no agent file; resolve via agent_to_capability only ──
   // routingOnly: true — skip all file checks; only coverage in agent_to_capability is verified.
-  'judge-evaluator': { routingOnly: true },
+  'WebSearch': { routingOnly: true },
+  'WebFetch':  { routingOnly: true },
+  'Monitor':   { routingOnly: true },
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

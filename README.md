@@ -8,26 +8,36 @@
 
 ## 🚀 Quick Start
 
-### 1. Install
+### Plugin install (recommended for Claude Code users)
+
+```
+/plugin marketplace add whichguy/claude-craft
+/plugin install c-thru@claude-craft
+```
+
+The plugin is self-contained — no git clone or `install.sh` required.
+On first session after install, the SessionStart hook seeds your model-map config,
+starts the proxy, and registers `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`.
+**Restart Claude Code once** to activate routing.
+
+### CLI install (for terminal `c-thru` invocation)
+
+To use `c-thru` as a drop-in CLI replacement for `claude` in your terminal:
+
 ```bash
 git clone https://github.com/whichguy/c-thru.git
 cd c-thru
 ./install.sh
 ```
+
 *The installer symlinks tools to `~/.claude/tools/` and sets up your default model maps.*
 
-### 2. Configure Backends
+### Configure Backends
+
 Ensure [Ollama](https://ollama.com) is running locally for offline support. For cloud access, set your API keys:
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENROUTER_API_KEY="sk-or-..."
-```
-
-### 3. Launch
-Simply prepend `c-thru` to your usual Claude commands:
-```bash
-c-thru                 # Standard mode (cloud primary, local fallback)
-c-thru --offline  # Force all agents to run on local hardware
 ```
 
 ---
@@ -103,7 +113,7 @@ Per-profile `on_failure` field controls fallback behavior: `"cascade"` (default)
 - `x-c-thru-thinking-tokens: <N>` — upstream `thoughtsTokenCount` (non-streaming). Streaming surfaces it as `message_delta.usage.thinking_output_tokens`.
 - `output_tokens` matches Anthropic semantics: includes thinking tokens.
 
-**`/model` picker exposure**: aliases `claude-via-gemini-pro` and `claude-via-gemini-flash` make Gemini selectable from Claude Code's runtime `/model` picker (which only displays `claude-*` IDs).
+**`/model` picker exposure**: `claude-via-<endpoint-key>` aliases are auto-synthesized for any endpoint in `picker_alias_endpoints`, making those backends selectable from Claude Code's `/model` picker (which only lists `claude-*` IDs).
 
 ### Lifecycle & Constraints
 
@@ -124,10 +134,10 @@ Develop and debug code on a plane, in a coffee shop with bad WiFi, or in secure 
 Offload token-heavy tasks (like initial codebase indexing or large-scale refactors) to local models while reserving expensive cloud tokens for final reasoning, planning, and architectural judgment.
 
 ### 🔒 Enhanced Privacy
-Route sensitive internal code to local-only agents (`agentic-coder`, `security-reviewer`) while using cloud models for general queries or public library documentation.
+Route sensitive internal code to local-only agents (`coder`, `reviewer-security`) while using cloud models for general queries or public library documentation.
 
 ### ⚡ Performance Tuning
-Use "Fast" variants of agents (e.g., `fast-coder`, `edge`) that run small, highly-quantized models for trivial transformations, significantly reducing the "waiting for LLM" time in your inner loop.
+Use fast agents (e.g., `fast-scout`, `edge`) that run small, highly-quantized models for trivial transformations, significantly reducing the "waiting for LLM" time in your inner loop.
 
 ---
 

@@ -44,9 +44,13 @@ function buildConfig(stubPort, extras = {}) {
     },
     model_routes: { [MODEL]: 'stub' },
     llm_profiles: {
-      '16gb': {
-        workhorse: { connected_model: `${MODEL}@stub`, disconnect_model: `${MODEL}@stub` },
-        judge:     { connected_model: `${MODEL}@stub`, disconnect_model: `${MODEL}@stub` },
+      workhorse: {
+        'best-cloud':     { '16gb': `${MODEL}@stub` },
+        'best-local-oss': { '16gb': `${MODEL}@stub` },
+      },
+      judge: {
+        'best-cloud':     { '16gb': `${MODEL}@stub` },
+        'best-local-oss': { '16gb': `${MODEL}@stub` },
       },
     },
     agent_to_capability: {
@@ -63,7 +67,7 @@ async function main() {
   try {
     stub = await stubBackend();
     const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-    const env = { CLAUDE_PROXY_ANNOTATE_MODEL: '1', CLAUDE_LLM_MODE: 'connected' };
+    const env = { CLAUDE_PROXY_ANNOTATE_MODEL: '1', CLAUDE_LLM_MODE: 'best-cloud' };
 
     // ── 1. Body model field set to effectiveModel in forwarded request ────────
     console.log('1. Forwarded body.model = effectiveModel (not raw client model)');

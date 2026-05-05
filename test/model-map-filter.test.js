@@ -85,115 +85,119 @@ assertEq(isOpenSource('deepseek/deepseek-v3'),     true,  'deepseek/deepseek-v3 
 assertEq(isOpenSource(null),                       false, 'null');
 
 // ── filterFor ───────────────────────────────────────────────────────────────
+// filterFor only returns a predicate for gov modes (Chinese-origin filter).
+// All other modes return null (no filter applied).
 console.log('\n4. filterFor');
-assert(typeof filterFor('cloud-only')      === 'function', 'cloud-only → predicate fn');
-assert(typeof filterFor('claude-only')     === 'function', 'claude-only → predicate fn');
-assert(typeof filterFor('opensource-only') === 'function', 'opensource-only → predicate fn');
-assertEq(filterFor('connected'),     null, 'connected → null (no filter)');
-assertEq(filterFor('offline'),       null, 'offline → null');
-assertEq(filterFor('cloud-thinking'), null, 'cloud-thinking → null (slot-based, not filter)');
-assertEq(filterFor('totally-bogus'), null, 'unknown mode → null');
+assert(typeof filterFor('best-cloud-gov') === 'function', 'best-cloud-gov → predicate fn');
+assert(typeof filterFor('best-local-gov') === 'function', 'best-local-gov → predicate fn');
+assertEq(filterFor('best-cloud'),     null, 'best-cloud → null (no filter)');
+assertEq(filterFor('best-cloud-oss'), null, 'best-cloud-oss → null (no filter)');
+assertEq(filterFor('best-local-oss'), null, 'best-local-oss → null (no filter)');
+assertEq(filterFor('totally-bogus'),  null, 'unknown mode → null');
+// Legacy mode strings also return null
+assertEq(filterFor('connected'),  null, 'legacy connected → null');
+assertEq(filterFor('offline'),    null, 'legacy offline → null');
+assertEq(filterFor('cloud-only'), null, 'removed cloud-only mode → null');
+
+// Gov predicate: blocks Chinese-origin models (qwen, deepseek, glm, etc.)
+const govPred = filterFor('best-cloud-gov');
+assert(govPred('claude-opus-4-6'),     'gov predicate: claude passes (not Chinese-origin)');
+assert(govPred('phi4-mini'),           'gov predicate: phi4-mini passes');
+assert(!govPred('qwen3:1.7b'),         'gov predicate: qwen3 blocked (Chinese-origin)');
+assert(!govPred('deepseek/deepseek-v3'), 'gov predicate: deepseek blocked');
+assert(!govPred('glm-5.1:cloud'),      'gov predicate: glm blocked');
+assert(!govPred('moonshotai/kimi-k2'), 'gov predicate: moonshotai blocked');
 
 // ── applyModeFilter ─────────────────────────────────────────────────────────
+// For non-gov modes: returns primary unchanged (no filter).
+// For gov modes: walks primary + chain, returns first non-Chinese-origin model.
 console.log('\n5. applyModeFilter');
 
-// Non-filter mode → returns primary unchanged
+// Non-gov modes → primary returned unchanged, chain ignored
 assertEq(
-  applyModeFilter('connected', 'qwen3:1.7b', [], MODEL_ROUTES, BACKENDS),
+  applyModeFilter('best-cloud', 'qwen3:1.7b', [], MODEL_ROUTES, BACKENDS),
   'qwen3:1.7b',
-  'non-filter mode returns primary unchanged'
+  'best-cloud: primary returned unchanged (no filter)'
 );
-
-// cloud-only with cloud primary → primary returned
 assertEq(
-  applyModeFilter('cloud-only', 'claude-opus-4-6', [], MODEL_ROUTES, BACKENDS),
+  applyModeFilter('best-local-oss', 'deepseek/deepseek-v3', [{ model: 'claude-opus-4-6' }], MODEL_ROUTES, BACKENDS),
+  'deepseek/deepseek-v3',
+  'best-local-oss: primary returned unchanged even if Chinese-origin (no filter in non-gov)'
+);
+assertEq(
+  applyModeFilter('best-cloud-oss', 'claude-opus-4-6', [], MODEL_ROUTES, BACKENDS),
   'claude-opus-4-6',
-  'cloud-only: cloud primary passes filter'
+  'best-cloud-oss: primary returned unchanged'
 );
 
-// cloud-only with local primary + cloud in chain → chain hit
+// best-cloud-gov: non-Chinese primary passes
+assertEq(
+  applyModeFilter('best-cloud-gov', 'claude-opus-4-6', [], MODEL_ROUTES, BACKENDS),
+  'claude-opus-4-6',
+  'best-cloud-gov: non-Chinese primary passes filter'
+);
+
+// best-cloud-gov: Chinese primary + non-Chinese in chain → chain hit
 assertEq(
   applyModeFilter(
-    'cloud-only', 'qwen3:1.7b',
+    'best-cloud-gov', 'qwen3:1.7b',
     [{ model: 'claude-opus-4-6' }],
     MODEL_ROUTES, BACKENDS
   ),
   'claude-opus-4-6',
-  'cloud-only: local primary rejected, cloud chain candidate selected'
+  'best-cloud-gov: Chinese primary rejected, non-Chinese chain candidate selected'
 );
 
-// cloud-only with all-local chain → null
+// best-cloud-gov: Chinese primary + all-Chinese chain → null
 assertEq(
   applyModeFilter(
-    'cloud-only', 'qwen3:1.7b',
-    [{ model: 'qwen3.6:35b' }, { model: 'qwen3.6:35b-a3b' }],
+    'best-cloud-gov', 'qwen3:1.7b',
+    [{ model: 'deepseek/deepseek-v3' }, { model: 'glm-5.1:cloud' }],
     MODEL_ROUTES, BACKENDS
   ),
   null,
-  'cloud-only: all-local chain → null'
+  'best-cloud-gov: all-Chinese chain → null'
 );
 
-// claude-only with non-Claude primary + Claude in chain → claude picked
+// best-local-gov: same filter applies
 assertEq(
   applyModeFilter(
-    'claude-only', 'glm-5.1:cloud',
-    [{ model: 'qwen3:1.7b' }, { model: 'claude-sonnet-4-6' }],
+    'best-local-gov', 'qwen3:1.7b',
+    [{ model: 'phi4-mini' }],
     MODEL_ROUTES, BACKENDS
   ),
-  'claude-sonnet-4-6',
-  'claude-only: skips non-Claude until Claude found'
+  'phi4-mini',
+  'best-local-gov: Chinese primary rejected, non-Chinese phi picked'
 );
 
-// claude-only with no Claude anywhere → null
+// best-cloud-gov: empty chain, Chinese primary → null
 assertEq(
-  applyModeFilter(
-    'claude-only', 'qwen3:1.7b',
-    [{ model: 'glm-5.1:cloud' }, { model: 'qwen3.6:35b' }],
-    MODEL_ROUTES, BACKENDS
-  ),
+  applyModeFilter('best-cloud-gov', 'qwen3:1.7b', [], MODEL_ROUTES, BACKENDS),
   null,
-  'claude-only: no Claude in chain → null'
+  'empty chain + Chinese primary → null'
 );
 
-// opensource-only with Claude primary + OS in chain → OS picked
+// Chain with plain string entries (not {model: ...})
 assertEq(
   applyModeFilter(
-    'opensource-only', 'claude-opus-4-6',
-    [{ model: 'qwen3.6:35b' }],
-    MODEL_ROUTES, BACKENDS
-  ),
-  'qwen3.6:35b',
-  'opensource-only: Claude primary skipped, OS picked'
-);
-
-// Empty chain
-assertEq(
-  applyModeFilter('cloud-only', 'qwen3:1.7b', [], MODEL_ROUTES, BACKENDS),
-  null,
-  'empty chain + non-compliant primary → null'
-);
-
-// Chain with string entries (not {model: ...})
-assertEq(
-  applyModeFilter(
-    'cloud-only', 'qwen3:1.7b',
-    ['claude-opus-4-6', 'qwen3:1.7b'],
+    'best-cloud-gov', 'qwen3:1.7b',
+    ['claude-opus-4-6', 'qwen3.6:35b'],
     MODEL_ROUTES, BACKENDS
   ),
   'claude-opus-4-6',
-  'chain accepts plain strings'
+  'gov filter: chain accepts plain strings'
 );
 
 // Null chain → only primary checked
 assertEq(
-  applyModeFilter('cloud-only', 'claude-opus-4-6', null, MODEL_ROUTES, BACKENDS),
+  applyModeFilter('best-cloud-gov', 'claude-opus-4-6', null, MODEL_ROUTES, BACKENDS),
   'claude-opus-4-6',
-  'null chain handled (primary passes)'
+  'null chain handled (non-Chinese primary passes)'
 );
 assertEq(
-  applyModeFilter('cloud-only', 'qwen3:1.7b', null, MODEL_ROUTES, BACKENDS),
+  applyModeFilter('best-cloud-gov', 'qwen3:1.7b', null, MODEL_ROUTES, BACKENDS),
   null,
-  'null chain handled (primary fails → null)'
+  'null chain handled (Chinese primary → null)'
 );
 
 const failed = summary();

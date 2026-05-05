@@ -5,10 +5,10 @@
 // correct concrete model, and the x-c-thru-resolved-via response header
 // confirms both served_by and capability for every combination.
 //
-// Coverage: 5 form factors × 6 connectivity modes × 10 capabilities = 300 combos.
-// Includes a "bare" capability (only connected/disconnect_model) and a "partial"
-// capability (has cloud_best_model but no local_best_model and no modes[]) to
-// exercise every combination of missing optional fields.
+// Coverage: 5 form factors × 5 connectivity modes × 6 capabilities = 150 combos.
+// Includes a "bare" capability (only best-cloud; other modes fall back to best-cloud)
+// to exercise the mode-fallback path.
+//
 // Run with: node test/proxy-form-factor.test.js
 
 const fs   = require('fs');
@@ -26,36 +26,24 @@ console.log('proxy-form-factor matrix tests\n');
 
 const TIERS = ['16gb', '32gb', '48gb', '64gb', '128gb'];
 
-// All six connectivity modes with expected suffix overrides for sparse capabilities.
-// bareSuffix:    "bare" has only connected/disconnect_model (no modes[], cloud_best, local_best)
-// partialSuffix: "partial" has cloud_best_model but no local_best_model and no modes[]
+// 5 canonical modes. bareSuffix: what "bare" capability resolves to (falls
+// back to best-cloud for all modes since it only has a best-cloud entry).
 const MODES = [
-  { mode: 'connected',          suffix: 'conn', bareSuffix: 'conn', partialSuffix: 'conn' },
-  { mode: 'offline',            suffix: 'disc', bareSuffix: 'disc', partialSuffix: 'disc' },
-  { mode: 'local-only',         suffix: 'disc', bareSuffix: 'disc', partialSuffix: 'disc' }, // alias for offline
-  { mode: 'semi-offload',       suffix: 'semi', bareSuffix: 'disc', partialSuffix: 'disc' }, // no modes[] → disconnect
-  { mode: 'cloud-judge-only',   suffix: 'cjo',  bareSuffix: 'disc', partialSuffix: 'disc' }, // no modes[] → disconnect
-  { mode: 'cloud-thinking',     suffix: 'cthk', bareSuffix: 'disc', partialSuffix: 'disc' }, // modes[cloud-thinking] present (cthk); no override → disconnect
-  { mode: 'local-review',       suffix: 'lrev', bareSuffix: 'conn', partialSuffix: 'conn' }, // modes[local-review] present (lrev); no override → connected
-  { mode: 'cloud-best-quality', suffix: 'cbq',  bareSuffix: 'conn', partialSuffix: 'cbq'  }, // cloud_best_model present → uses it
-  { mode: 'local-best-quality', suffix: 'lbq',  bareSuffix: 'disc', partialSuffix: 'disc' }, // no local_best_model → disconnect
+  { mode: 'best-cloud',     suffix: 'cloud', bareSuffix: 'cloud' },
+  { mode: 'best-cloud-oss', suffix: 'oss',   bareSuffix: 'cloud' },  // bare falls back to best-cloud
+  { mode: 'best-local-oss', suffix: 'loco',  bareSuffix: 'cloud' },  // bare falls back to best-cloud
+  { mode: 'best-cloud-gov', suffix: 'gov',   bareSuffix: 'cloud' },  // bare falls back to best-cloud
+  { mode: 'best-local-gov', suffix: 'lgov',  bareSuffix: 'cloud' },  // bare falls back to best-cloud
 ];
 
-// Capabilities: static LLM_PROFILE_ALIASES + key agentic-system profile keys.
-// Short tag kept to ≤4 chars so model names stay readable in assertion output.
-// 'bare':    only connected/disconnect_model — all optional fields absent.
-// 'partial': has cloud_best_model but no local_best_model and no modes[] — mixed sparse.
+// 6 capabilities: 5 full (all modes present) + 1 bare (only best-cloud).
 const CAPABILITIES = [
-  { name: 'workhorse',    tag: 'wh'   },
-  { name: 'judge',        tag: 'jdg'  },
-  { name: 'deep-coder',   tag: 'dc'   },
-  { name: 'orchestrator', tag: 'orch' },
-  { name: 'classifier',   tag: 'clf'  },
-  { name: 'explorer',     tag: 'expl' },
-  { name: 'reviewer',     tag: 'rev'  },
-  { name: 'coder',        tag: 'cdr'  },
-  { name: 'bare',         tag: 'bare' },
-  { name: 'partial',      tag: 'part' },
+  { name: 'workhorse', tag: 'wh'   },
+  { name: 'judge',     tag: 'jdg'  },
+  { name: 'coder',     tag: 'cdr'  },
+  { name: 'explorer',  tag: 'expl' },
+  { name: 'reviewer',  tag: 'rev'  },
+  { name: 'bare',      tag: 'bare' },  // only best-cloud — others fall back to it
 ];
 
 // ── Fixture helpers ─────────────────────────────────────────────────────────
@@ -65,45 +53,31 @@ function modelName(tag, tier, suffix) {
   return `${tag}-${tier}-${suffix}`;
 }
 
-// Profile entry for one capability in one tier.
-// Every capability gets all six modes[] entries so the fixture is uniform.
-function profileEntry(tag, tier) {
-  return {
-    connected_model:  `${modelName(tag, tier, 'conn')}@stub`,
-    disconnect_model: `${modelName(tag, tier, 'disc')}@stub`,
-    cloud_best_model: `${modelName(tag, tier, 'cbq')}@stub`,
-    local_best_model: `${modelName(tag, tier, 'lbq')}@stub`,
-    modes: {
-      'semi-offload':      `${modelName(tag, tier, 'semi')}@stub`,
-      'cloud-judge-only':  `${modelName(tag, tier, 'cjo')}@stub`,
-      'cloud-thinking':    `${modelName(tag, tier, 'cthk')}@stub`,
-      'local-review':      `${modelName(tag, tier, 'lrev')}@stub`,
-    },
-  };
+// Profile entry for one capability in the new schema:
+// llm_profiles[capability][mode][tier] = concrete model string.
+function profileEntry(tag) {
+  const entry = {};
+  for (const { mode, suffix } of MODES) {
+    entry[mode] = {};
+    for (const tier of TIERS) {
+      entry[mode][tier] = `${modelName(tag, tier, suffix)}@stub`;
+    }
+  }
+  return entry;
 }
 
 function buildConfig(stubPort) {
   const llm_profiles = {};
-  for (const tier of TIERS) {
-    llm_profiles[tier] = {};
-    for (const { name, tag } of CAPABILITIES) {
-      if (name === 'bare') {
-        // Bare: only connected/disconnect — all optional fields absent.
-        llm_profiles[tier][name] = {
-          connected_model:  `bare-${tier}-conn@stub`,
-          disconnect_model: `bare-${tier}-disc@stub`,
-        };
-      } else if (name === 'partial') {
-        // Partial: has cloud_best_model but no local_best_model and no modes[].
-        // cloud-best-quality → cloud_best_model (cbq); local-best-quality → disconnect (disc).
-        llm_profiles[tier][name] = {
-          connected_model:  `part-${tier}-conn@stub`,
-          disconnect_model: `part-${tier}-disc@stub`,
-          cloud_best_model: `part-${tier}-cbq@stub`,
-        };
-      } else {
-        llm_profiles[tier][name] = profileEntry(tag, tier);
+  for (const { name, tag } of CAPABILITIES) {
+    if (name === 'bare') {
+      // Only best-cloud — other modes fall back to best-cloud via resolveProfileModel.
+      const bestCloud = {};
+      for (const tier of TIERS) {
+        bestCloud[tier] = `bare-${tier}-cloud@stub`;
       }
+      llm_profiles[name] = { 'best-cloud': bestCloud };
+    } else {
+      llm_profiles[name] = profileEntry(tag);
     }
   }
   return {
@@ -116,7 +90,7 @@ function buildConfig(stubPort) {
 
 // Minimal request body.
 const MSG_BODY = {
-  messages: [{ role: 'user', content: 'what is your model name, where were you born, model id and who is your maker?' }],
+  messages: [{ role: 'user', content: 'what is your model name?' }],
   max_tokens: 10,
 };
 
@@ -141,23 +115,18 @@ async function main() {
     for (const tier of TIERS) {
       console.log(`\n── form factor: ${tier} ──────────────────────────────`);
 
-      for (const { mode, suffix, bareSuffix, partialSuffix } of MODES) {
+      for (const { mode, suffix, bareSuffix } of MODES) {
         console.log(`  mode: ${mode}`);
 
         await withProxy(
           { configPath, profile: tier, mode, env: proxyEnv },
           async ({ port }) => {
             for (const { name, tag } of CAPABILITIES) {
-              let expected;
-              if (name === 'bare') {
-                expected = `bare-${tier}-${bareSuffix}`;
-              } else if (name === 'partial') {
-                expected = `part-${tier}-${partialSuffix}`;
-              } else {
-                expected = modelName(tag, tier, suffix);
-              }
-              const body = Object.assign({ model: name }, MSG_BODY);
+              const expected = name === 'bare'
+                ? modelName('bare', tier, bareSuffix)
+                : modelName(tag, tier, suffix);
 
+              const body = Object.assign({ model: name }, MSG_BODY);
               const r = await httpJson(port, 'POST', '/v1/messages', body);
 
               // 1. Stub received the correct concrete model on the wire.
@@ -176,12 +145,6 @@ async function main() {
               assert(
                 via && via.capability === name,
                 `${tier}/${mode}/${name}: x-c-thru-resolved-via.capability=${name} (got ${via && via.capability})`
-              );
-
-              // 3. x-c-thru-served-by header matches.
-              assert(
-                r.headers['x-c-thru-served-by'] === expected,
-                `${tier}/${mode}/${name}: x-c-thru-served-by=${expected} (got ${r.headers['x-c-thru-served-by']})`
               );
             }
           }

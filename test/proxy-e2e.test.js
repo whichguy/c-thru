@@ -110,16 +110,22 @@ async function main() {
   // ── Test 3: default route (no explicit model) ──────────────────────────────
   console.log('\n3. Default route (c-thru -p "..." — no --model flag)');
   {
-    const r = await new Promise((resolve, reject) => {
-      const args = ['-p', IDENTITY_PROMPT];
-      execFile(C_THRU, args, { timeout: E2E_TIMEOUT_MS }, (err, stdout, stderr) => {
-        if (err && err.killed) { reject(new Error(`timed out.\nstderr: ${stderr.slice(0, 500)}`)); return; }
-        resolve({ exitCode: err ? (err.code || 1) : 0, stdout, stderr });
+    const hasRealKey = process.env.ANTHROPIC_API_KEY &&
+      !process.env.ANTHROPIC_API_KEY.startsWith('sk-ant-test');
+    if (!hasRealKey) {
+      skip('default route (no real ANTHROPIC_API_KEY — would hit real Anthropic)');
+    } else {
+      const r = await new Promise((resolve, reject) => {
+        const args = ['-p', IDENTITY_PROMPT];
+        execFile(C_THRU, args, { timeout: E2E_TIMEOUT_MS }, (err, stdout, stderr) => {
+          if (err && err.killed) { reject(new Error(`timed out.\nstderr: ${stderr.slice(0, 500)}`)); return; }
+          resolve({ exitCode: err ? (err.code || 1) : 0, stdout, stderr });
+        });
       });
-    });
-    assertEq(r.exitCode, 0, `default route: exit code 0 (got ${r.exitCode})`);
-    assert(r.stdout.trim().length > 0, 'default route: stdout is non-empty');
-    console.log(`  response: ${r.stdout.trim().slice(0, 120)}…`);
+      assertEq(r.exitCode, 0, `default route: exit code 0 (got ${r.exitCode})`);
+      assert(r.stdout.trim().length > 0, 'default route: stdout is non-empty');
+      console.log(`  response: ${r.stdout.trim().slice(0, 120)}…`);
+    }
   }
 
   const failed = summary();

@@ -53,16 +53,13 @@ async function main() {
             C_be: { kind: 'ollama',    url: `http://127.0.0.1:${C.port}` },
           },
           model_routes: { 'A-model': 'A_be', 'B-target': 'B_be', 'C-target': 'C_be' },
-          llm_profiles: {
-            '128gb': { workhorse: { connected_model: 'A-model', disconnect_model: 'A-model' } },
-          },
         };
         const configPath = writeConfig(tmpDir, cfg);
         // Use a short TTL so we can test expiry within the test.
         await withProxy({
           configPath,
           profile: '128gb',
-          mode: 'connected',
+          mode: 'best-cloud',
           env: { CLAUDE_PROXY_FAILED_BACKEND_TTL_MS: '500' },
         }, async ({ port }) => {
           const reqBody = {
@@ -77,10 +74,13 @@ async function main() {
           assertEq(B.requests.length, 1, 'request 1: B tried once');
           assertEq(C.requests.length, 1, 'request 1: C served');
 
-          // Request 2 (immediate): A fails → B is cooldowned (has fallback_to) → skip → C.
+          // Request 2 (immediate): A is cooldowned (has fallback_to) → skip →
+          //   B is also cooldowned (has fallback_to) → skip → C serves.
+          // The proxy skips any non-terminal backend that is in cooldown,
+          // including the primary, to avoid paying the TTFT cost of a known-bad backend.
           const r2 = await httpJson(port, 'POST', '/v1/messages', reqBody);
           assertEq(r2.status, 200, 'request 2: still served via C (200)');
-          assertEq(A.requests.length, 2, 'request 2: A tried again (primary — never cooldowned from this chain)');
+          assertEq(A.requests.length, 1, 'request 2: A SKIPPED (in cooldown — has fallback_to)');
           assertEq(B.requests.length, 1, 'request 2: B SKIPPED (in cooldown)');
           assertEq(C.requests.length, 2, 'request 2: C served again');
 
@@ -113,13 +113,10 @@ async function main() {
             terminal_be: { kind: 'anthropic', url: `http://127.0.0.1:${T.port}` },  // no fallback_to
           },
           model_routes: { 'T-model': 'terminal_be' },
-          llm_profiles: {
-            '128gb': { workhorse: { connected_model: 'T-model', disconnect_model: 'T-model' } },
-          },
         };
         const configPath = writeConfig(tmpDir, cfg);
         await withProxy({
-          configPath, profile: '128gb', mode: 'connected',
+          configPath, profile: '128gb', mode: 'best-cloud',
           env: { CLAUDE_PROXY_FAILED_BACKEND_TTL_MS: '500' },
         }, async ({ port }) => {
           const reqBody = {
@@ -155,13 +152,10 @@ async function main() {
             C_be:     { kind: 'ollama',    url: `http://127.0.0.1:${C.port}` },
           },
           model_routes: { 'P-model': 'perm_be', 'C-target': 'C_be' },
-          llm_profiles: {
-            '128gb': { workhorse: { connected_model: 'P-model', disconnect_model: 'P-model' } },
-          },
         };
         const configPath = writeConfig(tmpDir, cfg);
         await withProxy({
-          configPath, profile: '128gb', mode: 'connected',
+          configPath, profile: '128gb', mode: 'best-cloud',
           env: { CLAUDE_PROXY_FAILED_BACKEND_TTL_MS: '500' },
         }, async ({ port }) => {
           const reqBody = {
@@ -199,14 +193,11 @@ async function main() {
             C_be: { kind: 'ollama',    url: `http://127.0.0.1:${C.port}` },
           },
           model_routes: { 'A-model': 'A_be', 'C-target': 'C_be' },
-          llm_profiles: {
-            '128gb': { workhorse: { connected_model: 'A-model', disconnect_model: 'A-model' } },
-          },
         };
         const configPath = writeConfig(tmpDir, cfg);
         // Use a more realistic TTL here so the status check can read a meaningful expiry.
         await withProxy({
-          configPath, profile: '128gb', mode: 'connected',
+          configPath, profile: '128gb', mode: 'best-cloud',
           env: { CLAUDE_PROXY_FAILED_BACKEND_TTL_MS: '30000' },
         }, async ({ port }) => {
           const reqBody = {

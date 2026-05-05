@@ -153,82 +153,21 @@ Default tier is the active hardware tier unless `--tier` is given.
 Extract `<CAPABILITY>`, `<MODEL>`, and optionally `--tier <TIER>` and `--reload` from `$ARGUMENTS`.
 If capability or model is missing, print usage and stop.
 
-Steps:
-1. Determine tier: use `--tier` value if given, otherwise detect active tier with the
-   same logic as `resolve` (env → `llm_active_profile` → `tierForGb(totalmem())`).
-
-2. Read `~/.claude/model-map.json`. Look up the existing entry for
-   `llm_profiles[<tier>][<capability>]` to preserve `on_failure`, `modes`, etc.
-   If the capability doesn't exist in that tier, confirm with the user before
-   creating a new entry.
-
-3. Merge: copy the existing entry (or `{}` if new), then set
-   `connected_model = <MODEL>` and `disconnect_model = <MODEL>`.
-
-4. Build the spec and run `model-map-edit`. Use node inline to construct valid JSON
-   that preserves any extra fields from the existing entry:
+Steps: Extract `<TIER>`, `<CAPABILITY>`, `<MODEL>`, and optional `--reload` from `$ARGUMENTS`.
+Delegate entirely to `c-thru-config-helpers.js`:
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-node -e "
-'use strict';
-const fs = require('fs'), os = require('os'), path = require('path');
-const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
-const mapPath = CLAUDE_DIR + '/model-map.json';
-let config = {};
-try { config = JSON.parse(fs.readFileSync(mapPath, 'utf8')); } catch {}
-const tier = process.argv[1];
-const cap  = process.argv[2];
-const model = process.argv[3];
-const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
-const entry = Object.assign({}, existing, { connected_model: model, disconnect_model: model });
-process.stdout.write(JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } }));
-" -- "<TIER>" "<CAPABILITY>" "<MODEL>" | xargs -0 -I SPEC \
-node "$CLAUDE_DIR/tools/model-map-edit" \
-  "$CLAUDE_DIR/model-map.system.json" \
-  "$CLAUDE_DIR/model-map.overrides.json" \
-  "$CLAUDE_DIR/model-map.json" \
-  SPEC
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" \
+  remap "<TIER>" "<CAPABILITY>" "<MODEL>" [--reload]
 ```
 
-> **Alternative (simpler):** If you are constructing the spec interactively, build the
-> JSON string using node and pass it directly:
->
-> ```bash
-> CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-> SPEC=$(node -e "
-> 'use strict';
-> const fs = require('fs'), os = require('os'), path = require('path');
-> const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
-> const config = JSON.parse(fs.readFileSync(CLAUDE_DIR + '/model-map.json', 'utf8'));
-> const tier = process.argv[1], cap = process.argv[2], model = process.argv[3];
-> const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
-> const entry = Object.assign({}, existing, { connected_model: model, disconnect_model: model });
-> process.stdout.write(JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } }));
-> " -- "<TIER>" "<CAPABILITY>" "<MODEL>")
-> node "$CLAUDE_DIR/tools/model-map-edit" \
->   "$CLAUDE_DIR/model-map.system.json" \
->   "$CLAUDE_DIR/model-map.overrides.json" \
->   "$CLAUDE_DIR/model-map.json" \
->   "$SPEC"
-> ```
+The helper reads the active mode via `resolveLlmMode`, then sets
+`llm_profiles[<CAPABILITY>][<activeMode>][<TIER>] = <MODEL>` in overrides.
 
-On success, print:
-- If `--reload` is absent:
-  ```
-  remapped <CAPABILITY> → <MODEL>  (tier: <TIER>)
-  run '/c-thru-config reload' to apply to running proxy
-  ```
-- If `--reload` is present:
-  ```
-  remapped <CAPABILITY> → <MODEL>  (tier: <TIER>)
-  ```
-
-If `--reload` is present, also reload the running proxy immediately after a successful edit:
-
-```bash
-~/.claude/tools/c-thru reload || echo "proxy not running — config saved, will apply on next spawn"
-```
+On success the helper prints:
+- `remapped <CAPABILITY> → <MODEL> for mode <MODE> (tier: <TIER>)`
+- If `--reload` absent: also prints `run '/c-thru-config reload' to apply to running proxy`
+- If `--reload` present: calls `c-thru reload` immediately after writing
 
 ---
 
@@ -236,33 +175,19 @@ If `--reload` is present, also reload the running proxy immediately after a succ
 
 **Usage:** `/c-thru-config set-cloud-best-model <capability> <model> [--tier <tier>] [--reload]`
 
-Sets `cloud_best_model` on an existing profile entry. Used by `cloud-best-quality` mode when no explicit `modes[cloud-best-quality]` override is present.
+Sets `llm_profiles[<CAPABILITY>][best-cloud][<TIER>]` in overrides — the model used when
+`CLAUDE_LLM_MODE=best-cloud` at the given tier.
 
-Extract `<CAPABILITY>`, `<MODEL>`, and optionally `--tier <TIER>` and `--reload` from `$ARGUMENTS`.
-
-Steps mirror `remap`: detect tier, read existing entry, merge in `cloud_best_model: <MODEL>`, pass to `model-map-edit`.
+Extract `<TIER>`, `<CAPABILITY>`, `<MODEL>`, and optional `--reload` from `$ARGUMENTS`.
+Delegate entirely to `c-thru-config-helpers.js`:
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-SPEC=$(node -e "
-'use strict';
-const fs = require('fs'), os = require('os'), path = require('path');
-const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
-const config = JSON.parse(fs.readFileSync(CLAUDE_DIR + '/model-map.json', 'utf8'));
-const tier = process.argv[1], cap = process.argv[2], model = process.argv[3];
-const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
-const entry = Object.assign({}, existing, { cloud_best_model: model });
-process.stdout.write(JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } }));
-" -- "<TIER>" "<CAPABILITY>" "<MODEL>")
-node "$CLAUDE_DIR/tools/model-map-edit" \
-  "$CLAUDE_DIR/model-map.system.json" \
-  "$CLAUDE_DIR/model-map.overrides.json" \
-  "$CLAUDE_DIR/model-map.json" \
-  "$SPEC"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" \
+  set-cloud-best "<TIER>" "<CAPABILITY>" "<MODEL>" [--reload]
 ```
 
-On success, print `set cloud_best_model for <CAPABILITY> → <MODEL>  (tier: <TIER>)`.
-If `--reload` is present, also run `~/.claude/tools/c-thru reload`.
+On success prints `set cloud model for <CAPABILITY> → <MODEL> in mode best-cloud (tier: <TIER>)`.
+If `--reload` present, calls `c-thru reload` after writing.
 
 ---
 
@@ -270,31 +195,19 @@ If `--reload` is present, also run `~/.claude/tools/c-thru reload`.
 
 **Usage:** `/c-thru-config set-local-best-model <capability> <model> [--tier <tier>] [--reload]`
 
-Sets `local_best_model` on an existing profile entry. Used by `local-best-quality` mode when no explicit `modes[local-best-quality]` override is present.
+Sets `llm_profiles[<CAPABILITY>][best-local-oss][<TIER>]` in overrides — the model used when
+`CLAUDE_LLM_MODE=best-local-oss` at the given tier.
 
-Same pattern as `set-cloud-best-model`, replacing the merged key:
+Extract `<TIER>`, `<CAPABILITY>`, `<MODEL>`, and optional `--reload` from `$ARGUMENTS`.
+Delegate entirely to `c-thru-config-helpers.js`:
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-SPEC=$(node -e "
-'use strict';
-const fs = require('fs'), os = require('os'), path = require('path');
-const CLAUDE_DIR = process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude');
-const config = JSON.parse(fs.readFileSync(CLAUDE_DIR + '/model-map.json', 'utf8'));
-const tier = process.argv[1], cap = process.argv[2], model = process.argv[3];
-const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
-const entry = Object.assign({}, existing, { local_best_model: model });
-process.stdout.write(JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } }));
-" -- "<TIER>" "<CAPABILITY>" "<MODEL>")
-node "$CLAUDE_DIR/tools/model-map-edit" \
-  "$CLAUDE_DIR/model-map.system.json" \
-  "$CLAUDE_DIR/model-map.overrides.json" \
-  "$CLAUDE_DIR/model-map.json" \
-  "$SPEC"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" \
+  set-local-best "<TIER>" "<CAPABILITY>" "<MODEL>" [--reload]
 ```
 
-On success, print `set local_best_model for <CAPABILITY> → <MODEL>  (tier: <TIER>)`.
-If `--reload` is present, also run `~/.claude/tools/c-thru reload`.
+On success prints `set local model for <CAPABILITY> → <MODEL> in mode best-local-oss (tier: <TIER>)`.
+If `--reload` present, calls `c-thru reload` after writing.
 
 ---
 
@@ -491,13 +404,13 @@ const CAPS = [
   'debugger-hypothesis','debugger-investigate','debugger-hard',
   'vision','pdf','writer','edge','generalist','fast-generalist','fast-scout','long-context',
 ];
-const profile = (config.llm_profiles || {})[tier] || {};
-const maxLen = CAPS.filter(c => profile[c]).reduce((m,c) => Math.max(m,c.length), 0);
+const profiles = config.llm_profiles || {};
+const maxLen = CAPS.filter(c => profiles[c] && profiles[c][mode]).reduce((m,c) => Math.max(m,c.length), 0);
 console.log('\nCapability → model  (mode: ' + mode + ', tier: ' + tier + ')');
 for (const cap of CAPS) {
-  const entry = profile[cap]; if (!entry) continue;
-  const resolved = resolveProfileModel(entry, mode);
-  const tag = entry.on_failure === 'hard_fail' ? '  [hard_fail]' : '';
+  const entry = (profiles[cap] || {})[mode]; if (!entry) continue;
+  const resolved = resolveProfileModel(entry, tier, mode);
+  const tag = (typeof entry === 'object' && entry.on_failure === 'hard_fail') ? '  [hard_fail]' : '';
   console.log('  ' + cap.padEnd(maxLen + 2) + (resolved || '(unresolved)') + tag);
 }
 "
@@ -560,13 +473,15 @@ const { resolveActiveTier } = require(path.join(CLAUDE_DIR, 'tools', 'model-map-
 let config = {};
 try { config = JSON.parse(fs.readFileSync(CLAUDE_DIR + '/model-map.json','utf8')); } catch {}
 const tier = resolveActiveTier(config);
-const profile = (config.llm_profiles || {})[tier] || {};
+const profiles = config.llm_profiles || {};
 const refs = new Set();
-for (const e of Object.values(profile)) {
-  if (e && typeof e === 'object') {
-    [e.connected_model, e.disconnect_model, ...Object.values(e.modes || {})].forEach(m => {
-      if (m && m.includes(':') && !m.includes('claude') && !m.includes('gpt')) refs.add(m);
-    });
+for (const modes of Object.values(profiles)) {
+  if (!modes || typeof modes !== 'object') continue;
+  for (const tierMap of Object.values(modes)) {
+    if (!tierMap || typeof tierMap !== 'object') continue;
+    const m = tierMap[tier];
+    if (m && typeof m === 'string' && m.includes(':') &&
+        !m.includes('claude') && !m.includes('gpt')) refs.add(m);
   }
 }
 const pulled = new Set();

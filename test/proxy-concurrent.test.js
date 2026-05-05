@@ -34,16 +34,14 @@ async function main() {
             'rev-model':   'stub',
           },
           llm_profiles: {
-            '128gb': {
-              workhorse: { connected_model: 'wh-model',    disconnect_model: 'wh-model' },
-              judge:     { connected_model: 'judge-model', disconnect_model: 'judge-model' },
-              coder:     { connected_model: 'coder-model', disconnect_model: 'coder-model' },
-              reviewer:  { connected_model: 'rev-model',   disconnect_model: 'rev-model' },
-            },
+            workhorse: { 'best-cloud': { '128gb': 'wh-model' } },
+            judge:     { 'best-cloud': { '128gb': 'judge-model' } },
+            coder:     { 'best-cloud': { '128gb': 'coder-model' } },
+            reviewer:  { 'best-cloud': { '128gb': 'rev-model' } },
           },
         };
         const configPath = writeConfig(tmpDir, config);
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           const caps = ['workhorse', 'judge', 'coder', 'reviewer'];
           const expectedModels = { workhorse: 'wh-model', judge: 'judge-model', coder: 'coder-model', reviewer: 'rev-model' };
 
@@ -81,10 +79,10 @@ async function main() {
         const config = {
           backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
           model_routes: { 'm': 'stub' },
-          llm_profiles: { '128gb': { workhorse: { connected_model: 'm', disconnect_model: 'm' } } },
+          llm_profiles: { workhorse: { 'best-cloud': { '128gb': 'm' } } },
         };
         const configPath = writeConfig(tmpDir, config);
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           const requests = [];
           for (let i = 0; i < 5; i++) {
             requests.push(httpJson(port, 'POST', '/v1/messages', {
@@ -118,10 +116,10 @@ async function main() {
         const config = {
           backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
           model_routes: { 'm': 'stub' },
-          llm_profiles: { '128gb': { workhorse: { connected_model: 'm', disconnect_model: 'm' } } },
+          llm_profiles: { workhorse: { 'best-cloud': { '128gb': 'm' } } },
         };
         const configPath = writeConfig(tmpDir, config);
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           // Fire 5 concurrent /v1/active-models calls during traffic
           const tasks = [];
           for (let i = 0; i < 5; i++) {

@@ -4,6 +4,57 @@
 # A13: `-u` catches unset-var bugs. `-e` off — failed curls are flow control.
 set -uo pipefail
 
+# --- Resolve script location (follow symlinks) so ROUTER_REPO_ROOT is correct
+# whether this script is invoked via ~/.claude/tools symlink, repo direct, or plugin bundle.
+_src="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_src" ]; do
+    _dir=$(cd -P "$(dirname "$_src")" && pwd)
+    _src=$(readlink "$_src")
+    case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+_script_dir=$(cd -P "$(dirname "$_src")" && pwd)
+ROUTER_REPO_ROOT=$(cd -P "$_script_dir/.." && pwd)
+
+# --- First-run: seed model-map config + register proxy URL in settings.json ---
+CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
+_bundled_config="$ROUTER_REPO_ROOT/config/model-map.json"
+_sys_map="$CLAUDE_DIR/model-map.system.json"
+_ovr_map="$CLAUDE_DIR/model-map.overrides.json"
+_eff_map="$CLAUDE_DIR/model-map.json"
+_settings="$CLAUDE_DIR/settings.json"
+
+if [ -f "$_bundled_config" ] && [ ! -f "$_sys_map" ]; then
+    # Seed model-map files
+    cp "$_bundled_config" "$_sys_map"
+    [ -f "$_ovr_map" ] || printf '{}' > "$_ovr_map"
+    [ -f "$_eff_map" ] || cp "$_bundled_config" "$_eff_map"
+
+    # Spawn proxy on fixed port (plugin mode — port is static so ANTHROPIC_BASE_URL can be pre-written)
+    _proxy_bin="$ROUTER_REPO_ROOT/tools/claude-proxy"
+    _plugin_port="${C_THRU_PLUGIN_PORT:-10017}"
+    if [ -f "$_proxy_bin" ] && command -v node >/dev/null 2>&1; then
+        nohup node "$_proxy_bin" --port "$_plugin_port" \
+            --config "$_eff_map" \
+            >> "$CLAUDE_DIR/proxy.plugin.log" 2>&1 &
+        disown $!
+    fi
+
+    # Register ANTHROPIC_BASE_URL in settings.json (takes effect on next Claude Code launch)
+    if command -v node >/dev/null 2>&1 && [ -f "$_settings" ]; then
+        node -e "
+          const fs=require('fs'), f=process.argv[1], p=parseInt(process.argv[2]);
+          let s={};
+          try{s=JSON.parse(fs.readFileSync(f,'utf8'))}catch(e){}
+          s.env=s.env||{};
+          if(!s.env.ANTHROPIC_BASE_URL){
+            s.env.ANTHROPIC_BASE_URL='http://127.0.0.1:'+p;
+            fs.writeFileSync(f,JSON.stringify(s,null,2)+'\n');
+            process.stderr.write('c-thru plugin: routing registered on port '+p+'. Restart Claude Code to activate.\n');
+          }
+        " "$_settings" "$_plugin_port" >&2
+    fi
+fi
+
 PORT="${CLAUDE_PROXY_PORT:-}"
 if [ -z "$PORT" ] && [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
     PORT=$(printf '%s' "$ANTHROPIC_BASE_URL" | sed -nE 's#^https?://[^/:]+:([0-9]+).*$#\1#p')
@@ -51,16 +102,6 @@ if [ ${#issues[@]} -gt 0 ]; then
 fi
 
 # Check 3: profile pollution — silent on happy path, single advisory line on drift.
-# Resolve script dir (follow symlink) so we can find tools/model-map-config.js
-# whether invoked via ~/.claude/tools symlink or directly from the repo.
-_src="${BASH_SOURCE[0]:-$0}"
-while [ -L "$_src" ]; do
-    _dir=$(cd -P "$(dirname "$_src")" && pwd)
-    _src=$(readlink "$_src")
-    case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
-done
-_script_dir=$(cd -P "$(dirname "$_src")" && pwd)
-ROUTER_REPO_ROOT=$(cd -P "$_script_dir/.." && pwd)
 _pollution_script="$ROUTER_REPO_ROOT/tools/model-map-config.js"
 if [ -f "$_pollution_script" ] && command -v node >/dev/null 2>&1; then
     _pollution_out=$(node "$_pollution_script" --detect-pollution 2>/dev/null || true)

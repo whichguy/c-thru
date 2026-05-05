@@ -102,9 +102,10 @@ console.log('\n3. Unknown agent → resolveCapabilityAlias returns null');
 // ── 4. Direct alias passthrough — known profile key is identity ───────────────
 console.log('\n4. Direct capability alias used as model name → identity');
 {
-  const fixtureCfg = { llm_profiles: { '64gb': { judge: { connected_model: 'j', disconnect_model: 'j' } } } };
+  // New schema: llm_profiles[capability][mode][tier]
+  const fixtureCfg = { llm_profiles: { judge: { 'best-cloud': { '64gb': 'j' } }, workhorse: { 'best-cloud': { '64gb': 'w' } } } };
   assert(resolveCapabilityAlias('judge', fixtureCfg, '64gb') === 'judge', `judge → judge (identity) (got ${resolveCapabilityAlias('judge', fixtureCfg, '64gb')})`);
-  assert(resolveCapabilityAlias('workhorse', fixtureCfg, '64gb') === 'workhorse', `workhorse → workhorse (static set) (got ${resolveCapabilityAlias('workhorse', fixtureCfg, '64gb')})`);
+  assert(resolveCapabilityAlias('workhorse', fixtureCfg, '64gb') === 'workhorse', `workhorse → workhorse (identity) (got ${resolveCapabilityAlias('workhorse', fixtureCfg, '64gb')})`);
 }
 
 // ── 5. model_overrides field declared in production config ────────────────────

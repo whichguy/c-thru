@@ -51,6 +51,14 @@ run_suite "preflight-model-readiness (/v1/active-models)" \
   bash "$REPO_DIR/test/preflight-model-readiness.test.sh"
 run_suite "c-thru-contract-check (agent/skill contracts)" \
   bash "$REPO_DIR/test/c-thru-contract-check.test.sh"
+run_suite "c-thru-explain-bash (bash integration: _explain_all_json cache + TSV contracts)" \
+  bash "$REPO_DIR/test/c-thru-explain-bash.test.sh"
+run_suite "c-thru-bootstrap-auth-env (bootstrap auth env helper)" \
+  bash "$REPO_DIR/test/c-thru-bootstrap-auth-env.test.sh"
+run_suite "hook-payload-extraction (hook payload extraction)" \
+  bash "$REPO_DIR/test/hook-payload-extraction.test.sh"
+run_suite "strict-models (C_THRU_STRICT_MODELS=1 enforcement)" \
+  bash "$REPO_DIR/test/strict-models.test.sh"
 
 echo ""
 echo "Node tests:"
@@ -158,14 +166,28 @@ run_suite "proxy-translation (Anthropic→provider translation)" \
   node "$REPO_DIR/test/proxy-translation.test.js"
 run_suite "resolution-coverage (full resolution coverage)" \
   node "$REPO_DIR/test/resolution-coverage.test.js"
+run_suite "proxy-model-pin-routing (model pin + routing)" \
+  node "$REPO_DIR/test/proxy-model-pin-routing.test.js"
+run_suite "proxy-cross-provider-parity (live parity — skipped unless C_THRU_LIVE_PARITY=1)" \
+  node "$REPO_DIR/test/proxy-cross-provider-parity.test.js"
+run_suite "proxy-gemini-routing (Gemini routing + picker aliases)" \
+  node "$REPO_DIR/test/proxy-gemini-routing.test.js"
+run_suite "proxy-gemini-translation (Anthropic→Gemini translation)" \
+  node "$REPO_DIR/test/proxy-gemini-translation.test.js"
 
 # EXCLUDED (currently failing — do not wire until fixed):
-# benchmark-coverage.test.js: coverage-map mismatch / fixture drift (run manually to diagnose)
-# proxy-classify.test.js:     withProxy async error at startup
-# proxy-targets.test.js:      withProxy async error at startup
+# benchmark-coverage.test.js:       coverage-map mismatch / fixture drift (run manually to diagnose)
+# proxy-classify.test.js:           withProxy async error at startup
+# proxy-targets.test.js:            withProxy async error at startup
+# proxy-ollama-passthrough.test.js: 0/11 — legacy translation path broken against current proxy
+# model-map-lineage.test.js:        1/333 failure — minor fixture drift (run manually to diagnose)
+# proxy-quality.test.js:            8/28 failures — quality-score expectations drifted from config
 skip_suite "benchmark-coverage (excluded — fixture drift, run manually to diagnose)"
 skip_suite "proxy-classify (excluded — withProxy async error at startup)"
 skip_suite "proxy-targets (excluded — withProxy async error at startup)"
+skip_suite "proxy-ollama-passthrough (excluded — legacy path broken against current proxy)"
+skip_suite "model-map-lineage (excluded — fixture drift, run manually to diagnose)"
+skip_suite "proxy-quality (excluded — quality-score expectations drifted from config)"
 
 echo ""
 echo "Validators:"

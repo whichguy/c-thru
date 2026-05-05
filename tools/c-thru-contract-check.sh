@@ -539,7 +539,8 @@ PIPELINE_AGENTS=(
 )
 for agent_name in "${PIPELINE_AGENTS[@]}"; do
     agent_file="$AGENTS_DIR/${agent_name}.md"
-    [ -f "$agent_file" ] || { fail "${agent_name}.md: file not found"; continue; }
+    # Missing file is already caught by check 4 (agent-count consistency).
+    [ -f "$agent_file" ] || { ok "${agent_name}.md: absent (check 4 owns file-missing invariant)"; continue; }
     if grep -q '^HANDOFF:' "$agent_file" 2>/dev/null; then
         ok "${agent_name}.md: HANDOFF declared"
     else

@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 'use strict';
 // Tests for tools/model-map-resolve.js pure-function API.
-// Unit: cartesian product of modes × tiers × capabilities against a fixture config.
+// Unit: modes × tiers × capabilities against a fixture config (new schema).
 // Integration: spawn tools/c-thru-resolve and assert stdout matches pure-function result.
 // Run with: node test/resolve-capability.test.js
 
 const { execSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const {
   resolveProfileModel,
   resolveLlmMode,
@@ -28,169 +30,271 @@ function assert(condition, message) {
   }
 }
 
-// ── Fixture config ────────────────────────────────────────────────────────────
+// ── Fixture config (new schema: capability-outer llm_profiles) ────────────────
 const FIXTURE_CONFIG = {
-  llm_mode: 'connected',
-  llm_active_profile: '64gb',
   agent_to_capability: {
-    implementer:  'deep-coder',
-    scaffolder:   'pattern-coder',
-    planner:      'judge',
+    writer:    'coder',
+    planner:   'planner',
   },
   llm_profiles: {
-    '16gb': {
-      'deep-coder':   { connected_model: 'small-cloud', disconnect_model: 'small-local' },
-      'judge':        { connected_model: 'small-cloud', disconnect_model: 'small-local',
-                        modes: { 'semi-offload': 'mid-local' } },
-      'orchestrator': { connected_model: 'small-cloud', disconnect_model: 'small-local' },
+    // tier-keyed object per mode
+    coder: {
+      'best-cloud':     { '16gb': 'cloud-small', '64gb': 'cloud-large' },
+      'best-local-oss': { '16gb': 'local-small', '64gb': 'local-large' },
     },
-    '64gb': {
-      'deep-coder':   { connected_model: 'dc-cloud',  disconnect_model: 'dc-local' },
-      'judge':        { connected_model: 'j-cloud',   disconnect_model: 'j-local',
-                        modes: { 'semi-offload': 'j-mid', 'cloud-judge-only': 'j-cloud' } },
-      'orchestrator': { connected_model: 'orch-cloud', disconnect_model: 'orch-local' },
-      'pattern-coder':{ connected_model: 'pc-cloud',  disconnect_model: 'pc-local' },
-      'workhorse':    { connected_model: 'wh-cloud',  disconnect_model: 'wh-local' },
+    // flat string per mode (same model for all tiers)
+    planner: {
+      'best-cloud':     'cloud-planner',
+      'best-local-oss': 'local-planner',
+      'best-cloud-gov': 'gov-planner',
+    },
+    // capability not in agent_to_capability — direct lookup only
+    tester: {
+      'best-cloud':     { '64gb': 'cloud-tester' },
+      'best-local-oss': { '64gb': 'local-tester' },
     },
   },
 };
 
 const MODES = Array.from(LLM_MODE_ENUM);
-const TIERS = Object.keys(FIXTURE_CONFIG.llm_profiles);
-const CAPABILITIES = ['deep-coder', 'judge', 'orchestrator', 'workhorse'];
 
-// ── 1. resolveProfileModel — cartesian product ────────────────────────────────
-console.log('1. resolveProfileModel — 4 modes × entries with and without modes sub-map');
+// ── 1. resolveProfileModel — tier-keyed object form ───────────────────────────
+console.log('1. resolveProfileModel — tier-keyed object per mode');
 {
-  const entryWithModes = FIXTURE_CONFIG.llm_profiles['64gb']['judge'];
-  assert(resolveProfileModel(entryWithModes, 'connected')       === 'j-cloud', `judge connected (got ${resolveProfileModel(entryWithModes, 'connected')})`);
-  assert(resolveProfileModel(entryWithModes, 'offline')         === 'j-local', `judge offline (got ${resolveProfileModel(entryWithModes, 'offline')})`);
-  assert(resolveProfileModel(entryWithModes, 'semi-offload')    === 'j-mid',   `judge semi-offload (modes[]) (got ${resolveProfileModel(entryWithModes, 'semi-offload')})`);
-  assert(resolveProfileModel(entryWithModes, 'cloud-judge-only')=== 'j-cloud', `judge cloud-judge-only (modes[]) (got ${resolveProfileModel(entryWithModes, 'cloud-judge-only')})`);
-
-  const plainEntry = FIXTURE_CONFIG.llm_profiles['64gb']['deep-coder'];
-  assert(resolveProfileModel(plainEntry, 'connected')       === 'dc-cloud', `dc connected (got ${resolveProfileModel(plainEntry, 'connected')})`);
-  assert(resolveProfileModel(plainEntry, 'offline')         === 'dc-local', `dc offline (got ${resolveProfileModel(plainEntry, 'offline')})`);
-  assert(resolveProfileModel(plainEntry, 'semi-offload')    === 'dc-local', `dc semi-offload (no modes[]) (got ${resolveProfileModel(plainEntry, 'semi-offload')})`);
-  assert(resolveProfileModel(plainEntry, 'cloud-judge-only')=== 'dc-local', `dc cloud-judge-only (no modes[]) (got ${resolveProfileModel(plainEntry, 'cloud-judge-only')})`);
-  assert(resolveProfileModel(plainEntry, 'unknown-mode')    === 'dc-cloud', `dc unknown mode → conservative default (got ${resolveProfileModel(plainEntry, 'unknown-mode')})`);
+  const entry = FIXTURE_CONFIG.llm_profiles.coder;
+  assert(resolveProfileModel(entry, '16gb', 'best-cloud')     === 'cloud-small', `coder 16gb best-cloud → cloud-small`);
+  assert(resolveProfileModel(entry, '64gb', 'best-cloud')     === 'cloud-large', `coder 64gb best-cloud → cloud-large`);
+  assert(resolveProfileModel(entry, '16gb', 'best-local-oss') === 'local-small', `coder 16gb best-local-oss → local-small`);
+  assert(resolveProfileModel(entry, '64gb', 'best-local-oss') === 'local-large', `coder 64gb best-local-oss → local-large`);
 }
 
-// ── 2. resolveLlmMode — config + env precedence ───────────────────────────────
-console.log('\n2. resolveLlmMode — env overrides config; legacy env aliases');
+// ── 2. resolveProfileModel — flat string form (all tiers same model) ──────────
+console.log('\n2. resolveProfileModel — flat string per mode (tier-agnostic)');
+{
+  const entry = FIXTURE_CONFIG.llm_profiles.planner;
+  assert(resolveProfileModel(entry, '16gb', 'best-cloud')     === 'cloud-planner', `planner 16gb best-cloud → cloud-planner`);
+  assert(resolveProfileModel(entry, '64gb', 'best-cloud')     === 'cloud-planner', `planner 64gb best-cloud → same model at 64gb`);
+  assert(resolveProfileModel(entry, '64gb', 'best-local-oss') === 'local-planner', `planner 64gb best-local-oss → local-planner`);
+  assert(resolveProfileModel(entry, '64gb', 'best-cloud-gov') === 'gov-planner',   `planner 64gb best-cloud-gov → gov-planner`);
+}
+
+// ── 3. resolveProfileModel — unknown mode falls back to best-cloud ────────────
+console.log('\n3. resolveProfileModel — unknown mode falls back to best-cloud');
+{
+  const entry = FIXTURE_CONFIG.llm_profiles.coder;
+  // best-cloud-oss not in fixture → falls back to best-cloud value
+  const result = resolveProfileModel(entry, '64gb', 'best-cloud-oss');
+  assert(result === 'cloud-large', `coder 64gb best-cloud-oss (not in fixture) → falls back to cloud-large (got ${result})`);
+}
+
+// ── 4. resolveProfileModel — null/undefined guard ─────────────────────────────
+console.log('\n4. resolveProfileModel — null/undefined returns null for all modes');
+{
+  for (const mode of MODES) {
+    assert(resolveProfileModel(null, '64gb', mode)      === null, `null entry mode=${mode} → null`);
+    assert(resolveProfileModel(undefined, '64gb', mode) === null, `undefined entry mode=${mode} → null`);
+  }
+}
+
+// ── 5. resolveProfileModel — missing tier key returns null ────────────────────
+console.log('\n5. resolveProfileModel — missing tier key returns null');
+{
+  const entry = FIXTURE_CONFIG.llm_profiles.coder;
+  assert(resolveProfileModel(entry, '512gb', 'best-cloud') === null,
+    `coder 512gb best-cloud (tier not in fixture) → null`);
+}
+
+// ── 6. resolveLlmMode — env overrides config, legacy aliases ─────────────────
+console.log('\n6. resolveLlmMode — env overrides config; legacy env aliases still work');
 {
   const savedEnv = { ...process.env };
 
-  // Default from config
   delete process.env.CLAUDE_LLM_MODE;
   delete process.env.CLAUDE_CONNECTIVITY_MODE;
   delete process.env.CLAUDE_LLM_CONNECTIVITY_MODE;
-  assert(resolveLlmMode({ llm_mode: 'offline' }) === 'offline', `config.llm_mode respected (got ${resolveLlmMode({ llm_mode: 'offline' })})`);
-  assert(resolveLlmMode({}) === 'connected', `built-in default when config absent (got ${resolveLlmMode({})})`);
 
-  // Env wins over config
-  process.env.CLAUDE_LLM_MODE = 'semi-offload';
-  assert(resolveLlmMode({ llm_mode: 'offline' }) === 'semi-offload', `CLAUDE_LLM_MODE wins over config (got ${resolveLlmMode({ llm_mode: 'offline' })})`);
+  // Config llm_mode (new key): recognized value used
+  assert(resolveLlmMode({ llm_mode: 'best-local-oss' }) === 'best-local-oss',
+    `config.llm_mode=best-local-oss respected`);
+
+  // Config llm_mode: legacy alias 'connected' → best-cloud
+  assert(resolveLlmMode({ llm_mode: 'connected' }) === 'best-cloud',
+    `config.llm_mode=connected maps to best-cloud`);
+
+  // Config llm_mode: legacy alias 'offline' → best-local-oss
+  assert(resolveLlmMode({ llm_mode: 'offline' }) === 'best-local-oss',
+    `config.llm_mode=offline maps to best-local-oss`);
+
+  // Default when no config and no env
+  const defaultMode = resolveLlmMode({});
+  assert(defaultMode === 'best-cloud' || defaultMode === 'best-local-oss',
+    `built-in default is best-cloud or best-local-oss (got ${defaultMode})`);
+
+  // CLAUDE_LLM_MODE env wins over config
+  process.env.CLAUDE_LLM_MODE = 'best-cloud-oss';
+  assert(resolveLlmMode({ llm_mode: 'best-local-oss' }) === 'best-cloud-oss',
+    `CLAUDE_LLM_MODE wins over config.llm_mode`);
   delete process.env.CLAUDE_LLM_MODE;
 
-  // Legacy env
+  // Invalid CLAUDE_LLM_MODE is silently ignored; config fallback used
+  process.env.CLAUDE_LLM_MODE = 'bogus-mode';
+  assert(resolveLlmMode({ llm_mode: 'best-cloud-gov' }) === 'best-cloud-gov',
+    `invalid CLAUDE_LLM_MODE ignored; falls back to config.llm_mode`);
+  delete process.env.CLAUDE_LLM_MODE;
+
+  // Legacy CLAUDE_CONNECTIVITY_MODE=disconnect → best-local-oss
   process.env.CLAUDE_CONNECTIVITY_MODE = 'disconnect';
-  assert(resolveLlmMode({}) === 'offline', `legacy disconnect → offline (got ${resolveLlmMode({})})`);
-  process.env.CLAUDE_CONNECTIVITY_MODE = 'connected';
-  assert(resolveLlmMode({}) === 'connected', `legacy connected → connected (got ${resolveLlmMode({})})`);
+  assert(resolveLlmMode({}) === 'best-local-oss',
+    `legacy CLAUDE_CONNECTIVITY_MODE=disconnect → best-local-oss`);
   delete process.env.CLAUDE_CONNECTIVITY_MODE;
-
-  // Invalid env is ignored
-  process.env.CLAUDE_LLM_MODE = 'bogus';
-  assert(resolveLlmMode({ llm_mode: 'offline' }) === 'offline', `invalid CLAUDE_LLM_MODE ignored, falls back (got ${resolveLlmMode({ llm_mode: 'offline' })})`);
-  delete process.env.CLAUDE_LLM_MODE;
 
   Object.assign(process.env, savedEnv);
 }
 
-// ── 3. resolveActiveTier — env and config precedence ─────────────────────────
-console.log('\n3. resolveActiveTier — CLAUDE_LLM_PROFILE → config.llm_active_profile → hw detection');
+// ── 7. resolveActiveTier — env and config precedence ─────────────────────────
+console.log('\n7. resolveActiveTier — CLAUDE_LLM_PROFILE → config → hw detection');
 {
   const savedEnv = { ...process.env };
   delete process.env.CLAUDE_LLM_PROFILE;
   delete process.env.CLAUDE_LLM_MEMORY_GB;
 
-  assert(resolveActiveTier({ llm_active_profile: '32gb' }) === '32gb', `config.llm_active_profile used (got ${resolveActiveTier({ llm_active_profile: '32gb' })})`);
-  assert(resolveActiveTier({ llm_active_profile: 'auto', }) !== '', `auto → hw detection returns non-empty string (got ${resolveActiveTier({ llm_active_profile: 'auto' })})`);
+  // Config-specified tier
+  assert(resolveActiveTier({ llm_active_profile: '32gb' }) === '32gb',
+    `config.llm_active_profile=32gb used when no env`);
 
+  // env wins over config
   process.env.CLAUDE_LLM_PROFILE = '16gb';
-  assert(resolveActiveTier({ llm_active_profile: '64gb' }) === '16gb', `CLAUDE_LLM_PROFILE wins over config (got ${resolveActiveTier({ llm_active_profile: '64gb' })})`);
+  assert(resolveActiveTier({ llm_active_profile: '128gb' }) === '16gb',
+    `CLAUDE_LLM_PROFILE=16gb wins over config.llm_active_profile=128gb`);
   delete process.env.CLAUDE_LLM_PROFILE;
 
+  // CLAUDE_LLM_MEMORY_GB maps to correct tier
   process.env.CLAUDE_LLM_MEMORY_GB = '8';
-  assert(resolveActiveTier({}) === '16gb', `CLAUDE_LLM_MEMORY_GB=8 → 16gb tier (got ${resolveActiveTier({})})`);
-  process.env.CLAUDE_LLM_MEMORY_GB = '48';
-  assert(resolveActiveTier({}) === '48gb', `CLAUDE_LLM_MEMORY_GB=48 → 48gb tier (got ${resolveActiveTier({})})`);
+  assert(resolveActiveTier({}) === '16gb',
+    `CLAUDE_LLM_MEMORY_GB=8 → 16gb tier`);
+  process.env.CLAUDE_LLM_MEMORY_GB = '60';
+  assert(resolveActiveTier({}) === '64gb',
+    `CLAUDE_LLM_MEMORY_GB=60 → 64gb tier`);
+  process.env.CLAUDE_LLM_MEMORY_GB = '120';
+  assert(resolveActiveTier({}) === '128gb',
+    `CLAUDE_LLM_MEMORY_GB=120 → 128gb tier`);
   delete process.env.CLAUDE_LLM_MEMORY_GB;
+
+  // auto → hw detection returns a non-empty string
+  const autoTier = resolveActiveTier({ llm_active_profile: 'auto' });
+  assert(typeof autoTier === 'string' && autoTier.length > 0,
+    `auto hw detection returns non-empty string (got '${autoTier}')`);
 
   Object.assign(process.env, savedEnv);
 }
 
-// ── 4. resolveCapabilityAlias — static set, agent_to_capability, profile key ──
-console.log('\n4. resolveCapabilityAlias — static aliases, agent map, profile key, unknown');
+// ── 8. resolveCapabilityAlias — agent map and direct profile key ──────────────
+console.log('\n8. resolveCapabilityAlias — agent map, direct profile key, unknown');
 {
+  const cfg = FIXTURE_CONFIG;
   const tier = '64gb';
-  const cfg  = FIXTURE_CONFIG;
-
-  // Static LLM_PROFILE_ALIASES
-  assert(resolveCapabilityAlias('workhorse', cfg, tier) === 'workhorse', `static alias identity (got ${resolveCapabilityAlias('workhorse', cfg, tier)})`);
-  assert(resolveCapabilityAlias('coder', cfg, tier)     === 'coder',     `static alias identity (coder) (got ${resolveCapabilityAlias('coder', cfg, tier)})`);
 
   // agent_to_capability
-  assert(resolveCapabilityAlias('implementer', cfg, tier) === 'deep-coder',   `agent → deep-coder (got ${resolveCapabilityAlias('implementer', cfg, tier)})`);
-  assert(resolveCapabilityAlias('scaffolder',  cfg, tier) === 'pattern-coder', `agent → pattern-coder (got ${resolveCapabilityAlias('scaffolder', cfg, tier)})`);
-  assert(resolveCapabilityAlias('planner',     cfg, tier) === 'judge',         `agent → judge (got ${resolveCapabilityAlias('planner', cfg, tier)})`);
+  assert(resolveCapabilityAlias('writer', cfg, tier)  === 'coder',   `agent writer → coder`);
+  assert(resolveCapabilityAlias('planner', cfg, tier) === 'planner', `agent planner → planner`);
 
-  // Direct profile key (not in static set, not in a2c)
-  assert(resolveCapabilityAlias('deep-coder',   cfg, tier) === 'deep-coder',   `profile key → identity (got ${resolveCapabilityAlias('deep-coder', cfg, tier)})`);
-  assert(resolveCapabilityAlias('orchestrator', cfg, tier) === 'orchestrator', `profile key → identity (got ${resolveCapabilityAlias('orchestrator', cfg, tier)})`);
+  // Direct profile key (not in a2c but exists in llm_profiles)
+  assert(resolveCapabilityAlias('tester', cfg, tier)  === 'tester',  `direct profile key tester → tester`);
+  assert(resolveCapabilityAlias('coder', cfg, tier)   === 'coder',   `direct profile key coder → coder`);
 
-  // Unknown
-  assert(resolveCapabilityAlias('unknown-thing', cfg, tier) === null, `unknown → null (got ${resolveCapabilityAlias('unknown-thing', cfg, tier)})`);
-
-  // Wrong tier: capability exists in 64gb but not 16gb, and not in static set or a2c
-  assert(resolveCapabilityAlias('pattern-coder', cfg, '16gb') === null, `profile key miss on wrong tier → null (got ${resolveCapabilityAlias('pattern-coder', cfg, '16gb')})`);
+  // Unknown — not in a2c or llm_profiles
+  assert(resolveCapabilityAlias('totally-unknown', cfg, tier) === null,
+    `unknown capability → null`);
 }
 
-// ── 5. Cartesian product — modes × tiers × capabilities ──────────────────────
-console.log('\n5. Cartesian product — resolveProfileModel output is always a non-empty string');
+// ── 9. Cartesian product — modes × tiers × capabilities (fixture) ────────────
+console.log('\n9. Cartesian product — resolveProfileModel always string or null for all modes');
 {
+  const tiers = ['16gb', '64gb'];
+  const caps = ['coder', 'planner', 'tester'];
   let combos = 0;
-  for (const tier of TIERS) {
-    const tierProfile = FIXTURE_CONFIG.llm_profiles[tier];
-    for (const cap of CAPABILITIES) {
-      const entry = tierProfile[cap];
-      if (!entry) continue;
+  for (const tier of tiers) {
+    for (const cap of caps) {
+      const entry = FIXTURE_CONFIG.llm_profiles[cap];
       for (const mode of MODES) {
-        const result = resolveProfileModel(entry, mode);
-        assert(typeof result === 'string' && result.length > 0,
-          `${cap} @ ${tier} / mode=${mode} → '${result}'`);
+        const result = resolveProfileModel(entry, tier, mode);
+        assert(result === null || (typeof result === 'string' && result.length > 0),
+          `${cap} @ ${tier} mode=${mode} → string or null (got ${JSON.stringify(result)})`);
         combos++;
       }
     }
   }
-  console.log(`  (${combos} mode×tier×cap combos checked)`);
+  console.log(`  (${combos} mode×tier×cap combos checked against fixture)`);
 }
 
-// ── 6. Integration — spawn tools/c-thru-resolve ──────────────────────────────
-console.log('\n6. Integration — tools/c-thru-resolve output matches pure-function result');
+// ── 10. Shipped config cartesian — all capabilities return non-null at 64gb ───
+console.log('\n10. Shipped config — all llm_profiles capabilities resolve at 64gb for every mode');
 {
-  const fs = require('fs');
-  const os = require('os');
+  const shippedConfig = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'config', 'model-map.json'), 'utf8')
+  );
+  const profiles = shippedConfig.llm_profiles || {};
+  let nullCount = 0;
+  for (const [cap, entry] of Object.entries(profiles)) {
+    for (const mode of MODES) {
+      const result = resolveProfileModel(entry, '64gb', mode);
+      if (result === null) nullCount++;
+      // We don't assert non-null because gov modes intentionally block Chinese-origin models
+      // which the resolver returns anyway (gov filter is in the proxy/explain layer).
+      // Just verify the return type is always string or null.
+      assert(result === null || typeof result === 'string',
+        `shipped ${cap} @ 64gb mode=${mode} → string or null (got ${JSON.stringify(result)})`);
+    }
+  }
+  console.log(`  (${nullCount} null results across all mode×cap combos at 64gb — expected for gov/unknown mode fallbacks)`);
+}
+
+// ── 11. Pinned-model regression guard for shipped config ──────────────────────
+// Asserts exact model strings for high-value capability×mode×tier triples.
+// These are the sentinel values: if a shipped config edit silently changes a key
+// mapping the flexible cartesian test (§10) would not catch, this section will.
+console.log('\n11. Pinned-model regression guard — shipped config key triples');
+{
+  const shippedConfig = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'config', 'model-map.json'), 'utf8')
+  );
+  const p = shippedConfig.llm_profiles || {};
+
+  const pins = [
+    // Cloud planner at workhorse tiers must be claude-sonnet-4-6
+    { cap: 'planner',      tier: '64gb',  mode: 'best-cloud',     want: 'claude-sonnet-4-6' },
+    { cap: 'planner',      tier: '128gb', mode: 'best-cloud',     want: 'claude-sonnet-4-6' },
+    // Hard planner must always be opus
+    { cap: 'planner-hard', tier: '128gb', mode: 'best-cloud',     want: 'claude-opus-4-7'  },
+    // fast-scout is always the small local model regardless of mode
+    { cap: 'fast-scout',   tier: '64gb',  mode: 'best-cloud',     want: 'phi4-mini:3.8b'   },
+    { cap: 'fast-scout',   tier: '64gb',  mode: 'best-local-oss', want: 'phi4-mini:3.8b'   },
+    // coder in gov mode must be a non-Chinese claude model
+    { cap: 'coder',        tier: '64gb',  mode: 'best-cloud-gov',  want: 'claude-sonnet-4-6' },
+    // edge is always the smallest local model
+    { cap: 'edge',         tier: '64gb',  mode: 'best-cloud',     want: 'gemma4:e4b'        },
+  ];
+
+  for (const { cap, tier, mode, want } of pins) {
+    const got = resolveProfileModel(p[cap], tier, mode);
+    assert(got === want, `pinned: ${cap}/${mode}/${tier} = ${want} (got ${got})`);
+  }
+}
+
+// ── 12. Integration — spawn tools/c-thru-resolve with fixture config ──────────
+console.log('\n12. Integration — tools/c-thru-resolve output matches pure-function result');
+{
   const fixturePath = path.join(os.tmpdir(), `resolve-cap-fixture-${process.pid}.json`);
+  const resolveScript = path.join(__dirname, '..', 'tools', 'c-thru-resolve');
   try {
     fs.writeFileSync(fixturePath, JSON.stringify(FIXTURE_CONFIG));
 
     const cases = [
-      { cap: 'deep-coder',  mode: 'connected', tier: '64gb', expected: 'dc-cloud' },
-      { cap: 'deep-coder',  mode: 'offline',   tier: '64gb', expected: 'dc-local' },
-      { cap: 'judge',       mode: 'semi-offload', tier: '64gb', expected: 'j-mid' },
-      { cap: 'implementer', mode: 'connected', tier: '64gb', expected: 'dc-cloud' }, // agent alias
+      { cap: 'coder',   mode: 'best-cloud',     tier: '64gb', expected: 'cloud-large' },
+      { cap: 'coder',   mode: 'best-local-oss',  tier: '64gb', expected: 'local-large' },
+      { cap: 'planner', mode: 'best-cloud',      tier: '64gb', expected: 'cloud-planner' },
+      { cap: 'planner', mode: 'best-cloud-gov',  tier: '64gb', expected: 'gov-planner' },
+      { cap: 'writer',  mode: 'best-cloud',      tier: '64gb', expected: 'cloud-large' }, // agent alias
     ];
 
     for (const { cap, mode, tier, expected } of cases) {
@@ -200,7 +304,6 @@ console.log('\n6. Integration — tools/c-thru-resolve output matches pure-funct
         CLAUDE_LLM_MODE: mode,
         CLAUDE_LLM_PROFILE: tier,
       };
-      const resolveScript = path.join(__dirname, '..', 'tools', 'c-thru-resolve');
       let stdout;
       try {
         stdout = execSync(`node ${resolveScript} ${cap}`, { env, encoding: 'utf8' }).trim();
@@ -208,69 +311,70 @@ console.log('\n6. Integration — tools/c-thru-resolve output matches pure-funct
         assert(false, `c-thru-resolve ${cap} mode=${mode} tier=${tier} → threw: ${err.message}`);
         continue;
       }
-      assert(stdout === expected, `c-thru-resolve ${cap} mode=${mode} tier=${tier} → '${stdout}' (want '${expected}')`);
+      assert(stdout === expected,
+        `c-thru-resolve ${cap} mode=${mode} tier=${tier} → '${expected}' (got '${stdout}')`);
     }
   } finally {
     try { fs.unlinkSync(fixturePath); } catch {}
   }
 }
 
-// ── 7. Active config selection — override/project/profile precedence ─────────
-console.log('\n7. tools/c-thru-resolve follows active config selection precedence');
+// ── 13. Integration — config selection precedence ─────────────────────────────
+console.log('\n13. tools/c-thru-resolve follows config selection precedence');
 {
-  const fs = require('fs');
-  const os = require('os');
+  const resolveScript = path.join(__dirname, '..', 'tools', 'c-thru-resolve');
   const profileHome = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-home-'));
-  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-project-'));
+  const projectDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-project-'));
   const overridePath = path.join(os.tmpdir(), `resolve-override-${process.pid}.json`);
   const profileClaude = path.join(profileHome, '.claude');
   const projectClaude = path.join(projectDir, '.claude');
   fs.mkdirSync(profileClaude, { recursive: true });
   fs.mkdirSync(projectClaude, { recursive: true });
 
-  const mkConfig = (model) => ({
-    llm_mode: 'connected',
-    llm_active_profile: '16gb',
+  const mkConfig = (modelSuffix) => ({
     llm_profiles: {
-      '16gb': {
-        workhorse: { connected_model: model, disconnect_model: model },
+      coder: {
+        'best-cloud': { '64gb': `coder-${modelSuffix}` },
       },
     },
   });
 
   try {
-    fs.writeFileSync(path.join(profileClaude, 'model-map.json'), JSON.stringify(mkConfig('profile-model')));
-    fs.writeFileSync(path.join(projectClaude, 'model-map.json'), JSON.stringify(mkConfig('project-model')));
-    fs.writeFileSync(overridePath, JSON.stringify(mkConfig('override-model')));
+    fs.writeFileSync(path.join(profileClaude, 'model-map.json'), JSON.stringify(mkConfig('profile')));
+    fs.writeFileSync(path.join(projectClaude, 'model-map.json'), JSON.stringify(mkConfig('project')));
+    fs.writeFileSync(overridePath, JSON.stringify(mkConfig('override')));
 
-    const resolveScript = path.join(__dirname, '..', 'tools', 'c-thru-resolve');
+    const baseEnv = {
+      ...process.env,
+      HOME: profileHome,
+      CLAUDE_LLM_PROFILE: '64gb',
+      CLAUDE_LLM_MODE: 'best-cloud',
+    };
 
-    const profileOut = execSync(`node ${resolveScript} workhorse`, {
+    // Project-local wins over profile
+    const projectOut = execSync(`node ${resolveScript} coder`, {
       cwd: projectDir,
-      env: { ...process.env, HOME: profileHome, CLAUDE_LLM_PROFILE: '16gb', CLAUDE_LLM_MODE: 'connected' },
+      env: { ...baseEnv },
       encoding: 'utf8',
     }).trim();
-    assert(profileOut === 'project-model', `project-local config wins over profile (got '${profileOut}')`);
+    assert(projectOut === 'coder-project',
+      `project-local config wins over profile (got '${projectOut}')`);
 
-    const overrideOut = execSync(`node ${resolveScript} workhorse`, {
+    // CLAUDE_MODEL_MAP_PATH wins over project/profile
+    const overrideOut = execSync(`node ${resolveScript} coder`, {
       cwd: projectDir,
-      env: {
-        ...process.env,
-        HOME: profileHome,
-        CLAUDE_LLM_PROFILE: '16gb',
-        CLAUDE_LLM_MODE: 'connected',
-        CLAUDE_MODEL_MAP_PATH: overridePath,
-      },
+      env: { ...baseEnv, CLAUDE_MODEL_MAP_PATH: overridePath },
       encoding: 'utf8',
     }).trim();
-    assert(overrideOut === 'override-model', `CLAUDE_MODEL_MAP_PATH wins over project/profile (got '${overrideOut}')`);
+    assert(overrideOut === 'coder-override',
+      `CLAUDE_MODEL_MAP_PATH wins over project/profile (got '${overrideOut}')`);
   } finally {
     try { fs.rmSync(profileHome, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(projectDir, { recursive: true, force: true }); } catch {}
+    try { fs.rmSync(projectDir,  { recursive: true, force: true }); } catch {}
     try { fs.unlinkSync(overridePath); } catch {}
   }
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────
-console.log('\n' + (failed === 0 ? '✓' : '✗') + ` ${passed + failed} tests: ${passed} passed, ${failed} failed`);
+console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

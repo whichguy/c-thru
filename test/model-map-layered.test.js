@@ -41,9 +41,9 @@ function withTmpFiles(files, fn) {
 const BASE = {
   backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
   model_routes: { 'base-model': 'local' },
-  llm_mode: 'connected',
+  llm_mode: 'best-cloud',
   llm_profiles: {
-    '16gb': { workhorse: { connected_model: 'base-model', disconnect_model: 'base-model' } },
+    workhorse: { 'best-cloud': { '16gb': 'base-model' } },
   },
 };
 
@@ -104,7 +104,7 @@ console.log('\n5. loadLayeredConfig — missing overrides path → defaults only
       threw = true;
     }
     assert(!threw, `missing overrides file does not throw (got threw=${threw})`);
-    assert(effective && effective.llm_mode === 'connected', `effective comes from base defaults (got ${effective && effective.llm_mode})`);
+    assert(effective && effective.llm_mode === 'best-cloud', `effective comes from base defaults (got ${effective && effective.llm_mode})`);
   });
 }
 
@@ -137,22 +137,22 @@ console.log('\n7. mergeConfigLayers — null in override removes the key');
 }
 
 // ── 8. loadLayeredConfig — deep merge of llm_profiles ────────────────────────
-console.log('\n8. loadLayeredConfig — deep merge: override adds new tier without replacing existing');
+console.log('\n8. loadLayeredConfig — deep merge: override adds new capability without replacing existing');
 {
   const override = {
     llm_profiles: {
-      '32gb': { workhorse: { connected_model: 'override-model', disconnect_model: 'override-model' } },
+      coder: { 'best-cloud': { '32gb': 'override-model' } },
     },
     model_routes: { 'override-model': 'local' },
   };
   withTmpFiles({ 'defaults.json': BASE, 'overrides.json': override }, ({ 'defaults.json': d, 'overrides.json': o }) => {
     const { effective } = loadLayeredConfig(d, o);
-    assert(effective.llm_profiles['16gb'] !== undefined, `16gb tier preserved from base (got ${effective.llm_profiles['16gb']})`);
-    assert(effective.llm_profiles['32gb'] !== undefined, `32gb tier added from override (got ${effective.llm_profiles['32gb']})`);
-    assert(effective.llm_profiles['32gb'].workhorse.connected_model === 'override-model',
-      `override tier value correct (got ${effective.llm_profiles['32gb'].workhorse.connected_model})`);
-    assert(effective.llm_profiles['16gb'].workhorse.connected_model === 'base-model',
-      `base tier value unchanged (got ${effective.llm_profiles['16gb'].workhorse.connected_model})`);
+    assert(effective.llm_profiles.workhorse !== undefined, `workhorse capability preserved from base (got ${effective.llm_profiles.workhorse})`);
+    assert(effective.llm_profiles.coder !== undefined, `coder capability added from override (got ${effective.llm_profiles.coder})`);
+    assert(effective.llm_profiles.coder['best-cloud']['32gb'] === 'override-model',
+      `override capability value correct (got ${effective.llm_profiles.coder?.['best-cloud']?.['32gb']})`);
+    assert(effective.llm_profiles.workhorse['best-cloud']['16gb'] === 'base-model',
+      `base capability value unchanged (got ${effective.llm_profiles.workhorse?.['best-cloud']?.['16gb']})`);
   });
 }
 

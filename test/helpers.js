@@ -111,6 +111,10 @@ async function spawnProxy(opts = {}) {
 
   const proxyEnv = Object.assign({}, process.env, {
     HOME: tmpHome,
+  }, extraEnv);
+  if (!extraEnv.CLAUDE_MODEL_MAP_PATH) delete proxyEnv.CLAUDE_MODEL_MAP_PATH;
+  delete proxyEnv.CLAUDE_MODEL_MAP_LAUNCH_CWD;
+  Object.assign(proxyEnv, {
     CLAUDE_PROXY_STARTUP_PROBE: '0',
     CLAUDE_PROXY_SKIP_OLLAMA_WARMUP: '1',
     CLAUDE_PROXY_HOOKS_PORT: String(hooksPort || await getFreePort()),

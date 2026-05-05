@@ -12,24 +12,29 @@ OpenRouter, Bedrock, Vertex, Gemini, LiteLLM) without changing the vendor CLI.
 | `/c-thru-status` | Show active profile, agent → model assignments, proxy URL, Ollama state, per-model usage stats |
 | `/cplan <intent>` | Wave-based agentic planner (shortcut for `/c-thru-plan`) |
 | Skills | `c-thru-plan` (planner/coder/tester/reviewer pipeline), `c-thru-config`, `c-thru-control` |
-| Hooks | SessionStart proxy+Ollama health check, UserPromptSubmit proxy-health gate + classify_intent context injection, PostToolUse model-map.json validation, PostCompact context re-injection |
+| Hooks | SessionStart proxy+Ollama health check, UserPromptSubmit proxy-health gate + classify_intent context injection, PostToolUse model-map.json validation, PreCompact context re-injection |
 
-## Prerequisite — install c-thru itself
-
-This plugin registers Claude Code surfaces (commands, skills, hooks). The
-proxy binary, model-map config, and `~/.claude/tools/c-thru` symlinks come
-from this repo's own installer:
-
-```sh
-# One-line install (clones to ~/src/c-thru, symlinks tools to ~/.claude/tools)
-curl -fsSL https://raw.githubusercontent.com/whichguy/c-thru/main/install.sh | bash
-```
-
-Then install the plugin via Claude Code:
+## Install
 
 ```
 /plugin marketplace add whichguy/claude-craft
 /plugin install c-thru@claude-craft
+```
+
+On your first Claude Code session after install, the SessionStart hook automatically:
+- Seeds `~/.claude/model-map.json` with default routing config
+- Starts the proxy on port 10017 (override: `C_THRU_PLUGIN_PORT`)
+- Registers `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`
+
+**Restart Claude Code once** after install to activate model routing.
+
+### CLI use (optional)
+
+To invoke `c-thru` from the terminal as a drop-in replacement for `claude`:
+
+```sh
+git clone https://github.com/whichguy/c-thru.git ~/src/c-thru
+cd ~/src/c-thru && ./install.sh
 ```
 
 ## Plugin bundle maintenance

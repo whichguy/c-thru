@@ -42,19 +42,16 @@ function tmpClaudeDir(extraFiles = {}) {
 
   // Minimal model-map.json fixture
   const cfg = {
-    llm_mode: 'connected',
-    llm_active_profile: '16gb',
     llm_profiles: {
-      '16gb': {
-        'deep-coder': {
-          connected_model: 'devstral-small:2',
-          disconnect_model: 'devstral-small:2',
-          on_failure: 'cascade',
-        },
-        'judge': {
-          connected_model: 'claude-sonnet-4-6',
-          disconnect_model: 'devstral-small:2',
-        },
+      'deep-coder': {
+        'best-cloud': {
+          '16gb': 'devstral-small:2'
+        }
+      },
+      'judge': {
+        'best-cloud': {
+          '16gb': 'claude-sonnet-4-6'
+        }
       },
     },
     agent_to_capability: {
@@ -71,19 +68,18 @@ function tmpClaudeDir(extraFiles = {}) {
   // Stub model-map-resolve.js in tools/
   const resolveStub = `
 'use strict';
-const LLM_MODE_ENUM = new Set(['connected','semi-offload','cloud-judge-only','offline','cloud-best-quality','local-best-quality']);
-function resolveLlmMode(config) { return process.env.CLAUDE_LLM_MODE || config.llm_mode || 'connected'; }
-function resolveActiveTier(config) { return process.env.CLAUDE_LLM_PROFILE || config.llm_active_profile || '16gb'; }
+const LLM_MODE_ENUM = new Set(['best-cloud','best-cloud-oss','best-local-oss','best-cloud-gov','best-local-gov']);
+function resolveLlmMode(config) { return process.env.CLAUDE_LLM_MODE || 'best-cloud'; }
+function resolveActiveTier(config) { return process.env.CLAUDE_LLM_PROFILE || '16gb'; }
 function resolveCapabilityAlias(input, config, tier) {
   const a2c = config.agent_to_capability || {};
   const cap = a2c[input] || input;
-  const profile = (config.llm_profiles || {})[tier] || {};
+  const profiles = config.llm_profiles || {};
   const key = cap === 'general-default' ? 'default' : cap;
-  return profile[key] ? cap : null;
+  return profiles[key] ? key : null;
 }
-function resolveProfileModel(entry, mode) {
-  if (mode === 'connected') return entry.connected_model || null;
-  return entry.disconnect_model || entry.connected_model || null;
+function resolveProfileModel(entry, tier, mode) {
+  return (entry[mode] && entry[mode][tier]) || null;
 }
 function resolveTerminalTarget(_config, _label) { return null; }
 module.exports = { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, LLM_MODE_ENUM };
@@ -103,9 +99,12 @@ const merged = Object.assign({}, overrides, patch);
 // Deep merge llm_profiles
 if (patch.llm_profiles && overrides.llm_profiles) {
   merged.llm_profiles = Object.assign({}, overrides.llm_profiles);
-  for (const [tier, caps] of Object.entries(patch.llm_profiles || {})) {
-    merged.llm_profiles[tier] = Object.assign({}, (overrides.llm_profiles[tier] || {}), caps);
-  }
+  for (const [cap, modes] of Object.entries(patch.llm_profiles || {})) {
+      merged.llm_profiles[cap] = Object.assign({}, overrides.llm_profiles[cap] || {});
+      for (const [mode, tiers] of Object.entries(modes)) {
+        merged.llm_profiles[cap][mode] = Object.assign({}, (merged.llm_profiles[cap][mode] || {}), tiers);
+      }
+    }
 }
 fs.writeFileSync(ovrPath, JSON.stringify(merged, null, 2), 'utf8');
 // Write merged path too
@@ -161,16 +160,9 @@ console.log('\n1. resolve — capability/agent resolution');
   const projectClaude = path.join(projectDir, '.claude');
   fs.mkdirSync(projectClaude, { recursive: true });
   const projectCfg = {
-    llm_mode: 'connected',
+    llm_mode: 'best-cloud',
     llm_active_profile: '16gb',
-    llm_profiles: {
-      '16gb': {
-        'deep-coder': {
-          connected_model: 'project-picked-model',
-          disconnect_model: 'project-picked-model',
-        },
-      },
-    },
+    llm_profiles: { 'deep-coder': { 'best-cloud': { '16gb': 'project-picked-model' } } },
     agent_to_capability: {},
     backends: {},
     model_routes: {},
@@ -190,15 +182,15 @@ console.log('\n2. mode-read — active mode display');
   const dir = tmpClaudeDir();
   const r = run(['mode-read'], { CLAUDE_PROFILE_DIR: dir });
   assert(r.code === 0, 'mode-read exits 0');
-  assert(r.stdout.includes('connected'), 'mode-read shows connected (from fixture)');
+  assert(r.stdout.includes('best-cloud'), 'mode-read shows best-cloud (from fixture)');
   assert(r.stdout.includes('source:'), 'mode-read shows source');
 }
 
 {
   // CLAUDE_LLM_MODE env overrides file
   const dir = tmpClaudeDir();
-  const r = run(['mode-read'], { CLAUDE_PROFILE_DIR: dir, CLAUDE_LLM_MODE: 'offline' });
-  assert(r.stdout.includes('offline'), 'env CLAUDE_LLM_MODE overrides file');
+  const r = run(['mode-read'], { CLAUDE_PROFILE_DIR: dir, CLAUDE_LLM_MODE: 'best-local-oss' });
+  assert(r.stdout.includes('best-local-oss'), 'env CLAUDE_LLM_MODE overrides file');
   assert(r.stdout.includes('transient'), 'env source labeled transient');
 }
 
@@ -208,10 +200,10 @@ console.log('\n3. mode-write — persist llm_mode');
 
 {
   const dir = tmpClaudeDir();
-  const r = run(['mode-write', 'semi-offload'], { CLAUDE_PROFILE_DIR: dir });
-  assert(r.code === 0, 'mode-write semi-offload exits 0');
+  const r = run(['mode-write', 'best-cloud-oss'], { CLAUDE_PROFILE_DIR: dir });
+  assert(r.code === 0, 'mode-write best-cloud-oss exits 0');
   const overrides = JSON.parse(fs.readFileSync(path.join(dir, 'model-map.overrides.json'), 'utf8'));
-  assert(overrides.llm_mode === 'semi-offload', 'overrides.json updated with llm_mode');
+  assert(overrides.llm_mode === 'best-cloud-oss', 'overrides.json updated with llm_mode');
 }
 
 {
@@ -219,6 +211,16 @@ console.log('\n3. mode-write — persist llm_mode');
   const dir = tmpClaudeDir();
   const r = run(['mode-write', 'invalid-mode'], { CLAUDE_PROFILE_DIR: dir });
   assert(r.code === 1, 'mode-write invalid mode exits 1');
+}
+
+{
+  // Roundtrip: mode-write then mode-read reflects the persisted value
+  const dir = tmpClaudeDir();
+  run(['mode-write', 'best-cloud-oss'], { CLAUDE_PROFILE_DIR: dir });
+  const r = run(['mode-read'], { CLAUDE_PROFILE_DIR: dir });
+  assert(r.code === 0, 'mode-read after mode-write exits 0');
+  assert(r.stdout.includes('best-cloud-oss'), 'mode-read reflects written mode');
+  assert(r.stdout.includes(path.join(dir, 'model-map.overrides.json')), 'mode-read source points to overrides file');
 }
 
 // ── 4. remap ──────────────────────────────────────────────────────────────────
@@ -229,13 +231,9 @@ console.log('\n4. remap — rebind capability model');
   const dir = tmpClaudeDir();
   const r = run(['remap', '16gb', 'deep-coder', 'qwen3.5:27b'], { CLAUDE_PROFILE_DIR: dir });
   assert(r.code === 0, 'remap exits 0');
-  assert(r.stdout.includes('remapped deep-coder → qwen3.5:27b'), 'remap output correct');
+  assert(r.stdout.includes('remapped deep-coder → qwen3.5:27b for mode best-cloud'), 'remap output correct');
   const overrides = JSON.parse(fs.readFileSync(path.join(dir, 'model-map.overrides.json'), 'utf8'));
-  const entry = ((overrides.llm_profiles || {})['16gb'] || {})['deep-coder'];
-  assert(entry && entry.connected_model === 'qwen3.5:27b', 'connected_model updated in overrides');
-  assert(entry && entry.disconnect_model === 'qwen3.5:27b', 'disconnect_model updated in overrides');
-  // on_failure should be preserved from existing entry
-  assert(entry && entry.on_failure === 'cascade', 'on_failure preserved from existing entry');
+  assert(((overrides.llm_profiles || {})['deep-coder'] || {})['best-cloud']?.['16gb'] === 'qwen3.5:27b', 'llm_profiles[deep-coder][best-cloud][16gb] updated in overrides');
 }
 
 {
@@ -254,9 +252,7 @@ console.log('\n5. set-cloud-best — set cloud_best_model');
   const r = run(['set-cloud-best', '16gb', 'judge', 'claude-opus-4-7'], { CLAUDE_PROFILE_DIR: dir });
   assert(r.code === 0, 'set-cloud-best exits 0');
   const overrides = JSON.parse(fs.readFileSync(path.join(dir, 'model-map.overrides.json'), 'utf8'));
-  const entry = ((overrides.llm_profiles || {})['16gb'] || {})['judge'];
-  assert(entry && entry.cloud_best_model === 'claude-opus-4-7', 'cloud_best_model set in overrides');
-  assert(entry && entry.connected_model === 'claude-sonnet-4-6', 'connected_model preserved from existing');
+  assert(((overrides.llm_profiles || {})['judge'] || {})['best-cloud']?.['16gb'] === 'claude-opus-4-7', 'llm_profiles[judge][best-cloud][16gb] set in overrides');
 }
 
 // ── 6. set-local-best ─────────────────────────────────────────────────────────
@@ -268,9 +264,7 @@ console.log('\n6. set-local-best — set local_best_model');
   const r = run(['set-local-best', '16gb', 'deep-coder', 'qwen3.5:27b'], { CLAUDE_PROFILE_DIR: dir });
   assert(r.code === 0, 'set-local-best exits 0');
   const overrides = JSON.parse(fs.readFileSync(path.join(dir, 'model-map.overrides.json'), 'utf8'));
-  const entry = ((overrides.llm_profiles || {})['16gb'] || {})['deep-coder'];
-  assert(entry && entry.local_best_model === 'qwen3.5:27b', 'local_best_model set in overrides');
-  assert(entry && entry.on_failure === 'cascade', 'existing fields preserved');
+  assert(((overrides.llm_profiles || {})['deep-coder'] || {})['best-local-oss']?.['16gb'] === 'qwen3.5:27b', 'llm_profiles[deep-coder][best-local-oss][16gb] set in overrides');
 }
 
 // ── 7. route ──────────────────────────────────────────────────────────────────

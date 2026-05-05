@@ -996,57 +996,50 @@ profile_capability_slots() {
   jq -r '(.llm_profiles // {}) | keys[]' "$CONFIG" 2>/dev/null || true
 }
 
+# In-process cache — avoids multiple Node.js spawns per c-thru invocation
+_EXPLAIN_ALL_CACHE_KEY=""
+_EXPLAIN_ALL_CACHE_JSON=""
+
+_explain_all_json() {
+  local profile="$1" llm_mode="$2"
+  local mtime
+  mtime="$(stat -c %Y "$CONFIG" 2>/dev/null || stat -f %m "$CONFIG" 2>/dev/null || echo 0)"
+  local key="${mtime}:${profile}:${llm_mode}"
+  if [[ "$key" == "$_EXPLAIN_ALL_CACHE_KEY" && -n "$_EXPLAIN_ALL_CACHE_JSON" ]]; then
+    printf '%s' "$_EXPLAIN_ALL_CACHE_JSON"
+    return 0
+  fi
+  local json
+  json="$(CLAUDE_LLM_PROFILE="$profile" CLAUDE_LLM_MODE="$llm_mode" \
+          CLAUDE_MODEL_MAP_PATH="$CONFIG" \
+          node "$CTHRU_SELF_DIR/c-thru-explain.js" --all --format json 2>/dev/null)" || return 1
+  _EXPLAIN_ALL_CACHE_KEY="$key"
+  _EXPLAIN_ALL_CACHE_JSON="$json"
+  printf '%s' "$json"
+}
+
 collect_active_profile_capability_assignments() {
   local default_override="$1"
   [[ -f "$CONFIG" ]] || return 0
   llm_profiles_defined || return 0
 
-  local profile llm_mode slot requested resolved rec_suffix rec_model
   ensure_llm_profile_context || return 0
-  profile="$LLM_PROFILE_CACHE_NAME"
+  local profile="$LLM_PROFILE_CACHE_NAME"
   [[ -n "$profile" ]] || return 0
-  llm_mode="$(resolve_llm_mode)"
+  local llm_mode; llm_mode="$(resolve_llm_mode)"
 
-  # rec_file path for (rec) suffix detection (bash 3.2-safe: no associative arrays)
-  local rec_file="$CTHRU_REPO_ROOT/config/recommended-mappings.json"
+  local json
+  json="$(_explain_all_json "$profile" "$llm_mode")" || return 0
+  [[ -n "$json" ]] || return 0
 
-  while IFS= read -r slot; do
-    [[ -n "$slot" ]] || continue
-    
-    if [[ "$slot" == "default" && -n "$default_override" ]]; then
-      requested="$default_override"
-    else
-      # llm_mode-aware resolution: mirrors resolveProfileModel() in model-map-resolve.js
-      # New schema: llm_profiles[$key][$mode] is a string or tier-keyed object {$p: model}
-      requested="$(jq -r --arg p "$profile" --arg key "$slot" --arg mode "$llm_mode" '
-        (.llm_profiles // {})[$key] as $cap |
-        if $cap == null then empty
-        else
-          (($cap[$mode] // $cap["best-cloud"]) as $modeVal |
-          if $modeVal == null then empty
-          elif ($modeVal | type) == "string" then $modeVal
-          elif ($modeVal | type) == "object" then ($modeVal[$p] // empty)
-          else empty
-          end)
-        end
-      ' "$CONFIG" 2>/dev/null)"
-    fi
-    [[ -n "$requested" && "$requested" != "null" ]] || continue
-    looks_like_model_pattern_key "$requested" && continue
-    resolved="$(resolve_routes_graph "$requested" 2>/dev/null || printf '%s' "$requested")"
-    if is_llm_profile_alias "$resolved"; then
-      resolved="$(resolve_profile_alias_model "$resolved")"
-    fi
-    [[ -n "$resolved" ]] || continue
-    # (rec) suffix: check if slot's recommended model for this tier matches the requested model
-    rec_suffix=""
-    if [[ -f "$rec_file" ]]; then
-      rec_model="$(jq -r --arg cap "$slot" --arg tier "$profile" \
-        '(.recommendations // {})[$cap][$tier] // empty' "$rec_file" 2>/dev/null)"
-      [[ -n "$rec_model" && "$rec_model" == "$requested" ]] && rec_suffix="(rec)"
-    fi
-    printf '%s\t%s\t%s\n' "$slot" "$resolved" "$rec_suffix"
-  done < <(profile_capability_slots)
+  jq -r --arg do "$default_override" '
+    .[] |
+    .capability as $cap |
+    (if $cap == "default" and $do != "" then $do else .model end) as $model |
+    if $model == null or $model == "" then empty
+    else [$cap, $model, (if .is_recommended then "(rec)" else "" end)] | @tsv
+    end
+  ' <<< "$json" 2>/dev/null || true
 }
 
 profile_has_capability_assignments() {
@@ -2616,24 +2609,20 @@ collect_active_profile_local_ollama_models() {
   [[ -f "$CONFIG" ]] || return 0
   llm_profiles_defined || return 0
 
-  local profile
   ensure_llm_profile_context || return 0
-  profile="$LLM_PROFILE_CACHE_NAME"
+  local profile="$LLM_PROFILE_CACHE_NAME"
   [[ -n "$profile" ]] || return 0
   local llm_mode; llm_mode="$(resolve_llm_mode)"
   cthru_debug_event "ollama sweep profile profile=$profile mode=$llm_mode"
 
-  local capability resolved _rec backend_data cli_host cli_key backend_id
-  while IFS=$'\t' read -r capability resolved _rec; do
-    [[ -n "$resolved" ]] || continue
-    backend_data="$(resolve_local_ollama_backend_for_model "$resolved" || true)"
-    [[ -n "$backend_data" ]] || continue
-    cli_host="${backend_data%%$'\t'*}"
-    cli_key="${backend_data#*$'\t'}"
-    backend_id="${cli_key#*$'\t'}"
-    cli_key="${cli_key%%$'\t'*}"
-    printf '%s\t%s\t%s\t%s\t%s\n' "$resolved" "$cli_host" "$(tab_field_encode "$cli_key")" "$backend_id" "$capability"
-  done < <(collect_active_profile_capability_assignments) | sort -u
+  local json
+  json="$(_explain_all_json "$profile" "$llm_mode")" || return 0
+  [[ -n "$json" ]] || return 0
+
+  jq -r '
+    .[] | select(.local == true and .endpoint_cli_host != null) |
+    [.model, .endpoint_cli_host, "__EMPTY__", (.endpoint_id // ""), .capability] | @tsv
+  ' <<< "$json" 2>/dev/null | sort -u || true
 }
 
 run_background_ollama_prep_sweep() {

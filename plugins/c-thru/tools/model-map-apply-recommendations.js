@@ -10,8 +10,8 @@
 //   4. $PWD/.claude/model-map.json        ← project
 //
 // merge rules:
-//   - Only injects models into llm_profiles[cap]['best-local-oss'][tier]
-//     when the user's merged map has no explicit value there already.
+//   - Only injects connected_model for llm_profiles[tier][cap] when the
+//     user's merged map has no explicit value there already.
 //   - Only injects agent_to_capability entries not already defined.
 //   - Never touches disconnect_model, modes, or on_failure.
 
@@ -46,23 +46,22 @@ function applyRecommendations(effectiveMap, repoRoot) {
   let applied = 0;
   let preserved = 0;
 
-  // Inject recommendations into llm_profiles[cap]['best-local-oss'][tier]
+  // Inject connected_model recommendations into llm_profiles[tier][cap]
   const recommendations = rec.recommendations || {};
   const profiles = result.llm_profiles || {};
   for (const [cap, tierMap] of Object.entries(recommendations)) {
-    if (!profiles[cap] || typeof profiles[cap] !== 'object') continue;
-    const modeBlock = profiles[cap]['best-local-oss'];
-    if (!modeBlock || typeof modeBlock !== 'object') continue;
     for (const [tier, model] of Object.entries(tierMap)) {
       if (!VALID_HW_TIERS.has(tier)) continue;
-      const existing = modeBlock[tier];
-      if (existing && existing !== model) {
+      if (!profiles[tier]) continue;
+      const entry = profiles[tier][cap];
+      if (!entry || typeof entry !== 'object') continue;
+      if (entry.connected_model && entry.connected_model !== model) {
         preserved++;
-      } else if (!existing) {
-        modeBlock[tier] = model;
+      } else if (!entry.connected_model) {
+        entry.connected_model = model;
         applied++;
       }
-      // identical → no-op
+      // If connected_model === model it's already correct; no-op
     }
   }
 

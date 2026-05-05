@@ -65,35 +65,27 @@ async function main() {
   const local = await startStubBackend('local');
 
   try {
-    // Config: judge → cloud (via modes[]), workhorse + coder → local
+    // Config: judge → cloud in best-cloud, → local in best-local-oss; workhorse always local.
     const config = {
       backends: {
-        cloud_be: { kind: 'anthropic', url: cloud.url },
-        local_be: { kind: 'anthropic', url: local.url },  // anthropic kind for protocol simplicity
+        cloud_be: { kind: 'anthropic', url: `http://127.0.0.1:${cloud.port}` },
+        local_be: { kind: 'anthropic', url: `http://127.0.0.1:${local.port}` },
       },
       model_routes: {
-        'cloud-judge': 'cloud_be',
-        'local-worker': 'local_be',
+        'cloud-judge':  'cloud_be',
         'local-judge':  'local_be',
+        'local-worker': 'local_be',
       },
       llm_profiles: {
-        '128gb': {
-          judge: {
-            connected_model:  'cloud-judge',
-            disconnect_model: 'local-judge',
-            modes: {
-              'cloud-judge-only': 'cloud-judge',
-              'semi-offload':     'cloud-judge',
-            },
-          },
-          workhorse: {
-            connected_model:  'local-worker',
-            disconnect_model: 'local-worker',
-          },
-          coder: {
-            connected_model:  'local-worker',
-            disconnect_model: 'local-worker',
-          },
+        judge: {
+          'best-cloud':     { '128gb': 'cloud-judge'  },
+          'best-local-oss': { '128gb': 'local-judge'  },
+          'best-cloud-oss': { '128gb': 'cloud-judge'  },
+        },
+        workhorse: {
+          'best-cloud':     { '128gb': 'local-worker' },
+          'best-local-oss': { '128gb': 'local-worker' },
+          'best-cloud-oss': { '128gb': 'local-worker' },
         },
       },
     };
@@ -104,20 +96,18 @@ async function main() {
       max_tokens: 5,
     };
 
-    // ── Test 1: cloud-judge-only — judge → cloud, workhorse → local ──────────
-    console.log('1. cloud-judge-only mode: judge hits cloud, workhorse hits local');
+    // ── Test 1: best-cloud — judge → cloud, workhorse → local ────────────────
+    console.log('1. best-cloud mode: judge hits cloud, workhorse hits local');
     await withProxy(
-      { configPath, profile: '128gb', mode: 'cloud-judge-only' },
+      { configPath, profile: '128gb', mode: 'best-cloud' },
       async ({ port }) => {
-        // Send judge request
         const rJudge = await httpJson(port, 'POST', '/v1/messages',
           Object.assign({ model: 'judge' }, messageBody));
         assert(rJudge.status === 200, `judge request 200 (got ${rJudge.status})`);
         const judgeVia = JSON.parse(rJudge.headers['x-c-thru-resolved-via'] || '{}');
         assert(judgeVia.served_by === 'cloud-judge',
-          `judge resolved to cloud-judge (got ${JSON.stringify(judgeVia.served_by)})`);
+          `judge resolved to cloud-judge in best-cloud (got ${JSON.stringify(judgeVia.served_by)})`);
 
-        // Send workhorse request in same proxy session
         const rWork = await httpJson(port, 'POST', '/v1/messages',
           Object.assign({ model: 'workhorse' }, messageBody));
         assert(rWork.status === 200, `workhorse request 200 (got ${rWork.status})`);
@@ -125,15 +115,12 @@ async function main() {
         assert(workVia.served_by === 'local-worker',
           `workhorse resolved to local-worker (got ${JSON.stringify(workVia.served_by)})`);
 
-        // Now verify backends actually received the traffic
         const cloudHits = cloud.hits();
         const localHits = local.hits();
-        const cloudJudgeHit = cloudHits.find(h => h.model === 'cloud-judge');
-        const localWorkerHit = localHits.find(h => h.model === 'local-worker');
-        assert(!!cloudJudgeHit,
-          `cloud backend received judge request (got cloud hits: ${JSON.stringify(cloudHits.map(h => h.model))})`);
-        assert(!!localWorkerHit,
-          `local backend received workhorse request (got local hits: ${JSON.stringify(localHits.map(h => h.model))})`);
+        assert(cloudHits.some(h => h.model === 'cloud-judge'),
+          `cloud backend received judge request (cloud hits: ${JSON.stringify(cloudHits.map(h => h.model))})`);
+        assert(localHits.some(h => h.model === 'local-worker'),
+          `local backend received workhorse request (local hits: ${JSON.stringify(localHits.map(h => h.model))})`);
       }
     );
 
@@ -141,10 +128,10 @@ async function main() {
     cloud.hits().length = 0;
     local.hits().length = 0;
 
-    // ── Test 2: offline — judge → local, workhorse → local (cloud unused) ────
-    console.log('\n2. offline mode: both hit local, cloud is never touched');
+    // ── Test 2: best-local-oss — judge → local, cloud never touched ──────────
+    console.log('\n2. best-local-oss mode: both hit local, cloud is never touched');
     await withProxy(
-      { configPath, profile: '128gb', mode: 'offline' },
+      { configPath, profile: '128gb', mode: 'best-local-oss' },
       async ({ port }) => {
         await httpJson(port, 'POST', '/v1/messages',
           Object.assign({ model: 'judge' }, messageBody));
@@ -154,7 +141,7 @@ async function main() {
         const cloudHits = cloud.hits();
         const localHits = local.hits();
         assert(cloudHits.length === 0,
-          `cloud backend NOT touched in offline mode (got ${cloudHits.length} hits)`);
+          `cloud backend NOT touched in best-local-oss mode (got ${cloudHits.length} hits)`);
         assert(localHits.length === 2,
           `local backend received both requests (got ${localHits.length})`);
       }
@@ -163,10 +150,10 @@ async function main() {
     cloud.hits().length = 0;
     local.hits().length = 0;
 
-    // ── Test 3: connected — judge → cloud (no modes[] override needed) ──────
-    console.log('\n3. connected mode: judge → cloud via connected_model, workhorse → local');
+    // ── Test 3: best-cloud-oss — judge → cloud, workhorse → local ───────────
+    console.log('\n3. best-cloud-oss mode: judge → cloud, workhorse → local');
     await withProxy(
-      { configPath, profile: '128gb', mode: 'connected' },
+      { configPath, profile: '128gb', mode: 'best-cloud-oss' },
       async ({ port }) => {
         await httpJson(port, 'POST', '/v1/messages',
           Object.assign({ model: 'judge' }, messageBody));
@@ -176,9 +163,9 @@ async function main() {
         const cloudHits = cloud.hits();
         const localHits = local.hits();
         assert(cloudHits.length === 1 && cloudHits[0].model === 'cloud-judge',
-          `cloud backend got judge request (got ${JSON.stringify(cloudHits)})`);
+          `cloud backend got judge request in best-cloud-oss (got ${JSON.stringify(cloudHits)})`);
         assert(localHits.length === 1 && localHits[0].model === 'local-worker',
-          `local backend got workhorse request (got ${JSON.stringify(localHits)})`);
+          `local backend got workhorse request in best-cloud-oss (got ${JSON.stringify(localHits)})`);
       }
     );
 

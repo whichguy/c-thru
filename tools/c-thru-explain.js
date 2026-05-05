@@ -18,7 +18,7 @@ const {
   resolveCapabilityAlias,
   applyModeFilter,
   pickBenchmarkBest,
-  isClaude, isCloud, isOpenSource,
+  isClaude, isCloud, isOpenSource, isChineseOrigin,
   LLM_MODE_ENUM,
 } = require('./model-map-resolve.js');
 
@@ -47,19 +47,23 @@ function parseArgs(argv) {
 const args = parseArgs(process.argv.slice(2));
 if (args.help || args.h) {
   console.log(`Usage: c-thru explain [--capability <cap>] [--agent <name>] [--model <name>] [--mode <m>] [--tier <t>]
+         c-thru explain --all [--mode <m>] [--tier <t>] [--format json|text]
 
 Prints the model resolution chain for a hypothetical request, without sending one.
 
   --capability <cap>   capability alias (e.g. workhorse, judge, deep-coder)
   --agent <name>       agent name (resolved through agent_to_capability)
   --model <name>       raw model name (resolved through model_routes)
-  --mode <m>           connectivity / routing mode (default: \$CLAUDE_LLM_MODE or 'connected')
+  --all                resolve every capability in llm_profiles
+  --mode <m>           connectivity / routing mode (default: \$CLAUDE_LLM_MODE or 'best-cloud')
   --tier <t>           hardware tier (default: detected from RAM)
+  --format <f>         output format: text (default) or json (machine-readable, only with --all)
 
 Examples:
   c-thru explain --capability coder --mode best-cloud-oss
   c-thru explain --agent tester --mode best-local-oss --tier 64gb
   c-thru explain --model gemini-latest
+  c-thru explain --all --format json --mode best-local-oss --tier 64gb
 `);
   process.exit(0);
 }
@@ -94,6 +98,90 @@ try {
 let capability = args.capability;
 let agent = args.agent;
 const modelName = args.model;
+
+// --all branch: resolve every capability for the given tier × mode
+if (args.all) {
+  const theMode = args.mode || process.env.CLAUDE_LLM_MODE || 'best-cloud';
+  if (!LLM_MODE_ENUM.has(theMode)) {
+    console.error(`explain: unknown mode '${theMode}' (valid: ${[...LLM_MODE_ENUM].join(', ')})`);
+    process.exit(1);
+  }
+  let theTier = args.tier || process.env.CLAUDE_LLM_PROFILE;
+  if (!theTier) {
+    try {
+      const { tierForGb } = require('./hw-profile.js');
+      const gb = process.env.CLAUDE_LLM_MEMORY_GB
+        ? Number(process.env.CLAUDE_LLM_MEMORY_GB)
+        : Math.ceil(os.totalmem() / (1024 ** 3));
+      theTier = tierForGb(gb);
+    } catch { theTier = '64gb'; }
+  }
+
+  const epMap  = config.endpoints || config.backends || {};
+  const LOCAL_RE = /localhost|127\.0\.0\.1|0\.0\.0\.0/;
+  const GOV    = new Set(['best-cloud-gov', 'best-local-gov']);
+
+  let rec = null;
+  try {
+    const rp = path.join(__dirname, '..', 'config', 'recommended-mappings.json');
+    if (fs.existsSync(rp)) rec = JSON.parse(fs.readFileSync(rp, 'utf8'));
+  } catch {}
+
+  const results = [];
+  for (const [cap, entry] of Object.entries(config.llm_profiles || {})) {
+    const model = resolveProfileModel(entry, theTier, theMode);
+    if (!model) continue;
+    if (GOV.has(theMode) && isChineseOrigin(model)) continue;
+
+    // Strip @sigil
+    const sig    = model.match(/^(.+)@([A-Za-z0-9_-]+)$/);
+    const base   = sig ? sig[1] : model;
+    const sigilEp = sig ? sig[2] : null;
+
+    // Backend lookup via model_routes
+    const route  = (config.model_routes || {})[base];
+    let epId = sigilEp;
+    if (!epId && route) {
+      if (typeof route === 'string') epId = route;
+      else if (route && typeof route === 'object') epId = route.endpoint;
+    }
+
+    const ep      = epId ? epMap[epId] : null;
+    const epUrl   = ep?.url ?? null;
+    const epFmt   = ep?.format ?? 'anthropic';
+    const isLocal = ep ? LOCAL_RE.test(ep.url || '') : false;
+    const isOllama = isLocal && (epFmt === 'anthropic' || epFmt === 'ollama-legacy');
+
+    // Strip path to scheme://host:port for CLI host
+    let cliHost = null;
+    if (isLocal && epUrl) {
+      try { cliHost = new URL(epUrl).origin; } catch { cliHost = epUrl; }
+    }
+
+    results.push({
+      capability:        cap,
+      model:             base,
+      endpoint_id:       epId ?? null,
+      endpoint_url:      epUrl,
+      endpoint_cli_host: cliHost,
+      endpoint_format:   epFmt,
+      local:             isLocal,
+      ollama:            isOllama,
+      is_recommended:    !!(rec && rec.recommendations?.[cap]?.[theTier] === base),
+    });
+  }
+
+  if (args.format === 'json') {
+    process.stdout.write(JSON.stringify(results, null, 2) + '\n');
+  } else {
+    for (const r of results) {
+      const tag = r.local ? '[local]' : '[cloud]';
+      const recStr = r.is_recommended ? '  (rec)' : '';
+      console.log(`  ${r.capability.padEnd(22)} ${r.model.padEnd(40)} ${tag}${recStr}`);
+    }
+  }
+  process.exit(0);
+}
 
 if (!capability && !agent && !modelName) {
   console.error('explain: --capability, --agent, or --model required (try --help)');

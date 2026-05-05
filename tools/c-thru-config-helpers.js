@@ -11,9 +11,9 @@
  *   resolve           Resolve capability/agent → concrete model under current mode+tier  [wired]
  *   mode-read         Show active llm_mode and its source                                [wired]
  *   mode-write        Set llm_mode in overrides (persisted)                              [wired]
- *   remap             Rebind llm_profiles[tier][cap] connected_model + disconnect_model  [implemented; SKILL.md still uses inline block]
- *   set-cloud-best    Set cloud_best_model on a profile entry                            [implemented; SKILL.md still uses inline block]
- *   set-local-best    Set local_best_model on a profile entry                            [implemented; SKILL.md still uses inline block]
+ *   remap             Rebind llm_profiles[cap][mode][tier] for the active mode           [implemented; SKILL.md still uses inline block]
+ *   set-cloud-best    Set best-cloud model for a capability at a given tier              [implemented; SKILL.md still uses inline block]
+ *   set-local-best    Set best-local-oss model for a capability at a given tier          [implemented; SKILL.md still uses inline block]
  *   route             Bind model name → backend in model_routes                          [implemented; SKILL.md still uses inline block]
  *   backend           Add/update a backend entry                                          [implemented; SKILL.md still uses inline block]
  *
@@ -30,6 +30,12 @@ const os            = require('os');
 const path          = require('path');
 const { execFileSync } = require('child_process');
 const { loadSelectedConfig } = require('./model-map-config.js');
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const LLM_MODE_ENUM = new Set([
+  'best-cloud', 'best-cloud-oss', 'best-local-oss', 'best-cloud-gov', 'best-local-gov',
+]);
 
 // ── Shared preamble ────────────────────────────────────────────────────────────
 
@@ -196,7 +202,6 @@ function cmdResolve(args) {
     process.stderr.write(`  target:      ${target.targetId}\n`);
     process.stderr.write(`  backend:     ${target.backendId}\n`);
   }
-  process.stderr.write(`  on_failure:  ${entry.on_failure || 'cascade'}\n`);
 }
 
 // ── Subcommand: mode-read ──────────────────────────────────────────────────────
@@ -207,13 +212,6 @@ function cmdResolve(args) {
  * @param {string[]} _args
  */
 function cmdModeRead(_args) {
-  const LLM_MODE_ENUM = new Set([
-    'connected', 'semi-offload', 'cloud-judge-only', 'offline',
-    'cloud-best-quality', 'local-best-quality',
-    'local-only', 'cloud-thinking', 'local-review',
-    'cloud-only', 'claude-only', 'opensource-only',
-    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local'
-  ]);
   let config = {}, overrides = {};
   try { config    = JSON.parse(fs.readFileSync(MAP_PATH,       'utf8')); } catch {}
   try { overrides = JSON.parse(fs.readFileSync(OVERRIDES_PATH, 'utf8')); } catch {}
@@ -226,7 +224,7 @@ function cmdModeRead(_args) {
   } else if (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) {
     process.stdout.write(`mode: ${config.llm_mode}  (source: ${MAP_PATH} — system default)\n`);
   } else {
-    process.stdout.write('mode: connected  (source: built-in default)\n');
+    process.stdout.write('mode: best-cloud  (source: built-in default)\n');
   }
 }
 
@@ -238,16 +236,9 @@ function cmdModeRead(_args) {
  * @param {string[]} args - [<mode>] [--reload]
  */
 function cmdModeWrite(args) {
-  const VALID = new Set([
-    'connected', 'semi-offload', 'cloud-judge-only', 'offline',
-    'cloud-best-quality', 'local-best-quality',
-    'local-only', 'cloud-thinking', 'local-review',
-    'cloud-only', 'claude-only', 'opensource-only',
-    'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local'
-  ]);
   const mode = args[0];
-  if (!mode || !VALID.has(mode)) {
-    die(`invalid mode '${mode}' — valid: ${[...VALID].join(', ')}`);
+  if (!mode || !LLM_MODE_ENUM.has(mode)) {
+    die(`invalid mode '${mode}' — valid: ${[...LLM_MODE_ENUM].join(', ')}`);
   }
   runEdit(JSON.stringify({ llm_mode: mode }));
   if (hasFlag(args, '--reload')) {
@@ -261,7 +252,7 @@ function cmdModeWrite(args) {
 // ── Subcommand: remap ──────────────────────────────────────────────────────────
 
 /**
- * @description Rebind llm_profiles[tier][cap] connected_model + disconnect_model.
+ * @description Rebind llm_profiles[cap][activeMode][tier] for the active llm_mode.
  * Migrated from: skills/c-thru-config/SKILL.md § remap
  * @param {string[]} args - <tier> <capability> <model> [--reload]
  */
@@ -269,13 +260,18 @@ function cmdRemap(args) {
   const [tier, cap, model] = args.filter(a => !a.startsWith('--'));
   if (!tier || !cap || !model) { die('usage: remap <tier> <capability> <model> [--reload]'); }
 
-  const config   = readConfig();
-  const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
-  const entry    = Object.assign({}, existing, { connected_model: model, disconnect_model: model });
-  const spec     = JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } });
+  const config = readConfig();
+  const { resolveLlmMode } = loadResolve();
+  const activeMode = resolveLlmMode(config);
+  
+  const existingCap = (config.llm_profiles || {})[cap] || {};
+  const existingMode = existingCap[activeMode] || {};
+  const newMode = Object.assign({}, existingMode, { [tier]: model });
+  const newCap = Object.assign({}, existingCap, { [activeMode]: newMode });
+  const spec = JSON.stringify({ llm_profiles: { [cap]: newCap } });
 
   runEdit(spec);
-  process.stdout.write(`remapped ${cap} → ${model}  (tier: ${tier})\n`);
+  process.stdout.write(`remapped ${cap} → ${model} for mode ${activeMode} (tier: ${tier})\n`);
   if (hasFlag(args, '--reload')) {
     reloadProxy();
   } else {
@@ -286,7 +282,7 @@ function cmdRemap(args) {
 // ── Subcommand: set-cloud-best ─────────────────────────────────────────────────
 
 /**
- * @description Set cloud_best_model on a profile entry.
+ * @description Set llm_profiles[cap][best-cloud][tier] model.
  * Migrated from: skills/c-thru-config/SKILL.md § set-cloud-best-model
  * @param {string[]} args - <tier> <capability> <model> [--reload]
  */
@@ -294,20 +290,22 @@ function cmdSetCloudBest(args) {
   const [tier, cap, model] = args.filter(a => !a.startsWith('--'));
   if (!tier || !cap || !model) { die('usage: set-cloud-best <tier> <capability> <model> [--reload]'); }
 
-  const config   = readConfig();
-  const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
-  const entry    = Object.assign({}, existing, { cloud_best_model: model });
-  const spec     = JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } });
+  const config = readConfig();
+  const existingCap = (config.llm_profiles || {})[cap] || {};
+  const existingMode = existingCap['best-cloud'] || {};
+  const newMode = Object.assign({}, existingMode, { [tier]: model });
+  const newCap = Object.assign({}, existingCap, { 'best-cloud': newMode });
+  const spec = JSON.stringify({ llm_profiles: { [cap]: newCap } });
 
   runEdit(spec);
-  process.stdout.write(`set cloud_best_model for ${cap} → ${model}  (tier: ${tier})\n`);
+  process.stdout.write(`set cloud model for ${cap} → ${model} in mode best-cloud (tier: ${tier})\n`);
   if (hasFlag(args, '--reload')) reloadProxy();
 }
 
 // ── Subcommand: set-local-best ─────────────────────────────────────────────────
 
 /**
- * @description Set local_best_model on a profile entry.
+ * @description Set llm_profiles[cap][best-local-oss][tier] model.
  * Migrated from: skills/c-thru-config/SKILL.md § set-local-best-model
  * @param {string[]} args - <tier> <capability> <model> [--reload]
  */
@@ -315,13 +313,15 @@ function cmdSetLocalBest(args) {
   const [tier, cap, model] = args.filter(a => !a.startsWith('--'));
   if (!tier || !cap || !model) { die('usage: set-local-best <tier> <capability> <model> [--reload]'); }
 
-  const config   = readConfig();
-  const existing = ((config.llm_profiles || {})[tier] || {})[cap] || {};
-  const entry    = Object.assign({}, existing, { local_best_model: model });
-  const spec     = JSON.stringify({ llm_profiles: { [tier]: { [cap]: entry } } });
+  const config = readConfig();
+  const existingCap = (config.llm_profiles || {})[cap] || {};
+  const existingMode = existingCap['best-local-oss'] || {};
+  const newMode = Object.assign({}, existingMode, { [tier]: model });
+  const newCap = Object.assign({}, existingCap, { 'best-local-oss': newMode });
+  const spec = JSON.stringify({ llm_profiles: { [cap]: newCap } });
 
   runEdit(spec);
-  process.stdout.write(`set local_best_model for ${cap} → ${model}  (tier: ${tier})\n`);
+  process.stdout.write(`set local model for ${cap} → ${model} in mode best-local-oss (tier: ${tier})\n`);
   if (hasFlag(args, '--reload')) reloadProxy();
 }
 
@@ -527,9 +527,9 @@ Subcommands:
   resolve    <capability>                         resolve capability/agent → model
   mode-read                                       show active mode + source
   mode-write <mode> [--reload]                    set llm_mode in overrides
-  remap      <tier> <cap> <model> [--reload]      rebind connected+disconnect model
-  set-cloud-best <tier> <cap> <model> [--reload]  set cloud_best_model
-  set-local-best <tier> <cap> <model> [--reload]  set local_best_model
+  remap      <tier> <cap> <model> [--reload]      rebind model for active mode
+  set-cloud-best <tier> <cap> <model> [--reload]  set best-cloud model for capability at tier
+  set-local-best <tier> <cap> <model> [--reload]  set best-local-oss model for capability at tier
   route      <model> <backend> [--reload]         bind model → backend
   backend    <name> <url> [--kind k] [--auth-env VAR] [--reload]  add/update backend
   agent-list                                      show agent → capability → model table (* = overridden)

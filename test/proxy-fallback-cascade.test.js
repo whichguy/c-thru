@@ -38,12 +38,9 @@ async function main() {
             'secondary:mid': 'be_secondary',
           },
           llm_profiles: {
-            '128gb': {
-              workhorse: {
-                connected_model:  'primary:big',
-                disconnect_model: 'primary:big',
-                on_failure: 'cascade',
-              },
+            workhorse: {
+              'best-cloud': { '128gb': 'primary:big' },
+              on_failure: 'cascade',
             },
           },
           fallback_chains: {
@@ -56,7 +53,7 @@ async function main() {
           },
         };
         const configPath = writeConfig(tmpDir, config);
-        await withProxy({ configPath, profile: '128gb', mode: 'connected',
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud',
           env: { CLAUDE_PROXY_SKIP_VALIDATOR: '1' } }, async ({ port }) => {
           const r = await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',
@@ -95,12 +92,9 @@ async function main() {
             't:low': 'be_t',
           },
           llm_profiles: {
-            '128gb': {
-              workhorse: {
-                connected_model:  'p:big',
-                disconnect_model: 'p:big',
-                on_failure: 'cascade',
-              },
+            workhorse: {
+              'best-cloud': { '128gb': 'p:big' },
+              on_failure: 'cascade',
             },
           },
           fallback_chains: {
@@ -114,7 +108,7 @@ async function main() {
           },
         };
         const configPath = writeConfig(tmpDir, config);
-        await withProxy({ configPath, profile: '128gb', mode: 'connected',
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud',
           env: { CLAUDE_PROXY_SKIP_VALIDATOR: '1' } }, async ({ port }) => {
           const r = await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',
@@ -148,12 +142,9 @@ async function main() {
             'b:mid': 'be_b',
           },
           llm_profiles: {
-            '128gb': {
-              workhorse: {
-                connected_model:  'a:big',
-                disconnect_model: 'a:big',
-                on_failure: 'cascade',
-              },
+            workhorse: {
+              'best-cloud': { '128gb': 'a:big' },
+              on_failure: 'cascade',
             },
           },
           fallback_chains: {
@@ -166,7 +157,7 @@ async function main() {
           },
         };
         const configPath = writeConfig(tmpDir, config);
-        await withProxy({ configPath, profile: '128gb', mode: 'connected',
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud',
           env: { CLAUDE_PROXY_SKIP_VALIDATOR: '1' } }, async ({ port }) => {
           const r = await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',
@@ -200,12 +191,9 @@ async function main() {
             'strict-fallback': 'be_fallback',
           },
           llm_profiles: {
-            '128gb': {
-              'judge-strict': {
-                connected_model:  'strict-primary',
-                disconnect_model: 'strict-primary',
-                on_failure: 'hard_fail',
-              },
+            'judge-strict': {
+              'best-cloud': { '128gb': 'strict-primary' },
+              on_failure: 'hard_fail',
             },
           },
           fallback_chains: {
@@ -218,7 +206,7 @@ async function main() {
           },
         };
         const configPath = writeConfig(tmpDir, config);
-        await withProxy({ configPath, profile: '128gb', mode: 'connected',
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud',
           env: { CLAUDE_PROXY_SKIP_VALIDATOR: '1' } }, async ({ port }) => {
           const r = await httpJson(port, 'POST', '/v1/messages', {
             model: 'judge-strict',
@@ -254,10 +242,8 @@ async function main() {
             'fm': 'be_f',
           },
           llm_profiles: {
-            '128gb': {
-              workhorse:    { connected_model: 'pm', disconnect_model: 'pm', on_failure: 'cascade' },
-              'judge-strict': { connected_model: 'pm', disconnect_model: 'pm', on_failure: 'hard_fail' },
-            },
+            workhorse:      { 'best-cloud': { '128gb': 'pm' }, on_failure: 'cascade' },
+            'judge-strict': { 'best-cloud': { '128gb': 'pm' }, on_failure: 'hard_fail' },
           },
           fallback_chains: {
             '128gb': {
@@ -267,7 +253,7 @@ async function main() {
           },
         };
         const configPath = writeConfig(tmpDir, config);
-        await withProxy({ configPath, profile: '128gb', mode: 'connected',
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud',
           env: { CLAUDE_PROXY_SKIP_VALIDATOR: '1' } }, async ({ port }) => {
           const cascadeRes = await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',

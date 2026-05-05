@@ -21,8 +21,9 @@ function buildConfig(stubPort) {
     backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stubPort}` } },
     model_routes: { 'stream-model': 'stub' },
     llm_profiles: {
-      '128gb': {
-        workhorse: { connected_model: 'stream-model', disconnect_model: 'stream-model' },
+      workhorse: {
+        'best-cloud':     { '128gb': 'stream-model' },
+        'best-local-oss': { '128gb': 'stream-model' },
       },
     },
   };
@@ -68,7 +69,7 @@ async function main() {
       const stub = await streamingStubBackend(FULL_STREAM);
       try {
         const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           const r = await httpStream(port, 'POST', '/v1/messages', {
             model: 'workhorse', stream: true,
             messages: [{ role: 'user', content: 'hi' }],
@@ -93,7 +94,7 @@ async function main() {
       const stub = await streamingStubBackend(FULL_STREAM);
       try {
         const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           const r = await httpStream(port, 'POST', '/v1/messages', {
             model: 'workhorse', stream: true,
             messages: [{ role: 'user', content: 'hi' }],
@@ -111,7 +112,7 @@ async function main() {
       const stub = await streamingStubBackend(FULL_STREAM);
       try {
         const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           const r = await httpStream(port, 'POST', '/v1/messages', {
             model: 'workhorse', stream: true,
             messages: [{ role: 'user', content: 'hi' }],
@@ -123,7 +124,7 @@ async function main() {
           try { via = JSON.parse(hdr); } catch {}
           assertEq(via?.capability, 'workhorse', 'capability=workhorse');
           assertEq(via?.served_by, 'stream-model', 'served_by=stream-model');
-          assertEq(via?.mode, 'connected', 'mode=connected');
+          assertEq(via?.mode, 'best-cloud', 'mode=best-cloud');
           assert(typeof via?.tier === 'string', 'tier present');
         });
       } finally { await stub.close().catch(() => {}); }
@@ -135,7 +136,7 @@ async function main() {
       const stub = await streamingStubBackend(FULL_STREAM);
       try {
         const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           const r = await httpStream(port, 'POST', '/v1/messages', {
             model: 'workhorse', stream: true,
             messages: [{ role: 'user', content: 'hi' }],
@@ -165,7 +166,7 @@ async function main() {
       const stub = await streamingStubBackend(minimal);
       try {
         const configPath = writeConfig(tmpDir, buildConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           const r = await httpStream(port, 'POST', '/v1/messages', {
             model: 'workhorse', stream: true,
             messages: [{ role: 'user', content: 'hi' }],

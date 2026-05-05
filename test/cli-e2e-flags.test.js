@@ -38,7 +38,7 @@ node -e 'console.log(JSON.stringify({
   claude_proxy_bypass:   process.env.CLAUDE_PROXY_BYPASS   || null,
   claude_proxy_journal:  process.env.CLAUDE_PROXY_JOURNAL  || null,
   claude_proxy_debug:    process.env.CLAUDE_PROXY_DEBUG    || null,
-  claude_router_debug:   process.env.CLAUDE_ROUTER_DEBUG   || null,
+  claude_router_debug:   process.env.C_THRU_DEBUG          || null,
   claude_router_no_update: process.env.CLAUDE_ROUTER_NO_UPDATE || null,
 }))' -- "$@"
 `;
@@ -252,7 +252,7 @@ console.log('\n13. --proxy-debug (no value) → CLAUDE_PROXY_DEBUG=1');
 }
 
 // ── Test 14: --router-debug=2 (= form) ────────────────────────────────────
-console.log('\n14. --router-debug=2 → CLAUDE_ROUTER_DEBUG=2');
+console.log('\n14. --router-debug=2 → C_THRU_DEBUG=2');
 {
   const r = runCthru(['--router-debug=2', '--model', 'claude-sonnet-4-6']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);

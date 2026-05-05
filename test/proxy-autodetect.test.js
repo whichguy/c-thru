@@ -42,19 +42,15 @@ console.log(`Expected tier: ${expectedTier}\n`);
 const CONCRETE_MODEL = 'autodetect-model-v1';
 
 function buildConfig(stubPort) {
-  const profile = {
-    workhorse: {
-      connected_model:  `${CONCRETE_MODEL}@stub`,
-      disconnect_model: `${CONCRETE_MODEL}@stub`,
-    },
-  };
   // Populate only the expected tier so resolution fails loudly on wrong tier.
   return {
     backends: {
       stub: { kind: 'anthropic', url: `http://127.0.0.1:${stubPort}` },
     },
     llm_profiles: {
-      [expectedTier]: profile,
+      workhorse: {
+        'best-cloud': { [expectedTier]: `${CONCRETE_MODEL}@stub` },
+      },
     },
   };
 }
@@ -126,11 +122,8 @@ async function main() {
       const cfg16 = writeConfig(cfg16Dir, {
         backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
         llm_profiles: {
-          '16gb': {
-            workhorse: {
-              connected_model:  'wh-forced-16gb@stub',
-              disconnect_model: 'wh-forced-16gb@stub',
-            },
+          workhorse: {
+            'best-cloud': { '16gb': 'wh-forced-16gb@stub' },
           },
         },
       });
