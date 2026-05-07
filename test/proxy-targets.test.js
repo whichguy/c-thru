@@ -31,10 +31,8 @@ function buildBaseConfig(stubPort, extras = {}) {
       stub: { kind: 'anthropic', url: `http://127.0.0.1:${stubPort}` },
     },
     llm_profiles: {
-      '16gb': {
-        workhorse: { connected_model: 'workhorse-leaf', disconnect_model: 'workhorse-leaf' },
-        judge: { connected_model: 'workhorse-leaf', disconnect_model: 'workhorse-leaf' },
-      },
+      workhorse: { 'best-cloud': { '16gb': 'workhorse-leaf' } },
+      judge:     { 'best-cloud': { '16gb': 'workhorse-leaf' } },
     },
   }, extras);
 }
@@ -50,10 +48,8 @@ async function main() {
     {
       const configPath = writeConfig(tmpDir, buildBaseConfig(stub.port, {
         llm_profiles: {
-          '16gb': {
-            workhorse: { connected_model: 'glm5.1-zai', disconnect_model: 'glm5.1-zai' },
-            judge: { connected_model: 'glm5.1-zai', disconnect_model: 'glm5.1-zai' },
-          },
+          workhorse: { 'best-cloud': { '16gb': 'glm5.1-zai' } },
+          judge:     { 'best-cloud': { '16gb': 'glm5.1-zai' } },
         },
         targets: {
           default: { backend: 'stub' },
@@ -64,7 +60,7 @@ async function main() {
           },
         },
       }));
-      await withProxy({ configPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'connected' } }, async ({ port }) => {
+      await withProxy({ configPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } }, async ({ port }) => {
         const r = await httpJson(port, 'POST', '/v1/messages', { ...MSG, model: 'workhorse' });
         assert(r.status === 200, `explicit target status 200 (got ${r.status})`);
         assert(stub.lastRequest()?.model_used === 'glm-5.1',
@@ -81,10 +77,8 @@ async function main() {
     {
       const configPath = writeConfig(tmpDir, buildBaseConfig(stub.port, {
         llm_profiles: {
-          '16gb': {
-            workhorse: { connected_model: 'raw-pass-through', disconnect_model: 'raw-pass-through' },
-            judge: { connected_model: 'raw-pass-through', disconnect_model: 'raw-pass-through' },
-          },
+          workhorse: { 'best-cloud': { '16gb': 'raw-pass-through' } },
+          judge:     { 'best-cloud': { '16gb': 'raw-pass-through' } },
         },
         targets: {
           default: {
@@ -93,7 +87,7 @@ async function main() {
           },
         },
       }));
-      await withProxy({ configPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'connected' } }, async ({ port }) => {
+      await withProxy({ configPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } }, async ({ port }) => {
         const r = await httpJson(port, 'POST', '/v1/messages', { ...MSG, model: 'workhorse' });
         assert(r.status === 200, `default target status 200 (got ${r.status})`);
         assert(stub.lastRequest()?.model_used === 'raw-pass-through',
@@ -109,10 +103,8 @@ async function main() {
     {
       const configPath = writeConfig(tmpDir, buildBaseConfig(stub.port, {
         llm_profiles: {
-          '16gb': {
-            workhorse: { connected_model: 'env-target', disconnect_model: 'env-target' },
-            judge: { connected_model: 'env-target', disconnect_model: 'env-target' },
-          },
+          workhorse: { 'best-cloud': { '16gb': 'env-target' } },
+          judge:     { 'best-cloud': { '16gb': 'env-target' } },
         },
         targets: {
           default: { backend: 'stub' },
@@ -133,7 +125,7 @@ async function main() {
         configPath,
         profile: '16gb',
         env: {
-          CLAUDE_LLM_MODE: 'connected',
+          CLAUDE_LLM_MODE: 'best-cloud',
           TEST_TARGET_THINK: 'true',
           TEST_TARGET_NUM_PREDICT: '512',
         },
@@ -162,10 +154,8 @@ async function main() {
       fs.mkdirSync(profileDir, { recursive: true });
       fs.writeFileSync(path.join(profileDir, 'model-map.json'), JSON.stringify(buildBaseConfig(stub.port, {
         llm_profiles: {
-          '16gb': {
-            workhorse: { connected_model: 'js-target', disconnect_model: 'js-target' },
-            judge: { connected_model: 'js-target', disconnect_model: 'js-target' },
-          },
+          workhorse: { 'best-cloud': { '16gb': 'js-target' } },
+          judge:     { 'best-cloud': { '16gb': 'js-target' } },
         },
         targets: {
           default: { backend: 'stub' },
@@ -188,7 +178,7 @@ async function main() {
           profile: '16gb',
           tmpHome,
           cwd: tmpHome,
-          env: { CLAUDE_LLM_MODE: 'connected', C_THRU_ENABLE_TARGET_JS: '1' },
+          env: { CLAUDE_LLM_MODE: 'best-cloud', C_THRU_ENABLE_TARGET_JS: '1' },
         });
         child = started.child;
         await waitForPing(started.port);
@@ -209,10 +199,8 @@ async function main() {
       fs.mkdirSync(profileDir, { recursive: true });
       fs.writeFileSync(path.join(profileDir, 'model-map.json'), JSON.stringify(buildBaseConfig(stub.port, {
         llm_profiles: {
-          '16gb': {
-            workhorse: { connected_model: 'js-target', disconnect_model: 'js-target' },
-            judge: { connected_model: 'js-target', disconnect_model: 'js-target' },
-          },
+          workhorse: { 'best-cloud': { '16gb': 'js-target' } },
+          judge:     { 'best-cloud': { '16gb': 'js-target' } },
         },
         targets: {
           default: { backend: 'stub' },
@@ -235,7 +223,7 @@ async function main() {
           profile: '16gb',
           tmpHome,
           cwd: tmpHome,
-          env: { CLAUDE_LLM_MODE: 'connected', C_THRU_ENABLE_TARGET_JS: '1' },
+          env: { CLAUDE_LLM_MODE: 'best-cloud', C_THRU_ENABLE_TARGET_JS: '1' },
         });
         child = started.child;
         await waitForPing(started.port);
@@ -256,10 +244,8 @@ async function main() {
     {
       const jsConfigPath = writeConfig(tmpDir, buildBaseConfig(stub.port, {
         llm_profiles: {
-          '16gb': {
-            workhorse: { connected_model: 'js-target', disconnect_model: 'js-target' },
-            judge: { connected_model: 'js-target', disconnect_model: 'js-target' },
-          },
+          workhorse: { 'best-cloud': { '16gb': 'js-target' } },
+          judge:     { 'best-cloud': { '16gb': 'js-target' } },
         },
         targets: {
           default: { backend: 'stub' },
@@ -277,7 +263,7 @@ async function main() {
         await spawnProxy({
           configPath: jsConfigPath,
           profile: '16gb',
-          env: { CLAUDE_LLM_MODE: 'connected', C_THRU_ENABLE_TARGET_JS: '1' },
+          env: { CLAUDE_LLM_MODE: 'best-cloud', C_THRU_ENABLE_TARGET_JS: '1' },
         });
       } catch (error) {
         rejected = true;

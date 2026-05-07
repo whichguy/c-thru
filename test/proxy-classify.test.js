@@ -39,10 +39,8 @@ async function main() {
       backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
       model_routes: { 'test-model': 'stub' },
       llm_profiles: {
-        '128gb': {
-          workhorse: { connected_model: 'test-model', disconnect_model: 'test-model' },
-          coder:     { connected_model: 'test-model', disconnect_model: 'test-model' },
-        },
+        workhorse: { 'best-cloud': { '128gb': 'test-model' } },
+        coder:     { 'best-cloud': { '128gb': 'test-model' } },
       },
     };
     const configPath = writeConfig(tmpDir, config);
@@ -60,7 +58,7 @@ async function main() {
       const cls = await classifierStub();
       try {
         await withProxy({
-          configPath, profile: '128gb', mode: 'connected',
+          configPath, profile: '128gb', mode: 'best-cloud',
           env: { CLAUDE_PROXY_CLASSIFY_OLLAMA_URL: `http://127.0.0.1:${cls.port}` },
         }, async ({ port }) => {
           const r = await send(port, 'workhorse');
@@ -78,7 +76,7 @@ async function main() {
       const cls = await classifierStub({ role: 'coder', confidence: 0.9 });
       try {
         await withProxy({
-          configPath, profile: '128gb', mode: 'connected',
+          configPath, profile: '128gb', mode: 'best-cloud',
           env: {
             CLAUDE_PROXY_CLASSIFY: '1',
             CLAUDE_PROXY_CLASSIFY_OLLAMA_URL: `http://127.0.0.1:${cls.port}`,
@@ -102,7 +100,7 @@ async function main() {
       const cls = await classifierStub({ role: 'debugger', confidence: 0.92 });
       try {
         await withProxy({
-          configPath, profile: '128gb', mode: 'connected',
+          configPath, profile: '128gb', mode: 'best-cloud',
           env: {
             CLAUDE_PROXY_CLASSIFY: '1',
             CLAUDE_PROXY_CLASSIFY_OLLAMA_URL: `http://127.0.0.1:${cls.port}`,
@@ -130,7 +128,7 @@ async function main() {
       const cls = await classifierStub({ role: 'logic', confidence: 0.7 });
       try {
         await withProxy({
-          configPath, profile: '128gb', mode: 'connected',
+          configPath, profile: '128gb', mode: 'best-cloud',
           env: {
             CLAUDE_PROXY_CLASSIFY: '1',
             CLAUDE_PROXY_CLASSIFY_OLLAMA_URL: `http://127.0.0.1:${cls.port}`,
@@ -156,7 +154,7 @@ async function main() {
       const cls = await classifierStub({ broken: true });
       try {
         await withProxy({
-          configPath, profile: '128gb', mode: 'connected',
+          configPath, profile: '128gb', mode: 'best-cloud',
           env: {
             CLAUDE_PROXY_CLASSIFY: '1',
             CLAUDE_PROXY_CLASSIFY_OLLAMA_URL: `http://127.0.0.1:${cls.port}`,
@@ -182,7 +180,7 @@ async function main() {
       const journalDir6 = path.join(tmpDir, 'journal-classify');
       try {
         await withProxy({
-          configPath, profile: '128gb', mode: 'connected',
+          configPath, profile: '128gb', mode: 'best-cloud',
           env: {
             CLAUDE_PROXY_CLASSIFY: '1',
             CLAUDE_PROXY_CLASSIFY_OLLAMA_URL: `http://127.0.0.1:${cls.port}`,
@@ -216,7 +214,7 @@ async function main() {
       const cls = await classifierStub({ role: 'not_a_real_role', confidence: 0.5 });
       try {
         await withProxy({
-          configPath, profile: '128gb', mode: 'connected',
+          configPath, profile: '128gb', mode: 'best-cloud',
           env: {
             CLAUDE_PROXY_CLASSIFY: '1',
             CLAUDE_PROXY_CLASSIFY_OLLAMA_URL: `http://127.0.0.1:${cls.port}`,

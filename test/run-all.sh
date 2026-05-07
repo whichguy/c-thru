@@ -66,6 +66,10 @@ run_suite "model-map-v12-adapter (regression)" \
   node "$REPO_DIR/test/model-map-v12-adapter.test.js"
 run_suite "proxy-lifecycle (startup, /ping, loopback bind)" \
   node "$REPO_DIR/test/proxy-lifecycle.test.js"
+run_suite "proxy-unhandled-rejection (unhandledRejection handler + log)" \
+  node "$REPO_DIR/test/proxy-unhandled-rejection.test.js"
+run_suite "proxy-body-size-cap (MAX_BODY_BYTES 413 guard)" \
+  node "$REPO_DIR/test/proxy-body-size-cap.test.js"
 run_suite "proxy-forward-ollama-midstream-error" \
   node "$REPO_DIR/test/proxy-forward-ollama-midstream-error.test.js"
 run_suite "proxy-client-disconnect-cleanup" \
@@ -175,19 +179,20 @@ run_suite "proxy-gemini-routing (Gemini routing + picker aliases)" \
 run_suite "proxy-gemini-translation (Anthropic→Gemini translation)" \
   node "$REPO_DIR/test/proxy-gemini-translation.test.js"
 
-# EXCLUDED (currently failing — do not wire until fixed):
-# benchmark-coverage.test.js:       coverage-map mismatch / fixture drift (run manually to diagnose)
-# proxy-classify.test.js:           withProxy async error at startup
-# proxy-targets.test.js:            withProxy async error at startup
-# proxy-ollama-passthrough.test.js: 0/11 — legacy translation path broken against current proxy
-# model-map-lineage.test.js:        1/333 failure — minor fixture drift (run manually to diagnose)
-# proxy-quality.test.js:            8/28 failures — quality-score expectations drifted from config
-skip_suite "benchmark-coverage (excluded — fixture drift, run manually to diagnose)"
-skip_suite "proxy-classify (excluded — withProxy async error at startup)"
-skip_suite "proxy-targets (excluded — withProxy async error at startup)"
-skip_suite "proxy-ollama-passthrough (excluded — legacy path broken against current proxy)"
-skip_suite "model-map-lineage (excluded — fixture drift, run manually to diagnose)"
-skip_suite "proxy-quality (excluded — quality-score expectations drifted from config)"
+run_suite "proxy-ollama-passthrough (Ollama /v1/messages passthrough + tool block preservation)" \
+  node "$REPO_DIR/test/proxy-ollama-passthrough.test.js"
+run_suite "model-map-lineage (full resolution matrix snapshot)" \
+  node "$REPO_DIR/test/model-map-lineage.test.js"
+run_suite "proxy-quality (mapping, fallback cascade, v1 passthrough)" \
+  node "$REPO_DIR/test/proxy-quality.test.js"
+
+# EXCLUDED (tests for features not yet implemented in the proxy):
+# proxy-classify.test.js:  CLAUDE_PROXY_CLASSIFY dynamic in-proxy classifier not implemented
+# proxy-targets.test.js:   targets{} config section (request_defaults per model) not implemented
+# benchmark-coverage.test.js: passes now, but low value (0 cells checked since modes not in fixture)
+skip_suite "benchmark-coverage (excluded — 0 cells checked, mode fixture not populated)"
+skip_suite "proxy-classify (excluded — CLAUDE_PROXY_CLASSIFY feature not implemented in proxy)"
+skip_suite "proxy-targets (excluded — targets{} config feature not implemented in proxy)"
 
 echo ""
 echo "Validators:"

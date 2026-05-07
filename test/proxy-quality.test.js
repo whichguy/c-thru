@@ -73,16 +73,8 @@ function buildFallbackConfig(primaryPort, secondaryPort, tertiaryPort) {
       'tertiary-model':  'tertiary'
     },
     llm_profiles: {
-      '16gb': {
-        workhorse: {
-          connected_model: 'primary-model@primary',
-          on_failure: 'cascade'
-        },
-        hard_fail_cap: {
-          connected_model: 'primary-model@primary',
-          on_failure: 'hard_fail'
-        }
-      }
+      workhorse:     { 'best-cloud': { '16gb': 'primary-model@primary' }, on_failure: 'cascade' },
+      hard_fail_cap: { 'best-cloud': { '16gb': 'primary-model@primary' }, on_failure: 'hard_fail' },
     }
   };
 }
@@ -170,8 +162,8 @@ async function runFallbackTests() {
     const config = buildFallbackConfig(s1.port, s2.port, s3.port);
     const configPath = writeConfig(tmpDir, config);
 
-    await withProxy({ configPath, profile: '16gb' }, async ({ port }) => {
-      
+    await withProxy({ configPath, profile: '16gb', mode: 'best-cloud' }, async ({ port }) => {
+
       // 2.1 Cascade from primary -> secondary -> tertiary
       console.log('2.1 Cascade primary -> secondary -> tertiary');
       const body = { model: 'workhorse', messages: [{ role: 'user', content: 'test cascade' }] };

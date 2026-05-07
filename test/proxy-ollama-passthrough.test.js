@@ -78,7 +78,7 @@ function buildOllamaConfig(stubPort, opts = {}) {
     backends: { stub },
     model_routes: { 'tool-model': 'stub' },
     llm_profiles: {
-      '128gb': { workhorse: { connected_model: 'tool-model', disconnect_model: 'tool-model' } },
+      workhorse: { 'best-cloud': { '128gb': 'tool-model' } },
     },
   };
 }
@@ -106,7 +106,7 @@ async function main() {
       const stub = await ollamaStubBackend();
       try {
         const configPath = writeConfig(tmpDir, buildOllamaConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           const r = await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',
             tools: TOOLS_DECL,
@@ -145,7 +145,7 @@ async function main() {
       const stub = await ollamaStubBackend();
       try {
         const configPath = writeConfig(tmpDir, buildOllamaConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',
             messages: [{ role: 'user', content: 'hi' }],
@@ -164,7 +164,7 @@ async function main() {
       const stub = await ollamaStubBackend();
       try {
         const configPath = writeConfig(tmpDir, buildOllamaConfig(stub.port));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           await httpJson(port, 'POST', '/v1/messages', {
             model: 'workhorse',
             messages: [{ role: 'user', content: 'hi' }],
@@ -186,7 +186,7 @@ async function main() {
       const stub = await ollamaStubBackend();
       try {
         const configPath = writeConfig(tmpDir, buildOllamaConfig(stub.port, { legacy: true }));
-        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
           // /api/chat returns NDJSON not Anthropic JSON; the legacy path expects
           // a 200 with NDJSON content. Our stub returns Anthropic JSON which the
           // legacy path will fail to parse — but the request will still reach
