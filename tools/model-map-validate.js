@@ -295,13 +295,30 @@ function validateCapabilityEntry(capabilityName, entry, report) {
     // Value must be a non-empty string (same model for all tiers) or a tier-keyed object
     if (typeof value === 'string') {
       if (!value.trim()) report(`'llm_profiles.${capabilityName}.${key}' must be a non-empty string`);
+      if (value.endsWith(':TODO')) {
+        console.warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}' is a placeholder (${value}) — requests using this entry will fail at runtime`);
+      }
     } else if (isObject(value)) {
+      const definedTiers = [];
       for (const [tier, model] of Object.entries(value)) {
         if (!HARDWARE_TIERS.has(tier)) {
           report(`'llm_profiles.${capabilityName}.${key}.${tier}' uses unknown hardware tier (expected: ${[...HARDWARE_TIERS].join(', ')})`);
+        } else {
+          definedTiers.push(tier);
         }
         if (typeof model !== 'string' || !model.trim()) {
           report(`'llm_profiles.${capabilityName}.${key}.${tier}' must be a non-empty string`);
+        } else if (model.endsWith(':TODO')) {
+          console.warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}.${tier}' is a placeholder (${model}) — requests using this entry will fail at runtime`);
+        }
+      }
+      // V4: warn when higher tiers exist but are not covered
+      const TIER_ORDER = ['16gb', '32gb', '48gb', '64gb', '128gb'];
+      if (definedTiers.length > 0) {
+        const maxDefinedIdx = Math.max(...definedTiers.map(t => TIER_ORDER.indexOf(t)));
+        const missingAbove = TIER_ORDER.slice(maxDefinedIdx + 1).filter(t => !definedTiers.includes(t));
+        if (missingAbove.length > 0) {
+          console.warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}' defines up to '${TIER_ORDER[maxDefinedIdx]}' but is missing higher tiers: ${missingAbove.join(', ')} — requests from those tiers will get null resolution`);
         }
       }
     } else {
@@ -509,6 +526,17 @@ function validateConfig(config, _errors, options) {
           console.warn(`model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming auth will be forwarded verbatim`);
         }
       }
+      // V3: warn on unresolved URL template variables (e.g. ${GOOGLE_CLOUD_REGION})
+      if (entry.url) {
+        const templateVarRe = /\$\{([^}]+)\}/g;
+        let m;
+        while ((m = templateVarRe.exec(entry.url)) !== null) {
+          const varName = m[1];
+          if (!process.env[varName]) {
+            console.warn(`model-map-validate: warning: endpoint '${id}' url references \${${varName}} but ${varName} is not set in the environment — the URL will be malformed at runtime`);
+          }
+        }
+      }
       // Vertex flag — boolean only; warn if used outside Gemini.
       if (entry.vertex !== undefined) {
         if (typeof entry.vertex !== 'boolean') {
@@ -579,6 +607,32 @@ function validateConfig(config, _errors, options) {
       } else if (profiles && !entry.model.startsWith('model:') &&
                  !Object.prototype.hasOwnProperty.call(profiles, entry.model)) {
         report(`'llm_capabilities.${capabilityName}.model' references unknown capability '${entry.model}' (not in llm_profiles)`);
+      }
+    }
+  }
+
+  // V2: sampling bounds validation for capability_sampling_defaults
+  if (config.capability_sampling_defaults != null) {
+    if (!isObject(config.capability_sampling_defaults)) {
+      report("'capability_sampling_defaults' must be an object when present");
+    } else {
+      for (const [cap, defaults] of Object.entries(config.capability_sampling_defaults)) {
+        if (!isObject(defaults)) { report(`'capability_sampling_defaults.${cap}' must be an object`); continue; }
+        if (defaults.temperature != null) {
+          if (typeof defaults.temperature !== 'number' || defaults.temperature < 0 || defaults.temperature > 2) {
+            report(`'capability_sampling_defaults.${cap}.temperature' must be a number in [0, 2] (got ${defaults.temperature})`);
+          }
+        }
+        if (defaults.top_p != null) {
+          if (typeof defaults.top_p !== 'number' || defaults.top_p < 0 || defaults.top_p > 1) {
+            report(`'capability_sampling_defaults.${cap}.top_p' must be a number in [0, 1] (got ${defaults.top_p})`);
+          }
+        }
+        if (defaults.top_k != null) {
+          if (typeof defaults.top_k !== 'number' || !Number.isInteger(defaults.top_k) || defaults.top_k < 1) {
+            report(`'capability_sampling_defaults.${cap}.top_k' must be a positive integer (got ${defaults.top_k})`);
+          }
+        }
       }
     }
   }

@@ -28,9 +28,20 @@ On your first Claude Code session after install, the SessionStart hook automatic
 
 **Restart Claude Code once** after install to activate model routing.
 
-### CLI use (optional)
+### Plugin-only limitations
 
-To invoke `c-thru` from the terminal as a drop-in replacement for `claude`:
+Plugin install provides: proxy runtime, routing config, hooks, and the three public skills above.
+
+**Not included in the plugin bundle** (requires source install):
+- `c-thru` CLI — terminal drop-in for `claude` with `--mode`, `--profile`, `--route` flags
+- `c-thru list`, `c-thru explain`, `c-thru reload` control commands
+- `c-thru-hygiene-check`, `c-thru-statusline` monitoring scripts
+- `llm-capabilities-mcp.js` MCP server (model capability queries)
+- `c-thru-ollama-gc.sh`, `c-thru-journal` and other utility tools
+
+### Full install (CLI + all tools)
+
+To install the full CLI as a drop-in replacement for `claude`:
 
 ```sh
 git clone https://github.com/whichguy/c-thru.git ~/src/c-thru

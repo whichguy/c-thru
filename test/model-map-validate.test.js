@@ -120,13 +120,13 @@ console.log('\n8. llm_connectivity_mode deprecated key → stderr warning');
   // 'connected' / 'disconnect' (NOT the new llm_mode enum like 'best-cloud').
   const cfg = Object.assign({}, VALID_BASE, { llm_connectivity_mode: 'connected' });
   delete cfg.llm_mode;
-  let stderrLine = '';
+  const warnLines = [];
   const origWarn = console.warn;
-  console.warn = msg => { stderrLine = msg; };
+  console.warn = msg => warnLines.push(msg);
   const errs = validate(cfg);
   console.warn = origWarn;
   assert(errs.length === 0, 'deprecated key alone → no error');
-  assert(stderrLine.includes('deprecated'), `warning text includes "deprecated" (got: "${stderrLine}")`);
+  assert(warnLines.some(l => l.includes('deprecated')), `a warning text includes "deprecated" (got: ${warnLines.join(' | ')})`);
 }
 
 // ── 9. fallback_strategies cycle → error ──────────────────────────────────
@@ -392,6 +392,104 @@ console.log('\n23. claude-via-gemini-* aliases resolve to gemini_ai');
   // The shipped config must validate cleanly with the new aliases in place.
   const errs = validate(shippedConfig);
   assert(errs.length === 0, `shipped config validates with new aliases (errs: ${errs.slice(0,3).join('; ')})`);
+}
+
+// ── 24. V1: :TODO placeholder model → warning (not error) ────────────────────
+console.log('\n24. V1: :TODO placeholder model emits warning, not error');
+{
+  const cfg = {
+    backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+    model_routes: { 'test-model': 'local' },
+    llm_profiles: {
+      workhorse: { 'best-cloud-gov': { '128gb': 'gpt-oss-120b:TODO' } },
+    },
+    llm_mode: 'best-cloud-gov',
+  };
+  const warnMessages = [];
+  const origWarn = console.warn;
+  console.warn = msg => warnMessages.push(msg);
+  const errs = validate(cfg);
+  console.warn = origWarn;
+  assert(errs.length === 0, 'placeholder :TODO model → no error (only warning)');
+  assert(
+    warnMessages.some(m => m.includes(':TODO') && m.includes('placeholder')),
+    `:TODO warning emitted (got: ${warnMessages[0] || 'none'})`
+  );
+}
+
+// ── 25. V2: capability_sampling_defaults temperature out of range → error ──
+console.log('\n25. V2: sampling_defaults temperature > 2 → error');
+{
+  const cfg = Object.assign({}, VALID_BASE, {
+    capability_sampling_defaults: { coder: { temperature: 3.5 } },
+  });
+  const errs = validate(cfg);
+  assert(errs.length > 0, 'temperature 3.5 → error');
+  assert(errs.some(e => e.includes('temperature') && e.includes('[0, 2]')),
+    `error mentions temperature range (got: ${errs[0]})`);
+}
+
+// ── 26. V2: top_p out of range → error ───────────────────────────────────────
+console.log('\n26. V2: sampling_defaults top_p > 1 → error');
+{
+  const cfg = Object.assign({}, VALID_BASE, {
+    capability_sampling_defaults: { coder: { top_p: 1.5 } },
+  });
+  const errs = validate(cfg);
+  assert(errs.length > 0, 'top_p 1.5 → error');
+  assert(errs.some(e => e.includes('top_p') && e.includes('[0, 1]')),
+    `error mentions top_p range (got: ${errs[0]})`);
+}
+
+// ── 27. V2: top_k non-integer → error ────────────────────────────────────────
+console.log('\n27. V2: sampling_defaults top_k non-positive-integer → error');
+{
+  const cfg = Object.assign({}, VALID_BASE, {
+    capability_sampling_defaults: { coder: { top_k: 0 } },
+  });
+  const errs = validate(cfg);
+  assert(errs.length > 0, 'top_k 0 → error');
+  assert(errs.some(e => e.includes('top_k') && e.includes('positive integer')),
+    `error mentions top_k constraint (got: ${errs[0]})`);
+}
+
+// ── 28. V2: valid sampling defaults pass ─────────────────────────────────────
+console.log('\n28. V2: valid sampling_defaults → no error');
+{
+  const cfg = Object.assign({}, VALID_BASE, {
+    capability_sampling_defaults: { coder: { temperature: 1.0, top_p: 0.95, top_k: 20 } },
+  });
+  const errs = validate(cfg);
+  assert(errs.length === 0, `valid sampling_defaults → no error (got: ${errs.join('; ')})`);
+}
+
+// ── 29. V3: URL template var warning when env var unset ──────────────────────
+console.log('\n29. V3: endpoint URL with unset template var emits warning');
+{
+  const savedEnv = process.env.TEST_MISSING_VAR_XYZ;
+  delete process.env.TEST_MISSING_VAR_XYZ;
+  const cfg = {
+    endpoints: {
+      vertex: {
+        format: 'gemini',
+        url: 'https://${TEST_MISSING_VAR_XYZ}-aiplatform.googleapis.com/v1/models',
+        auth_env: 'GOOGLE_CLOUD_TOKEN',
+      },
+    },
+    model_routes: {},
+    llm_mode: 'best-cloud',
+  };
+  const warnMessages = [];
+  const origWarn = console.warn;
+  console.warn = msg => warnMessages.push(msg);
+  const errs = validate(cfg);
+  console.warn = origWarn;
+  if (savedEnv !== undefined) process.env.TEST_MISSING_VAR_XYZ = savedEnv;
+  assert(errs.length === 0, 'unset URL template var → no hard error');
+  assert(
+    warnMessages.some(m => m.includes('TEST_MISSING_VAR_XYZ') && m.includes('not set')),
+    `warning emitted for unset URL template var (got: ${warnMessages[0] || 'none'})`
+  );
 }
 
 // ── Summary ────────────────────────────────────────────────────────────────

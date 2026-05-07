@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Pre-commit: verify plugins/c-thru/ bundle is in sync with source files.
+# Pre-commit: verify plugins/c-thru/ bundle is in sync with source files,
+# and run baseline syntax/schema checks.
 set -o pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -10,3 +11,10 @@ if [ -f "$REPO_ROOT/tools/sync-plugin-bundle.sh" ]; then
     exit 1
   }
 fi
+
+bash -n "$REPO_ROOT/tools/c-thru" || { echo "bash syntax error in tools/c-thru"; exit 1; }
+node --check "$REPO_ROOT/tools/claude-proxy" || { echo "node syntax error in tools/claude-proxy"; exit 1; }
+node "$REPO_ROOT/tools/model-map-validate.js" "$REPO_ROOT/config/model-map.json" || {
+  echo "model-map.json schema validation failed"
+  exit 1
+}
