@@ -542,6 +542,16 @@ function injectSamplingDefaults(body, effectiveModel, capability, backend) {
   return out;
 }
 
+// Returns true when an auth_env is configured but the env var is unset/empty.
+// Used to set x-c-thru-auth-missing on the response header.
+function isAuthMissing(backend) {
+  if (backend.auth_env) return !process.env[backend.auth_env];
+  if (backend.auth && typeof backend.auth === 'object' && backend.auth.env) {
+    return !process.env[backend.auth.env];
+  }
+  return false;
+}
+
 // Apply auth for an outbound request based on endpoint auth config.
 //   auth:"none"       -> strip auth headers, inject nothing
 //   auth_env present  -> inject Authorization: Bearer <env value>
@@ -836,10 +846,20 @@ function sseWrite(res, event, data) {
   res.write(`event: ${event}\ndata: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`);
 }
 
+const MAX_BODY_BYTES = 100 * 1024 * 1024; // 100 MB
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', c => chunks.push(c));
+    let totalBytes = 0;
+    req.on('data', c => {
+      totalBytes += c.length;
+      if (totalBytes > MAX_BODY_BYTES) {
+        req.socket?.destroy();
+        return reject(Object.assign(new Error('request body too large'), { status: 413 }));
+      }
+      chunks.push(c);
+    });
     req.on('error', reject);
     req.on('end', () => resolve(Buffer.concat(chunks)));
   });
@@ -1170,6 +1190,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
 
   const headers = scrubCthruHeaders(req.headers);
   applyOutboundAuth(backend, req.headers, headers);
+  if (requestMeta) requestMeta.authMissing = isAuthMissing(backend);
 
   // Combine the backend's optional base path with the client's request path.
   // - Anthropic backend url=https://api.anthropic.com -> pathname='/' -> use req.url verbatim ("/v1/messages?beta=true")
@@ -1185,8 +1206,11 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     headers
   };
   ctxDebug(ctx, 'anthropic.request.path', { backend: backend.id, target: `${targetUrl.origin}${forwardedPath}` });
+  const backendStartedAt = Date.now();
+  if (requestMeta) requestMeta.backendStartedAt = backendStartedAt;
 
   const up = lib.request(options, upRes => {
+    const backendLatencyMs = Date.now() - backendStartedAt;
     ctxLog(ctx, 'backend_response', { backend: backend.id, statusCode: upRes.statusCode });
     if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
       // Buffer the upstream error body for the log, then attempt fallback. If
@@ -1226,6 +1250,12 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     }
     if (requestMeta._fallbackFrom) outHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
     if (requestMeta._fallbackFrom) outHeaders['x-claude-proxy-fallback-from'] = requestMeta._fallbackFrom;
+    outHeaders['x-c-thru-backend-latency-ms'] = String(backendLatencyMs);
+    if (requestMeta.hwTierDetected) {
+      outHeaders['x-c-thru-tier-detected'] = requestMeta.hwTierDetected;
+      outHeaders['x-c-thru-tier-used'] = requestMeta.hwTier;
+    }
+    if (isAuthMissing(backend)) outHeaders['x-c-thru-auth-missing'] = '1';
     res.writeHead(upRes.statusCode, outHeaders);
     // Tee the upstream bytes for usage extraction without affecting the
     // pipe to the client. Anthropic emits `usage.input_tokens` in the
@@ -1426,6 +1456,12 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
   }
   if (requestMeta._fallbackFrom) streamHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
   if (requestMeta._fallbackFrom) streamHeaders['x-claude-proxy-fallback-from'] = requestMeta._fallbackFrom;
+  streamHeaders['x-c-thru-backend-latency-ms'] = String(Date.now() - (requestMeta.backendStartedAt || requestStartedAt));
+  if (requestMeta.hwTierDetected) {
+    streamHeaders['x-c-thru-tier-detected'] = requestMeta.hwTierDetected;
+    streamHeaders['x-c-thru-tier-used'] = requestMeta.hwTier;
+  }
+  if (isAuthMissing(backend)) streamHeaders['x-c-thru-auth-missing'] = '1';
   res.writeHead(200, streamHeaders);
 
   const messageId = anthropicMessageId();
@@ -1821,6 +1857,12 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
       nonStreamHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
       if (requestMeta._fallbackFrom) nonStreamHeaders['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
       if (requestMeta._fallbackFrom) nonStreamHeaders['x-claude-proxy-fallback-from'] = requestMeta._fallbackFrom;
+      nonStreamHeaders['x-c-thru-backend-latency-ms'] = String(Date.now() - (requestMeta.backendStartedAt || requestMeta.startedAt || Date.now()));
+      if (requestMeta.hwTierDetected) {
+        nonStreamHeaders['x-c-thru-tier-detected'] = requestMeta.hwTierDetected;
+        nonStreamHeaders['x-c-thru-tier-used'] = requestMeta.hwTier;
+      }
+      if (isAuthMissing(backend)) nonStreamHeaders['x-c-thru-auth-missing'] = '1';
       res.writeHead(200, nonStreamHeaders);
       res.end(respBody);
       ctxLog(ctx, 'ollama.nonstream.done', {
@@ -2151,6 +2193,16 @@ function buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta)
   h['request-id'] = (upstreamId && /^req_[a-f0-9]+$/i.test(upstreamId))
     ? upstreamId
     : 'req_' + crypto.randomBytes(8).toString('hex');
+  if (requestMeta) {
+    if (requestMeta.backendStartedAt) {
+      h['x-c-thru-backend-latency-ms'] = String(Date.now() - requestMeta.backendStartedAt);
+    }
+    if (requestMeta.hwTierDetected) {
+      h['x-c-thru-tier-detected'] = requestMeta.hwTierDetected;
+      h['x-c-thru-tier-used'] = requestMeta.hwTier;
+    }
+    if (requestMeta.authMissing) h['x-c-thru-auth-missing'] = '1';
+  }
   return h;
 }
 
@@ -2384,6 +2436,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
   headers['content-type'] = 'application/json';
   // x-goog-api-key will be applied by applyOutboundAuth based on Phase 2 changes
   applyOutboundAuth(backend, req.headers, headers);
+  if (requestMeta) requestMeta.authMissing = isAuthMissing(backend);
 
   ctxLog(ctx, 'gemini.request', { backend: backend.id, url, model: effectiveModel, stream: isStream });
 
@@ -2399,6 +2452,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
 
   const messageId = 'msg_gemini_' + crypto.randomBytes(12).toString('hex');
   const startedAt = Date.now();
+  if (requestMeta) requestMeta.backendStartedAt = startedAt;
 
   // Wave 1: client-disconnect cancellation. When the Claude Code client closes
   // mid-flight (Ctrl-C, network drop, page reload), we must tear down the
@@ -3635,7 +3689,9 @@ function armConfigWatcher(configPath) {
         }
       }
     });
-  } catch {}
+  } catch (e) {
+    proxyLog('warn', 'configWatcherFailed', { path: configPath, err: String(e) });
+  }
 }
 
 // ── Main Server ──────────────────────────────────────────────────────
@@ -3963,6 +4019,8 @@ const server = http.createServer((req, res) => {
           }
         }
 
+        const { tierForGb } = require('./hw-profile.js');
+        const hwTierDetected = tierForGb(Math.ceil(os.totalmem() / (1024 ** 3)));
         const requestMeta = {
           capability: logicalRole,
           stream: !!body.stream,
@@ -3970,6 +4028,7 @@ const server = http.createServer((req, res) => {
           // Thread tier+mode through so forward functions can re-resolve via
           // resolveBackend if they need to fall back to a different upstream.
           hwTier,
+          hwTierDetected,
           activeMode,
           startedAt: requestStartedAt,
           onFailure,
@@ -4049,12 +4108,20 @@ const server = http.createServer((req, res) => {
 
       sendAnthropicError(res, 404, `not found: ${req.method} ${req.url}`);
     } catch (err) {
+      if (err.status === 413) {
+        return sendAnthropicError(res, 413, 'request body too large');
+      }
       proxyLog('fatal_error', { error: err.message, stack: err.stack });
       sendAnthropicError(res, 500, 'internal error');
     }
   });
 });
 
+server.on('error', err => {
+  proxyLog('fatal_error_listen', { code: err.code, message: err.message });
+  process.stdout.write(`READY_FAILED ${err.code} ${err.message}\n`);
+  process.exit(1);
+});
 server.listen(INITIAL_PORT, '127.0.0.1', () => {
   process.stdout.write(`READY ${server.address().port}\n`);
   console.error(`c-thru listening on :${server.address().port}`);
@@ -4081,4 +4148,8 @@ process.on('uncaughtException', err => {
   }
   proxyLog('fatal_error_uncaught', { error: err.message, stack: err.stack });
   process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  proxyLog('error', 'unhandledRejection', { reason: String(reason) });
 });

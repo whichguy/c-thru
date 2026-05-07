@@ -12,6 +12,20 @@ Streaming headers must be set before the first `writeHead` call —
 see the per-header notes for headers that cannot be backfilled
 mid-stream.
 
+## Observability
+
+| Header | Set when | Value | Streaming? |
+|---|---|---|---|
+| `x-c-thru-backend-latency-ms` | Always (when request reaches upstream) | Round-trip time from proxy→backend in milliseconds (integer string) | Yes |
+| `x-c-thru-auth-missing` | `auth_env` is configured on the endpoint but the referenced env var is unset at request time | `1` | Yes |
+| `x-c-thru-tier-detected` | Always | Hardware tier computed from raw `os.totalmem()` — ignores `CLAUDE_LLM_PROFILE` / `CLAUDE_LLM_MEMORY_GB` overrides (e.g. `64gb`) | Yes |
+| `x-c-thru-tier-used` | Always | Effective tier after all overrides — this is what model resolution used (e.g. `16gb` when `CLAUDE_LLM_PROFILE=16gb` is set on a 128 GB machine) | Yes |
+
+`x-c-thru-tier-detected` and `x-c-thru-tier-used` differ when a
+`CLAUDE_LLM_PROFILE` override is active. Comparing the two headers is
+the fastest way to determine whether a routing decision was driven by
+the actual hardware or an explicit override.
+
 ## Routing & resolution
 
 | Header | Set when | Value | Streaming? |

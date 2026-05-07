@@ -1866,6 +1866,11 @@ ensure_proxy_running() {
       start_ec=1
       diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "" "$temp_log" \
         "timed out waiting for claude-proxy readiness line (after ${ready_timeout}s)"
+    elif [[ "$ready_line" =~ ^READY_FAILED\ (.+)$ ]]; then
+      [[ -n "$_PROXY_SPIN_PID" ]] && { kill "$_PROXY_SPIN_PID" 2>/dev/null; wait "$_PROXY_SPIN_PID" 2>/dev/null; _PROXY_SPIN_PID=""; printf "\r%70s\r" "" >&2; }
+      start_ec=1
+      diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "" "$temp_log" \
+        "claude-proxy failed to bind: ${BASH_REMATCH[1]}"
     elif [[ ! "$ready_line" =~ ^READY\ ([0-9]+)$ ]]; then
       [[ -n "$_PROXY_SPIN_PID" ]] && { kill "$_PROXY_SPIN_PID" 2>/dev/null; wait "$_PROXY_SPIN_PID" 2>/dev/null; _PROXY_SPIN_PID=""; printf "\r%70s\r" "" >&2; }
       start_ec=1
