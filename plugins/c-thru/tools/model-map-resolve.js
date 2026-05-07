@@ -95,8 +95,10 @@ function resolveLlmMode(config) {
     }
   }
   // Legacy env aliases: treat 'connected' as best-cloud, 'offline'/'disconnect' as best-local-oss
-  const legacyEnv = process.env.CLAUDE_CONNECTIVITY_MODE || process.env.CLAUDE_LLM_CONNECTIVITY_MODE;
+  const legacyEnvName = process.env.CLAUDE_CONNECTIVITY_MODE ? 'CLAUDE_CONNECTIVITY_MODE' : (process.env.CLAUDE_LLM_CONNECTIVITY_MODE ? 'CLAUDE_LLM_CONNECTIVITY_MODE' : null);
+  const legacyEnv = legacyEnvName ? process.env[legacyEnvName] : null;
   if (legacyEnv) {
+    process.stderr.write(`model-map-resolve: ${legacyEnvName} is deprecated, use CLAUDE_LLM_MODE instead\n`);
     if (legacyEnv === 'disconnect' || legacyEnv === 'offline') return 'best-local-oss';
     return DEFAULT_MODE; // 'connected' or anything else → best-cloud
   }
@@ -142,8 +144,7 @@ function resolveActiveTier(config) {
 // agent name  → agent_to_capability → capability alias  (e.g. coder → coder)
 // alias name  → identity                                 (e.g. coder → coder)
 // unknown     → null                                     (passthrough, not a profile alias)
-// tier must be pre-computed by the caller (use resolveActiveTier).
-function resolveCapabilityAlias(model, config, tier) {
+function resolveCapabilityAlias(model, config) {
   const a2c = config && config.agent_to_capability;
   if (a2c && Object.prototype.hasOwnProperty.call(a2c, model)) return a2c[model];
   // New schema: llm_profiles is capability-outer (not tier-outer).

@@ -21,7 +21,6 @@ const {
   resolveActiveTier,
   resolveCapabilityAlias,
   LLM_MODE_ENUM,
-  pickBenchmarkBest,
   applyModeFilter,
 } = require('./model-map-resolve.js');
 
@@ -282,7 +281,6 @@ function traceLog(ctx, direction, method, url, headers, body) {
 }
 
 function nowIso() { return new Date().toISOString(); }
-function nowMs() { return Date.now(); }
 
 function numberFromEnv(key, def) {
   const v = process.env[key];
@@ -696,7 +694,7 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
     }
   }
 
-  const capAlias = resolveCapabilityAlias(model, cfg, tier);
+  const capAlias = resolveCapabilityAlias(model, cfg);
   if (capAlias) {
     if (capAlias.startsWith(MODEL_PIN_PREFIX)) {
       const pinnedModel = capAlias.slice(MODEL_PIN_PREFIX.length);
@@ -1065,9 +1063,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
   const capChain = capKey && CONFIG.fallback_chains?.[requestMeta.hwTier]?.[capKey];
   if (capChain) {
     const tolerancePct = CONFIG.quality_tolerance_pct;
-    const applyTolerance = tolerancePct != null &&
-      (requestMeta.activeMode === 'cloud-best-quality' || requestMeta.activeMode === 'local-best-quality');
-    const sortedChain = applyTolerance
+    const sortedChain = tolerancePct != null
       ? sortFallbackChainByTolerance(capChain, tolerancePct, triedModels)
       : capChain;
     for (const candidate of sortedChain) {
@@ -3294,42 +3290,6 @@ function mapAnthropicToGemini(body, effectiveModel) {
   return geminiReq;
 }
 
-function translateGeminiCandidateToAnthropic(candidate, messageId, modelName, isLast = false) {
-  const events = [];
-  const content = candidate.content || {};
-  const parts = content.parts || [];
-
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    if (part.text) {
-      events.push({
-        type: 'content_block_delta',
-        index: i,
-        delta: { type: 'text_delta', text: part.text }
-      });
-    } else if (part.functionCall) {
-      // Gemini functionCall is a single part. Anthropic tool_use is a block.
-      // In SSE, this is trickier because we need message_start first.
-      // This helper is for deltas.
-    }
-  }
-
-  if (isLast && candidate.finishReason) {
-    let stopReason = 'end_turn';
-    if (candidate.finishReason === 'STOP') stopReason = 'end_turn';
-    else if (candidate.finishReason === 'MAX_TOKENS') stopReason = 'max_tokens';
-    else if (candidate.finishReason === 'SAFETY') stopReason = 'stop_sequence'; // closest match
-    
-    events.push({
-      type: 'message_delta',
-      delta: { stop_reason: stopReason, stop_sequence: null },
-      usage: { output_tokens: 0 } // usage usually comes in separate metadata
-    });
-  }
-
-  return events;
-}
-
 // =============================================================================
 // LEGACY WIRE FORMAT: Ollama native /api/chat (NOT Anthropic Messages API)
 // =============================================================================
@@ -3968,31 +3928,6 @@ const server = http.createServer((req, res) => {
         if (resolved.error) {
           ctxLog(ctx, 'routing_error', { incoming_model: body.model, error: resolved.error });
           return sendAnthropicError(res, resolved.status || 400, resolved.error);
-        }
-
-        // ── Phase 3 ranking ──
-        const RANK_MODES = {
-          'fastest-possible': 'fastest',
-          'smallest-possible': 'smallest',
-          'best-opensource': 'best-opensource',
-          'best-opensource-cloud': 'best-opensource-cloud',
-          'best-opensource-local': 'best-opensource-local'
-        };
-        const criterion = RANK_MODES[activeMode];
-        if (criterion && BENCHMARK) {
-          const capKey = resolved.logicalRole || resolveCapabilityAlias(body.model, CONFIG, hwTier);
-          const role = capKey ? BENCHMARK.capability_to_role?.[capKey] : null;
-          if (role) {
-            const candidates = Object.keys(CONFIG.model_routes || {}).filter(k => !k.startsWith('re:'));
-            const best = pickBenchmarkBest(criterion, candidates, BENCHMARK, role, CONFIG.model_routes || {}, CONFIG.endpoints || CONFIG.backends || {});
-            if (best && best !== resolved.effectiveModel) {
-              const replaced = resolveBackend(best, CONFIG, hwTier, activeMode);
-              if (!replaced.error) {
-                ctxLog(ctx, 'ranking_promotion', { criterion, role, old_model: resolved.effectiveModel, new_model: replaced.effectiveModel });
-                resolved = Object.assign({}, replaced, { logicalRole: resolved.logicalRole });
-              }
-            }
-          }
         }
 
         let { backend, effectiveModel, logicalRole } = resolved;

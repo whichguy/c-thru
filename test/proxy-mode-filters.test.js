@@ -21,6 +21,7 @@ const {
   assert, assertEq, summary,
   writeConfig, withProxy, httpJson, stubBackend,
 } = require('./helpers');
+const { LLM_MODE_ENUM } = require('../tools/model-map-resolve.js');
 
 console.log('proxy gov-mode filter tests (best-cloud-gov / best-local-gov)\n');
 
@@ -61,6 +62,7 @@ async function main() {
         all_blocked: {
           'best-cloud':     { '128gb': 'qwen3-test'         },
           'best-cloud-gov': { '128gb': 'qwen3-test'         },
+          'best-local-gov': { '128gb': 'qwen3-test'         },
         },
       },
       fallback_chains: {
@@ -124,21 +126,27 @@ async function main() {
       assertEq(allowed_stub.requests.length, 0, 'allowed stub NOT touched (qwen3 routed directly)');
     });
 
-    // ── Test 4: best-cloud-gov with all-Chinese chain → 502 ─────────────────
-    console.log('\n4. best-cloud-gov: all-Chinese chain → 502 error');
-    allowed_stub.requests.length = 0; blocked_stub.requests.length = 0;
-    await withProxy({ configPath, profile: '128gb', mode: 'best-cloud-gov' }, async ({ port }) => {
-      const r = await send(port, 'all_blocked');
-      assertEq(r.status, 502, 'all-Chinese chain → 502 (gov filter hard-fails)');
-      const msg = r.json?.error?.message || '';
-      assert(msg.toLowerCase().includes('best-cloud-gov') || msg.toLowerCase().includes('filter') || msg.toLowerCase().includes('model'),
-        `error message mentions filter context (got ${JSON.stringify(msg)})`);
-      assertEq(allowed_stub.requests.length, 0, 'no upstream call (filter rejected all)');
-      assertEq(blocked_stub.requests.length, 0, 'blocked stub NOT touched (filter ran before request)');
-    });
+    // ── Tests 4+6: both gov modes with all-Chinese chain → 502 ──────────────
+    const GOV_MODES = [...LLM_MODE_ENUM].filter(m => m.endsWith('-gov'));
+    let testNum = 4;
+    for (const govMode of GOV_MODES) {
+      console.log(`\n${testNum++}. ${govMode}: all-Chinese chain → 502 error`);
+      allowed_stub.requests.length = 0; blocked_stub.requests.length = 0;
+      await withProxy({ configPath, profile: '128gb', mode: govMode }, async ({ port }) => {
+        const r = await send(port, 'all_blocked');
+        assertEq(r.status, 502, `${govMode} all-Chinese chain → 502`);
+        const msg = r.json?.error?.message || '';
+        assert(
+          msg.toLowerCase().includes(govMode) || msg.toLowerCase().includes('filter') || msg.toLowerCase().includes('model'),
+          `error message mentions filter context (got ${JSON.stringify(msg)})`
+        );
+        assertEq(allowed_stub.requests.length, 0, 'no upstream call (filter rejected all)');
+        assertEq(blocked_stub.requests.length, 0, 'blocked stub NOT touched');
+      });
+    }
 
-    // ── Test 5: best-local-gov with local allowed model → passes ─────────────
-    console.log('\n5. best-local-gov: non-Chinese local model passes filter');
+    // ── Test 5 (renumbered 6): best-local-gov with local allowed model → passes
+    console.log(`\n${testNum++}. best-local-gov: non-Chinese local model passes filter`);
     allowed_stub.requests.length = 0; blocked_stub.requests.length = 0;
     await withProxy({ configPath, profile: '128gb', mode: 'best-local-gov' }, async ({ port }) => {
       const r = await send(port, 'mixed_cap');

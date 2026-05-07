@@ -636,7 +636,7 @@ function createRequestOptions(baseUrl, pathName, bodyStr) {
     headers: {
       'content-type': 'application/json',
       'content-length': Buffer.byteLength(bodyStr),
-      'x-api-key': process.env.ANTHROPIC_API_KEY || 'proxied-placeholder',
+      'x-api-key': process.env.ANTHROPIC_API_KEY || (() => { process.stderr.write('[llm-capabilities-mcp] ANTHROPIC_API_KEY is unset — requests to Anthropic backends will fail with 401\n'); return 'missing-api-key'; })(),
       'anthropic-version': '2023-06-01',
     },
   };

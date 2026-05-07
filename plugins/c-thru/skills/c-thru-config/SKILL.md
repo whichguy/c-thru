@@ -404,13 +404,13 @@ const CAPS = [
   'debugger-hypothesis','debugger-investigate','debugger-hard',
   'vision','pdf','writer','edge','generalist','fast-generalist','fast-scout','long-context',
 ];
-const profile = (config.llm_profiles || {})[tier] || {};
-const maxLen = CAPS.filter(c => profile[c]).reduce((m,c) => Math.max(m,c.length), 0);
+const profiles = config.llm_profiles || {};
+const maxLen = CAPS.filter(c => profiles[c] && profiles[c][mode]).reduce((m,c) => Math.max(m,c.length), 0);
 console.log('\nCapability → model  (mode: ' + mode + ', tier: ' + tier + ')');
 for (const cap of CAPS) {
-  const entry = profile[cap]; if (!entry) continue;
-  const resolved = resolveProfileModel(entry, mode);
-  const tag = entry.on_failure === 'hard_fail' ? '  [hard_fail]' : '';
+  const entry = (profiles[cap] || {})[mode]; if (!entry) continue;
+  const resolved = resolveProfileModel(entry, tier, mode);
+  const tag = (typeof entry === 'object' && entry.on_failure === 'hard_fail') ? '  [hard_fail]' : '';
   console.log('  ' + cap.padEnd(maxLen + 2) + (resolved || '(unresolved)') + tag);
 }
 "

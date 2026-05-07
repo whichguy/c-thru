@@ -66,18 +66,6 @@ function applyRecommendations(effectiveMap, repoRoot) {
     }
   }
 
-  // Inject agent_to_capability_defaults where not already defined
-  const a2cDefaults = rec.agent_to_capability_defaults || {};
-  if (!result.agent_to_capability) result.agent_to_capability = {};
-  for (const [agent, cap] of Object.entries(a2cDefaults)) {
-    if (!Object.prototype.hasOwnProperty.call(result.agent_to_capability, agent)) {
-      result.agent_to_capability[agent] = cap;
-      applied++;
-    } else {
-      preserved++;
-    }
-  }
-
   return { map: result, applied, preserved };
 }
 

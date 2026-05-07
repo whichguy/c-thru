@@ -52,7 +52,7 @@ const LEGACY_LLM_MODES = new Set([
   'connected', 'offline', 'semi-offload', 'cloud-judge-only', 'local-only',
   'cloud-best-quality', 'local-best-quality', 'cloud-thinking', 'local-review',
   'cloud-only', 'claude-only', 'opensource-only',
-  'fastest-possible', 'smallest-possible', 'best-opensource', 'best-opensource-cloud', 'best-opensource-local',
+  'best-opensource', 'best-opensource-cloud', 'best-opensource-local',
 ]);
 const HARDWARE_TIERS = new Set(['16gb', '32gb', '48gb', '64gb', '128gb']);
 const ON_FAILURE_VALUES = new Set(['cascade', 'hard_fail']);

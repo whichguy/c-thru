@@ -40,7 +40,12 @@ for h in "${HOOKS[@]}"; do
   check_or_copy "$ROOT/tools/$h" "$BUNDLE/hooks/$h"
 done
 
-# Skill SKILL.md files
+# Skill SKILL.md files — only public-facing skills synced to the marketplace bundle.
+# The following skills are intentionally excluded:
+#   competitive-evolution, concurrent-evolution — internal dev/experiment workflows
+#   logical-gearbox                             — internal routing research
+#   review-fix, review-plan                     — review-suite; shipped via separate plugin
+#   update-model-research                       — internal capability research tool
 SKILLS=(c-thru-plan c-thru-config c-thru-control)
 for s in "${SKILLS[@]}"; do
   check_or_copy "$ROOT/skills/$s/SKILL.md" "$BUNDLE/skills/$s/SKILL.md"

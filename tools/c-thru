@@ -54,13 +54,14 @@ OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-4}"
 # shell.  Set CLAUDE_PROXY_PORT explicitly only when you need a fixed port
 # (e.g. c-thru reload, c-thru restart, or direct ANTHROPIC_BASE_URL targeting).
 export CLAUDE_PROXY_PORT
-# Backward-compat aliases: CLAUDE_ROUTER_* → C_THRU_* (deprecated names still accepted)
-[[ -n "${CLAUDE_ROUTER_DEBUG:-}"                ]] && C_THRU_DEBUG="${CLAUDE_ROUTER_DEBUG}"
-[[ -n "${CLAUDE_ROUTER_NO_UPDATE:-}"            ]] && C_THRU_NO_UPDATE="${CLAUDE_ROUTER_NO_UPDATE}"
-[[ -n "${CLAUDE_ROUTER_NO_COLOR:-}"             ]] && NO_COLOR="${CLAUDE_ROUTER_NO_COLOR}"
-[[ -n "${CLAUDE_ROUTER_UPDATE_INTERVAL:-}"      ]] && C_THRU_UPDATE_INTERVAL="${CLAUDE_ROUTER_UPDATE_INTERVAL}"
-[[ -n "${CLAUDE_ROUTER_OLLAMA_AUTOSTART:-}"     ]] && C_THRU_OLLAMA_AUTOSTART="${CLAUDE_ROUTER_OLLAMA_AUTOSTART}"
-[[ -n "${CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART:-}" ]] && C_THRU_SKIP_PROXY_AUTOSTART="${CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART}"
+# Backward-compat aliases: CLAUDE_ROUTER_* → C_THRU_* (deprecated — remove from your env)
+_router_alias_warn() { echo "c-thru: $1 is deprecated, use $2 instead" >&2; }
+[[ -n "${CLAUDE_ROUTER_DEBUG:-}"                ]] && { _router_alias_warn CLAUDE_ROUTER_DEBUG C_THRU_DEBUG;                C_THRU_DEBUG="${CLAUDE_ROUTER_DEBUG}"; }
+[[ -n "${CLAUDE_ROUTER_NO_UPDATE:-}"            ]] && { _router_alias_warn CLAUDE_ROUTER_NO_UPDATE C_THRU_NO_UPDATE;        C_THRU_NO_UPDATE="${CLAUDE_ROUTER_NO_UPDATE}"; }
+[[ -n "${CLAUDE_ROUTER_NO_COLOR:-}"             ]] && { _router_alias_warn CLAUDE_ROUTER_NO_COLOR NO_COLOR;                 NO_COLOR="${CLAUDE_ROUTER_NO_COLOR}"; }
+[[ -n "${CLAUDE_ROUTER_UPDATE_INTERVAL:-}"      ]] && { _router_alias_warn CLAUDE_ROUTER_UPDATE_INTERVAL C_THRU_UPDATE_INTERVAL; C_THRU_UPDATE_INTERVAL="${CLAUDE_ROUTER_UPDATE_INTERVAL}"; }
+[[ -n "${CLAUDE_ROUTER_OLLAMA_AUTOSTART:-}"     ]] && { _router_alias_warn CLAUDE_ROUTER_OLLAMA_AUTOSTART C_THRU_OLLAMA_AUTOSTART; C_THRU_OLLAMA_AUTOSTART="${CLAUDE_ROUTER_OLLAMA_AUTOSTART}"; }
+[[ -n "${CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART:-}" ]] && { _router_alias_warn CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART C_THRU_SKIP_PROXY_AUTOSTART; C_THRU_SKIP_PROXY_AUTOSTART="${CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART}"; }
 
 PROXY_STARTED_PID=""
 CLAUDE_CHILD_PID=""
@@ -107,10 +108,6 @@ canonicalize_file() {
   local real_dir
   real_dir="$(canonicalize_dir "$(dirname "$file")")" || return 1
   printf '%s/%s' "$real_dir" "$(basename "$file")"
-}
-
-layered_profile_model_map_enabled() {
-  [[ -f "$MODEL_MAP_DEFAULTS_FILE" && -f "$MODEL_MAP_OVERRIDES_FILE" ]]
 }
 
 maybe_refresh_model_map_defaults_from_git() {
@@ -441,31 +438,7 @@ EOF
   fi
 }
 
-resolve_launch_project_dir() {
-  local override="${CLAUDE_PROJECT_DIR:-}"
-  if [[ -n "$override" ]]; then
-    local override_real
-    override_real="$(canonicalize_dir "$override" 2>/dev/null || true)"
-    if [[ -n "$override_real" ]]; then
-      LAUNCH_PROJECT_DIR="$override_real"
-      return 0
-    fi
-  fi
 
-  local git_root=""
-  git_root="$(git -C "$LAUNCH_CWD" rev-parse --show-toplevel 2>/dev/null || true)"
-  if [[ -n "$git_root" ]]; then
-    local git_root_real
-    git_root_real="$(canonicalize_dir "$git_root" 2>/dev/null || true)"
-    if [[ -n "$git_root_real" ]]; then
-      LAUNCH_PROJECT_DIR="$git_root_real"
-      return 0
-    fi
-  fi
-
-  LAUNCH_PROJECT_DIR=""
-  return 1
-}
 
 # --- --help / -h subcommand ---
 # Defined here — before the config-sync/startup block — so that
@@ -989,11 +962,6 @@ resolve_llm_profile_name() {
     return 1
   }
   printf '%s' "$LLM_PROFILE_CACHE_NAME"
-}
-
-profile_capability_slots() {
-  [[ -f "$CONFIG" ]] || return 0
-  jq -r '(.llm_profiles // {}) | keys[]' "$CONFIG" 2>/dev/null || true
 }
 
 # In-process cache — avoids multiple Node.js spawns per c-thru invocation
@@ -2560,27 +2528,6 @@ resolve_ollama_backend_for_model() {
   local_flag=0
   is_local_ollama_host "$cli_host" && local_flag=1
   printf '%s\t%s\t%s\t%s\t%s\n' "$cli_host" "$api_key" "$backend_id" "$explicit_auth" "$local_flag"
-}
-
-resolve_local_ollama_backend_for_model() {
-  local model_or_backend="$1"
-  local backend_data="$model_or_backend"
-  if [[ "$backend_data" != *$'\t'* ]]; then
-    backend_data="$(resolve_ollama_backend_for_model "$model_or_backend" || true)"
-  fi
-  [[ -n "$backend_data" ]] || return 1
-
-  local cli_host rest backend_id explicit_auth local_flag cli_key
-  cli_host="${backend_data%%$'\t'*}"
-  rest="${backend_data#*$'\t'}"
-  cli_key="${rest%%$'\t'*}"
-  rest="${rest#*$'\t'}"
-  backend_id="${rest%%$'\t'*}"
-  rest="${rest#*$'\t'}"
-  explicit_auth="${rest%%$'\t'*}"
-  local_flag="${rest#*$'\t'}"
-  [[ "$local_flag" == "1" ]] || return 1
-  printf '%s\t%s\t%s\n' "$cli_host" "$cli_key" "$backend_id"
 }
 
 collect_active_profile_cloud_ollama_models() {

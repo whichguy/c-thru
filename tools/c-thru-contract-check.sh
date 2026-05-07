@@ -761,6 +761,67 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Check 14: No phantom mode literals in claude-proxy
+# ---------------------------------------------------------------------------
+echo "14. Phantom mode literals in claude-proxy"
+_valid_modes=$(node -e "
+  const {LLM_MODE_ENUM}=require('./tools/model-map-resolve.js');
+  console.log([...LLM_MODE_ENUM].join('\n'));
+" 2>/dev/null)
+_found_modes=$(grep -oE "'best-[a-z-]+'" tools/claude-proxy 2>/dev/null | tr -d "'" | sort -u || true)
+_phantom=0
+while IFS= read -r _m; do
+  [[ -z "$_m" ]] && continue
+  if ! echo "$_valid_modes" | grep -qxF "$_m"; then
+    echo "  FAIL: phantom mode '$_m' in claude-proxy (not in LLM_MODE_ENUM)"
+    _phantom=1
+  fi
+done <<< "$_found_modes"
+[[ $_phantom -eq 0 ]] && echo "  ok (no phantom modes)"
+ISSUES=$(( ISSUES + _phantom ))
+
+# ---------------------------------------------------------------------------
+# Check 15: LEGACY_LLM_MODES conversion coverage
+# resolveLlmMode() handles legacy modes in two ways:
+#   a) explicit branch: a named case mapping to a specific mode (e.g. offline → best-local-oss)
+#   b) catch-all: "Other old mode names fall through to DEFAULT_MODE" — covers everything else
+# Any entry covered by (b) is safe as long as the catch-all exists.
+# Any entry requiring (a) must have an explicit string literal in model-map-resolve.js.
+# Fail only when the catch-all is absent AND an entry has no explicit branch.
+# ---------------------------------------------------------------------------
+echo "15. LEGACY_LLM_MODES conversion coverage"
+_has_catchall=0
+grep -qF "Other old mode names" tools/model-map-resolve.js 2>/dev/null && _has_catchall=1
+
+_legacy_modes=$(node -e "
+  const fs = require('fs');
+  const src = fs.readFileSync('./tools/model-map-validate.js', 'utf8');
+  const m = src.match(/LEGACY_LLM_MODES\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
+  if (!m) { process.exit(0); }
+  const modes = [...m[1].matchAll(/'([^']+)'/g)].map(r => r[1]);
+  console.log(modes.join('\n'));
+" 2>/dev/null || true)
+_missing_conv=0
+while IFS= read -r _lm; do
+  [[ -z "$_lm" ]] && continue
+  if grep -qF "'$_lm'" tools/model-map-resolve.js 2>/dev/null; then
+    : # explicit branch present — always ok
+  elif [[ $_has_catchall -eq 0 ]]; then
+    echo "  FAIL: LEGACY_LLM_MODES has '$_lm' and catch-all is missing from resolveLlmMode()"
+    _missing_conv=1
+  fi
+done <<< "$_legacy_modes"
+if [[ $_missing_conv -eq 0 ]]; then
+  _count=$(echo "$_legacy_modes" | grep -c . || true)
+  if [[ $_has_catchall -eq 1 ]]; then
+    echo "  ok (catch-all present; ${_count} legacy modes degrade gracefully)"
+  else
+    echo "  ok (no legacy modes defined)"
+  fi
+fi
+ISSUES=$(( ISSUES + _missing_conv ))
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

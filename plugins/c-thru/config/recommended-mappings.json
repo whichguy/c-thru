@@ -32,6 +32,5 @@
       "64gb": "qwen3.6:27b-coding-nvfp4",
       "128gb": "qwen3-coder:30b"
     }
-  },
-  "agent_to_capability_defaults": {}
+  }
 }

@@ -10,8 +10,8 @@
 //   4. $PWD/.claude/model-map.json        ← project
 //
 // merge rules:
-//   - Only injects connected_model for llm_profiles[tier][cap] when the
-//     user's merged map has no explicit value there already.
+//   - Only injects models into llm_profiles[cap]['best-local-oss'][tier]
+//     when the user's merged map has no explicit value there already.
 //   - Only injects agent_to_capability entries not already defined.
 //   - Never touches disconnect_model, modes, or on_failure.
 
@@ -46,34 +46,23 @@ function applyRecommendations(effectiveMap, repoRoot) {
   let applied = 0;
   let preserved = 0;
 
-  // Inject connected_model recommendations into llm_profiles[tier][cap]
+  // Inject recommendations into llm_profiles[cap]['best-local-oss'][tier]
   const recommendations = rec.recommendations || {};
   const profiles = result.llm_profiles || {};
   for (const [cap, tierMap] of Object.entries(recommendations)) {
+    if (!profiles[cap] || typeof profiles[cap] !== 'object') continue;
+    const modeBlock = profiles[cap]['best-local-oss'];
+    if (!modeBlock || typeof modeBlock !== 'object') continue;
     for (const [tier, model] of Object.entries(tierMap)) {
       if (!VALID_HW_TIERS.has(tier)) continue;
-      if (!profiles[tier]) continue;
-      const entry = profiles[tier][cap];
-      if (!entry || typeof entry !== 'object') continue;
-      if (entry.connected_model && entry.connected_model !== model) {
+      const existing = modeBlock[tier];
+      if (existing && existing !== model) {
         preserved++;
-      } else if (!entry.connected_model) {
-        entry.connected_model = model;
+      } else if (!existing) {
+        modeBlock[tier] = model;
         applied++;
       }
-      // If connected_model === model it's already correct; no-op
-    }
-  }
-
-  // Inject agent_to_capability_defaults where not already defined
-  const a2cDefaults = rec.agent_to_capability_defaults || {};
-  if (!result.agent_to_capability) result.agent_to_capability = {};
-  for (const [agent, cap] of Object.entries(a2cDefaults)) {
-    if (!Object.prototype.hasOwnProperty.call(result.agent_to_capability, agent)) {
-      result.agent_to_capability[agent] = cap;
-      applied++;
-    } else {
-      preserved++;
+      // identical → no-op
     }
   }
 
