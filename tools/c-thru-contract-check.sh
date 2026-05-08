@@ -524,14 +524,15 @@ while IFS='|' read -r agent keys; do
 done < "$tmpblocks"
 
 # ---------------------------------------------------------------------------
-# Check 8 — HANDOFF declaration coverage in pipeline agents
+# Check 8 — HANDOFF / UNBLOCKED_TASKS declaration coverage in pipeline agents
 #
-# Each of the 12 pipeline agents must declare a HANDOFF: field somewhere in
-# its STATUS block. This ensures the orchestrator's breadcrumb chain is intact.
-# Utility agents (vision, pdf, writer, edge, generalist, fast-generalist,
-# fast-scout, long-context) are exempt — they are terminal agents.
+# Each of the 12 pipeline agents must declare either:
+#   HANDOFF:          (v1 contract — HANDOFF: + NEXT: breadcrumb)
+#   UNBLOCKED_TASKS:  (v2 contract — Task() invocations for orchestrator)
+# Both satisfy the breadcrumb-chain requirement.
+# Utility agents are exempt — they are terminal agents.
 # ---------------------------------------------------------------------------
-echo "8/13  HANDOFF declaration coverage check..."
+echo "8/13  HANDOFF / UNBLOCKED_TASKS declaration coverage check..."
 
 PIPELINE_AGENTS=(
   planner planner-hard explore coder coder-fallback tester docs
@@ -539,12 +540,11 @@ PIPELINE_AGENTS=(
 )
 for agent_name in "${PIPELINE_AGENTS[@]}"; do
     agent_file="$AGENTS_DIR/${agent_name}.md"
-    # Missing file is already caught by check 4 (agent-count consistency).
     [ -f "$agent_file" ] || { ok "${agent_name}.md: absent (check 4 owns file-missing invariant)"; continue; }
-    if grep -q '^HANDOFF:' "$agent_file" 2>/dev/null; then
-        ok "${agent_name}.md: HANDOFF declared"
+    if grep -q '^HANDOFF:\|^UNBLOCKED_TASKS:' "$agent_file" 2>/dev/null; then
+        ok "${agent_name}.md: breadcrumb declared (HANDOFF or UNBLOCKED_TASKS)"
     else
-        fail "${agent_name}.md: missing HANDOFF: field — add to STATUS block"
+        fail "${agent_name}.md: missing HANDOFF: or UNBLOCKED_TASKS: — add to STATUS block"
     fi
 done
 

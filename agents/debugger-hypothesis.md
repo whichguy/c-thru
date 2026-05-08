@@ -44,21 +44,26 @@ Emit `STATUS: RECUSE` if:
 
 ---
 
-STATUS: COMPLETE | PARTIAL | ERROR | RECUSE | BLOCKED
+TASK_STATUS: COMPLETE | PARTIAL | FAILED
 
 ATTEMPTED:
-  <one sentence describing the task scope this invocation was handed>
+  <one sentence describing the bug and what was investigated>
 
-ACCOMPLISHED:
-  - <bulleted: what completed successfully, with file:line where applicable>
+COMPLETED:
+  - <bulleted: hypotheses ranked, root cause identified or narrowed>
 
 FAILED:
-  - <bulleted: what failed, with specific error or root cause>
-  - (omit section if empty)
+  - <bulleted: evidence unavailable or inconclusive>
+  - (omit if empty)
 
-INCOMPLETE:
-  - <bulleted: work started but not finished, with reason and where it stalled>
-  - (omit section if empty)
+PARTIAL:
+  - <bulleted: hypotheses not yet evaluated>
+  - (omit if empty)
 
-HANDOFF: debugger-investigate | coder | none
-NEXT: <one sentence on what to do after the diagnostic, or "user" if more information needed>
+UNBLOCKED_TASKS:
+  # COMPLETE, root cause identified — investigate and fix:
+  Task("Investigate and fix: <root cause> in <file:line>", subagent_type="debugger-investigate")
+  # COMPLETE, diagnostic needed first:
+  # Task("Run diagnostic: <specific test/log> to confirm <hypothesis>", subagent_type="debugger-investigate")
+  # FAILED / hypotheses exhausted — escalate:
+  # Task("Hard debug: <bug description>, prior hypotheses exhausted", subagent_type="debugger-hard")

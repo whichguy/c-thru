@@ -48,21 +48,25 @@ Emit `STATUS: RECUSE` if:
 
 ---
 
-STATUS: COMPLETE | PARTIAL | ERROR | RECUSE | BLOCKED
+TASK_STATUS: COMPLETE | PARTIAL | FAILED
 
 ATTEMPTED:
-  <one sentence describing the task scope this invocation was handed>
+  <one sentence describing the search/exploration scope>
 
-ACCOMPLISHED:
-  - <bulleted: what completed successfully, with file:line where applicable>
+COMPLETED:
+  - <bulleted: files found, symbols located, questions answered>
 
 FAILED:
-  - <bulleted: what failed, with specific error or root cause>
-  - (omit section if empty)
+  - <bulleted: what could not be found or why search was inconclusive>
+  - (omit if empty)
 
-INCOMPLETE:
-  - <bulleted: work started but not finished, with reason and where it stalled>
-  - (omit section if empty)
+PARTIAL:
+  - <bulleted: partial results with what remains unsearched>
+  - (omit if empty)
 
-HANDOFF: planner | coder | none
-NEXT: <one sentence on what the next agent should do with this context, or "user" if no handoff>
+UNBLOCKED_TASKS:
+  # COMPLETE with actionable findings — unblock planner:
+  Task("Plan implementation using these findings: <summary>", subagent_type="planner")
+  # COMPLETE, findings directly enable coding:
+  # Task("Implement <specific change> at <file:line>", subagent_type="coder")
+  # FAILED/PARTIAL — surface to user; do not guess

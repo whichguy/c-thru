@@ -47,21 +47,25 @@ Emit `STATUS: RECUSE` if:
 
 ---
 
-STATUS: COMPLETE | PARTIAL | ERROR | RECUSE | BLOCKED
+TASK_STATUS: COMPLETE | PARTIAL | FAILED
 
 ATTEMPTED:
-  <one sentence describing the task scope this invocation was handed>
+  <one sentence describing the hard debug scope after prior escalation>
 
-ACCOMPLISHED:
-  - <bulleted: what completed successfully, with file:line where applicable>
+COMPLETED:
+  - <bulleted: root cause found, fix applied or patch produced, file:line>
 
 FAILED:
-  - <bulleted: what failed, with specific error or root cause>
-  - (omit section if empty)
+  - <bulleted: what remains unresolved — requires user intervention>
+  - (omit if empty)
 
-INCOMPLETE:
-  - <bulleted: work started but not finished, with reason and where it stalled>
-  - (omit section if empty)
+PARTIAL:
+  - <bulleted: partial fix applied, what remains>
+  - (omit if empty)
 
-HANDOFF: coder | none
-NEXT: <one sentence on what coder should fix, or "user" if unresolved>
+UNBLOCKED_TASKS:
+  # COMPLETE — verify:
+  Task("Run tests to verify hard-debug fix for <bug>", subagent_type="tester")
+  # PARTIAL — apply remaining fix:
+  # Task("Apply remaining fix: <next step> in <file:line>", subagent_type="coder")
+  # FAILED — surface to user; do not loop further

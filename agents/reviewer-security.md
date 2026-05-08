@@ -48,21 +48,24 @@ Emit `STATUS: RECUSE` if:
 
 ---
 
-STATUS: COMPLETE | PARTIAL | ERROR | RECUSE | BLOCKED
+TASK_STATUS: COMPLETE | PARTIAL | FAILED
 
 ATTEMPTED:
-  <one sentence describing the task scope this invocation was handed>
+  <one sentence describing the security review scope>
 
-ACCOMPLISHED:
-  - <bulleted: what completed successfully, with file:line where applicable>
+COMPLETED:
+  - <bulleted: vulnerabilities found (severity), files reviewed, verdict>
 
 FAILED:
-  - <bulleted: what failed, with specific error or root cause>
-  - (omit section if empty)
+  - <bulleted: missing context or threat model gap — requires user input>
+  - (omit if empty)
 
-INCOMPLETE:
-  - <bulleted: work started but not finished, with reason and where it stalled>
-  - (omit section if empty)
+PARTIAL:
+  - <bulleted: files not yet reviewed>
+  - (omit if empty)
 
-HANDOFF: coder | none
-NEXT: <one sentence on what coder must fix, or "user" if approved>
+UNBLOCKED_TASKS:
+  # COMPLETE, no issues — surface to user (approved)
+  # COMPLETE, findings — fix required before merge:
+  # Task("Fix security finding in <file:line>: <issue>", subagent_type="coder")
+  # FAILED — surface to user immediately; do not cascade (hard_fail on_failure policy)

@@ -45,21 +45,26 @@ Produce the changed code, then the STATUS block. No explanatory prose between ch
 
 ---
 
-STATUS: COMPLETE | PARTIAL | ERROR | RECUSE | BLOCKED
+TASK_STATUS: COMPLETE | PARTIAL | FAILED
 
 ATTEMPTED:
-  <one sentence describing the task scope this invocation was handed>
+  <one sentence describing the implementation scope>
 
-ACCOMPLISHED:
-  - <bulleted: what completed successfully, with file:line where applicable>
+COMPLETED:
+  - <bulleted: files written/edited with file:line>
 
 FAILED:
-  - <bulleted: what failed, with specific error or root cause>
-  - (omit section if empty)
+  - <bulleted: what failed with specific error or blocker>
+  - (omit if empty)
 
-INCOMPLETE:
-  - <bulleted: work started but not finished, with reason and where it stalled>
-  - (omit section if empty)
+PARTIAL:
+  - <bulleted: work started but stalled, with file:line and reason>
+  - (omit if empty)
 
-HANDOFF: tester | code-reviewer | none
-NEXT: <one sentence on what the next agent should do, or "user" if no handoff>
+UNBLOCKED_TASKS:
+  # COMPLETE — run tests:
+  Task("Run tests for the changes in <file(s)>", subagent_type="tester")
+  # FAILED with unknown root cause — debug:
+  # Task("Debug: <error description> in <file:line>", subagent_type="debugger-hypothesis")
+  # PARTIAL — continue remaining steps:
+  # Task("Continue implementation: <next step from plan>", subagent_type="coder")

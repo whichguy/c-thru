@@ -52,21 +52,25 @@ Produce a markdown plan with:
 
 ---
 
-STATUS: COMPLETE | PARTIAL | ERROR | RECUSE | BLOCKED
+TASK_STATUS: COMPLETE | PARTIAL | FAILED
 
 ATTEMPTED:
-  <one sentence describing the task scope this invocation was handed>
+  <one sentence describing the planning scope this invocation was handed>
 
-ACCOMPLISHED:
-  - <bulleted: what completed successfully, with file:line where applicable>
+COMPLETED:
+  - <bulleted: plan sections written, files identified, verification steps defined>
 
 FAILED:
-  - <bulleted: what failed, with specific error or root cause>
-  - (omit section if empty)
+  - <bulleted: missing context or unresolvable ambiguity>
+  - (omit if empty)
 
-INCOMPLETE:
-  - <bulleted: work started but not finished, with reason and where it stalled>
-  - (omit section if empty)
+PARTIAL:
+  - <bulleted: sections started but incomplete, with reason>
+  - (omit if empty)
 
-HANDOFF: coder | none
-NEXT: <one sentence on what coder should implement first, or "user" if no handoff>
+UNBLOCKED_TASKS:
+  # COMPLETE — hand plan to coder:
+  Task("Implement the plan: <one-line summary of first step>", subagent_type="coder")
+  # PARTIAL (scope exceeds local reasoning) — escalate:
+  # Task("Re-plan with extended reasoning: <what was unclear>", subagent_type="planner-hard")
+  # FAILED — surface to user; do not unblock downstream

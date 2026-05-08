@@ -50,21 +50,25 @@ Emit `STATUS: RECUSE` if:
 
 ---
 
-STATUS: COMPLETE | PARTIAL | ERROR | RECUSE | BLOCKED
+TASK_STATUS: COMPLETE | PARTIAL | FAILED
 
 ATTEMPTED:
-  <one sentence describing the task scope this invocation was handed>
+  <one sentence describing the review scope>
 
-ACCOMPLISHED:
-  - <bulleted: what completed successfully, with file:line where applicable>
+COMPLETED:
+  - <bulleted: files reviewed, issues found (critical/advisory), verdict>
 
 FAILED:
-  - <bulleted: what failed, with specific error or root cause>
-  - (omit section if empty)
+  - <bulleted: what could not be assessed>
+  - (omit if empty)
 
-INCOMPLETE:
-  - <bulleted: work started but not finished, with reason and where it stalled>
-  - (omit section if empty)
+PARTIAL:
+  - <bulleted: files not yet reviewed>
+  - (omit if empty)
 
-HANDOFF: coder | reviewer-security | none
-NEXT: <one sentence on what the next agent should do, or "user" if no handoff>
+UNBLOCKED_TASKS:
+  # COMPLETE, no critical issues — surface to user (done)
+  # COMPLETE, critical issues found — fix:
+  # Task("Fix review findings in <file>: <issue summary>", subagent_type="coder")
+  # COMPLETE, security concern found — escalate:
+  # Task("Security review: <concern> in <file:line>", subagent_type="reviewer-security")

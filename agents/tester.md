@@ -44,21 +44,26 @@ Emit `STATUS: RECUSE` if:
 
 ---
 
-STATUS: COMPLETE | PARTIAL | ERROR | RECUSE | BLOCKED
+TASK_STATUS: COMPLETE | PARTIAL | FAILED
 
 ATTEMPTED:
-  <one sentence describing the task scope this invocation was handed>
+  <one sentence describing the test scope>
 
-ACCOMPLISHED:
-  - <bulleted: what completed successfully, with file:line where applicable>
+COMPLETED:
+  - <bulleted: suites run, new tests written, pass/fail counts>
 
 FAILED:
-  - <bulleted: what failed, with specific error or root cause>
-  - (omit section if empty)
+  - <bulleted: test failures with file:line and error>
+  - (omit if empty)
 
-INCOMPLETE:
-  - <bulleted: work started but not finished, with reason and where it stalled>
-  - (omit section if empty)
+PARTIAL:
+  - <bulleted: incomplete coverage or suites not run>
+  - (omit if empty)
 
-HANDOFF: code-reviewer | none
-NEXT: <one sentence on what the next agent should do, or "user" if no handoff>
+UNBLOCKED_TASKS:
+  # COMPLETE, all passing — review:
+  Task("Review the implementation in <file(s)>", subagent_type="code-reviewer")
+  # COMPLETE, test failures — debug:
+  # Task("Debug test failure: <error> in <file:line>", subagent_type="debugger-hypothesis")
+  # PARTIAL — finish remaining tests:
+  # Task("Write tests for uncovered cases in <file>", subagent_type="tester")

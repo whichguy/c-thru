@@ -39,21 +39,23 @@ Emit `STATUS: RECUSE` if:
 
 ---
 
-STATUS: COMPLETE | PARTIAL | ERROR | RECUSE | BLOCKED
+TASK_STATUS: COMPLETE | PARTIAL | FAILED
 
 ATTEMPTED:
-  <one sentence describing the task scope this invocation was handed>
+  <one sentence describing the documentation scope>
 
-ACCOMPLISHED:
-  - <bulleted: what completed successfully, with file:line where applicable>
+COMPLETED:
+  - <bulleted: docs written/updated with file:line>
 
 FAILED:
-  - <bulleted: what failed, with specific error or root cause>
-  - (omit section if empty)
+  - <bulleted: what could not be documented and why>
+  - (omit if empty)
 
-INCOMPLETE:
-  - <bulleted: work started but not finished, with reason and where it stalled>
-  - (omit section if empty)
+PARTIAL:
+  - <bulleted: sections incomplete with reason>
+  - (omit if empty)
 
-HANDOFF: none
-NEXT: user
+UNBLOCKED_TASKS:
+  # COMPLETE — surface to user; no downstream agent needed
+  # PARTIAL — continue remaining sections:
+  # Task("Finish documenting <section> in <file>", subagent_type="docs")

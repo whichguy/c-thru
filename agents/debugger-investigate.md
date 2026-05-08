@@ -47,21 +47,26 @@ Emit `STATUS: RECUSE` if:
 
 ---
 
-STATUS: COMPLETE | PARTIAL | ERROR | RECUSE | BLOCKED
+TASK_STATUS: COMPLETE | PARTIAL | FAILED
 
 ATTEMPTED:
-  <one sentence describing the task scope this invocation was handed>
+  <one sentence describing the investigation and fix scope>
 
-ACCOMPLISHED:
-  - <bulleted: what completed successfully, with file:line where applicable>
+COMPLETED:
+  - <bulleted: root cause confirmed, fix applied, tests run, file:line>
 
 FAILED:
-  - <bulleted: what failed, with specific error or root cause>
-  - (omit section if empty)
+  - <bulleted: what could not be fixed and why>
+  - (omit if empty)
 
-INCOMPLETE:
-  - <bulleted: work started but not finished, with reason and where it stalled>
-  - (omit section if empty)
+PARTIAL:
+  - <bulleted: fix started but incomplete, with file:line>
+  - (omit if empty)
 
-HANDOFF: coder | debugger-hard | none
-NEXT: <one sentence on what coder should fix or what escalation is needed>
+UNBLOCKED_TASKS:
+  # COMPLETE — verify the fix:
+  Task("Run tests to verify fix for <bug>", subagent_type="tester")
+  # FAILED — escalate:
+  # Task("Hard debug: <bug> could not be fixed after investigation", subagent_type="debugger-hard")
+  # PARTIAL — continue:
+  # Task("Continue fix: <next step> in <file:line>", subagent_type="debugger-investigate")
