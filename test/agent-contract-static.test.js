@@ -60,6 +60,7 @@ const ROSTER = {
   'tester':               { warnOnly: true },
   'docs':                 { warnOnly: true },
   'code-reviewer':        { warnOnly: true },
+  'reviewer-plan':        { warnOnly: true },
   'reviewer-security':    { warnOnly: true },
   'debugger-hypothesis':  { warnOnly: true },
   'debugger-investigate': { warnOnly: true },

@@ -526,7 +526,7 @@ done < "$tmpblocks"
 # ---------------------------------------------------------------------------
 # Check 8 — HANDOFF / UNBLOCKED_TASKS declaration coverage in pipeline agents
 #
-# Each of the 12 pipeline agents must declare either:
+# Each of the 13 pipeline agents must declare either:
 #   HANDOFF:          (v1 contract — HANDOFF: + NEXT: breadcrumb)
 #   UNBLOCKED_TASKS:  (v2 contract — Task() invocations for orchestrator)
 # Both satisfy the breadcrumb-chain requirement.
@@ -536,7 +536,7 @@ echo "8/13  HANDOFF / UNBLOCKED_TASKS declaration coverage check..."
 
 PIPELINE_AGENTS=(
   planner planner-hard explore coder coder-fallback tester docs
-  code-reviewer reviewer-security debugger-hypothesis debugger-investigate debugger-hard
+  code-reviewer reviewer-security reviewer-plan debugger-hypothesis debugger-investigate debugger-hard
 )
 for agent_name in "${PIPELINE_AGENTS[@]}"; do
     agent_file="$AGENTS_DIR/${agent_name}.md"

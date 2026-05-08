@@ -304,7 +304,7 @@ Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`.
 
 The agent fleet uses a flat identity mapping: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. No alias indirection.
 
-**12 pipeline agents (planner → coder → tester → reviewer flow):**
+**13 pipeline agents (planner → coder → tester → reviewer flow):**
 
 | Agent / Capability | Role | Tier budget |
 |---|---|---|
@@ -316,6 +316,7 @@ The agent fleet uses a flat identity mapping: each agent's `model` frontmatter f
 | `tester` | Test generation; same models as explore | 10000 |
 | `docs` | Documentation writing; Gemma E4B / Phi (gov) | 10000 |
 | `code-reviewer` | Routine code review; Sonnet/local-27B | 50000 |
+| `reviewer-plan` | Plan structural review (Phase 3 of c-thru-plan); Sonnet/local-27B | 50000 |
 | `reviewer-security` | Security review; always Opus / Kimi K2.6, hard_fail | 999999 |
 | `debugger-hypothesis` | Parallel hypothesis testing; Sonnet/local-27B | 50000 |
 | `debugger-investigate` | Investigation; same shape as coder | 50000 |

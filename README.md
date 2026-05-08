@@ -55,7 +55,7 @@ Local Ollama is used automatically when reachable (`http://localhost:11434`).
 Claude Code is tied to cloud-hosted Anthropic models. `c-thru` breaks that constraint:
 
 - **Hardware-aware routing** — detects your system RAM and selects appropriately-sized models per tier (16 GB → 128 GB+)
-- **Agent fleet** — 12 pipeline agents + 8 utility agents, each bound to a capability alias resolved to a concrete model at request time
+- **Agent fleet** — 13 pipeline agents + 8 utility agents, each bound to a capability alias resolved to a concrete model at request time
 - **Protocol translation** — Anthropic Messages API → Ollama `/v1/messages` (Ollama 0.4+), preserving tool use, multi-turn conversations, and thinking blocks. Full Anthropic↔Gemini translation for Google backends.
 - **Fallback chains** — transparent retry against a fallback backend on 5xx/429/network errors; cycle detection resets on SIGHUP config reload
 - **Hybrid routing** — your planner runs on Claude Sonnet (cloud) while your coder runs on a local Qwen3.6 in the same session
@@ -106,9 +106,9 @@ test/
 
 ## Agent Fleet
 
-All 20 agents declare `model: <agent-name>` in their frontmatter. The proxy resolves `agent-name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model` at request time. No agent file is modified when you change model assignments.
+All 21 agents declare `model: <agent-name>` in their frontmatter. The proxy resolves `agent-name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model` at request time. No agent file is modified when you change model assignments.
 
-### 12 pipeline agents (planner → coder → tester → reviewer flow)
+### 13 pipeline agents (planner → coder → tester → reviewer flow)
 
 | Agent | Role | Cloud (best-cloud) | Local 64gb (best-local-oss) |
 |---|---|---|---|
@@ -120,6 +120,7 @@ All 20 agents declare `model: <agent-name>` in their frontmatter. The proxy reso
 | `tester` | Test generation | gemini-pro | qwen3.6:35b-a3b-coding-nvfp4 |
 | `docs` | Documentation writing | gemma4:26b | qwen3.6:35b |
 | `code-reviewer` | Routine code review | claude-sonnet-4-6 | qwen3.6:35b |
+| `reviewer-plan` | Plan structural review (Phase 3 of c-thru-plan) | claude-sonnet-4-6 | qwen3.6:35b |
 | `reviewer-security` | Security review (`hard_fail` on error) | claude-opus-4-7 | qwen3.6:35b |
 | `debugger-hypothesis` | Parallel hypothesis testing | gemini-pro | qwen3.6:35b |
 | `debugger-investigate` | Deep investigation | gemini-pro | qwen3.6:35b-a3b-coding-nvfp4 |
