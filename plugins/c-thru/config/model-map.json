@@ -49,15 +49,15 @@
     "16gb": "deepseek-v4-pro:cloud",
     "32gb": "deepseek-v4-pro:cloud",
     "48gb": "deepseek-v4-pro:cloud",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
+    "64gb": "qwen3.6:35b",
     "128gb": "deepseek-v4-flash:cloud"
    },
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": {
     "16gb": "claude-opus-4-7",
@@ -81,10 +81,10 @@
    "best-cloud-oss": "deepseek-v4-flash:cloud",
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": "claude-opus-4-7",
    "best-local-gov": {
@@ -102,15 +102,15 @@
     "16gb": "gemma4:e4b",
     "32gb": "devstral-small-2:24b",
     "48gb": "devstral-small-2:24b",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
+    "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
     "128gb": "deepseek-v4-flash:cloud"
    },
    "best-local-oss": {
     "16gb": "gemma4:e4b",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "devstral-small-2:24b",
+    "48gb": "devstral-small-2:24b",
+    "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
+    "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
    },
    "best-cloud-gov": "phi4-mini:3.8b",
    "best-local-gov": "phi4-mini:3.8b",
@@ -224,10 +224,10 @@
    },
    "best-local-oss": {
     "16gb": "gemma4:e4b",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": "phi4-mini:3.8b",
    "best-local-gov": "phi4-mini:3.8b",
@@ -245,15 +245,15 @@
     "16gb": "deepseek-v4-pro:cloud",
     "32gb": "deepseek-v4-pro:cloud",
     "48gb": "deepseek-v4-pro:cloud",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
+    "64gb": "qwen3.6:35b",
     "128gb": "deepseek-v4-flash:cloud"
    },
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": {
     "16gb": "claude-sonnet-4-6",
@@ -276,10 +276,10 @@
    "best-cloud-oss": "deepseek-v4-flash:cloud",
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": "claude-opus-4-7",
    "best-local-gov": {
@@ -303,15 +303,15 @@
     "16gb": "deepseek-v4-pro:cloud",
     "32gb": "deepseek-v4-pro:cloud",
     "48gb": "deepseek-v4-pro:cloud",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
+    "64gb": "qwen3.6:35b",
     "128gb": "deepseek-v4-flash:cloud"
    },
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": {
     "16gb": "claude-sonnet-4-6",
@@ -372,10 +372,10 @@
    "best-cloud-oss": "deepseek-v4-flash:cloud",
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": "claude-opus-4-7",
    "best-local-gov": {
@@ -399,15 +399,15 @@
     "16gb": "phi4-reasoning:plus",
     "32gb": "claude-sonnet-4-6",
     "48gb": "claude-sonnet-4-6",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
+    "64gb": "qwen3.6:35b",
     "128gb": "deepseek-v4-flash:cloud"
    },
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": {
     "16gb": "phi4-mini:3.8b",
@@ -437,15 +437,15 @@
     "16gb": "phi4-reasoning:plus",
     "32gb": "claude-sonnet-4-6",
     "48gb": "claude-sonnet-4-6",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
+    "64gb": "qwen3.6:35b",
     "128gb": "deepseek-v4-flash:cloud"
    },
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": {
     "16gb": "phi4-mini:3.8b",
@@ -480,10 +480,10 @@
    },
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": {
     "16gb": "phi4-mini:3.8b",
@@ -521,15 +521,15 @@
     "16gb": "phi4-reasoning:plus",
     "32gb": "deepseek-v4-pro:cloud",
     "48gb": "deepseek-v4-pro:cloud",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
+    "64gb": "qwen3.6:35b",
     "128gb": "deepseek-v4-flash:cloud"
    },
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": {
     "16gb": "phi4-mini:3.8b",
@@ -550,22 +550,22 @@
   "fast-generalist": {
    "best-cloud": {
     "16gb": "gemma4:e4b",
-    "32gb": "qwen3.6:27b-nvfp4",
-    "48gb": "qwen3.6:27b-nvfp4",
+    "32gb": "gemma4:e4b",
+    "48gb": "gemma4:e4b",
     "64gb": "gemma4:e4b",
     "128gb": "gemma4:e4b"
    },
    "best-cloud-oss": {
     "16gb": "gemma4:e4b",
-    "32gb": "qwen3.6:27b-nvfp4",
-    "48gb": "qwen3.6:27b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
+    "32gb": "gemma4:e4b",
+    "48gb": "gemma4:e4b",
+    "64gb": "qwen3.6:35b",
     "128gb": "deepseek-v4-flash:cloud"
    },
    "best-local-oss": {
     "16gb": "gemma4:e4b",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
     "64gb": "gemma4:e4b",
     "128gb": "gemma4:e4b"
    },
@@ -610,10 +610,10 @@
    },
    "best-local-oss": {
     "16gb": "phi4-reasoning:plus",
-    "32gb": "qwen3.6:35b-a3b-nvfp4",
-    "48gb": "qwen3.6:35b-a3b-nvfp4",
-    "64gb": "qwen3.6:35b-a3b-nvfp4",
-    "128gb": "qwen3.6:35b-a3b-nvfp4"
+    "32gb": "qwen3.6:27b",
+    "48gb": "qwen3.6:27b",
+    "64gb": "qwen3.6:35b",
+    "128gb": "qwen3.6:35b-a3b-q8_0"
    },
    "best-cloud-gov": {
     "16gb": "phi4-mini:3.8b",
@@ -661,15 +661,33 @@
   "claude-sonnet-4-6": "anthropic",
   "claude-opus-4-6": "anthropic",
   "re:^claude-.*$": "anthropic",
-  "gemini-latest": { "endpoint": "gemini_ai", "name": "gemini-pro-latest" },
-  "gemini-pro": { "endpoint": "gemini_ai", "name": "gemini-pro-latest" },
-  "gemini-flash": { "endpoint": "gemini_ai", "name": "gemini-flash-latest" },
-  "gemini-fast": { "endpoint": "gemini_ai", "name": "gemini-flash-lite-latest" },
+  "gemini-latest": {
+   "endpoint": "gemini_ai",
+   "name": "gemini-pro-latest"
+  },
+  "gemini-pro": {
+   "endpoint": "gemini_ai",
+   "name": "gemini-pro-latest"
+  },
+  "gemini-flash": {
+   "endpoint": "gemini_ai",
+   "name": "gemini-flash-latest"
+  },
+  "gemini-fast": {
+   "endpoint": "gemini_ai",
+   "name": "gemini-flash-lite-latest"
+  },
   "gemini-pro-latest": "gemini_ai",
   "gemini-flash-latest": "gemini_ai",
   "gemini-flash-lite-latest": "gemini_ai",
-  "claude-via-gemini-pro": { "endpoint": "gemini_ai", "name": "gemini-pro-latest" },
-  "claude-via-gemini-flash": { "endpoint": "gemini_ai", "name": "gemini-flash-latest" },
+  "claude-via-gemini-pro": {
+   "endpoint": "gemini_ai",
+   "name": "gemini-pro-latest"
+  },
+  "claude-via-gemini-flash": {
+   "endpoint": "gemini_ai",
+   "name": "gemini-flash-latest"
+  },
   "re:^gemini-.*-latest$": "gemini_ai",
   "re:^gemini-(2|3)(\\.[0-9]+)?-.*": "gemini_ai",
   "qwen3:1.7b": "ollama_local",
@@ -794,7 +812,8 @@
    "endpoint": "ollama_local",
    "name": "devstral-small:2"
   },
-  "qwen3.6:27b-nvfp4": "ollama_local"
+  "qwen3.6:27b-nvfp4": "ollama_local",
+  "qwen3.6:35b-a3b-q8_0": "ollama_local"
  },
  "routes": {
   "default": "generalist",
