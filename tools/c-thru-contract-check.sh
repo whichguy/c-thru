@@ -822,6 +822,40 @@ fi
 ISSUES=$(( ISSUES + _missing_conv ))
 
 # ---------------------------------------------------------------------------
+# Check 16 — Cross-plugin Skill() reference check
+#
+# Scans agents/*.md for Skill("name") invocations. For each skill name, warns
+# if skills/<name>/ does not exist locally AND the immediately preceding line
+# lacks a "# Skill provided by" cross-plugin annotation. This enforces the
+# annotation convention mechanically.
+# ---------------------------------------------------------------------------
+echo "16.   Cross-plugin Skill() references in agents/*.md..."
+
+for _xp_agent in "$AGENTS_DIR"/*.md; do
+    [ -f "$_xp_agent" ] || continue
+    _xp_base=$(basename "$_xp_agent")
+    _xp_prev=""
+    while IFS= read -r _xp_line; do
+        if echo "$_xp_line" | grep -qE "Skill\([[:space:]]*['\"][^'\"]+['\"]"; then
+            _xp_skill=$(echo "$_xp_line" \
+                | grep -oE "Skill\([[:space:]]*['\"][^'\"]+['\"]" \
+                | head -1 \
+                | sed "s/Skill([[:space:]]*['\"]//;s/['\"].*//")
+            [ -z "$_xp_skill" ] && { _xp_prev="$_xp_line"; continue; }
+            if echo "$_xp_prev" | grep -qF '# Skill provided by'; then
+                ok "$_xp_base: Skill(\"$_xp_skill\") — cross-plugin (annotated)"
+            elif [ -d "$REPO_DIR/skills/$_xp_skill" ]; then
+                ok "$_xp_base: Skill(\"$_xp_skill\") — local skills/$_xp_skill/ exists"
+            else
+                warn "$_xp_base: Skill(\"$_xp_skill\") — skills/$_xp_skill/ not found locally; add '# Skill provided by <plugin>' if cross-plugin"
+            fi
+        fi
+        _xp_prev="$_xp_line"
+    done < "$_xp_agent"
+done
+unset _xp_agent _xp_base _xp_prev _xp_line _xp_skill
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

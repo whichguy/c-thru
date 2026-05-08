@@ -19,6 +19,9 @@ rewriting path creates a silent source of drift from `config/model-map.json`.
 
 ## Install and Verify
 
+> **Note:** `/schedule-plan-tasks` (used by the plan-scheduler agent) requires the planning-suite plugin.
+> Install separately: `claude /plugin install planning-suite@claude-craft`
+
 ```sh
 ./install.sh                            # symlinks tools into ~/.claude/tools/, seeds model-map
 bash -n tools/c-thru             # bash syntax check

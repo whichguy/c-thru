@@ -340,6 +340,15 @@ install_cplan_command
 extend_model_map
 apply_recommendations
 
+# --- Migration warning: planning-suite dependency ---
+# plan-scheduler requires the /schedule-plan-tasks skill from planning-suite.
+# Existing users who git pull get no other signal until the agent fails.
+if ! find "$CLAUDE_DIR/skills" -type d -name "schedule-plan-tasks" 2>/dev/null | grep -q .; then
+    echo ""
+    echo -e "${YELLOW}⚠️  planning-suite not installed — plan-scheduler agent requires it.${NC}"
+    echo -e "${YELLOW}   Install: claude /plugin install planning-suite@claude-craft${NC}"
+fi
+
 # --- Add ~/.claude/tools to PATH via shell rc file (idempotent) ---
 # Markers MUST stay verbatim — uninstall.sh greps these to remove the block.
 PATH_MARKER_BEGIN='# >>> c-thru tools on PATH (added by install.sh) >>>'

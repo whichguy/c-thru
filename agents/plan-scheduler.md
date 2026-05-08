@@ -26,15 +26,22 @@ The **plan-scheduler** dispatches READY_ITEMS from the current plan wave to work
 ## Recusal Check
 
 Emit `STATUS: RECUSE` if:
-- `plan_dir` is not provided or `current.md` is absent
-- No READY_ITEMS exist (all pending items have unsatisfied dependencies)
+- `plan_dir` is not provided or `plan_dir/current.md` is absent → STATUS: RECUSE
+- No READY_ITEMS exist (all pending items have unsatisfied dependencies) → STATUS: RECUSE
 
 ## Workflow
 
-1. Validate that `plan_dir/current.md` exists
+1. Validate that `plan_dir/current.md` exists — if absent, emit `STATUS: RECUSE` with reason
 2. Invoke the `/schedule-plan-tasks` skill:
    ```
+   # Skill provided by planning-suite plugin (not local to c-thru)
    Skill("schedule-plan-tasks", args: "<plan_dir> [--wave <wave_NNN>] [--items <id1,id2,...>]")
+   ```
+   If the skill is not found (planning-suite not installed), emit:
+   ```
+   STATUS: RECUSE
+   REASON: planning-suite plugin required — schedule-plan-tasks skill not found
+   INSTALL: /plugin install planning-suite@claude-craft
    ```
 3. Capture task IDs from skill output
 4. Return task IDs and wave_dir in STATUS block
