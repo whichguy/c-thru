@@ -4,7 +4,7 @@ description: |
   Unified c-thru configuration: diagnose the active setup, resolve what a
   capability alias maps to, switch connectivity modes, remap per-capability
   models, validate the config, or reload the running proxy.
-  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | agent list | agent set <agent> <cap> [--reload] | agent pin <agent> <model> [--reload] | agent reset <agent> [--reload] | validate | reload | restart [--force]
+  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | agent list | agent set <agent> <cap> [--reload] | agent pin <agent> <model> [--reload] | agent reset <agent> [--reload] | alias list | alias set <pattern> <cap> [--reload] | alias remove <pattern> [--reload] | validate | reload | restart [--force]
 color: cyan
 ---
 
@@ -40,6 +40,13 @@ clarifying question only if the intent is genuinely ambiguous.
 | "pin <agent> to <model>", "force <agent> to use <model>" | `agent pin <agent> <model> --reload` | apply immediately |
 | "reset <agent>", "restore default for <agent>" | `agent reset <agent> --reload` | apply immediately |
 | "move <agent> to <cap>", "set <agent> capability to <cap>" | `agent set <agent> <cap> --reload` | |
+| "show aliases", "list entry aliases", "what aliases are set" | `alias list` | |
+| "alias sonnet to <cap>", "map sonnet to <cap>", "redirect sonnet to <cap>" | `alias set claude-sonnet <cap> --reload` | substring match — covers all sonnet versions |
+| "alias opus to <cap>", "map opus to <cap>", "redirect opus to <cap>" | `alias set claude-opus <cap> --reload` | |
+| "alias haiku to <cap>", "map haiku to <cap>" | `alias set claude-haiku <cap> --reload` | |
+| "remove sonnet alias", "disable sonnet alias", "stop redirecting sonnet" | `alias remove claude-sonnet --reload` | |
+| "remove opus alias", "disable opus alias" | `alias remove claude-opus --reload` | |
+| "set default model to <cap>", "default to <cap>", "use <cap> by default" | `alias set claude-sonnet <cap> --reload` | maps the most common entry-point model |
 | "validate", "check config" | `validate` | |
 | "reload", "refresh proxy" | `reload` | |
 | "restart proxy", "bounce proxy", "bounce the proxy" | `restart` | |
@@ -285,6 +292,49 @@ On success:
   ```bash
   ~/.claude/tools/c-thru reload || echo "proxy not running — config saved, will apply on next spawn"
   ```
+
+---
+
+## Subcommand: `alias`
+
+**Usage:**
+- `/c-thru-config alias list` — show all entry_aliases
+- `/c-thru-config alias set <pattern> <capability> [--reload]` — add/update a substring alias
+- `/c-thru-config alias remove <pattern> [--reload]` — delete an alias
+
+Entry aliases are substring-matched against the incoming `model` field before route graph traversal.
+Use them to transparently redirect Claude model names (e.g. `claude-sonnet-4-6`) to a local capability
+(e.g. `coder`) so Claude Code uses local models without any per-session configuration.
+
+Parse the verb (`list` / `set` / `remove`) from `$ARGUMENTS`. Delegate entirely to `c-thru-config-helpers.js`:
+
+### Verb: `list`
+
+```bash
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" alias-list
+```
+
+### Verb: `set`
+
+Extract `<PATTERN>`, `<CAPABILITY>`, and optional `--reload` from `$ARGUMENTS`.
+
+```bash
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" \
+  alias-set "<PATTERN>" "<CAPABILITY>" ${RELOAD_FLAG}
+```
+
+Substitute `${RELOAD_FLAG}` with `--reload` when present in `$ARGUMENTS`, otherwise empty.
+
+Example: `alias set claude-sonnet coder --reload` maps all `claude-sonnet-*` requests to the `coder` capability.
+
+### Verb: `remove`
+
+Extract `<PATTERN>` and optional `--reload` from `$ARGUMENTS`.
+
+```bash
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" \
+  alias-remove "<PATTERN>" ${RELOAD_FLAG}
+```
 
 ---
 

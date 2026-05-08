@@ -3996,6 +3996,19 @@ const server = http.createServer((req, res) => {
           ctxLog(ctx, 'model_override', { from: overriddenFrom, to: body.model });
         }
 
+        // Apply entry_aliases — substring match on incoming model name before graph traversal.
+        // Fires once per request; recursive resolveBackend calls use config-sourced model strings.
+        const entryAliases = CONFIG.entry_aliases;
+        if (entryAliases && typeof entryAliases === 'object') {
+          for (const [pattern, capName] of Object.entries(entryAliases)) {
+            if (body.model === pattern || body.model.includes(pattern)) {
+              ctxLog(ctx, 'entry_alias', { from: body.model, to: capName, pattern });
+              body.model = capName;
+              break;
+            }
+          }
+        }
+
         let resolved = resolveBackend(body.model, CONFIG, hwTier, activeMode);
         if (resolved.error) {
           ctxLog(ctx, 'routing_error', { incoming_model: body.model, error: resolved.error });

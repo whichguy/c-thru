@@ -172,6 +172,20 @@ function applyUpdates(config, spec, defaults) {
     }
   }
 
+  if (spec.entry_aliases != null) {
+    if (!isObject(spec.entry_aliases)) fail("'entry_aliases' update payload must be an object");
+    next.entry_aliases = isObject(next.entry_aliases) ? { ...next.entry_aliases } : {};
+    for (const [pattern, capOrNull] of Object.entries(spec.entry_aliases)) {
+      if (capOrNull === null) {
+        delete next.entry_aliases[pattern];
+      } else {
+        if (typeof capOrNull !== 'string' || !capOrNull.trim()) fail(`entry_aliases['${pattern}'] must be a non-empty string or null`);
+        next.entry_aliases[pattern] = capOrNull;
+      }
+    }
+    if (Object.keys(next.entry_aliases).length === 0) delete next.entry_aliases;
+  }
+
   validateConfig(next);
   return next;
 }

@@ -518,6 +518,47 @@ function cmdAgentReset(args) {
   }
 }
 
+function cmdAliasList(_args) {
+  const config = readConfig();
+  const aliases = config.entry_aliases || {};
+  const keys = Object.keys(aliases);
+  if (keys.length === 0) {
+    process.stdout.write('entry_aliases: (none configured)\n');
+    return;
+  }
+  const maxLen = keys.reduce((m, k) => Math.max(m, k.length), 0);
+  process.stdout.write('entry_aliases (pattern → capability):\n');
+  for (const [pattern, cap] of Object.entries(aliases)) {
+    process.stdout.write(`  ${pattern.padEnd(maxLen + 2)}→ ${cap}\n`);
+  }
+}
+
+function cmdAliasSet(args) {
+  const positional = args.filter(a => !a.startsWith('--'));
+  const [pattern, capability] = positional;
+  if (!pattern || !capability) { die('usage: alias-set <pattern> <capability> [--reload]'); }
+  runEdit(JSON.stringify({ entry_aliases: { [pattern]: capability } }));
+  process.stdout.write(`alias set: '${pattern}' → '${capability}'\n`);
+  if (hasFlag(args, '--reload')) {
+    reloadProxy();
+  } else {
+    process.stdout.write(`run '/c-thru-config reload' to apply to running proxy\n`);
+  }
+}
+
+function cmdAliasRemove(args) {
+  const positional = args.filter(a => !a.startsWith('--'));
+  const [pattern] = positional;
+  if (!pattern) { die('usage: alias-remove <pattern> [--reload]'); }
+  runEdit(JSON.stringify({ entry_aliases: { [pattern]: null } }));
+  process.stdout.write(`alias removed: '${pattern}'\n`);
+  if (hasFlag(args, '--reload')) {
+    reloadProxy();
+  } else {
+    process.stdout.write(`run '/c-thru-config reload' to apply to running proxy\n`);
+  }
+}
+
 // ── Main dispatch ──────────────────────────────────────────────────────────────
 
 const USAGE = `
@@ -536,6 +577,9 @@ Subcommands:
   agent-set  <agent> <capability> [--reload]      map agent → capability alias (logical tier)
   agent-pin  <agent> <model> [--reload]           pin agent directly to a model (bypass tiers)
   agent-reset <agent> [--reload]                  restore system default for agent
+  alias-list                                      show entry_aliases (incoming model → capability)
+  alias-set  <pattern> <capability> [--reload]    add/update substring alias for incoming model
+  alias-remove <pattern> [--reload]               remove an entry alias
 `.trimStart();
 
 const [,, subcmd, ...rest] = process.argv;
@@ -553,6 +597,9 @@ switch (subcmd) {
   case 'agent-set':      cmdAgentSet(rest);     break;
   case 'agent-pin':      cmdAgentPin(rest);     break;
   case 'agent-reset':    cmdAgentReset(rest);   break;
+  case 'alias-list':     cmdAliasList(rest);    break;
+  case 'alias-set':      cmdAliasSet(rest);     break;
+  case 'alias-remove':   cmdAliasRemove(rest);  break;
   default:
     process.stdout.write(USAGE);
     process.exit(subcmd ? 1 : 0);
