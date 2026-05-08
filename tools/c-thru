@@ -2774,7 +2774,7 @@ ensure_active_tier_prepulled() {
       ensure_ollama_running "$model" "$cli_host" "$cli_key" "prepull" "$backend_id"
     done <<< "$lines"
     cthru_debug_event "ollama prepull done tier=$tier count=$count"
-  ) >/dev/null 2>&1 &
+  ) >>"${CLAUDE_PROFILE_DIR}/prepull-${tier}.log" 2>&1 &
   disown 2>/dev/null || true
 }
 
