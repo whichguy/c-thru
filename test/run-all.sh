@@ -140,6 +140,10 @@ run_suite "proxy-config-reload (SIGHUP config reload)" \
   node "$REPO_DIR/test/proxy-config-reload.test.js"
 run_suite "proxy-observability-headers (backend latency, auth-missing, tier headers)" \
   node "$REPO_DIR/test/proxy-observability-headers.test.js"
+run_suite "proxy-init-race (READY_FAILED sentinel on EADDRINUSE)" \
+  node "$REPO_DIR/test/proxy-init-race.test.js"
+run_suite "proxy-fallback-reload (fallback chain stable across SIGHUP reload)" \
+  node "$REPO_DIR/test/proxy-fallback-reload.test.js"
 run_suite "proxy-e2e (end-to-end proxy request flow)" \
   node "$REPO_DIR/test/proxy-e2e.test.js"
 run_suite "proxy-fallback-cascade (fallback chain cascade)" \
