@@ -10,5 +10,5 @@
   "repository": "https://github.com/whichguy/c-thru",
   "license": "MIT",
   "keywords": ["claude-code", "c-thru", "proxy", "router", "ollama", "gemini", "openrouter", "model-routing"],
-  "dependencies": []
+  "dependencies": ["planning-suite"]
 }
