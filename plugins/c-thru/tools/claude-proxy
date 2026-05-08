@@ -494,6 +494,19 @@ function normalizeBackend(id, raw) {
   if (result.auth == null && raw.kind === 'ollama' && !hasFormat) {
     result.auth = 'none';
   }
+  if (format === 'openai') {
+    console.warn(`[c-thru] endpoint "${id}": format:"openai" is not yet implemented. ` +
+      `Use format:"anthropic" for OpenAI-compat passthrough or route through OpenRouter.`);
+  }
+  if (result.vertex === true) {
+    const region = process.env.GOOGLE_CLOUD_REGION;
+    const project = process.env.GOOGLE_CLOUD_PROJECT;
+    if (!region || !project) {
+      console.warn(`[c-thru] endpoint "${id}": vertex:true but ` +
+        `GOOGLE_CLOUD_REGION${!region ? ' (unset)' : ''} / ` +
+        `GOOGLE_CLOUD_PROJECT${!project ? ' (unset)' : ''} — URL will be malformed.`);
+    }
+  }
   return result;
 }
 
@@ -3748,6 +3761,7 @@ const server = http.createServer((req, res) => {
         active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG),
         bind_address: server.address().address,
         gemini_cache: { ...GEMINI_CACHE_STATS, entries: GEMINI_CACHE_MAP.size },
+        vertex_env_ok: !!(process.env.GOOGLE_CLOUD_REGION && process.env.GOOGLE_CLOUD_PROJECT),
       });
 
       if (req.method === 'POST' && (req.url === '/c-thru/stats/clear' || req.url === '/c-thru/stats/clear/')) {

@@ -31,7 +31,14 @@
       "url": "https://${GOOGLE_CLOUD_REGION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_REGION}/publishers/google/models",
       "format": "gemini",
       "vertex": true,
-      "auth_env": "GOOGLE_CLOUD_TOKEN"
+      "auth_env": "GOOGLE_CLOUD_TOKEN",
+      "fallback_to": "claude-sonnet-4-6"
+    },
+    "gemini_ai_compat": {
+      "url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "format": "anthropic",
+      "auth_env": "GOOGLE_API_KEY",
+      "fallback_to": "claude-sonnet-4-6"
     }
   },
   "llm_active_profile": "auto",

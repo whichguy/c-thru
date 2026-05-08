@@ -59,6 +59,10 @@ PORT="${CLAUDE_PROXY_PORT:-}"
 if [ -z "$PORT" ] && [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
     PORT=$(printf '%s' "$ANTHROPIC_BASE_URL" | sed -nE 's#^https?://[^/:]+:([0-9]+).*$#\1#p')
 fi
+# If URL matched 127.0.0.1 but had no port, fall back to plugin default
+if [ -z "$PORT" ] && printf '%s' "${ANTHROPIC_BASE_URL:-}" | grep -qE '^https?://127\.0\.0\.1'; then
+    PORT="${C_THRU_PLUGIN_PORT:-10017}"
+fi
 [ -n "$PORT" ] || exit 0  # c-thru not active
 
 issues=()
