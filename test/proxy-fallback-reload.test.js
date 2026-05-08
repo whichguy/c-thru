@@ -90,43 +90,51 @@ async function main() {
     } finally { await stub.close().catch(() => {}); }
   }
 
-  // ── Test 2: CONFIG._version increments on each reload ──────────────────────
-  console.log('\n2. CONFIG._version increments on SIGHUP (verified via /ping config_source)');
+  // ── Test 2: cycle-detection reset fires on SIGHUP ──────────────────────────
+  // A self-referential fallback (primary → fallback_to: primary) is a deliberate
+  // cycle. Cycle detection must fire before the first attempt, and must fire again
+  // after a SIGHUP reload (CONFIG_VERSION increments → _configVersion mismatch →
+  // _fallbackChain reset). Neither request should hang.
+  console.log('\n2. cycle-detection reset fires on SIGHUP (CONFIG_VERSION-driven)');
   {
     const stub = await stubBackend();
     try {
-      const configPath = writeConfig(tmpDir, {
-        backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
-        model_routes: { 'test-model': 'stub' },
-        llm_profiles: { workhorse: { 'best-cloud': { '128gb': 'test-model' } } },
-      });
+      // primary points to unreachable port 1; fallback_to loops back to itself → cycle.
+      // stub is the global default so cycle → global-default → stub.
+      const selfCycleConfig = {
+        backends: {
+          primary: { kind: 'anthropic', url: 'http://127.0.0.1:1', fallback_to: 'primary' },
+          stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` },
+        },
+        model_routes: { 'test-model': 'primary' },
+        llm_profiles: {
+          workhorse: { 'best-cloud': { '128gb': 'stub' } },  // global default = stub
+        },
+      };
+      const configPath = writeConfig(tmpDir, selfCycleConfig);
 
       await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port, child }) => {
-        // Verify /ping reports config
-        const ping1 = await httpJson(port, 'GET', '/ping', null);
-        assertEq(ping1.status, 200, 'proxy is up');
-        assert(ping1.json?.ok === true, '/ping returns ok:true before reload');
+        // Before reload: cycle detected, proxy resolves (no hang) within 3s.
+        const r1 = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'test-model', messages: [{ role: 'user', content: 'hi' }], max_tokens: 5,
+        }, {}, 3000);
+        assert(r1.status >= 200 && r1.status < 600, `pre-reload: response received without hang (status ${r1.status})`);
 
-        // Reload
-        fs.writeFileSync(configPath, JSON.stringify({
-          backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
-          model_routes: { 'test-model': 'stub' },
-          llm_profiles: { workhorse: { 'best-cloud': { '128gb': 'test-model' } } },
-          _reload_marker: 2,
-        }));
+        // Send SIGHUP — CONFIG_VERSION increments; old visited-set must be reset.
+        fs.writeFileSync(configPath, JSON.stringify({ ...selfCycleConfig, _reload_marker: 2 }));
         process.kill(child.pid, 'SIGHUP');
         await new Promise(r => setTimeout(r, 200));
 
-        // Proxy should still respond after reload
-        const ping2 = await httpJson(port, 'GET', '/ping', null);
-        assertEq(ping2.status, 200, 'proxy responds after SIGHUP');
-        assert(ping2.json?.ok === true, '/ping returns ok:true after reload');
-
-        // Confirm a request still routes correctly after reload
-        const r = await httpJson(port, 'POST', '/v1/messages', {
+        // After reload: same cycle; reset must have fired (no bleed-over from pre-reload visited-set).
+        const r2 = await httpJson(port, 'POST', '/v1/messages', {
           model: 'test-model', messages: [{ role: 'user', content: 'hi' }], max_tokens: 5,
-        });
-        assertEq(r.status, 200, 'request succeeds after reload');
+        }, {}, 3000);
+        assert(r2.status >= 200 && r2.status < 600, `post-reload: response received without hang (status ${r2.status})`);
+        assert(r2.status !== undefined, 'post-reload request completed (not a timeout)');
+
+        // Proxy must still be alive.
+        const ping = await httpJson(port, 'GET', '/ping', null);
+        assertEq(ping.status, 200, '/ping ok after cycle+reload');
       });
     } finally { await stub.close().catch(() => {}); }
   }

@@ -28,6 +28,8 @@ node tools/model-map-validate.js config/model-map.json   # validate shipped conf
 node test/model-map-v12-adapter.test.js                  # adapter regression test
 bash test/c-thru-bootstrap-auth-env.test.sh              # interactive auth bootstrap (TTY-mocked)
 ~/.claude/tools/c-thru list      # runtime smoke-test (requires install; --list also accepted)
+make test-fast          # run proxy + model-map test suite (~2 min)
+make test               # full suite including smoke tests
 ```
 
 ## Directory Layout and Path Invariants

@@ -213,6 +213,7 @@ let GLOBAL_CONFIG;
 let CONFIG_PATH;
 let CONFIG_SOURCE;
 let CONFIG_MTIME_MS = 0;
+let CONFIG_VERSION = 0;
 
 Object.defineProperty(global, 'CONFIG', {
   get: () => configStorage.getStore() || GLOBAL_CONFIG,
@@ -1008,6 +1009,15 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
   // _seen Set for route-chain cycles within a single resolution; this Set
   // tracks across DISPATCH hops (separate invocations of dispatchOllamaBackend /
   // forwardAnthropic).
+  // If the config was reloaded mid-flight (SIGHUP), cycles introduced by the
+  // new graph would be undetectable against the old visited-set. Reset the
+  // chain so subsequent hops cycle-check against the new config graph.
+  // Hops intentionally see the live CONFIG, not a snapshot — this only resets
+  // the visited-set, not the config reference.
+  if (requestMeta._configVersion !== CONFIG_VERSION) {
+    requestMeta._fallbackChain = new Set();
+    requestMeta._configVersion = CONFIG_VERSION;
+  }
   const chain = requestMeta._fallbackChain || (requestMeta._fallbackChain = new Set());
   if (chain.has(backend.id)) {
     ctxLog(ctx, 'fallback.cycle_detected', { from_backend: backend.id, chain: [...chain] });
@@ -3536,6 +3546,7 @@ function loadConfig() {
   CONFIG_SOURCE = resolved.source;
   try {
     GLOBAL_CONFIG = interpolateEndpointUrls(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')));
+    GLOBAL_CONFIG._version = ++CONFIG_VERSION;
     CONFIG_MTIME_MS = Math.floor(fs.statSync(CONFIG_PATH).mtimeMs);
   } catch (e) {
     console.error(`c-thru: failed to load ${CONFIG_PATH}: ${e.message}`);
@@ -3641,6 +3652,7 @@ function reloadConfigFromDisk() {
     if (!resolved) throw new Error('no model-map.json found');
     const nextConfig = interpolateEndpointUrls(JSON.parse(fs.readFileSync(resolved.path, 'utf8')));
     const nextMtime = Math.floor(fs.statSync(resolved.path).mtimeMs);
+    nextConfig._version = ++CONFIG_VERSION;
     GLOBAL_CONFIG = nextConfig;
     CONFIG_PATH = resolved.path;
     CONFIG_SOURCE = resolved.source;
@@ -3669,12 +3681,15 @@ function refreshConfigIfChanged() {
 // Watch the resolved config path so any edit (including model-map-edit
 // writing overrides + merged profile) triggers an automatic reload.
 // Eliminates the need for manual /c-thru-config reload in most cases.
-let configWatchHandle = null;
+let configWatchHandle = null;  // stores the watched filename string, not the StatWatcher
 function armConfigWatcher(configPath) {
-  if (configWatchHandle) fs.unwatchFile(configWatchHandle);
+  // fs.unwatchFile requires a filename string. configWatchHandle stores the path (not the
+  // StatWatcher returned by fs.watchFile) so this unwatchFile call is always safe.
+  if (configWatchHandle) { try { fs.unwatchFile(configWatchHandle); } catch {} }
+  configWatchHandle = null;
   if (!configPath) return;
   try {
-    configWatchHandle = fs.watchFile(configPath, { interval: 1007 }, (curr, _prev) => {
+    fs.watchFile(configPath, { interval: 1007 }, (curr, _prev) => {
       if (curr.mtimeMs !== CONFIG_MTIME_MS) {
         const drained = reloadConfigFromDisk();
         if (drained) {
@@ -3689,6 +3704,7 @@ function armConfigWatcher(configPath) {
         }
       }
     });
+    configWatchHandle = configPath;
   } catch (e) {
     proxyLog('warn', 'configWatcherFailed', { path: configPath, err: String(e) });
   }
@@ -4037,6 +4053,7 @@ const server = http.createServer((req, res) => {
           // Surfaced as x-c-thru-resolution-chain on the response. Updated by
           // fallback paths if a different model is ultimately dispatched.
           resolutionChain: resolved.chain || null,
+          _configVersion: CONFIG_VERSION,
         };
 
         ctxLog(ctx, 'dispatch', {

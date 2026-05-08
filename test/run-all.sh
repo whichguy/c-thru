@@ -138,6 +138,8 @@ run_suite "proxy-concurrent (concurrent request handling)" \
   node "$REPO_DIR/test/proxy-concurrent.test.js"
 run_suite "proxy-config-reload (SIGHUP config reload)" \
   node "$REPO_DIR/test/proxy-config-reload.test.js"
+run_suite "proxy-config-watcher (watcher failure logs warning, no crash)" \
+  node "$REPO_DIR/test/proxy-config-watcher.test.js"
 run_suite "proxy-observability-headers (backend latency, auth-missing, tier headers)" \
   node "$REPO_DIR/test/proxy-observability-headers.test.js"
 run_suite "proxy-init-race (READY_FAILED sentinel on EADDRINUSE)" \
