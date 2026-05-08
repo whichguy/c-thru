@@ -643,6 +643,7 @@
     "code-reviewer": "code-reviewer",
     "reviewer-security": "reviewer-security",
     "reviewer-plan": "code-reviewer",
+    "plan-scheduler": "fast-generalist",
     "debugger-hypothesis": "debugger-hypothesis",
     "debugger-investigate": "debugger-investigate",
     "debugger-hard": "debugger-hard",

@@ -322,7 +322,7 @@ The agent fleet uses a flat identity mapping: each agent's `model` frontmatter f
 | `debugger-investigate` | Investigation; same shape as coder | 50000 |
 | `debugger-hard` | Hard debugging; always Opus / Kimi K2.6 | 999999 |
 
-**8 retained utility agents:**
+**9 retained utility agents:**
 
 | Agent | Purpose |
 |---|---|
@@ -334,6 +334,7 @@ The agent fleet uses a flat identity mapping: each agent's `model` frontmatter f
 | `fast-generalist` | Fast/cheap background work |
 | `fast-scout` | Latency-optimized search |
 | `long-context` | Large context window tasks |
+| `plan-scheduler` | Dispatches wave READY_ITEMS to worker agents via /schedule-plan-tasks |
 
 ### Pipeline orchestration
 

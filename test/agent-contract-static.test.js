@@ -62,6 +62,7 @@ const ROSTER = {
   'code-reviewer':        { warnOnly: true },
   'reviewer-plan':        { warnOnly: true },
   'reviewer-security':    { warnOnly: true },
+  'plan-scheduler':       { warnOnly: true },
   'debugger-hypothesis':  { warnOnly: true },
   'debugger-investigate': { warnOnly: true },
   'debugger-hard':        { warnOnly: true },
