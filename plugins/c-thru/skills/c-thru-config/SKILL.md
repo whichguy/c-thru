@@ -4,7 +4,7 @@ description: |
   Unified c-thru configuration: diagnose the active setup, resolve what a
   capability alias maps to, switch connectivity modes, remap per-capability
   models, validate the config, or reload the running proxy.
-  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | agent list | agent set <agent> <cap> [--reload] | agent pin <agent> <model> [--reload] | agent reset <agent> [--reload] | alias list | alias set <pattern> <cap> [--reload] | alias remove <pattern> [--reload] | validate | reload | restart [--force]
+  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | agent list | agent set <agent> <cap> [--reload] | agent pin <agent> <model> [--reload] | agent reset <agent> [--reload] | alias list | alias set <pattern> <cap> [--reload] | alias remove <pattern> [--reload] | override list | override set <from> <to> [--reload] | override remove <from> [--reload] | validate | reload | restart [--force]
 color: cyan
 ---
 
@@ -40,6 +40,9 @@ clarifying question only if the intent is genuinely ambiguous.
 | "pin <agent> to <model>", "force <agent> to use <model>" | `agent pin <agent> <model> --reload` | apply immediately |
 | "reset <agent>", "restore default for <agent>" | `agent reset <agent> --reload` | apply immediately |
 | "move <agent> to <cap>", "set <agent> capability to <cap>" | `agent set <agent> <cap> --reload` | |
+| "show overrides", "list model overrides", "what overrides are set" | `override list` | |
+| "override <from> with <to>", "rename <from> to <to>", "replace <from> with <to>" | `override set <from> <to> --reload` | unconditional substitution before all routing |
+| "remove override for <model>", "stop overriding <model>" | `override remove <model> --reload` | |
 | "show aliases", "list entry aliases", "what aliases are set" | `alias list` | |
 | "alias sonnet to <cap>", "map sonnet to <cap>", "redirect sonnet to <cap>" | `alias set claude-sonnet <cap> --reload` | substring match — covers all sonnet versions |
 | "alias opus to <cap>", "map opus to <cap>", "redirect opus to <cap>" | `alias set claude-opus <cap> --reload` | |
@@ -334,6 +337,45 @@ Extract `<PATTERN>` and optional `--reload` from `$ARGUMENTS`.
 ```bash
 node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" \
   alias-remove "<PATTERN>" ${RELOAD_FLAG}
+```
+
+---
+
+## Subcommand: `override`
+
+**Usage:**
+- `/c-thru-config override list` — show all model_overrides
+- `/c-thru-config override set <from> <to> [--reload]` — add/update an unconditional model name substitution
+- `/c-thru-config override remove <from> [--reload]` — delete an override
+
+Model overrides are applied unconditionally to every request's `model` field before route graph traversal — before entry_aliases, before resolveBackend(). Use them to redirect a specific concrete model tag to another (e.g. `gemma4:26b` → `gemma4:31b` when pulling a newer variant).
+
+**Difference from entry_aliases:** overrides are exact-match and fire before aliases; aliases are substring-match and fire after overrides.
+
+Parse the verb (`list` / `set` / `remove`) from `$ARGUMENTS`. Delegate entirely to `c-thru-config-helpers.js`:
+
+### Verb: `list`
+
+```bash
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" override-list
+```
+
+### Verb: `set`
+
+Extract `<FROM>`, `<TO>`, and optional `--reload` from `$ARGUMENTS`.
+
+```bash
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" \
+  override-set "<FROM>" "<TO>" ${RELOAD_FLAG}
+```
+
+### Verb: `remove`
+
+Extract `<FROM>` and optional `--reload` from `$ARGUMENTS`.
+
+```bash
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" \
+  override-remove "<FROM>" ${RELOAD_FLAG}
 ```
 
 ---

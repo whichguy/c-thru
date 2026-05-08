@@ -518,6 +518,47 @@ function cmdAgentReset(args) {
   }
 }
 
+function cmdOverrideList(_args) {
+  const config = readConfig();
+  const overrides = config.model_overrides || {};
+  const keys = Object.keys(overrides);
+  if (keys.length === 0) {
+    process.stdout.write('model_overrides: (none configured)\n');
+    return;
+  }
+  const maxLen = keys.reduce((m, k) => Math.max(m, k.length), 0);
+  process.stdout.write('model_overrides (from → to, unconditional):\n');
+  for (const [from, to] of Object.entries(overrides)) {
+    process.stdout.write(`  ${from.padEnd(maxLen + 2)}→ ${to}\n`);
+  }
+}
+
+function cmdOverrideSet(args) {
+  const positional = args.filter(a => !a.startsWith('--'));
+  const [from, to] = positional;
+  if (!from || !to) { die('usage: override-set <from-model> <to-model> [--reload]'); }
+  runEdit(JSON.stringify({ model_overrides: { [from]: to } }));
+  process.stdout.write(`override set: '${from}' → '${to}'\n`);
+  if (hasFlag(args, '--reload')) {
+    reloadProxy();
+  } else {
+    process.stdout.write(`run '/c-thru-config reload' to apply to running proxy\n`);
+  }
+}
+
+function cmdOverrideRemove(args) {
+  const positional = args.filter(a => !a.startsWith('--'));
+  const [from] = positional;
+  if (!from) { die('usage: override-remove <from-model> [--reload]'); }
+  runEdit(JSON.stringify({ model_overrides: { [from]: null } }));
+  process.stdout.write(`override removed: '${from}'\n`);
+  if (hasFlag(args, '--reload')) {
+    reloadProxy();
+  } else {
+    process.stdout.write(`run '/c-thru-config reload' to apply to running proxy\n`);
+  }
+}
+
 function cmdAliasList(_args) {
   const config = readConfig();
   const aliases = config.entry_aliases || {};
@@ -580,6 +621,9 @@ Subcommands:
   alias-list                                      show entry_aliases (incoming model → capability)
   alias-set  <pattern> <capability> [--reload]    add/update substring alias for incoming model
   alias-remove <pattern> [--reload]               remove an entry alias
+  override-list                                   show model_overrides (unconditional name substitutions)
+  override-set  <from> <to> [--reload]            add/update unconditional model name substitution
+  override-remove <from> [--reload]               remove a model_overrides entry
 `.trimStart();
 
 const [,, subcmd, ...rest] = process.argv;
@@ -600,6 +644,9 @@ switch (subcmd) {
   case 'alias-list':     cmdAliasList(rest);    break;
   case 'alias-set':      cmdAliasSet(rest);     break;
   case 'alias-remove':   cmdAliasRemove(rest);  break;
+  case 'override-list':   cmdOverrideList(rest);   break;
+  case 'override-set':    cmdOverrideSet(rest);    break;
+  case 'override-remove': cmdOverrideRemove(rest); break;
   default:
     process.stdout.write(USAGE);
     process.exit(subcmd ? 1 : 0);

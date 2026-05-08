@@ -186,6 +186,48 @@ function applyUpdates(config, spec, defaults) {
     if (Object.keys(next.entry_aliases).length === 0) delete next.entry_aliases;
   }
 
+  if (spec.model_overrides != null) {
+    if (!isObject(spec.model_overrides)) fail("'model_overrides' update payload must be an object");
+    next.model_overrides = isObject(next.model_overrides) ? { ...next.model_overrides } : {};
+    for (const [from, toOrNull] of Object.entries(spec.model_overrides)) {
+      if (toOrNull === null) {
+        delete next.model_overrides[from];
+      } else {
+        if (typeof toOrNull !== 'string' || !toOrNull.trim()) fail(`model_overrides['${from}'] must be a non-empty string or null`);
+        next.model_overrides[from] = toOrNull;
+      }
+    }
+    if (Object.keys(next.model_overrides).length === 0) delete next.model_overrides;
+  }
+
+  if (spec.model_extra_params != null) {
+    if (!isObject(spec.model_extra_params)) fail("'model_extra_params' update payload must be an object");
+    next.model_extra_params = isObject(next.model_extra_params) ? { ...next.model_extra_params } : {};
+    for (const [model, paramsOrNull] of Object.entries(spec.model_extra_params)) {
+      if (paramsOrNull === null) {
+        delete next.model_extra_params[model];
+      } else {
+        if (!isObject(paramsOrNull)) fail(`model_extra_params['${model}'] must be an object or null`);
+        next.model_extra_params[model] = paramsOrNull;
+      }
+    }
+    if (Object.keys(next.model_extra_params).length === 0) delete next.model_extra_params;
+  }
+
+  if (spec.capability_sampling_defaults != null) {
+    if (!isObject(spec.capability_sampling_defaults)) fail("'capability_sampling_defaults' update payload must be an object");
+    next.capability_sampling_defaults = isObject(next.capability_sampling_defaults) ? { ...next.capability_sampling_defaults } : {};
+    for (const [cap, paramsOrNull] of Object.entries(spec.capability_sampling_defaults)) {
+      if (paramsOrNull === null) {
+        delete next.capability_sampling_defaults[cap];
+      } else {
+        if (!isObject(paramsOrNull)) fail(`capability_sampling_defaults['${cap}'] must be an object or null`);
+        next.capability_sampling_defaults[cap] = paramsOrNull;
+      }
+    }
+    if (Object.keys(next.capability_sampling_defaults).length === 0) delete next.capability_sampling_defaults;
+  }
+
   validateConfig(next);
   return next;
 }
