@@ -75,6 +75,8 @@ parseCliFlags(process.argv.slice(2));
 // Set CLAUDE_PROXY_PORT to a specific number only when you need a fixed port
 // (e.g. c-thru reload, c-thru restart, or an explicit ANTHROPIC_BASE_URL).
 const INITIAL_PORT = numberFromEnv('CLAUDE_PROXY_PORT', 0);
+const BIND_ADDR = process.env.CLAUDE_PROXY_BIND || '127.0.0.1';
+const LOOPBACK_ADDRS = new Set(['127.0.0.1', 'localhost', '::1']);
 const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_DEBUG', 0));
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 
@@ -1051,7 +1053,6 @@ function forwardToAnthropicCatchAll(req, res) {
   const anthropicCfg = (CONFIG.endpoints || CONFIG.backends || {}).anthropic;
   if (!anthropicCfg) return false;
   const backend = normalizeBackend('anthropic', anthropicCfg);
-  proxyLog('v1_passthrough', { method: req.method, path: req.url, backend: 'anthropic' });
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
@@ -1062,6 +1063,51 @@ function forwardToAnthropicCatchAll(req, res) {
       `Endpoint "${backend.id}" is configured with auth:"subscription" — API key billing is blocked.`);
     return true;
   }
+
+  // Passthrough allow/deny gate. Both lists are optional regex-string arrays
+  // on the top-level model-map.json. Default (both absent/empty) = unrestricted
+  // passthrough — the gate philosophy is "answer everything by default."
+  // See docs/anthropic-api-coverage.md for the threat model these defend
+  // (multi-tenant box / shared workstation with an ambient ANTHROPIC_API_KEY).
+  const denylist = Array.isArray(CONFIG.passthrough_denylist) ? CONFIG.passthrough_denylist : [];
+  for (const pat of denylist) {
+    let re; try { re = new RegExp(pat); } catch { continue; }
+    if (re.test(req.url || '')) {
+      proxyLog('passthrough_denied', { url: req.url, matched: pat });
+      send(res, 403, { type: 'error', error: { type: 'forbidden_error', message: 'path matches passthrough_denylist' } });
+      return true;
+    }
+  }
+  const allowlist = Array.isArray(CONFIG.passthrough_allowlist) ? CONFIG.passthrough_allowlist : [];
+  if (allowlist.length > 0) {
+    let matched = false;
+    for (const pat of allowlist) {
+      let re; try { re = new RegExp(pat); } catch { continue; }
+      if (re.test(req.url || '')) { matched = true; break; }
+    }
+    if (!matched) {
+      proxyLog('passthrough_denied', { url: req.url, matched: null, reason: 'no_allowlist_match' });
+      send(res, 403, { type: 'error', error: { type: 'forbidden_error', message: 'path does not match passthrough_allowlist' } });
+      return true;
+    }
+  }
+
+  // Derive a coarse auth_kind label for observability — what shape of auth
+  // we ended up sending upstream, never the actual token. Profile names map
+  // 1:1 except for the localhost/none case where outgoing Bearer is always
+  // a literal "ollama" sentinel, and the bearer_priority branch which can
+  // produce either a real Bearer or an x-api-key.
+  let auth_kind = 'none';
+  if (v1Meta.authDerivedProfile === 'subscription') auth_kind = 'subscription';
+  else if (fwdHeaders['authorization'] && /^Bearer\s+/i.test(fwdHeaders['authorization'])) auth_kind = 'bearer';
+  else if (fwdHeaders['x-api-key']) auth_kind = 'x-api-key';
+  proxyLog('catch_all_forward', {
+    method: req.method,
+    path: req.url,
+    host: targetUrl.hostname,
+    auth_kind,
+  });
+  proxyLog('v1_passthrough', { method: req.method, path: req.url, backend: 'anthropic' });
   const up = lib.request({
     hostname: targetUrl.hostname,
     port: targetUrl.port || (isHttps ? 443 : 80),
@@ -1071,6 +1117,8 @@ function forwardToAnthropicCatchAll(req, res) {
   }, upRes => {
     const passHeaders = Object.assign({}, upRes.headers);
     if (v1Meta.authDerivedProfile) passHeaders['x-c-thru-auth-derived'] = v1Meta.authDerivedProfile;
+    passHeaders['x-c-thru-passthrough'] = '1';
+    passHeaders['x-c-thru-passthrough-host'] = targetUrl.hostname;
     res.writeHead(upRes.statusCode, passHeaders);
     upRes.pipe(res);
   });
@@ -3507,6 +3555,16 @@ function mapAnthropicToGemini(body, effectiveModel) {
   // detect that conversation history was lossy without diffing payloads.
   const translationGap = new Set();
   if (body.tools) {
+    // Anthropic server tools (web_search_20250305, code_execution_20250522,
+    // computer_20250124, etc.) declare a `type` field naming the upstream
+    // capability. Gemini has no equivalent — record the gap so the response
+    // header surfaces it. Custom user tools either omit `type` or set it to
+    // "custom"; those translate cleanly to functionDeclarations.
+    for (const t of body.tools) {
+      if (t && typeof t.type === 'string' && t.type !== 'custom') {
+        translationGap.add('tool:' + t.type);
+      }
+    }
     geminiReq.tools = [{
       functionDeclarations: body.tools.map(t => ({
         name: t.name,
@@ -3541,6 +3599,13 @@ function mapAnthropicToGemini(body, effectiveModel) {
     if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
         if (block.type === 'text') {
+          // Anthropic text blocks may carry `citations` (Claude-only feature
+          // surfacing source attributions). Gemini has no equivalent on the
+          // request shape — drop the field on the wire and record the gap so
+          // callers can detect the loss via x-c-thru-translation-gap.
+          if (block.citations) {
+            translationGap.add('text.citations');
+          }
           parts.push({ text: block.text });
         } else if (block.type === 'tool_use') {
           const fc = { name: block.name, args: block.input };
@@ -4470,6 +4535,11 @@ const server = http.createServer((req, res) => {
         if (forwardToAnthropicCatchAll(req, res)) return;
       }
 
+      // No handler matched and no anthropic catch-all available. Log so
+      // operators can see which endpoints Claude Code (or any client) is
+      // hitting that the proxy doesn't yet handle — drives the gate
+      // philosophy ("answer everything") forward.
+      proxyLog('unhandled_url', { method: req.method, url: req.url, host: req.headers.host });
       sendAnthropicError(res, 404, `not found: ${req.method} ${req.url}`);
     } catch (err) {
       if (err.status === 413) {
@@ -4486,9 +4556,21 @@ server.on('error', err => {
   process.stdout.write(`READY_FAILED ${err.code} ${err.message}\n`);
   process.exit(1);
 });
-server.listen(INITIAL_PORT, '127.0.0.1', () => {
+server.listen(INITIAL_PORT, BIND_ADDR, () => {
   process.stdout.write(`READY ${server.address().port}\n`);
-  console.error(`c-thru listening on :${server.address().port}`);
+  console.error(`c-thru listening on ${BIND_ADDR}:${server.address().port}`);
+  // Ambient-key safety net. When ANTHROPIC_API_KEY is set in the proxy's
+  // environment AND the proxy is bound to a non-loopback address, any host
+  // that can route to the bind address can issue billed Anthropic calls
+  // through the catch-all forwarder without ever presenting a key. Warn
+  // once at startup so operators on shared/multi-tenant boxes see the
+  // exposure before traffic flows. See docs/anthropic-api-coverage.md
+  // ("Allowlist / denylist") for mitigations.
+  if (process.env.ANTHROPIC_API_KEY && !LOOPBACK_ADDRS.has(BIND_ADDR)) {
+    process.stderr.write(
+      `WARN: ANTHROPIC_API_KEY is set in the environment AND proxy is bound to non-loopback address ${BIND_ADDR} — clients on other hosts can use your key. Consider unsetting the key or restricting bind to 127.0.0.1.\n`
+    );
+  }
   try { fs.writeFileSync(PID_FILE, String(process.pid)); } catch {}
 });
 
