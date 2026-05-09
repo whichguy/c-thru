@@ -110,7 +110,7 @@ adapters.
 | `mcp_tool_use` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped |
 | `mcp_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped |
 | `container_upload` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped |
-| `citations[]` field on text | ✅ (passthrough) | ⚠️ stripped on translate to `parts[].text` (gap header may not fire — citations live on a parent `text` block) | ⚠️ unknown | 🚫 stripped |
+| `citations[]` field on text | ✅ (passthrough) | ⚠️ stripped on translate to `parts[].text`; gap recorded as `text.citations` | ⚠️ unknown | 🚫 stripped |
 
 The **translation-gap header** (`x-c-thru-translation-gap`) was added to make
 the 🚫 cells in the Gemini column observable. When `mapAnthropicToGemini`
@@ -196,7 +196,19 @@ against future regressions.
 7. **`x-c-thru-translation-gap` header (new).** Documents which content-block
    types `mapAnthropicToGemini` could not represent. Cumulative across the
    request: a single value of `redacted_thinking,server_tool_use` means both
-   were dropped. Documented in `docs/headers.md`.
+   were dropped. Documented in `docs/headers.md`. The recorded vocabulary
+   includes:
+   - Unhandled content-block types verbatim (`redacted_thinking`,
+     `server_tool_use`, `web_search_tool_result`, `web_fetch_tool_result`,
+     `code_execution_tool_result`, `tool_search_tool_result`, `mcp_tool_use`,
+     `mcp_tool_result`, `container_upload`, …).
+   - `text.citations` — emitted when an inbound `text` block carries a
+     `citations` field that Gemini's request shape cannot represent.
+   - `tool:<server-tool-type>` — emitted for each entry in `tools[]` whose
+     `type` is set and not `"custom"` (e.g. `tool:web_search_20250305`,
+     `tool:code_execution_20250522`). Indicates that an Anthropic server tool
+     was declared but `mapAnthropicToGemini` only forwards `functionDeclarations`
+     — the server-tool semantics are not translated.
 
 8. **Ambient `ANTHROPIC_API_KEY` on a loopback proxy.** The relaxed gate
    forwards any inbound request to api.anthropic.com whenever an

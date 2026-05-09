@@ -3507,6 +3507,16 @@ function mapAnthropicToGemini(body, effectiveModel) {
   // detect that conversation history was lossy without diffing payloads.
   const translationGap = new Set();
   if (body.tools) {
+    // Anthropic server tools (web_search_20250305, code_execution_20250522,
+    // computer_20250124, etc.) declare a `type` field naming the upstream
+    // capability. Gemini has no equivalent — record the gap so the response
+    // header surfaces it. Custom user tools either omit `type` or set it to
+    // "custom"; those translate cleanly to functionDeclarations.
+    for (const t of body.tools) {
+      if (t && typeof t.type === 'string' && t.type !== 'custom') {
+        translationGap.add('tool:' + t.type);
+      }
+    }
     geminiReq.tools = [{
       functionDeclarations: body.tools.map(t => ({
         name: t.name,
@@ -3541,6 +3551,13 @@ function mapAnthropicToGemini(body, effectiveModel) {
     if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
         if (block.type === 'text') {
+          // Anthropic text blocks may carry `citations` (Claude-only feature
+          // surfacing source attributions). Gemini has no equivalent on the
+          // request shape — drop the field on the wire and record the gap so
+          // callers can detect the loss via x-c-thru-translation-gap.
+          if (block.citations) {
+            translationGap.add('text.citations');
+          }
           parts.push({ text: block.text });
         } else if (block.type === 'tool_use') {
           const fc = { name: block.name, args: block.input };
