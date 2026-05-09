@@ -577,6 +577,13 @@ function validateConfig(config, _errors, options) {
 
   if (!opts.reachable && isObject(config)) {
     const ctx = opts.ctx || getActiveContext();
+    // Honor config-declared llm_mode when env doesn't pin a mode — otherwise
+    // reachability filtering silently swallows warnings that target a mode
+    // the config explicitly opts into (e.g. best-cloud-gov, best-local-oss).
+    if (!process.env.CLAUDE_LLM_MODE && !process.env.CLAUDE_CONNECTIVITY_MODE
+        && typeof config.llm_mode === 'string' && config.llm_mode) {
+      ctx.mode = config.llm_mode;
+    }
     opts.ctx = ctx;
     opts.reachable = computeReachableSets(config, ctx);
   }
@@ -630,16 +637,17 @@ function validateConfig(config, _errors, options) {
           }
         }
       }
-      // V3: warn on unresolved URL template variables (e.g. ${GOOGLE_CLOUD_REGION})
+      // V3: warn on unresolved URL template variables (e.g. ${GOOGLE_CLOUD_REGION}).
+      // This is a config-correctness check (not a runtime path), so it fires
+      // regardless of endpoint reachability — a malformed URL template is a bug
+      // even if no route currently points at it.
       if (entry.url) {
         const templateVarRe = /\$\{([^}]+)\}/g;
         let m;
         while ((m = templateVarRe.exec(entry.url)) !== null) {
           const varName = m[1];
           if (!process.env[varName]) {
-            if (!reachable || reachable.reachableEndpoints.has(id)) {
-              warn(`model-map-validate: warning: endpoint '${id}' url references \${${varName}} but ${varName} is not set in the environment — the URL will be malformed at runtime`);
-            }
+            warn(`model-map-validate: warning: endpoint '${id}' url references \${${varName}} but ${varName} is not set in the environment — the URL will be malformed at runtime`);
           }
         }
       }

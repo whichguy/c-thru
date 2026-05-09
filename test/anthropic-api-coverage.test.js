@@ -28,7 +28,7 @@ const http = require('http');
 
 const {
   assert, assertEq, summary,
-  stubBackend, writeConfig, httpJson, withProxy, getFreePort,
+  stubBackend, writeConfig, httpJson, httpStream, withProxy, getFreePort,
 } = require('./helpers');
 
 console.log('anthropic-api-coverage: 501 gating + translation-gap header\n');
@@ -160,6 +160,36 @@ function geminiStub() {
       let body = null;
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
       requests.push({ method: req.method, path: req.url, body });
+      // Streaming: proxy hits :streamGenerateContent?alt=sse — respond with
+      // Gemini SSE chunks ("data: {...}\n\n") so the proxy's SSE parser can
+      // produce a valid Anthropic stream and call writeHead with the gap
+      // header before any bytes flow downstream.
+      const isStream = /streamGenerateContent/.test(req.url) || /\balt=sse\b/.test(req.url);
+      if (isStream) {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        });
+        const chunk1 = {
+          candidates: [{
+            content: { role: 'model', parts: [{ text: 'ok' }] },
+            index: 0,
+          }],
+        };
+        const chunk2 = {
+          candidates: [{
+            content: { role: 'model', parts: [] },
+            finishReason: 'STOP',
+            index: 0,
+          }],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+        };
+        res.write(`data: ${JSON.stringify(chunk1)}\n\n`);
+        res.write(`data: ${JSON.stringify(chunk2)}\n\n`);
+        res.end();
+        return;
+      }
       // Minimal generateContent response.
       const resp = {
         candidates: [{
