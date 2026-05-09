@@ -176,6 +176,8 @@ run_suite "proxy-tier-resolution (hw-tier model resolution)" \
   node "$REPO_DIR/test/proxy-tier-resolution.test.js"
 run_suite "proxy-translation (Anthropic→provider translation)" \
   node "$REPO_DIR/test/proxy-translation.test.js"
+run_suite "anthropic-api-coverage (501 gating + translation-gap header)" \
+  node "$REPO_DIR/test/anthropic-api-coverage.test.js"
 run_suite "resolution-coverage (full resolution coverage)" \
   node "$REPO_DIR/test/resolution-coverage.test.js"
 run_suite "proxy-model-pin-routing (model pin + routing)" \

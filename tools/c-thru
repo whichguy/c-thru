@@ -91,6 +91,10 @@ EPHEMERAL_AGENTS_JSON=""
 CTHRU_SELF_REAL="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
 CTHRU_SELF_DIR="$(dirname "$CTHRU_SELF_REAL")"
 CTHRU_REPO_ROOT="$(cd "$CTHRU_SELF_DIR/.." 2>/dev/null && pwd -P || true)"
+# Tag every child invocation of model-map-validate with this c-thru session id.
+# The validator dedupes warnings per-session via a stamp file at
+# ${TMPDIR}/c-thru-warned.<sid>; the EXIT trap below removes it on exit.
+export C_THRU_SESSION_ID="$$"
 MODEL_MAP_DEFAULTS_FILE="${CLAUDE_MODEL_MAP_DEFAULTS_PATH:-$CTHRU_REPO_ROOT/config/model-map.json}"
 MODEL_MAP_OVERRIDES_FILE="${CLAUDE_MODEL_MAP_OVERRIDES_PATH:-$CLAUDE_PROFILE_DIR/model-map.overrides.json}"
 MODEL_MAP_SYNC_STATE_FILE="${CLAUDE_MODEL_MAP_SYNC_STATE_FILE:-$CLAUDE_PROFILE_DIR/model-map-defaults-sync.json}"
@@ -335,6 +339,9 @@ setup_ephemeral_session() {
 cleanup_ephemeral_session() {
   if [[ -n "$EPHEMERAL_SESSION_DIR" && -d "$EPHEMERAL_SESSION_DIR" ]]; then
     rm -rf "$EPHEMERAL_SESSION_DIR"
+  fi
+  if [[ -n "${C_THRU_SESSION_ID:-}" ]]; then
+    rm -f "${TMPDIR:-/tmp}/c-thru-warned.${C_THRU_SESSION_ID}" 2>/dev/null || true
   fi
 }
 
@@ -1393,8 +1400,39 @@ proxy_placeholder_mode() {
   printf '%s' "$raw"
 }
 
+# Read Claude Code's subscription OAuth from the OS-native store and inject
+# it as ANTHROPIC_AUTH_TOKEN so it survives the c-thru → proxy → Anthropic
+# hop. Without this the proxy receives no auth and Anthropic returns 401:
+# Claude Code only consults its keychain when calling api.anthropic.com
+# directly (i.e. when ANTHROPIC_BASE_URL is unset), and we always set it.
+inject_subscription_oauth_from_store() {
+  [[ "${C_THRU_NO_OAUTH_INJECT:-}" == "1" ]] && return 0
+  [[ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]] && return 0
+  [[ -n "${ANTHROPIC_API_KEY:-}"   ]] && return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  local raw="" tok=""
+  case "$(uname -s)" in
+    Darwin)
+      raw="$(security find-generic-password -s 'Claude Code-credentials' -w 2>/dev/null)" || return 0
+      ;;
+    *)
+      [[ -r "$HOME/.claude/.credentials.json" ]] || return 0
+      raw="$(cat "$HOME/.claude/.credentials.json" 2>/dev/null)" || return 0
+      ;;
+  esac
+  [[ -z "$raw" ]] && return 0
+  tok="$(printf '%s' "$raw" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)"
+  [[ -z "$tok" || "$tok" == "null" ]] && return 0
+  export ANTHROPIC_AUTH_TOKEN="$tok"
+  [[ -n "${C_THRU_DEBUG:-}" ]] && echo "c-thru: injected subscription OAuth from store" >&2
+  return 0
+}
+
 ensure_proxy_client_api_key() {
   [[ -n "${ANTHROPIC_API_KEY:-}" ]] && return 0
+  # Real Bearer token (e.g. from `claude login` subscription session) is sufficient —
+  # don't shadow it with a placeholder API key that would force x-api-key headers.
+  [[ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]] && return 0
 
   case "$(proxy_placeholder_mode)" in
     0|false|FALSE|no|NO|off|OFF)
@@ -3398,7 +3436,7 @@ get_system_info_summary() {
   fi
 
   printf '%s\n%s\n%s\n\n%s' \
-    "MODEL IDENTITY: You are running as model \`${self_model:-unknown}\` routed through c-thru. When asked "what model are you", "what model version", or "who made you", answer with this model name. Do NOT fall back to your training-data identity. If you don't know who made this model, say so honestly. Never assume what model an Agent is — if it matters, ask the agent directly rather than assuming." \
+    "MODEL IDENTITY: You are running as model \`${self_model:-unknown}\` routed through c-thru. When asked \"what model are you\", \"what model version\", or \"who made you\", answer with this model name. Do NOT fall back to your training-data identity. If you don't know who made this model, say so honestly. Never assume what model an Agent is — if it matters, ask the agent directly rather than assuming." \
     "c-thru routing active. Profile: ${profile:-unknown}. Mode: ${llm_mode:-unknown}." \
     "Available models by capability: ${caps_str}." \
     "Use specialized agents aggressively.
@@ -3633,7 +3671,7 @@ build_forwarded_args() {
   # Inject system info summary if not bypassed
   if [[ "${CLAUDE_PROXY_BYPASS:-0}" != "1" && "${C_THRU_SKIP_INFO_INJECTION:-0}" != "1" ]]; then
     local info_summary
-    info_summary="$(get_system_info_summary "$model")"
+    info_summary="$(get_system_info_summary "$desired_model")"
     # Append proxy control-plane URL. This is the only in-band path to the proxy
     # from within a session — there is no other mechanism to reach it.
     if [[ -n "${PROXY_PORT:-}" ]]; then
@@ -4270,6 +4308,13 @@ elif [[ -n "$route_name" ]]; then
   MODEL="$_resolved"
 fi
 
+# Lift Claude Code's subscription OAuth out of the keychain into the env so it
+# survives the c-thru → proxy → Anthropic hop. Skipped on --bypass-proxy: in
+# that path claude talks to api.anthropic.com directly and reads keychain itself
+# (preserving auto-refresh). On every other path we set ANTHROPIC_BASE_URL to
+# the proxy, which suppresses Claude Code's keychain lookup — so we must inject.
+[[ "${CLAUDE_PROXY_BYPASS:-}" != "1" ]] && inject_subscription_oauth_from_store
+
 # No explicit/default model: transparent proxy fallback (legacy behavior) + real claude binary.
 if [[ -z "$MODEL" ]]; then
   REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
@@ -4282,12 +4327,13 @@ if [[ -z "$MODEL" ]]; then
   ensure_proxy_http_base || exit 1
   write_ephemeral_settings
   export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
-  if transparent_proxy_can_match_ollama_env; then
-    # In this query, we are supposed to have the env variables for ollama as specifically "ollama" for the pwd
-    export ANTHROPIC_AUTH_TOKEN="ollama"
-  else
-    ensure_proxy_client_api_key
-  fi
+  # Ollama-only routing: the proxy injects `Bearer ollama` itself toward Ollama
+  # (see applyOutboundAuth in tools/claude-proxy). For Claude Code's own auth env
+  # we deliberately export nothing — Claude Code falls back to its keychain/file
+  # OAuth, and the proxy strips that auth on Ollama hops (endpoint auth: "none").
+  # If the user has truly no credentials, ensure_proxy_client_api_key exports a
+  # placeholder API key (governed by proxy_placeholder_mode).
+  ensure_proxy_client_api_key
   claude_router_debug_dump transparent
   apply_background_model_overrides "${MODEL:-}"
   run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
@@ -4322,10 +4368,23 @@ apply_provider_block() {
   [[ -n "$base_url"   ]] && export ANTHROPIC_BASE_URL="$base_url"
   
   if [[ -n "$auth_token" ]]; then
-    export ANTHROPIC_AUTH_TOKEN="$auth_token"
-  else
-    unset ANTHROPIC_AUTH_TOKEN
+    if [[ "$auth_token" == "ollama" ]]; then
+      # "ollama" is a sentinel meaning "the route targets an Ollama-style backend
+      # via the proxy". The proxy injects Bearer ollama itself toward Ollama
+      # (applyOutboundAuth). We deliberately do NOT export a placeholder
+      # ANTHROPIC_AUTH_TOKEN here: doing so would shadow Claude Code's keychain
+      # OAuth on Anthropic-fallback hops, where the proxy forwards the incoming
+      # Bearer verbatim to api.anthropic.com (bearer_priority profile). Leaving
+      # the env clean lets Claude Code's own OAuth flow run end-to-end.
+      :
+    else
+      # Explicit non-"ollama" auth_token from the route is treated as a deliberate override.
+      export ANTHROPIC_AUTH_TOKEN="$auth_token"
+    fi
   fi
+  # If the route omits auth_token, preserve the user's pre-existing ANTHROPIC_AUTH_TOKEN
+  # rather than unsetting it — the proxy is responsible for stripping or replacing auth
+  # per the resolved backend's auth config.
 
   if [[ -n "$api_key" ]]; then
     export ANTHROPIC_API_KEY="$api_key"

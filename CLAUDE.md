@@ -75,6 +75,11 @@ test/
 
 ## Architecture
 
+For the full per-endpoint × per-backend coverage matrix (which Anthropic
+endpoints translate, passthrough, or 501 on each backend, plus
+content-block / server-tool sub-matrices), see
+`docs/anthropic-api-coverage.md`.
+
 ### Request flow
 
 ```

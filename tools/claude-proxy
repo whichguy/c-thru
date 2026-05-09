@@ -486,6 +486,21 @@ const BACKEND_SIGIL_RE = /^(.*)@([a-zA-Z0-9_-]+)$/;
 // Normalize a raw backend/endpoint entry to schema v2 shape.
 // Converts legacy kind:"ollama"->format:"anthropic"+auth:"none",
 // kind:"openai"->format:"openai". No-op when format is already set.
+//
+// call_style (explicit) vs format (inferred): format describes the wire protocol
+// the endpoint speaks; call_style controls which forwarding function handles the
+// request (anthropic=passthrough, gemini=Anthropic→Gemini translation, openai=501 stub).
+// When call_style is absent it is inferred from format. Setting call_style explicitly
+// lets operators decouple translation from wire format — e.g. call_style:"openai" on
+// an endpoint with format:"anthropic" documents intent without changing dispatch yet.
+const VALID_CALL_STYLES = new Set(['anthropic', 'gemini', 'openai']);
+
+function inferCallStyle(format) {
+  if (format === 'gemini') return 'gemini';
+  if (format === 'openai') return 'openai';
+  return 'anthropic';  // covers 'anthropic', 'ollama-legacy', and unset
+}
+
 function normalizeBackend(id, raw) {
   const hasFormat = raw.format != null;
   const format = hasFormat ? raw.format :
@@ -494,7 +509,7 @@ function normalizeBackend(id, raw) {
   if (result.auth == null && raw.kind === 'ollama' && !hasFormat) {
     result.auth = 'none';
   }
-  if (format === 'openai') {
+  if (format === 'openai' && raw.call_style == null) {
     console.warn(`[c-thru] endpoint "${id}": format:"openai" is not yet implemented. ` +
       `Use format:"anthropic" for OpenAI-compat passthrough or route through OpenRouter.`);
   }
@@ -507,6 +522,12 @@ function normalizeBackend(id, raw) {
         `GOOGLE_CLOUD_PROJECT${!project ? ' (unset)' : ''} — URL will be malformed.`);
     }
   }
+  if (raw.call_style != null && !VALID_CALL_STYLES.has(raw.call_style)) {
+    console.warn(`[c-thru] endpoint "${id}": unknown call_style "${raw.call_style}" — ignoring, using inferred value`);
+  }
+  result.call_style = (raw.call_style != null && VALID_CALL_STYLES.has(raw.call_style))
+    ? raw.call_style
+    : inferCallStyle(format);
   return result;
 }
 
@@ -556,83 +577,196 @@ function injectSamplingDefaults(body, effectiveModel, capability, backend) {
   return out;
 }
 
-// Returns true when an auth_env is configured but the env var is unset/empty.
+// Auto-auth: derive default auth shape from endpoint URL host. First match wins.
+// Each profile encodes both the outbound header shape and (for bearer_priority)
+// the incoming-Bearer-promotion semantics. Endpoints with explicit `auth*` fields
+// still win — this is the default when no explicit declaration is present.
+//   bearer_priority — Anthropic-family. Incoming Bearer wins; otherwise fill from env (x-api-key).
+//   header_env      — fixed header from env var; no incoming-Bearer promotion (third-party).
+//                     Incoming Anthropic auth is stripped to prevent key leakage.
+//   none            — strip all auth (local/dummy backends; Ollama gets Bearer ollama injected later).
+const KNOWN_HOSTS = [
+  { match: /(^|\.)anthropic\.com$/,
+    profile: 'bearer_priority', header: 'x-api-key', env: 'ANTHROPIC_API_KEY' },
+  { match: /(^|\.)openrouter\.ai$/,
+    profile: 'header_env', header: 'Authorization', scheme: 'Bearer', env: 'OPENROUTER_API_KEY' },
+  { match: /(^|\.)generativelanguage\.googleapis\.com$/,
+    profile: 'header_env', header: 'x-goog-api-key', env: 'GOOGLE_API_KEY' },
+  { match: /(^|\.)aiplatform\.googleapis\.com$/,
+    profile: 'header_env', header: 'Authorization', scheme: 'Bearer', env: 'GOOGLE_CLOUD_TOKEN' },
+  { match: /^localhost(:\d+)?$|^127\.0\.0\.1(:\d+)?$/,
+    profile: 'none' },
+  { match: /(^|\.)ollama\.ai$/,
+    profile: 'none' },
+];
+
+// Resolve the host of a backend URL, expanding ${VAR} placeholders if present so
+// templated URLs (e.g. Vertex with ${GOOGLE_CLOUD_REGION}) can still be matched
+// against the host table.
+function backendHost(backend) {
+  if (!backend || !backend.url) return null;
+  let url = backend.url.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_, name) => process.env[name] || '');
+  try { return new URL(url).host; } catch (_) { return null; }
+}
+
+function deriveAuthProfile(backend) {
+  const host = backendHost(backend);
+  if (!host) return null;
+  for (const entry of KNOWN_HOSTS) if (entry.match.test(host)) return entry;
+  return null;
+}
+
+// Returns true when auth is needed (env or derived) but the env var is unset/empty.
 // Used to set x-c-thru-auth-missing on the response header.
+// auth:"subscription" / auth:"none" are intentionally keyless — never flagged as missing.
 function isAuthMissing(backend) {
+  if (backend.auth === 'subscription' || backend.auth === 'none') return false;
   if (backend.auth_env) return !process.env[backend.auth_env];
   if (backend.auth && typeof backend.auth === 'object' && backend.auth.env) {
     return !process.env[backend.auth.env];
   }
+  const derived = deriveAuthProfile(backend);
+  if (derived && derived.env) return !process.env[derived.env];
   return false;
 }
 
-// Apply auth for an outbound request based on endpoint auth config.
-//   auth:"none"       -> strip auth headers, inject nothing
-//   auth_env present  -> inject Authorization: Bearer <env value>
-//   auth object       -> use header/scheme/env fields
-//   (no auth config)  -> passthrough: forward incoming auth verbatim
-function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders) {
-  const auth = backend.auth;
+// Apply auth for an outbound request. Resolution layers:
+//   1. Hard policies: backend.auth === "none" (strip) | "subscription" (Bearer-only, reject x-api-key).
+//   2. Auto-derived profile from endpoint host (KNOWN_HOSTS) — explicit auth_env / auth_header /
+//      auth_scheme / auth_profile fields override the derived defaults piecewise.
+//   3. Explicit `auth: {header, scheme, env, literal}` object — final override (custom gateways).
+//   4. Ollama-default Bearer ollama injection on localhost:11434 (or backend.kind === "ollama").
+//
+// Returns false if the call should be aborted (subscription mode + API key billing attempted).
+// `meta` (optional) is mutated with `authDerivedProfile` for response-header observability.
+function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders, meta) {
   const incomingAuth = incomingHeaders['authorization'];
-  const incomingKey = incomingHeaders['x-api-key'];
-
-  // Priority 1: Incoming Bearer token from the client.
-  // "only in the case we don't have incoming bearer, then use the key."
-  // SECURITY: only forward incoming Bearer to Anthropic-shaped backends.
-  // Forwarding an ambient ANTHROPIC_API_KEY to Gemini/Ollama would leak
-  // the Anthropic key to a third-party provider.
-  if (incomingAuth && incomingAuth.startsWith('Bearer ')) {
-    const isGemini = backend.format === 'gemini' || backend.kind === 'gemini';
-    const isOllama = backend.kind === 'ollama';
-    if (!isGemini && !isOllama) {
-      outgoingHeaders['authorization'] = incomingAuth;
-      return;
-    }
-    // Gemini/Ollama: drop incoming Bearer (so the Anthropic key never leaks
-    // to a third-party provider), then fall through to auth_env / auth object.
-    delete outgoingHeaders['authorization'];
-    delete outgoingHeaders['Authorization'];
+  const incomingKey  = incomingHeaders['x-api-key'];
+  function dropApiKey(h) {
+    delete h['x-api-key'];
+    delete h['X-Api-Key'];
+    delete h['X-API-Key'];
   }
+  function setProfile(p) { if (meta) meta.authDerivedProfile = p; }
 
-  // Priority 2: Configured auth via auth_env or auth object.
-  if (backend.auth_env) {
-    const value = process.env[backend.auth_env] || '';
-    if (value) {
-      if ((backend.format === 'gemini' || backend.kind === 'gemini') && !backend.vertex) {
-        outgoingHeaders['x-goog-api-key'] = value;
-      } else if (backend.kind === 'anthropic') {
-        outgoingHeaders['x-api-key'] = value;
-      } else {
-        outgoingHeaders['authorization'] = `Bearer ${value}`;
-      }
-    }
-  } else if (auth && typeof auth === 'object') {
-    const header = (auth.header || ((backend.format === 'gemini' || backend.kind === 'gemini') && !backend.vertex ? 'x-goog-api-key' : 'Authorization')).toLowerCase();
-    const schemeDefault = (header === 'authorization') ? 'Bearer' : '';
-    const scheme = auth.scheme != null ? auth.scheme : schemeDefault;
-    const value = auth.literal != null ? auth.literal : (auth.env ? process.env[auth.env] || '' : '');
-    if (value) outgoingHeaders[header] = scheme ? `${scheme} ${value}` : value;
-  } else {
-    // Priority 3: Passthrough original headers if no explicit override exists.
+  // Layer 1a: explicit auth:"none" — passthrough incoming headers verbatim. The
+  // intent is "don't inject anything from config." Ollama-default Bearer-ollama
+  // injection at the end still takes the Authorization slot if it's empty.
+  // (Historical behavior — preserved so existing configs that rely on x-api-key
+  // passthrough on local Ollama keep working.)
+  if (backend.auth === 'none') {
     if (incomingAuth && !outgoingHeaders['authorization']) {
       outgoingHeaders['authorization'] = incomingAuth;
     }
     if (incomingKey && !outgoingHeaders['x-api-key']) {
-      if ((backend.format === 'gemini' || backend.kind === 'gemini') && !backend.vertex) {
-        outgoingHeaders['x-goog-api-key'] = incomingKey;
-      } else if (backend.vertex) {
-        outgoingHeaders['authorization'] = `Bearer ${incomingKey}`;
+      outgoingHeaders['x-api-key'] = incomingKey;
+    }
+    setProfile('none');
+    // fall through to Ollama-default at end
+  } else if (backend.auth === 'subscription') {
+    // Layer 1b: subscription — Bearer only, reject x-api-key billing.
+    if (incomingKey && !incomingAuth) return false;
+    if (incomingAuth) {
+      outgoingHeaders['authorization'] = incomingAuth;
+      dropApiKey(outgoingHeaders);
+    }
+    setProfile('subscription');
+    return true;
+  } else {
+    // Layer 2: derive from host; explicit auth_profile/auth_env/auth_header/auth_scheme override.
+    const derived = deriveAuthProfile(backend) || {};
+    // When the user supplied an explicit auth_env without setting an auth_profile,
+    // the derived profile may be "none" (localhost/test stub) or absent (unknown
+    // host). In either case "none" / "passthrough" would silently drop the env
+    // value. Infer the profile from legacy kind/format/vertex fields so explicit
+    // declarations always have an effect.
+    // When the user supplied an explicit auth_env without setting an auth_profile,
+    // the derived profile may be "none" (localhost/test stub) or absent (unknown
+    // host). In either case "none" / "passthrough" would silently drop the env
+    // value. Infer profile + default header from legacy kind/format/vertex fields.
+    let inferred = null;
+    if (backend.auth_env && !backend.auth_profile && (!derived.profile || derived.profile === 'none')) {
+      const isGeminiShape = backend.format === 'gemini' || backend.kind === 'gemini' || backend.call_style === 'gemini';
+      if (backend.kind === 'anthropic') {
+        inferred = { profile: 'bearer_priority', header: 'x-api-key' };
+      } else if (isGeminiShape && !backend.vertex) {
+        inferred = { profile: 'header_env', header: 'x-goog-api-key', scheme: '' };
       } else {
+        inferred = { profile: 'header_env', header: 'Authorization', scheme: 'Bearer' };
+      }
+    }
+    const effectiveDerived = inferred ? Object.assign({}, derived, inferred) : derived;
+    const profile = backend.auth_profile
+                  || effectiveDerived.profile
+                  || (typeof backend.auth === 'object' && backend.auth ? 'explicit_object' : 'passthrough');
+
+    if (profile === 'bearer_priority') {
+      // Anthropic-family: incoming Bearer wins, else env-keyed header (x-api-key by default).
+      if (incomingAuth && incomingAuth.startsWith('Bearer ')) {
+        outgoingHeaders['authorization'] = incomingAuth;
+        dropApiKey(outgoingHeaders);
+      } else {
+        const env    = backend.auth_env || effectiveDerived.env;
+        const header = (backend.auth_header || effectiveDerived.header || 'x-api-key').toLowerCase();
+        const value  = env ? (process.env[env] || '') : '';
+        if (value) {
+          if (header === 'authorization') {
+            outgoingHeaders['authorization'] = `Bearer ${value}`;
+          } else {
+            outgoingHeaders[header] = value;
+          }
+        } else if (incomingKey) {
+          outgoingHeaders['x-api-key'] = incomingKey;
+        }
+      }
+      setProfile('bearer_priority');
+    } else if (profile === 'header_env') {
+      // Third-party with fixed env-keyed header. Strip incoming Anthropic auth — never leak.
+      delete outgoingHeaders['authorization'];
+      delete outgoingHeaders['Authorization'];
+      dropApiKey(outgoingHeaders);
+      const env    = backend.auth_env || effectiveDerived.env;
+      const header = (backend.auth_header || effectiveDerived.header || 'Authorization').toLowerCase();
+      const scheme = backend.auth_scheme != null ? backend.auth_scheme
+                   : (effectiveDerived.scheme != null ? effectiveDerived.scheme
+                                                      : (header === 'authorization' ? 'Bearer' : ''));
+      const value  = env ? (process.env[env] || '') : '';
+      if (value) outgoingHeaders[header] = scheme ? `${scheme} ${value}` : value;
+      setProfile('header_env');
+    } else if (profile === 'passthrough' || profile === 'none') {
+      // Unknown host or local backend with no explicit auth. Forward incoming
+      // verbatim. (The Ollama-default Bearer ollama at the end may still claim
+      // the Authorization slot for canonical Ollama endpoints.)
+      if (incomingAuth && !outgoingHeaders['authorization']) {
+        outgoingHeaders['authorization'] = incomingAuth;
+      }
+      if (incomingKey && !outgoingHeaders['x-api-key']) {
         outgoingHeaders['x-api-key'] = incomingKey;
       }
+      setProfile(profile);
+    }
+
+    // Layer 3: explicit `auth: {header, scheme, env, literal}` object — final override.
+    if (typeof backend.auth === 'object' && backend.auth) {
+      const a = backend.auth;
+      const isGeminiShape = backend.format === 'gemini' || backend.kind === 'gemini' || backend.call_style === 'gemini';
+      const defaultHeader = (isGeminiShape && !backend.vertex) ? 'x-goog-api-key' : 'Authorization';
+      const header = (a.header || defaultHeader).toLowerCase();
+      const scheme = a.scheme != null ? a.scheme : (header === 'authorization' ? 'Bearer' : '');
+      const value  = a.literal != null ? a.literal : (a.env ? process.env[a.env] || '' : '');
+      if (value) outgoingHeaders[header] = scheme ? `${scheme} ${value}` : value;
+      setProfile('explicit_object');
     }
   }
 
-  // Default: Ollama backends (kind:"ollama") often use 'Bearer ollama' as a dummy
-  // token for their /v1/messages adapter. If no other Authorization header is set, inject it.
-  if (backend.kind === 'ollama' && !outgoingHeaders['authorization']) {
+  // Layer 4: Ollama-default dummy Bearer for /v1/messages adapter. Triggered by
+  // explicit kind:"ollama" OR localhost:11434 host (the canonical Ollama port).
+  const looksLikeOllama = backend.kind === 'ollama'
+    || /(?:^|\/\/)(?:localhost|127\.0\.0\.1):11434(?:[\/?#]|$)/.test(backend.url || '');
+  if (looksLikeOllama && !outgoingHeaders['authorization']) {
     outgoingHeaders['authorization'] = 'Bearer ollama';
   }
+  return true;
 }
 
 function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
@@ -850,6 +984,114 @@ function sendAnthropicError(res, code, message) {
     type: 'error',
     error: { type: anthropicErrorType(code), message },
   });
+}
+
+// Structured 501 for endpoints that this backend cannot serve. Matches the
+// Anthropic error envelope (`{type:"error", error:{type, message}}`) so SDKs
+// surface it through their normal error path instead of as opaque HTTP. See
+// docs/anthropic-api-coverage.md for the supported-endpoint matrix.
+function unsupportedForBackend(res, { backend, path, supported }) {
+  const supportedList = (supported && supported.length)
+    ? supported.join(', ')
+    : '/v1/messages';
+  send(res, 501, {
+    type: 'error',
+    error: {
+      type: 'not_implemented',
+      message:
+        `Endpoint ${path} is not implemented for backend "${backend}". ` +
+        `Supported here: ${supportedList}. ` +
+        `See docs/anthropic-api-coverage.md for the full matrix.`,
+    },
+  });
+}
+
+// Anthropic-only endpoints that have no Gemini/Ollama equivalent. The gate
+// only short-circuits to 501 when no anthropic upstream can be reached at
+// all — when an `endpoints.anthropic` exists, requests forward verbatim and
+// `applyOutboundAuth` synthesizes the right header from env/subscription
+// state. The principle is: serve as many Claude Code calls as possible.
+//
+// Excluded from this list (intentionally never gated):
+//   /v1/oauth/token         — bootstrap path, must always forward (subscription
+//                             refresh ships no inbound auth header)
+//   /v1/files/{id}/content  — handled by handleFilesApi (Gemini) or falls
+//                             through to anthropic catch-all (Anthropic)
+const BATCHES_PATH_RE = /^\/v1\/messages\/batches(?:\/|\?|$)/;
+const ANTHROPIC_ONLY_PATHS = [
+  BATCHES_PATH_RE,
+  /^\/v1\/skills(?:\/|\?|$)/,
+  /^\/v1\/agents(?:\/|\?|$)/,
+  /^\/v1\/sessions(?:\/|\?|$)/,
+  /^\/v1\/environments(?:\/|\?|$)/,
+  /^\/v1\/vaults(?:\/|\?|$)/,
+  /^\/v1\/organizations(?:\/|\?|$)/,
+  /^\/v1\/usage_report(?:\/|\?|$)/,
+  /^\/v1\/cost_report(?:\/|\?|$)/,
+  /^\/v1\/rate_limits(?:\/|\?|$)/,
+  /^\/v1\/audit_logs(?:\/|\?|$)/,
+  /^\/v1\/complete(?:\/|\?|$)/,
+];
+
+function isAnthropicOnlyPath(urlPath) {
+  if (typeof urlPath !== 'string') return false;
+  // Strip query string for the regex check; the trailing alternations above
+  // already accept `?` as a delimiter, but be explicit for robustness.
+  for (const re of ANTHROPIC_ONLY_PATHS) if (re.test(urlPath)) return true;
+  return false;
+}
+
+// Verbatim Anthropic catch-all forwarder. Used by both the top-of-dispatch
+// ANTHROPIC_ONLY_PATHS gate (so `/v1/messages/batches`, `/v1/files/.../content`,
+// etc. bypass the Messages-translation and Gemini-Files dispatch and go
+// straight to api.anthropic.com) and the late `/v1/*` catch-all (so unknown
+// auth-check paths like `/v1/me` resolve through the configured key). Returns
+// true if the request was handled, false if no `endpoints.anthropic` exists.
+function forwardToAnthropicCatchAll(req, res) {
+  const anthropicCfg = (CONFIG.endpoints || CONFIG.backends || {}).anthropic;
+  if (!anthropicCfg) return false;
+  const backend = normalizeBackend('anthropic', anthropicCfg);
+  proxyLog('v1_passthrough', { method: req.method, path: req.url, backend: 'anthropic' });
+  const targetUrl = new URL(backend.url);
+  const isHttps = targetUrl.protocol === 'https:';
+  const lib = isHttps ? https : http;
+  const fwdHeaders = scrubCthruHeaders(req.headers);
+  const v1Meta = {};
+  if (!applyOutboundAuth(backend, req.headers, fwdHeaders, v1Meta)) {
+    sendAnthropicError(res, 401,
+      `Endpoint "${backend.id}" is configured with auth:"subscription" — API key billing is blocked.`);
+    return true;
+  }
+  const up = lib.request({
+    hostname: targetUrl.hostname,
+    port: targetUrl.port || (isHttps ? 443 : 80),
+    path: req.url,
+    method: req.method,
+    headers: fwdHeaders,
+  }, upRes => {
+    const passHeaders = Object.assign({}, upRes.headers);
+    if (v1Meta.authDerivedProfile) passHeaders['x-c-thru-auth-derived'] = v1Meta.authDerivedProfile;
+    res.writeHead(upRes.statusCode, passHeaders);
+    upRes.pipe(res);
+  });
+  // SSE on this passthrough (e.g. /v1/sessions/{id}/stream) needs no idle
+  // timeout — let the upstream's own timeouts bound the connection. Same for
+  // /v1/messages/batches: batch creation can take well over a minute when
+  // Anthropic queues a large payload, and `setTimeout` here measures socket
+  // idle (not total time), so it fires while Anthropic is still processing.
+  // For the remaining short-lived calls (auth checks, model lookups, admin
+  // GETs), a generous 60 s cap catches truly-stuck sockets without falsely
+  // failing slow-but-legitimate requests.
+  const wantsStream = /text\/event-stream/i.test(req.headers['accept'] || '');
+  const isBatchPath = BATCHES_PATH_RE.test(req.url || '');
+  if (!wantsStream && !isBatchPath) {
+    up.setTimeout(60000, () => up.destroy(new Error('v1-passthrough timeout')));
+  }
+  up.on('error', err => {
+    if (!res.headersSent) sendAnthropicError(res, 502, `v1-passthrough error: ${err.message}`);
+  });
+  req.pipe(up);
+  return true;
 }
 
 // Write a single SSE frame with event + data lines. Anthropic always emits
@@ -1093,11 +1335,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
     requestMeta._fallbackFrom = requestMeta._fallbackFrom || backend.id;
     body.model = resolved.effectiveModel;
     if (resolved.chain) requestMeta.resolutionChain = resolved.chain;
-    if (isOllamaLegacy(resolved.backend)) {
-      dispatchOllamaBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
-    } else {
-      forwardAnthropic(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
-    }
+    dispatchBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
     return true;
   }
 
@@ -1126,11 +1364,7 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
       requestMeta._fallbackFrom = requestMeta._fallbackFrom || backend.id;
       body.model = candidateResolved.effectiveModel;
       if (candidateResolved.chain) requestMeta.resolutionChain = candidateResolved.chain;
-      if (isOllamaLegacy(candidateResolved.backend)) {
-        dispatchOllamaBackend(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
-      } else {
-        forwardAnthropic(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
-      }
+      dispatchBackend(ctx, req, res, body, candidateResolved.backend, candidateResolved.effectiveModel, requestMeta);
       return true;
     }
   }
@@ -1169,11 +1403,7 @@ function tryGlobalDefaultFallback(ctx, req, res, body, requestMeta) {
   chain.add(resolved.backend.id);
   body.model = resolved.effectiveModel;
   if (resolved.chain) requestMeta.resolutionChain = resolved.chain;
-  if (isOllamaLegacy(resolved.backend)) {
-    dispatchOllamaBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
-  } else {
-    forwardAnthropic(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
-  }
+  dispatchBackend(ctx, req, res, body, resolved.backend, resolved.effectiveModel, requestMeta);
   return true;
 }
 
@@ -1212,7 +1442,13 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   const lib = isHttps ? https : http;
 
   const headers = scrubCthruHeaders(req.headers);
-  applyOutboundAuth(backend, req.headers, headers);
+  if (!applyOutboundAuth(backend, req.headers, headers, requestMeta)) {
+    return sendAnthropicError(res, 401,
+      `Endpoint "${backend.id}" is configured with auth:"subscription" — ` +
+      'only Bearer session tokens (from "claude login") are accepted. ' +
+      'API key billing (x-api-key) is blocked on this endpoint. ' +
+      'Run "claude login" to authenticate via your subscription.');
+  }
   if (requestMeta) requestMeta.authMissing = isAuthMissing(backend);
 
   // Combine the backend's optional base path with the client's request path.
@@ -1279,6 +1515,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       outHeaders['x-c-thru-tier-used'] = requestMeta.hwTier;
     }
     if (isAuthMissing(backend)) outHeaders['x-c-thru-auth-missing'] = '1';
+    if (requestMeta && requestMeta.authDerivedProfile) outHeaders['x-c-thru-auth-derived'] = requestMeta.authDerivedProfile;
     res.writeHead(upRes.statusCode, outHeaders);
     // Tee the upstream bytes for usage extraction without affecting the
     // pipe to the client. Anthropic emits `usage.input_tokens` in the
@@ -1485,6 +1722,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
     streamHeaders['x-c-thru-tier-used'] = requestMeta.hwTier;
   }
   if (isAuthMissing(backend)) streamHeaders['x-c-thru-auth-missing'] = '1';
+  if (requestMeta && requestMeta.authDerivedProfile) streamHeaders['x-c-thru-auth-derived'] = requestMeta.authDerivedProfile;
   res.writeHead(200, streamHeaders);
 
   const messageId = anthropicMessageId();
@@ -1886,6 +2124,7 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
         nonStreamHeaders['x-c-thru-tier-used'] = requestMeta.hwTier;
       }
       if (isAuthMissing(backend)) nonStreamHeaders['x-c-thru-auth-missing'] = '1';
+      if (requestMeta && requestMeta.authDerivedProfile) nonStreamHeaders['x-c-thru-auth-derived'] = requestMeta.authDerivedProfile;
       res.writeHead(200, nonStreamHeaders);
       res.end(respBody);
       ctxLog(ctx, 'ollama.nonstream.done', {
@@ -2188,6 +2427,13 @@ function buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta)
   if (geminiBody && geminiBody._redactedThinkingDropped) {
     h['x-c-thru-redacted-thinking-dropped'] = '1';
   }
+  // Aggregate translation-gap header: comma-separated list of content-block
+  // types that mapAnthropicToGemini could not represent (includes
+  // redacted_thinking + any unhandled `*_tool_use|*_tool_result|container_upload`
+  // block). Documented in docs/headers.md and docs/anthropic-api-coverage.md.
+  if (geminiBody && Array.isArray(geminiBody._translationGap) && geminiBody._translationGap.length) {
+    h['x-c-thru-translation-gap'] = geminiBody._translationGap.join(',');
+  }
   // Thinking observability: surface auto-enable, budget expansion, and the
   // upstream-reported thoughtsTokenCount so callers can see what was paid.
   if (geminiBody && geminiBody._thinkingAutoEnabled) {
@@ -2225,6 +2471,7 @@ function buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta)
       h['x-c-thru-tier-used'] = requestMeta.hwTier;
     }
     if (requestMeta.authMissing) h['x-c-thru-auth-missing'] = '1';
+    if (requestMeta.authDerivedProfile) h['x-c-thru-auth-derived'] = requestMeta.authDerivedProfile;
   }
   return h;
 }
@@ -2458,7 +2705,11 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
   const headers = scrubCthruHeaders(req.headers);
   headers['content-type'] = 'application/json';
   // x-goog-api-key will be applied by applyOutboundAuth based on Phase 2 changes
-  applyOutboundAuth(backend, req.headers, headers);
+  if (!applyOutboundAuth(backend, req.headers, headers, requestMeta)) {
+    return sendAnthropicError(res, 401,
+      `Endpoint "${backend.id}" is configured with auth:"subscription" — ` +
+      'only Bearer session tokens are accepted. API key billing (x-api-key) is blocked on this endpoint.');
+  }
   if (requestMeta) requestMeta.authMissing = isAuthMissing(backend);
 
   ctxLog(ctx, 'gemini.request', { backend: backend.id, url, model: effectiveModel, stream: isStream });
@@ -2937,6 +3188,19 @@ function dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, req
   return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
 }
 
+// Shared dispatch helper used by fallback paths. Applies the same call_style
+// routing logic as the primary dispatch block so that fallback backends are
+// never silently downgraded to forwardAnthropic when call_style:"gemini".
+function dispatchBackend(ctx, req, res, body, backend, effectiveModel, requestMeta) {
+  if (isOllamaLegacy(backend)) {
+    return dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
+  }
+  if (backend.call_style === 'gemini') {
+    return dispatchGeminiBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
+  }
+  return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
+}
+
 // =============================================================================
 // GEMINI TRANSLATION
 // =============================================================================
@@ -3237,6 +3501,11 @@ function mapAnthropicToGemini(body, effectiveModel) {
 
   const schemaRemoved = new Set();
   let redactedThinkingDropped = false;
+  // Translation-gap accumulator: every inbound content-block type that this
+  // function cannot represent in Gemini's request shape gets added here and
+  // surfaced as `x-c-thru-translation-gap` on the response. Lets callers
+  // detect that conversation history was lossy without diffing payloads.
+  const translationGap = new Set();
   if (body.tools) {
     geminiReq.tools = [{
       functionDeclarations: body.tools.map(t => ({
@@ -3320,6 +3589,7 @@ function mapAnthropicToGemini(body, effectiveModel) {
           // Anthropic-encrypted opaque blob. Gemini cannot decrypt, would 400
           // if forwarded. Skip the part and surface the omission via header.
           redactedThinkingDropped = true;
+          translationGap.add('redacted_thinking');
           continue;
         } else if (block.type === 'image') {
           // Anthropic image blocks: base64 inline, url, or file_id (post-G9).
@@ -3343,6 +3613,14 @@ function mapAnthropicToGemini(body, effectiveModel) {
             const uri = fileIdToGeminiUri(src.file_id);
             if (uri) parts.push({ fileData: { fileUri: uri, mimeType: src.media_type || 'application/pdf' } });
           }
+        } else if (block && typeof block.type === 'string') {
+          // Unknown / unhandled content-block type (server_tool_use,
+          // web_search_tool_result, web_fetch_tool_result, code_execution_tool_result,
+          // tool_search_tool_result, mcp_tool_use, mcp_tool_result,
+          // container_upload, …). Drop silently on the wire — Gemini would 400
+          // — but record so the response surfaces an x-c-thru-translation-gap
+          // header. See docs/anthropic-api-coverage.md.
+          translationGap.add(block.type);
         }
       }
     } else if (typeof msg.content === 'string') {
@@ -3361,6 +3639,12 @@ function mapAnthropicToGemini(body, effectiveModel) {
   if (redactedThinkingDropped) {
     Object.defineProperty(geminiReq, '_redactedThinkingDropped', {
       value: true, enumerable: false
+    });
+  }
+
+  if (translationGap.size > 0) {
+    Object.defineProperty(geminiReq, '_translationGap', {
+      value: Array.from(translationGap), enumerable: false
     });
   }
 
@@ -3564,6 +3848,23 @@ function loadConfig() {
   } catch (e) {
     console.error(`c-thru: failed to load ${CONFIG_PATH}: ${e.message}`);
     process.exit(1);
+  }
+  warnUnknownAuthHosts(GLOBAL_CONFIG);
+}
+
+// Walk endpoints; warn for any whose host is not in KNOWN_HOSTS and which has no
+// explicit auth/auth_env declaration. Surfaces silent misconfiguration before
+// the first request 401s. Localhost endpoints with auth:"none" are silent.
+function warnUnknownAuthHosts(cfg) {
+  const eps = cfg.endpoints || cfg.backends || {};
+  for (const [id, ep] of Object.entries(eps)) {
+    if (!ep || typeof ep !== 'object') continue;
+    if (ep.auth || ep.auth_env || ep.auth_profile) continue;
+    const host = backendHost(ep);
+    if (!host) continue;
+    const derived = deriveAuthProfile(ep);
+    if (derived) continue;
+    console.error(`c-thru: warning: endpoint '${id}' (host=${host}) has no derivable auth and no explicit auth/auth_env; requests will fall back to header passthrough.`);
   }
 }
 
@@ -3863,10 +4164,40 @@ const server = http.createServer((req, res) => {
         });
       }
 
+      // Top-of-dispatch ANTHROPIC_ONLY_PATHS gate. These endpoints
+      // (Batches/Skills/Agents/Sessions/Admin/Reports/...) have no Gemini or
+      // Ollama equivalent. Routing them through the Messages or Files-translation
+      // handlers would 400/503 spuriously, so we intercept before those handlers.
+      //
+      // Policy: forward whenever an anthropic endpoint is configured —
+      // applyOutboundAuth synthesizes auth from env/subscription state. Only
+      // emit a structured 501 when there is no anthropic upstream at all
+      // (purely-local config, no key in env). Lets Claude Code calls that
+      // arrive without inbound auth headers (e.g. /v1/oauth/token, env-keyed
+      // admin probes) reach the upstream that can actually serve them.
+      // See docs/anthropic-api-coverage.md.
+      if (isAnthropicOnlyPath(req.url)) {
+        if (forwardToAnthropicCatchAll(req, res)) return;
+        return unsupportedForBackend(res, {
+          backend: 'no-anthropic-endpoint',
+          path: req.url,
+          supported: ['/v1/messages', '/v1/messages/count_tokens (gemini)', '/v1/files (gemini)'],
+        });
+      }
+
       // /v1/files* — Gemini Files API proxy (upload, list, get, delete).
-      // Anthropic file_<x> <-> Gemini files/<x> mapping is symmetrical.
+      // Anthropic file_<x> <-> Gemini files/<x> mapping is symmetrical. When
+      // no Gemini endpoint is configured, fall through to the anthropic
+      // catch-all so an Anthropic-only deployment can still serve Files API
+      // calls verbatim. Content-download (/v1/files/{id}/content) has no
+      // Gemini handler today either way — falling through is the right path.
       if (req.url === '/v1/files' || req.url === '/v1/files/' || req.url.startsWith('/v1/files?') || req.url.startsWith('/v1/files/')) {
-        return handleFilesApi(req, res);
+        const isContentDownload = /^\/v1\/files\/[^/]+\/content/.test(req.url);
+        const geminiBackendForFiles = pickGeminiBackend(CONFIG);
+        if (geminiBackendForFiles && !isContentDownload) {
+          return handleFilesApi(req, res);
+        }
+        // Else: fall through to the anthropic catch-all below.
       }
 
       // /v1/models — Anthropic-shape model listing. Static enumeration over
@@ -4110,44 +4441,33 @@ const server = http.createServer((req, res) => {
         if (isOllamaLegacy(backend)) {
           return dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
-        if (backend.format === 'gemini') {
+        if (backend.call_style === 'gemini') {
           return dispatchGeminiBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
-        if (backend.format === 'openai') {
-          return sendAnthropicError(res, 501, 'format:"openai" not yet implemented — configure an OpenRouter endpoint with format:"anthropic" instead, or use a separate OpenAI-compat gateway');
+        if (backend.call_style === 'openai') {
+          return sendAnthropicError(res, 501,
+            'call_style:"openai" (Anthropic→OpenAI translation) not yet implemented. ' +
+            'Translation requires mapping: (1) request `tools[]` shape (Anthropic ' +
+            '`{name,description,input_schema}` → OpenAI `{type:"function", function:{...}}`), ' +
+            '(2) `tool_use` / `tool_result` content blocks → OpenAI `tool_calls` / role:"tool" ' +
+            'messages, (3) streaming event vocabulary (Anthropic SSE event types → OpenAI ' +
+            '`chat.completion.chunk` deltas), and (4) finish-reason vocabulary (`end_turn` ' +
+            '/ `tool_use` / `max_tokens` ↔ `stop` / `tool_calls` / `length`). ' +
+            'See docs/anthropic-api-coverage.md for the full coverage matrix. ' +
+            'Workaround: use call_style:"anthropic" to passthrough as-is, or ' +
+            'call_style:"gemini" for Gemini endpoints.');
         }
         return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
       }
 
       // Forward unhandled /v1/* to Anthropic so Claude Code auth checks (/v1/me,
       // /v1/organizations) resolve with the real key rather than getting a 404.
+      // ANTHROPIC_ONLY_PATHS were already gated above; this catches the
+      // remaining /v1/* (e.g. /v1/me) where forwarding to a configured
+      // Anthropic endpoint is the right behavior even without explicit auth
+      // (the upstream itself decides whether to 401).
       if (req.url.startsWith('/v1/')) {
-        const anthropicCfg = (CONFIG.endpoints || CONFIG.backends || {}).anthropic;
-        if (anthropicCfg) {
-          const backend = normalizeBackend('anthropic', anthropicCfg);
-          proxyLog('v1_passthrough', { method: req.method, path: req.url, backend: 'anthropic' });
-          const targetUrl = new URL(backend.url);
-          const isHttps = targetUrl.protocol === 'https:';
-          const lib = isHttps ? https : http;
-          const fwdHeaders = scrubCthruHeaders(req.headers);
-          applyOutboundAuth(backend, req.headers, fwdHeaders);
-          const up = lib.request({
-            hostname: targetUrl.hostname,
-            port: targetUrl.port || (isHttps ? 443 : 80),
-            path: req.url,
-            method: req.method,
-            headers: fwdHeaders,
-          }, upRes => {
-            res.writeHead(upRes.statusCode, upRes.headers);
-            upRes.pipe(res);
-          });
-          up.setTimeout(15000, () => up.destroy(new Error('v1-passthrough timeout')));
-          up.on('error', err => {
-            if (!res.headersSent) sendAnthropicError(res, 502, `v1-passthrough error: ${err.message}`);
-          });
-          req.pipe(up);
-          return;
-        }
+        if (forwardToAnthropicCatchAll(req, res)) return;
       }
 
       sendAnthropicError(res, 404, `not found: ${req.method} ${req.url}`);

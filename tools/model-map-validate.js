@@ -3,6 +3,30 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+
+// Per-c-thru-session warning dedupe. When C_THRU_SESSION_ID is set (exported by
+// tools/c-thru as $$), each warning string is fingerprinted and recorded in a
+// stamp file at ${TMPDIR}/c-thru-warned.<sid>; subsequent matches in the same
+// session are skipped. No session id → never dedupe (standalone CLI, tests,
+// hooks all emit normally). The c-thru EXIT trap removes the stamp file.
+function sessionStampPath() {
+  const sid = process.env.C_THRU_SESSION_ID;
+  if (!sid) return null;
+  const tmp = process.env.TMPDIR || '/tmp';
+  return path.join(tmp, `c-thru-warned.${sid}`);
+}
+
+function shouldEmitWarning(msg) {
+  const stamp = sessionStampPath();
+  if (!stamp) return true;
+  const fp = crypto.createHash('sha1').update(msg).digest('hex').slice(0, 16);
+  let seen = '';
+  try { seen = fs.readFileSync(stamp, 'utf8'); } catch { /* first write */ }
+  if (seen.includes(fp)) return false;
+  try { fs.appendFileSync(stamp, fp + '\n'); } catch { /* best-effort */ }
+  return true;
+}
 
 // New schema: llm_profiles is capability-outer, not tier-outer.
 // 12 pipeline agents + 8 utility agents. Fallback for test fixtures.
@@ -62,6 +86,56 @@ const TRUSTED_JS_FLAG = 'C_THRU_MODEL_MAP_TRUSTED_JS';
 function fail(message) {
   console.error(`model-map-validate: ${message}`);
   process.exit(1);
+}
+
+// Resolve active mode + tier from env, mirroring tools/model-map-resolve.js logic.
+function getActiveContext() {
+  const mode = process.env.CLAUDE_LLM_MODE
+            || process.env.CLAUDE_CONNECTIVITY_MODE
+            || 'best-cloud';
+  const tier = process.env.CLAUDE_LLM_PROFILE || null;
+  return { mode, tier };
+}
+
+// Walk llm_profiles for active mode (+ best-cloud fallback per resolve.js),
+// collect concrete model names, then map each to its endpoint via model_routes.
+function computeReachableSets(config, ctx) {
+  const reachableCells = new Set();   // "<cap>.<mode>.<tier|*>"
+  const reachableEndpoints = new Set();
+  const modes = new Set([ctx.mode]);
+  if (ctx.mode !== 'best-cloud') modes.add('best-cloud');
+  const profiles = (config && config.llm_profiles) || {};
+  const routes = (config && config.model_routes) || {};
+  for (const [cap, entry] of Object.entries(profiles)) {
+    if (!entry || typeof entry !== 'object') continue;
+    for (const m of modes) {
+      const v = entry[m];
+      if (v == null) continue;
+      const tiers = typeof v === 'string'
+        ? [{ tier: '*', model: v }]
+        : Object.entries(v).map(([t, mdl]) => ({ tier: t, model: mdl }));
+      for (const { tier, model } of tiers) {
+        if (ctx.tier && tier !== '*' && tier !== ctx.tier) continue;
+        reachableCells.add(`${cap}.${m}.${tier}`);
+        const route = routes[model];
+        let endpoint = null;
+        if (typeof route === 'string') {
+          endpoint = route;
+        } else if (route && typeof route === 'object') {
+          if (typeof route.endpoint === 'string') {
+            endpoint = route.endpoint;
+          } else {
+            // mode-conditional: collect any string-valued mode targets
+            for (const v2 of Object.values(route)) {
+              if (typeof v2 === 'string') reachableEndpoints.add(v2);
+            }
+          }
+        }
+        if (typeof endpoint === 'string') reachableEndpoints.add(endpoint);
+      }
+    }
+  }
+  return { reachableCells, reachableEndpoints };
 }
 
 function checkNoDuplicateKeys(jsonText) {
@@ -278,7 +352,10 @@ function expectNonEmptyString(parent, key, context) {
 
 // New schema: llm_profiles[capability] is a mode-keyed object.
 // Each mode key maps to either a string or a tier-keyed object.
-function validateCapabilityEntry(capabilityName, entry, report) {
+function validateCapabilityEntry(capabilityName, entry, report, options) {
+  const opts = options || {};
+  const reachable = opts.reachable;
+  const warn = (msg) => { if (shouldEmitWarning(msg)) console.warn(msg); };
   if (!isObject(entry)) {
     report(`'llm_profiles.${capabilityName}' must be an object`);
     return;
@@ -296,7 +373,9 @@ function validateCapabilityEntry(capabilityName, entry, report) {
     if (typeof value === 'string') {
       if (!value.trim()) report(`'llm_profiles.${capabilityName}.${key}' must be a non-empty string`);
       if (value.endsWith(':TODO')) {
-        console.warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}' is a placeholder (${value}) — requests using this entry will fail at runtime`);
+        if (!reachable || reachable.reachableCells.has(`${capabilityName}.${key}.*`)) {
+          warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}' is a placeholder (${value}) — requests using this entry will fail at runtime`);
+        }
       }
     } else if (isObject(value)) {
       const definedTiers = [];
@@ -309,7 +388,9 @@ function validateCapabilityEntry(capabilityName, entry, report) {
         if (typeof model !== 'string' || !model.trim()) {
           report(`'llm_profiles.${capabilityName}.${key}.${tier}' must be a non-empty string`);
         } else if (model.endsWith(':TODO')) {
-          console.warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}.${tier}' is a placeholder (${model}) — requests using this entry will fail at runtime`);
+          if (!reachable || reachable.reachableCells.has(`${capabilityName}.${key}.${tier}`)) {
+            warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}.${tier}' is a placeholder (${model}) — requests using this entry will fail at runtime`);
+          }
         }
       }
       // V4: warn when higher tiers exist but are not covered
@@ -318,7 +399,7 @@ function validateCapabilityEntry(capabilityName, entry, report) {
         const maxDefinedIdx = Math.max(...definedTiers.map(t => TIER_ORDER.indexOf(t)));
         const missingAbove = TIER_ORDER.slice(maxDefinedIdx + 1).filter(t => !definedTiers.includes(t));
         if (missingAbove.length > 0) {
-          console.warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}' defines up to '${TIER_ORDER[maxDefinedIdx]}' but is missing higher tiers: ${missingAbove.join(', ')} — requests from those tiers will get null resolution`);
+          warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}' defines up to '${TIER_ORDER[maxDefinedIdx]}' but is missing higher tiers: ${missingAbove.join(', ')} — requests from those tiers will get null resolution`);
         }
       }
     } else {
@@ -490,8 +571,16 @@ function validateConfig(config, _errors, options) {
     jsEnabled: process.env[JS_WRAPPER_FLAG] === '1',
     trustedJs: process.env[TRUSTED_JS_FLAG] === '1',
   }, options || {});
+  const warn = (msg) => { if (shouldEmitWarning(msg)) console.warn(msg); };
 
   if (!isObject(config)) { report('top-level config must be an object'); return; }
+
+  if (!opts.reachable && isObject(config)) {
+    const ctx = opts.ctx || getActiveContext();
+    opts.ctx = ctx;
+    opts.reachable = computeReachableSets(config, ctx);
+  }
+  const reachable = opts.reachable;
 
   for (const key of ['backends', 'endpoints', 'model_routes', 'routes']) {
     if (config[key] != null && !isObject(config[key])) {
@@ -502,15 +591,28 @@ function validateConfig(config, _errors, options) {
   const endpointsOrBackends = config.endpoints || config.backends;
   const endpointsKey = config.endpoints ? 'endpoints' : 'backends';
   const VALID_FORMATS = new Set(['anthropic', 'openai', 'ollama-legacy', 'gemini']);
+  const VALID_CALL_STYLES = new Set(['anthropic', 'gemini', 'openai']);
   if (endpointsOrBackends != null && isObject(endpointsOrBackends)) {
     for (const [id, entry] of Object.entries(endpointsOrBackends)) {
       if (!isObject(entry)) { report(`'${endpointsKey}.${id}' must be an object`); continue; }
       if (entry.format != null && !VALID_FORMATS.has(entry.format)) {
         report(`'${endpointsKey}.${id}.format' must be one of: ${[...VALID_FORMATS].join(', ')}`);
       }
-      if (entry.auth != null && entry.auth !== 'none') {
+      if (entry.call_style != null) {
+        if (!VALID_CALL_STYLES.has(entry.call_style)) {
+          report(`'${endpointsKey}.${id}.call_style' must be one of: ${[...VALID_CALL_STYLES].join(', ')}`);
+        } else {
+          if (entry.format === 'gemini' && entry.call_style === 'anthropic') {
+            warn(`model-map-validate: warning: endpoint '${id}' has format:"gemini" + call_style:"anthropic" — request will passthrough without Gemini translation`);
+          }
+          if (entry.format !== 'gemini' && entry.call_style === 'gemini') {
+            warn(`model-map-validate: warning: endpoint '${id}' has call_style:"gemini" on a non-gemini format endpoint`);
+          }
+        }
+      }
+      if (entry.auth != null && entry.auth !== 'none' && entry.auth !== 'subscription') {
         if (typeof entry.auth !== 'object' || Array.isArray(entry.auth)) {
-          report(`'${endpointsKey}.${id}.auth' must be "none" or an object`);
+          report(`'${endpointsKey}.${id}.auth' must be "none", "subscription", or an object`);
         } else {
           if (entry.auth.env == null && entry.auth.literal == null) {
             report(`'${endpointsKey}.${id}.auth' object must have 'env' or 'literal' field`);
@@ -523,7 +625,9 @@ function validateConfig(config, _errors, options) {
       if (entry.auth == null && entry.auth_env == null) {
         const url = entry.url || '';
         if (url && !/localhost|127\.0\.0\.1/.test(url)) {
-          console.warn(`model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming auth will be forwarded verbatim`);
+          if (!reachable || reachable.reachableEndpoints.has(id)) {
+            warn(`model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming auth will be forwarded verbatim`);
+          }
         }
       }
       // V3: warn on unresolved URL template variables (e.g. ${GOOGLE_CLOUD_REGION})
@@ -533,7 +637,9 @@ function validateConfig(config, _errors, options) {
         while ((m = templateVarRe.exec(entry.url)) !== null) {
           const varName = m[1];
           if (!process.env[varName]) {
-            console.warn(`model-map-validate: warning: endpoint '${id}' url references \${${varName}} but ${varName} is not set in the environment — the URL will be malformed at runtime`);
+            if (!reachable || reachable.reachableEndpoints.has(id)) {
+              warn(`model-map-validate: warning: endpoint '${id}' url references \${${varName}} but ${varName} is not set in the environment — the URL will be malformed at runtime`);
+            }
           }
         }
       }
@@ -542,7 +648,7 @@ function validateConfig(config, _errors, options) {
         if (typeof entry.vertex !== 'boolean') {
           report(`'${endpointsKey}.${id}.vertex' must be boolean (got ${typeof entry.vertex})`);
         } else if (entry.vertex === true && entry.format !== 'gemini') {
-          console.warn(`model-map-validate: warning: endpoint '${id}' has vertex:true but format is '${entry.format || 'anthropic'}' — vertex flag is only meaningful for format:'gemini'`);
+          warn(`model-map-validate: warning: endpoint '${id}' has vertex:true but format is '${entry.format || 'anthropic'}' — vertex flag is only meaningful for format:'gemini'`);
         }
       }
     }
@@ -563,7 +669,7 @@ function validateConfig(config, _errors, options) {
       report("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
     } else if (config.llm_mode == null) {
       // Non-fatal migration hint: only warn when llm_mode is absent (both present = silent coexistence; llm_mode wins)
-      console.warn("model-map-validate: warning: 'llm_connectivity_mode' is deprecated; migrate to 'llm_mode' (connected|semi-offload|cloud-judge-only|offline)");
+      warn("model-map-validate: warning: 'llm_connectivity_mode' is deprecated; migrate to 'llm_mode' (connected|semi-offload|cloud-judge-only|offline)");
     }
     // else: both fields present — llm_mode takes precedence; no warning needed
   }
@@ -581,7 +687,7 @@ function validateConfig(config, _errors, options) {
   if (profiles) {
     for (const [capabilityName, capEntry] of Object.entries(profiles)) {
       if (capEntry != null) {
-        validateCapabilityEntry(capabilityName, capEntry, report);
+        validateCapabilityEntry(capabilityName, capEntry, report, opts);
       }
     }
     // Cross-reference: fallback_to must point to a known capability key

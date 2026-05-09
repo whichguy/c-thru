@@ -2,43 +2,43 @@
   "endpoints": {
     "anthropic": {
       "url": "https://api.anthropic.com",
-      "format": "anthropic",
-      "auth_env": "ANTHROPIC_API_KEY"
+      "format": "anthropic"
     },
     "openrouter": {
       "url": "https://openrouter.ai/api/v1",
-      "format": "anthropic",
-      "auth_env": "OPENROUTER_API_KEY"
+      "format": "anthropic"
     },
     "ollama_local": {
       "url": "http://localhost:11434",
-      "format": "anthropic",
-      "auth": "none"
+      "format": "anthropic"
     },
     "ollama_cloud": {
       "url": "http://localhost:11434",
       "format": "anthropic",
-      "auth": "none",
       "prep_policy": "skip"
     },
     "gemini_ai": {
       "url": "https://generativelanguage.googleapis.com",
       "format": "gemini",
-      "auth_env": "GOOGLE_API_KEY",
       "fallback_to": "claude-sonnet-4-6"
     },
     "gemini_vertex": {
       "url": "https://${GOOGLE_CLOUD_REGION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_REGION}/publishers/google/models",
       "format": "gemini",
       "vertex": true,
-      "auth_env": "GOOGLE_CLOUD_TOKEN",
       "fallback_to": "claude-sonnet-4-6"
     },
     "gemini_ai_compat": {
       "url": "https://generativelanguage.googleapis.com/v1beta/openai",
       "format": "anthropic",
+      "call_style": "openai",
       "auth_env": "GOOGLE_API_KEY",
       "fallback_to": "claude-sonnet-4-6"
+    },
+    "anthropic_subscription": {
+      "url": "https://api.anthropic.com",
+      "format": "anthropic",
+      "auth": "subscription"
     }
   },
   "llm_active_profile": "auto",

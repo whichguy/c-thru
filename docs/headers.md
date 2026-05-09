@@ -17,7 +17,8 @@ mid-stream.
 | Header | Set when | Value | Streaming? |
 |---|---|---|---|
 | `x-c-thru-backend-latency-ms` | Always (when request reaches upstream) | Round-trip time from proxy→backend in milliseconds (integer string) | Yes |
-| `x-c-thru-auth-missing` | `auth_env` is configured on the endpoint but the referenced env var is unset at request time | `1` | Yes |
+| `x-c-thru-auth-missing` | `auth_env` (explicit or derived from the host table) is configured on the endpoint but the referenced env var is unset at request time | `1` | Yes |
+| `x-c-thru-auth-derived` | Always (when a request reaches `applyOutboundAuth`) | Profile chosen for outbound auth: `bearer_priority` \| `header_env` \| `passthrough` \| `none` \| `subscription` \| `explicit_object`. Lets you debug "why is my key not being sent?" without reading code. See `docs/subscription-auth.md`. | Yes |
 | `x-c-thru-tier-detected` | Always | Hardware tier computed from raw `os.totalmem()` — ignores `CLAUDE_LLM_PROFILE` / `CLAUDE_LLM_MEMORY_GB` overrides (e.g. `64gb`) | Yes |
 | `x-c-thru-tier-used` | Always | Effective tier after all overrides — this is what model resolution used (e.g. `16gb` when `CLAUDE_LLM_PROFILE=16gb` is set on a 128 GB machine) | Yes |
 
@@ -49,6 +50,7 @@ the actual hardware or an explicit override.
 |---|---|---|---|
 | `x-c-thru-schema-scrubbed` | Tool-use schemas had Gemini-incompatible constructs stripped | Comma-list of dropped fields: `oneOf,allOf,$ref,additionalProperties` | Yes |
 | `x-c-thru-redacted-thinking-dropped` | Anthropic `redacted_thinking` block was in request history | `1` (Gemini cannot decrypt the opaque blob, so it's dropped silently otherwise) | Yes |
+| `x-c-thru-translation-gap` | `mapAnthropicToGemini` encountered any content-block type it cannot represent (`redacted_thinking`, `server_tool_use`, `web_search_tool_result`, `web_fetch_tool_result`, `code_execution_tool_result`, `tool_search_tool_result`, `mcp_tool_use`, `mcp_tool_result`, `container_upload`, …) | Comma-list of dropped block-type names; deduplicated across the request. See `docs/anthropic-api-coverage.md` for the full block × backend matrix. | Yes |
 | `x-c-thru-beta-dropped` | Request had `anthropic-beta` header tokens that Gemini can't honor | Comma-list of dropped tokens (`prompt-caching-2024-07-31,computer-use-2024-10-22`) | Yes |
 
 ## Thinking observability (Gemini ↔ Anthropic)
@@ -102,6 +104,32 @@ When adding a new header:
   data only arrives mid-stream (like `thoughtsTokenCount`), surface it
   via the SSE event stream instead — headers cannot be backfilled.
 - Update this page in the same commit.
+
+## Endpoint config: `call_style`
+
+`call_style` controls which forwarding function handles a request for a given endpoint.
+It is independent of `format` (which describes the wire protocol the endpoint speaks).
+When absent, `call_style` is inferred from `format`.
+
+| `call_style` | Forwarding function | Description |
+|---|---|---|
+| `anthropic` (default) | `forwardAnthropic` | Verbatim passthrough — body forwarded as-is, headers rewritten |
+| `gemini` | `dispatchGeminiBackend` | Full Anthropic→Gemini translation: URL construction, body mapping, streaming state machine, context caching, thinking blocks |
+| `openai` | 501 stub | Anthropic→OpenAI translation — not yet implemented; returns 501 with an informative message |
+
+**Why separate from `format`?**
+`format` is used for wire-level concerns (auth header selection: `x-goog-api-key` vs `Authorization`).
+`call_style` is used for translation-layer routing. Decoupling them allows:
+- Documenting future `call_style:"openai"` intent on an endpoint without changing current dispatch
+- Overriding translation independently of auth/wire format (e.g. passthrough to a Gemini-URL endpoint)
+
+**Example — `gemini_ai_compat`** uses `format:"anthropic"` (passthrough auth) but `call_style:"openai"` to
+document that its `/v1beta/openai` URL speaks OpenAI protocol. Once `forwardOpenAI` is implemented,
+it will dispatch correctly without any config change.
+
+**Backward compatibility:** all existing configs work unchanged. `format:"gemini"` infers
+`call_style:"gemini"`, `format:"anthropic"` infers `call_style:"anthropic"`, `format:"openai"` infers
+`call_style:"openai"` (still 501 — no behavior change).
 
 ## See also
 
