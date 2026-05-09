@@ -1051,7 +1051,6 @@ function forwardToAnthropicCatchAll(req, res) {
   const anthropicCfg = (CONFIG.endpoints || CONFIG.backends || {}).anthropic;
   if (!anthropicCfg) return false;
   const backend = normalizeBackend('anthropic', anthropicCfg);
-  proxyLog('v1_passthrough', { method: req.method, path: req.url, backend: 'anthropic' });
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
@@ -1062,6 +1061,51 @@ function forwardToAnthropicCatchAll(req, res) {
       `Endpoint "${backend.id}" is configured with auth:"subscription" — API key billing is blocked.`);
     return true;
   }
+
+  // Passthrough allow/deny gate. Both lists are optional regex-string arrays
+  // on the top-level model-map.json. Default (both absent/empty) = unrestricted
+  // passthrough — the gate philosophy is "answer everything by default."
+  // See docs/anthropic-api-coverage.md for the threat model these defend
+  // (multi-tenant box / shared workstation with an ambient ANTHROPIC_API_KEY).
+  const denylist = Array.isArray(CONFIG.passthrough_denylist) ? CONFIG.passthrough_denylist : [];
+  for (const pat of denylist) {
+    let re; try { re = new RegExp(pat); } catch { continue; }
+    if (re.test(req.url || '')) {
+      proxyLog('passthrough_denied', { url: req.url, matched: pat });
+      send(res, 403, { type: 'error', error: { type: 'forbidden_error', message: 'path matches passthrough_denylist' } });
+      return true;
+    }
+  }
+  const allowlist = Array.isArray(CONFIG.passthrough_allowlist) ? CONFIG.passthrough_allowlist : [];
+  if (allowlist.length > 0) {
+    let matched = false;
+    for (const pat of allowlist) {
+      let re; try { re = new RegExp(pat); } catch { continue; }
+      if (re.test(req.url || '')) { matched = true; break; }
+    }
+    if (!matched) {
+      proxyLog('passthrough_denied', { url: req.url, matched: null, reason: 'no_allowlist_match' });
+      send(res, 403, { type: 'error', error: { type: 'forbidden_error', message: 'path does not match passthrough_allowlist' } });
+      return true;
+    }
+  }
+
+  // Derive a coarse auth_kind label for observability — what shape of auth
+  // we ended up sending upstream, never the actual token. Profile names map
+  // 1:1 except for the localhost/none case where outgoing Bearer is always
+  // a literal "ollama" sentinel, and the bearer_priority branch which can
+  // produce either a real Bearer or an x-api-key.
+  let auth_kind = 'none';
+  if (v1Meta.authDerivedProfile === 'subscription') auth_kind = 'subscription';
+  else if (fwdHeaders['authorization'] && /^Bearer\s+/i.test(fwdHeaders['authorization'])) auth_kind = 'bearer';
+  else if (fwdHeaders['x-api-key']) auth_kind = 'x-api-key';
+  proxyLog('catch_all_forward', {
+    method: req.method,
+    path: req.url,
+    host: targetUrl.hostname,
+    auth_kind,
+  });
+  proxyLog('v1_passthrough', { method: req.method, path: req.url, backend: 'anthropic' });
   const up = lib.request({
     hostname: targetUrl.hostname,
     port: targetUrl.port || (isHttps ? 443 : 80),
@@ -1071,6 +1115,8 @@ function forwardToAnthropicCatchAll(req, res) {
   }, upRes => {
     const passHeaders = Object.assign({}, upRes.headers);
     if (v1Meta.authDerivedProfile) passHeaders['x-c-thru-auth-derived'] = v1Meta.authDerivedProfile;
+    passHeaders['x-c-thru-passthrough'] = '1';
+    passHeaders['x-c-thru-passthrough-host'] = targetUrl.hostname;
     res.writeHead(upRes.statusCode, passHeaders);
     upRes.pipe(res);
   });
@@ -4487,6 +4533,11 @@ const server = http.createServer((req, res) => {
         if (forwardToAnthropicCatchAll(req, res)) return;
       }
 
+      // No handler matched and no anthropic catch-all available. Log so
+      // operators can see which endpoints Claude Code (or any client) is
+      // hitting that the proxy doesn't yet handle — drives the gate
+      // philosophy ("answer everything") forward.
+      proxyLog('unhandled_url', { method: req.method, url: req.url, host: req.headers.host });
       sendAnthropicError(res, 404, `not found: ${req.method} ${req.url}`);
     } catch (err) {
       if (err.status === 413) {

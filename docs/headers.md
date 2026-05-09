@@ -50,8 +50,10 @@ the actual hardware or an explicit override.
 |---|---|---|---|
 | `x-c-thru-schema-scrubbed` | Tool-use schemas had Gemini-incompatible constructs stripped | Comma-list of dropped fields: `oneOf,allOf,$ref,additionalProperties` | Yes |
 | `x-c-thru-redacted-thinking-dropped` | Anthropic `redacted_thinking` block was in request history | `1` (Gemini cannot decrypt the opaque blob, so it's dropped silently otherwise) | Yes |
-| `x-c-thru-translation-gap` | `mapAnthropicToGemini` encountered any content-block type it cannot represent (`redacted_thinking`, `server_tool_use`, `web_search_tool_result`, `web_fetch_tool_result`, `code_execution_tool_result`, `tool_search_tool_result`, `mcp_tool_use`, `mcp_tool_result`, `container_upload`, …) | Comma-list of dropped block-type names; deduplicated across the request. See `docs/anthropic-api-coverage.md` for the full block × backend matrix. | Yes |
+| `x-c-thru-translation-gap` | `mapAnthropicToGemini` encountered any content-block type it cannot represent (`redacted_thinking`, `server_tool_use`, `web_search_tool_result`, `web_fetch_tool_result`, `code_execution_tool_result`, `tool_search_tool_result`, `mcp_tool_use`, `mcp_tool_result`, `container_upload`, …), an inbound `text` block carried `citations` (`text.citations`), or `body.tools[i].type` declared an Anthropic server tool other than `"custom"` (`tool:web_search_20250305`, `tool:code_execution_20250522`, …) | Comma-list of dropped block-type names + advisory tags; deduplicated across the request. See `docs/anthropic-api-coverage.md` for the full block × backend matrix. | Yes |
 | `x-c-thru-beta-dropped` | Request had `anthropic-beta` header tokens that Gemini can't honor | Comma-list of dropped tokens (`prompt-caching-2024-07-31,computer-use-2024-10-22`) | Yes |
+| `x-c-thru-passthrough` | Response was produced by the Anthropic catch-all forwarder (`forwardToAnthropicCatchAll`) — no proxy translation, body piped verbatim from upstream | `1` | Yes |
+| `x-c-thru-passthrough-host` | Set alongside `x-c-thru-passthrough` | Hostname of the upstream the request was forwarded to (e.g. `api.anthropic.com`). Lets clients distinguish proxy-translated from catch-all-forwarded responses without log diving. | Yes |
 
 ## Thinking observability (Gemini ↔ Anthropic)
 
