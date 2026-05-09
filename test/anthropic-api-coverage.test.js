@@ -258,6 +258,31 @@ async function runTranslationGapHeader() {
         `gap header includes redacted_thinking (got ${gap})`);
       assert(tokens.includes('server_tool_use'),
         `gap header includes server_tool_use (got ${gap})`);
+
+      // Streaming variant: writeHead in the SSE branch (~claude-proxy L2837)
+      // must use buildCthruResponseHeaders too, so x-c-thru-translation-gap
+      // shows up on the streaming response headers (set before any SSE bytes
+      // are flushed). Guards against the streaming and non-streaming paths
+      // drifting — both share buildCthruResponseHeaders today.
+      const streamReqBody = Object.assign({}, reqBody, { stream: true });
+      const sr = await httpStream(port, 'POST', '/v1/messages', streamReqBody, {}, 5000);
+      assertEq(sr.status, 200, 'POST /v1/messages stream:true → 200 via Gemini stub');
+      const sgap = sr.headers['x-c-thru-translation-gap'];
+      assert(typeof sgap === 'string' && sgap.length > 0,
+        `streaming x-c-thru-translation-gap header present (got ${JSON.stringify(sgap)})`);
+      const sTokens = (sgap || '').split(',');
+      assert(sTokens.includes('redacted_thinking'),
+        `streaming gap header includes redacted_thinking (got ${sgap})`);
+      assert(sTokens.includes('server_tool_use'),
+        `streaming gap header includes server_tool_use (got ${sgap})`);
+      // SSE body completed cleanly — message_start opens the stream and
+      // message_stop closes it. Confirms header logic didn't short-circuit
+      // the stream.
+      const evNames = sr.events.map(e => e.event);
+      assert(evNames.includes('message_start'),
+        `streaming response contains message_start (got events: ${evNames.join(',')})`);
+      assert(evNames.includes('message_stop'),
+        `streaming response contains message_stop (got events: ${evNames.join(',')})`);
     });
   } finally {
     try { if (gstub) await gstub.close(); } catch {}
