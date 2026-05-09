@@ -76,7 +76,12 @@ parseCliFlags(process.argv.slice(2));
 // (e.g. c-thru reload, c-thru restart, or an explicit ANTHROPIC_BASE_URL).
 const INITIAL_PORT = numberFromEnv('CLAUDE_PROXY_PORT', 0);
 const BIND_ADDR = process.env.CLAUDE_PROXY_BIND || '127.0.0.1';
-const LOOPBACK_ADDRS = new Set(['127.0.0.1', 'localhost', '::1']);
+// Canonical loopback addresses. Used to gate the ambient-key startup warning.
+// Includes IPv4-mapped IPv6 loopback (::ffff:127.0.0.1) so dual-stack stacks
+// that bind on the loopback interface don't produce a false-positive warn.
+// 0.0.0.0 is intentionally NOT included — it is a wildcard bind that exposes
+// the proxy on all interfaces and should warn when paired with an ambient key.
+const LOOPBACK_ADDRS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]', '::ffff:127.0.0.1']);
 const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_DEBUG', 0));
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 
@@ -4566,7 +4571,7 @@ server.listen(INITIAL_PORT, BIND_ADDR, () => {
   // once at startup so operators on shared/multi-tenant boxes see the
   // exposure before traffic flows. See docs/anthropic-api-coverage.md
   // ("Allowlist / denylist") for mitigations.
-  if (process.env.ANTHROPIC_API_KEY && !LOOPBACK_ADDRS.has(BIND_ADDR)) {
+  if (process.env.ANTHROPIC_API_KEY && !LOOPBACK_ADDRS.has(BIND_ADDR.toLowerCase())) {
     process.stderr.write(
       `WARN: ANTHROPIC_API_KEY is set in the environment AND proxy is bound to non-loopback address ${BIND_ADDR} — clients on other hosts can use your key. Consider unsetting the key or restricting bind to 127.0.0.1.\n`
     );
