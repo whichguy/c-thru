@@ -1,0 +1,10 @@
+{
+  "name": "c-thru",
+  "private": true,
+  "scripts": {
+    "lint": "eslint tools test"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0"
+  }
+}

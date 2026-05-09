@@ -1,4 +1,4 @@
-.PHONY: test test-fast check
+.PHONY: test test-fast check lint
 
 # Run the full test suite (including slow smoke tests)
 test:
@@ -15,3 +15,6 @@ check:
 	node --check tools/model-map-*.js tools/llm-capabilities-mcp.js
 	node tools/model-map-validate.js config/model-map.json
 	bash tools/c-thru-contract-check.sh
+
+lint:
+	@if [ -d node_modules ]; then npx eslint tools test; else echo "lint: run 'npm install' first to install eslint"; exit 0; fi
