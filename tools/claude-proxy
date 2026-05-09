@@ -75,6 +75,8 @@ parseCliFlags(process.argv.slice(2));
 // Set CLAUDE_PROXY_PORT to a specific number only when you need a fixed port
 // (e.g. c-thru reload, c-thru restart, or an explicit ANTHROPIC_BASE_URL).
 const INITIAL_PORT = numberFromEnv('CLAUDE_PROXY_PORT', 0);
+const BIND_ADDR = process.env.CLAUDE_PROXY_BIND || '127.0.0.1';
+const LOOPBACK_ADDRS = new Set(['127.0.0.1', 'localhost', '::1']);
 const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_DEBUG', 0));
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 
@@ -4554,9 +4556,21 @@ server.on('error', err => {
   process.stdout.write(`READY_FAILED ${err.code} ${err.message}\n`);
   process.exit(1);
 });
-server.listen(INITIAL_PORT, '127.0.0.1', () => {
+server.listen(INITIAL_PORT, BIND_ADDR, () => {
   process.stdout.write(`READY ${server.address().port}\n`);
-  console.error(`c-thru listening on :${server.address().port}`);
+  console.error(`c-thru listening on ${BIND_ADDR}:${server.address().port}`);
+  // Ambient-key safety net. When ANTHROPIC_API_KEY is set in the proxy's
+  // environment AND the proxy is bound to a non-loopback address, any host
+  // that can route to the bind address can issue billed Anthropic calls
+  // through the catch-all forwarder without ever presenting a key. Warn
+  // once at startup so operators on shared/multi-tenant boxes see the
+  // exposure before traffic flows. See docs/anthropic-api-coverage.md
+  // ("Allowlist / denylist") for mitigations.
+  if (process.env.ANTHROPIC_API_KEY && !LOOPBACK_ADDRS.has(BIND_ADDR)) {
+    process.stderr.write(
+      `WARN: ANTHROPIC_API_KEY is set in the environment AND proxy is bound to non-loopback address ${BIND_ADDR} — clients on other hosts can use your key. Consider unsetting the key or restricting bind to 127.0.0.1.\n`
+    );
+  }
   try { fs.writeFileSync(PID_FILE, String(process.pid)); } catch {}
 });
 

@@ -210,6 +210,35 @@ against future regressions.
      was declared but `mapAnthropicToGemini` only forwards `functionDeclarations`
      — the server-tool semantics are not translated.
 
+### Allowlist / denylist
+
+The catch-all forwarder honors two optional top-level keys on
+`model-map.json`, both arrays of regex strings matched against `req.url`:
+
+```json
+{
+  "passthrough_allowlist": ["^/v1/oauth/", "^/v1/messages/batches"],
+  "passthrough_denylist":  ["^/v1/audit_logs", "^/v1/admin/"]
+}
+```
+
+Behavior:
+
+- `passthrough_denylist` is checked first; any regex match returns a
+  structured 403 (`{type:"error", error:{type:"forbidden_error", message:"path matches passthrough_denylist"}}`)
+  and emits `proxyLog('passthrough_denied', { url, matched })`.
+- `passthrough_allowlist`, when non-empty, requires a regex match; otherwise
+  the same 403 is returned with message `path does not match passthrough_allowlist`.
+- Both lists absent or empty → unrestricted passthrough (current default).
+
+These are advisory escape hatches for hardening multi-tenant or shared
+workstations — the gate philosophy remains "answer everything by default."
+Combine with the `CLAUDE_PROXY_BIND` startup warning (proxy emits a stderr
+WARN at listen time when `ANTHROPIC_API_KEY` is set AND the bind address is
+non-loopback) for the full ambient-key safety net.
+
+---
+
 8. **Ambient `ANTHROPIC_API_KEY` on a loopback proxy.** The relaxed gate
    forwards any inbound request to api.anthropic.com whenever an
    `endpoints.anthropic` is configured — `applyOutboundAuth` synthesizes the

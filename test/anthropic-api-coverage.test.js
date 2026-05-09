@@ -290,11 +290,47 @@ async function runTranslationGapHeader() {
   }
 }
 
+async function runPassthroughDenylist() {
+  console.log('\n--- Phase 4: passthrough_denylist gates the catch-all forwarder ---');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-coverage-deny-'));
+  let stub;
+  try {
+    stub = await stubBackend();
+    const config = {
+      endpoints: {
+        anthropic: {
+          kind: 'anthropic',
+          url: `http://127.0.0.1:${stub.port}`,
+          format: 'anthropic',
+          auth_env: 'ANTHROPIC_API_KEY',
+        },
+      },
+      passthrough_denylist: ['^/v1/admin/'],
+    };
+    const configPath = writeConfig(tmpDir, config);
+    await withProxy({
+      configPath,
+      env: { ANTHROPIC_API_KEY: 'sk-test-coverage' },
+    }, async ({ port }) => {
+      const r = await probe(port, 'GET', '/v1/admin/foo', null);
+      assertEq(r.status, 403, 'denylisted path returns 403');
+      const errType = r.json && r.json.error && r.json.error.type;
+      assertEq(errType, 'forbidden_error', 'error.type === forbidden_error');
+      const stubSawAdmin = stub.requests.some(rq => rq.path === '/v1/admin/foo');
+      assert(!stubSawAdmin, 'upstream stub never received the denied request');
+    });
+  } finally {
+    try { if (stub) await stub.close(); } catch {}
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
 (async () => {
   try {
     await runUnauthedGating();
     await runAuthedPassthrough();
     await runTranslationGapHeader();
+    await runPassthroughDenylist();
   } catch (e) {
     console.error('test threw:', e && e.stack || e);
     process.exit(1);
