@@ -55,7 +55,7 @@ catch-all even when a Gemini backend is present).
 | `/v1/messages/batches/{id}` | GET | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
 | `/v1/messages/batches/{id}/results` | GET | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
 | `/v1/messages/batches/{id}/cancel` | POST | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
-| `/v1/messages/batches/{id}` | DELETE | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
+| `/v1/messages/batches/{id}` | DELETE | 🔁 catch-all → Anthropic (live-verified[^live]) | ➖ | ➖ | 🚫 |
 | `/v1/models` | GET | ✅ (synthesized) | ✅ (synthesized) | ✅ (synthesized) | ✅ (synthesized) |
 | `/v1/models/{id}` | GET | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
 | `/v1/files` (upload) | POST | ⚠️ catch-all → Anthropic (multipart) | ✅ via Files API translator | ➖ | 🚫 |
@@ -72,7 +72,7 @@ catch-all even when a Gemini backend is present).
 | `/v1/environments*` | POST/GET/PATCH/DELETE | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
 | `/v1/vaults*` | POST/GET/PATCH/DELETE | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
 | `/v1/oauth/token` | POST | 🔁 catch-all → Anthropic (bootstrap path — never gated) | ➖ | ➖ | 🚫 |
-| `/v1/organizations/me` | GET | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
+| `/v1/organizations/me` | GET | 🔁 catch-all → Anthropic (live-verified[^live]) | ➖ | ➖ | 🚫 |
 | `/v1/organizations/{id}/users*` | * | ⚠️ catch-all → Anthropic (admin key required) | ➖ | ➖ | 🚫 |
 | `/v1/organizations/{id}/invites*` | * | ⚠️ catch-all → Anthropic (admin key) | ➖ | ➖ | 🚫 |
 | `/v1/organizations/{id}/workspaces*` | * | ⚠️ catch-all → Anthropic (admin key) | ➖ | ➖ | 🚫 |
@@ -83,6 +83,14 @@ catch-all even when a Gemini backend is present).
 | `/v1/rate_limits` | GET | ⚠️ catch-all | ➖ | ➖ | 🚫 |
 | `/v1/audit_logs` | GET | ⚠️ catch-all | ➖ | ➖ | 🚫 |
 | `/v1/complete` (legacy) | POST | ⚠️ catch-all | ➖ | ➖ | 🚫 |
+
+[^live]: Live-verified by `test/anthropic-api-coverage-live.test.js` against
+real `api.anthropic.com` through the proxy. Opt-in: requires
+`C_THRU_LIVE_ANTHROPIC=1` and `ANTHROPIC_API_KEY`; default suite skips. Run
+via `make test-live`. Asserts `x-c-thru-passthrough: 1` response header,
+upstream-shape error bodies (`error.type: "not_found_error"`),
+DELETE method propagation through the catch-all forwarder, and
+`anthropic-beta` header round-trip without 400.
 
 ---
 
@@ -167,9 +175,11 @@ against future regressions.
    `forwardToAnthropicCatchAll`.
 
 3. **DELETE / PATCH method propagation.** `req.method` is forwarded verbatim
-   in the `lib.request({…, method: req.method, …})` call. Methods other than
-   GET/POST appear to work, but no integration test exercises them. **Status:
-   ⚠️ until covered by `test/anthropic-api-coverage.test.js`.**
+   in the `lib.request({…, method: req.method, …})` call. **Status: 🔁 for
+   DELETE** — `test/anthropic-api-coverage-live.test.js` exercises
+   `DELETE /v1/messages/batches/<bogus>` against live Anthropic and asserts
+   the upstream `error.type: "not_found_error"` is returned. PATCH remains
+   ⚠️ (no live exerciser yet).
 
 4. **Admin-key auth (`sk-ant-admin-…`).** `applyOutboundAuth` runs
    `bearer_priority` for any backend whose `kind: "anthropic"` (or derived

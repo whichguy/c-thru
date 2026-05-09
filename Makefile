@@ -1,4 +1,4 @@
-.PHONY: test test-fast check lint
+.PHONY: test test-fast test-live check lint
 
 # Run the full test suite (including slow smoke tests)
 test:
@@ -7,6 +7,10 @@ test:
 # Run the test suite without slow smoke tests
 test-fast:
 	bash test/run-all.sh --fast
+
+# Opt-in live verification against api.anthropic.com (requires ANTHROPIC_API_KEY)
+test-live:
+	C_THRU_LIVE_ANTHROPIC=1 node test/anthropic-api-coverage-live.test.js
 
 # Run baseline syntax and schema checks only (fast, no proxy spawn needed)
 check:

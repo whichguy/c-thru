@@ -204,6 +204,15 @@ skip_suite "benchmark-coverage (excluded — 0 cells checked, mode fixture not p
 skip_suite "proxy-classify (excluded — CLAUDE_PROXY_CLASSIFY feature not implemented in proxy)"
 skip_suite "proxy-targets (excluded — targets{} config feature not implemented in proxy)"
 
+if [[ "${C_THRU_LIVE_ANTHROPIC:-0}" == "1" ]]; then
+  echo ""
+  echo "Live API tests (C_THRU_LIVE_ANTHROPIC=1):"
+  run_suite "anthropic-api-coverage-live (real api.anthropic.com via proxy)" \
+    node "$REPO_DIR/test/anthropic-api-coverage-live.test.js"
+else
+  skip_suite "anthropic-api-coverage-live (set C_THRU_LIVE_ANTHROPIC=1 + ANTHROPIC_API_KEY to enable)"
+fi
+
 echo ""
 echo "Validators:"
 run_suite "model-map-validate (config/model-map.json)" \
