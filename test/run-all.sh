@@ -57,6 +57,8 @@ run_suite "c-thru-bootstrap-auth-env (bootstrap auth env helper)" \
   bash "$REPO_DIR/test/c-thru-bootstrap-auth-env.test.sh"
 run_suite "hook-payload-extraction (hook payload extraction)" \
   bash "$REPO_DIR/test/hook-payload-extraction.test.sh"
+run_suite "agent-router-hook (subagent_type → capability model rewrite)" \
+  bash "$REPO_DIR/test/agent-router-hook.test.js"
 run_suite "strict-models (C_THRU_STRICT_MODELS=1 enforcement)" \
   bash "$REPO_DIR/test/strict-models.test.sh"
 
@@ -84,6 +86,10 @@ run_suite "proxy-runtime-fallback (fallback chains, cycle detection)" \
   node "$REPO_DIR/test/proxy-runtime-fallback.test.js"
 run_suite "capability-alias-resolve (2-hop agent→capability)" \
   node "$REPO_DIR/test/capability-alias-resolve.test.js"
+run_suite "agent-mapping-complete (every agent → live endpoint, all modes×tiers)" \
+  node "$REPO_DIR/test/agent-mapping-complete.test.js"
+run_suite "agent-invocation-headers (per-agent resolved-via/served-by/journal)" \
+  node "$REPO_DIR/test/agent-invocation-headers.test.js"
 run_suite "llm-mode-resolution-matrix (16-mode matrix)" \
   node "$REPO_DIR/test/llm-mode-resolution-matrix.test.js"
 run_suite "resolve-capability (capability alias graph)" \
@@ -233,8 +239,18 @@ if [[ $FAST -eq 0 ]]; then
   else
     skip_suite "smoke-check (not found)"
   fi
+  # Advisory, opt-in: a real Ollama-backed session whose prompt elicits a
+  # subagent, verified via the journal. Self-skips (exit 0) unless C_THRU_E2E=1
+  # and Ollama + a claude binary are present; never fails the suite.
+  if [[ "${C_THRU_E2E:-0}" == "1" ]]; then
+    run_suite "agent-scenarios-e2e (prompt→agent→journal, advisory)" \
+      bash "$REPO_DIR/test/agent-scenarios-e2e.sh"
+  else
+    skip_suite "agent-scenarios-e2e (set C_THRU_E2E=1 + Ollama to enable)"
+  fi
 else
   skip_suite "smoke-check (--fast mode)"
+  skip_suite "agent-scenarios-e2e (--fast mode)"
 fi
 
 echo ""
