@@ -46,9 +46,9 @@
   "llm_profiles": {
     "planner": {
       "best-cloud": {
-        "16gb": "claude-opus-4-7",
-        "32gb": "claude-opus-4-7",
-        "48gb": "claude-opus-4-7",
+        "16gb": "claude-opus-4-8",
+        "32gb": "claude-opus-4-8",
+        "48gb": "claude-opus-4-8",
         "64gb": "claude-sonnet-4-6",
         "128gb": "claude-sonnet-4-6"
       },
@@ -67,10 +67,10 @@
         "128gb": "qwen3.6:35b-a3b-q8_0"
       },
       "best-cloud-gov": {
-        "16gb": "claude-opus-4-7",
-        "32gb": "claude-opus-4-7",
-        "48gb": "claude-opus-4-7",
-        "64gb": "claude-opus-4-7",
+        "16gb": "claude-opus-4-8",
+        "32gb": "claude-opus-4-8",
+        "48gb": "claude-opus-4-8",
+        "64gb": "claude-opus-4-8",
         "128gb": "gpt-oss-120b:TODO"
       },
       "best-local-gov": {
@@ -84,7 +84,7 @@
       "fallback_to": "planner-hard"
     },
     "planner-hard": {
-      "best-cloud": "claude-opus-4-7",
+      "best-cloud": "claude-opus-4-8",
       "best-cloud-oss": "deepseek-v4-flash:cloud",
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
@@ -93,7 +93,7 @@
         "64gb": "qwen3.6:35b",
         "128gb": "qwen3.6:35b-a3b-q8_0"
       },
-      "best-cloud-gov": "claude-opus-4-7",
+      "best-cloud-gov": "claude-opus-4-8",
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
@@ -279,7 +279,7 @@
       "on_failure": "cascade"
     },
     "reviewer-security": {
-      "best-cloud": "claude-opus-4-7",
+      "best-cloud": "claude-opus-4-8",
       "best-cloud-oss": "deepseek-v4-flash:cloud",
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
@@ -288,7 +288,7 @@
         "64gb": "qwen3.6:35b",
         "128gb": "qwen3.6:35b-a3b-q8_0"
       },
-      "best-cloud-gov": "claude-opus-4-7",
+      "best-cloud-gov": "claude-opus-4-8",
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
@@ -375,7 +375,7 @@
       "on_failure": "cascade"
     },
     "debugger-hard": {
-      "best-cloud": "claude-opus-4-7",
+      "best-cloud": "claude-opus-4-8",
       "best-cloud-oss": "deepseek-v4-flash:cloud",
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
@@ -384,7 +384,7 @@
         "64gb": "qwen3.6:35b",
         "128gb": "qwen3.6:35b-a3b-q8_0"
       },
-      "best-cloud-gov": "claude-opus-4-7",
+      "best-cloud-gov": "claude-opus-4-8",
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
@@ -476,7 +476,7 @@
         "32gb": "claude-sonnet-4-6",
         "48gb": "claude-sonnet-4-6",
         "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-opus-4-7"
+        "128gb": "claude-opus-4-8"
       },
       "best-cloud-oss": {
         "16gb": "phi4-reasoning:plus",
@@ -497,7 +497,7 @@
         "32gb": "claude-sonnet-4-6",
         "48gb": "claude-sonnet-4-6",
         "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-opus-4-7"
+        "128gb": "claude-opus-4-8"
       },
       "best-local-gov": {
         "16gb": "phi4-mini:3.8b",
@@ -668,7 +668,6 @@
   },
   "model_routes": {
     "claude-sonnet-4-6": "anthropic",
-    "claude-opus-4-6": "anthropic",
     "re:^claude-.*$": "anthropic",
     "gemini-latest": {
       "endpoint": "gemini_ai",
@@ -711,7 +710,6 @@
     "gemma4:e4b": "ollama_local",
     "gemma4:31b": "ollama_local",
     "qwen3.6:35b-a3b-nvfp4": "ollama_local",
-    "qwen3.5:1.7b": "ollama_local",
     "gpt-oss:20b": "ollama_local",
     "devstral-small-2:24b": "ollama_local",
     "devstral-2": "ollama_local",
@@ -769,9 +767,9 @@
       "endpoint": "ollama_local",
       "name": "gpt-oss-20b:TODO"
     },
-    "claude-opus-4-7": {
+    "claude-opus-4-8": {
       "endpoint": "anthropic",
-      "name": "claude-opus-4-7"
+      "name": "claude-opus-4-8"
     },
     "claude-haiku-4-5-20251001": {
       "endpoint": "anthropic",
@@ -779,7 +777,7 @@
     },
     "opus": {
       "endpoint": "anthropic",
-      "name": "claude-opus-4-7"
+      "name": "claude-opus-4-8"
     },
     "sonnet": {
       "endpoint": "anthropic",
@@ -800,14 +798,6 @@
     "qwen3:72b": {
       "endpoint": "ollama_local",
       "name": "qwen3:72b"
-    },
-    "qwen3.5:9b": {
-      "endpoint": "ollama_local",
-      "name": "qwen3.5:9b"
-    },
-    "qwen3.5:27b": {
-      "endpoint": "ollama_local",
-      "name": "qwen3.5:27b"
     },
     "gemma4:12b": {
       "endpoint": "ollama_local",
