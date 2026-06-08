@@ -265,7 +265,7 @@ console.log('\n11. Pinned-model regression guard — shipped config key triples'
     { cap: 'planner',      tier: '64gb',  mode: 'best-cloud',     want: 'claude-sonnet-4-6' },
     { cap: 'planner',      tier: '128gb', mode: 'best-cloud',     want: 'claude-sonnet-4-6' },
     // Hard planner must always be opus
-    { cap: 'planner-hard', tier: '128gb', mode: 'best-cloud',     want: 'claude-opus-4-7'  },
+    { cap: 'planner-hard', tier: '128gb', mode: 'best-cloud',     want: 'claude-opus-4-8'  },
     // fast-scout is always the small local model regardless of mode
     { cap: 'fast-scout',   tier: '64gb',  mode: 'best-cloud',     want: 'phi4-mini:3.8b'   },
     { cap: 'fast-scout',   tier: '64gb',  mode: 'best-local-oss', want: 'phi4-mini:3.8b'   },
