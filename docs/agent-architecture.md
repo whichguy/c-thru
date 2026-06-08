@@ -5,63 +5,73 @@ specialized agents (see `agents/` directory). Each agent declares its own name a
 `model:` — the c-thru proxy resolves it to a hardware-appropriate concrete model at
 request time.
 
-<!-- canonical list: config/model-map.json#agent_to_capability -->
+> **Canonical source.** This roster is descriptive; the authoritative agent→capability
+> mapping lives in [`config/model-map.json#agent_to_capability`](../config/model-map.json), and the
+> full agent→model→endpoint table is the README ["Agent routing reference"](../README.md#agent-routing-reference)
+> (verified live by `test/agent-mapping-complete.test.js`). The dispatch edges below are verified by
+> `test/agent-dispatch-graph.test.js`. If this section disagrees with those, they win.
 
 ## Agent roster
 
-| Agent | Capability alias | Role |
-|---|---|---|
-| discovery-advisor | pattern-coder | Reads recon summary, produces prioritized gap questions |
-| explorer | pattern-coder | Read-only reconnaissance; surveys codebase for gap questions |
-| planner | judge | Unified signal-based planner; reads outcome + findings + pending items; updates living dep map; returns READY_ITEMS[] |
-| planner-local | local-planner | Dep-update planner (local 27B+); applies dep_discoveries to affected items on dep_update transition; never on intent or outcome_risk |
-| auditor | judge | Exception-path wave direction (continue/extend/revise); invoked by cloud judge on outcome_risk escalation only |
-| final-reviewer | judge | End-of-plan gap analysis |
-| review-plan | judge | Plan quality review (max 20 rounds) |
-| journal-digester | judge | Out-of-band: synthesizes improvement suggestions → CLAUDE.md proposals |
-| security-reviewer | judge-strict | Security-focused code review; hard_fail on cascade |
-| plan-orchestrator | orchestrator | Pure executor: topo-sort → batch → progressive injection → workers → verify → commit |
-| integrator | orchestrator | Wires completed units (routes, exports, DI) |
-| doc-writer | orchestrator | User-facing documentation from implemented code |
-| wave-synthesizer | code-analyst | Exception-path: produces replan-brief.md when cloud judge needs context compression on outcome_risk/revise scenarios |
-| learnings-consolidator | pattern-coder | Refreshes learnings.md from prior findings; spawned by planner (step 2 of algorithm) |
-| scaffolder | pattern-coder | Mechanical file/directory scaffolding (stubs, boilerplate) |
-| test-writer | code-analyst | Tests that catch subtle bugs; reads implementation first |
-| wave-reviewer | code-analyst | Iterative review+fix loop (max 5 rounds per item) |
-| implementer | deep-coder | Core business logic; multi-file aware |
-| uplift-decider | judge | †Wave-2: routing judge; reads local partial output, emits accept\|uplift\|restart + CLOUD_CONFIDENCE |
-| implementer-cloud | deep-coder-cloud | †Wave-2: cloud-tier implementer; uplift (patch) or restart (clean) mode |
-| test-writer-cloud | code-analyst-cloud | †Wave-2: cloud-tier test writer; escalation target for test-writer recusals |
-| converger | code-analyst | †Wave-2: aggregates parallel explorer/implementer outputs into unified synthesis |
+The fleet is **22 agents**, each declaring `model: <its-own-name>` in frontmatter. The proxy
+resolves `name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model` at
+request time. All map 1:1 (capability == name) **except** the two ⚠ rows. The **Dispatches →**
+column is the inter-agent dispatch/escalation graph, parsed from each agent's `UNBLOCKED_TASKS`
+block (self-loops are continuation, `↑` marks an escalation to a harder tier).
 
-## Pending capability aliases
-
-These aliases have been added to `config/model-map.json` llm_profiles but are not yet bound in
-`agent_to_capability`. Binding is conditional on eval scoring confirming the target models.
-
-| Alias | Intended agents | 128gb model | Condition to activate |
+| Agent | Capability | Role | Dispatches → |
 |---|---|---|---|
-| `reasoner` | wave-reviewer, test-writer (after split) | deepseek-r1:14b | phi4-reasoning:plus scores ≥3.5 on debugger; deepseek-r1:14b scores confirmed |
-| `code-analyst-light` | wave-synthesizer, learnings-consolidator | gemma4:26b | gemma4:26b scores ≥3.0 on generalist/orchestrator prompts |
-| `deep-coder-precise` | implementer (offline/high-stakes mode) | qwen3.6:35b-a3b-coding-bf16 | bf16 variant scores ≥4.0 on coder/agentic_coder; used in `offline` or `cloud-judge-only` mode only |
-| `fast-scout` | explorer | gemma4:26b | gemma4:26b scores ≥3.0 on generalist; frees pattern-coder (qwen3-coder:30b) for scaffolding only |
+| `planner` | `planner` | Implementation/architecture plans before any code | `coder`, `planner-hard` ↑ |
+| `planner-hard` | `planner-hard` | High-stakes/ambiguous/cross-system planning (Opus) | `coder` |
+| `explore` | `explore` | Read-only context-gathering before planning/coding | `coder`, `planner` |
+| `coder` | `coder` | Writes/edits/refactors code to a plan | `coder` (continue), `tester`, `debugger-hypothesis` |
+| `coder-fallback` | `coder-fallback` | Second attempt when `coder` stalls (different model) | `tester`, `debugger-hypothesis` |
+| `tester` | `tester` | Runs/writes tests, verifies behavior | `tester` (continue), `code-reviewer`, `debugger-hypothesis` |
+| `code-reviewer` | `code-reviewer` | Correctness/style/coverage review after `coder` | `coder` (fix), `reviewer-security` ↑ |
+| `reviewer-security` | `reviewer-security` | Security review (authz, crypto, injection); hard-fail | `coder` (fix) |
+| `reviewer-plan` ⚠ | `code-reviewer` | Plan-document review (APPROVED / NEEDS_REVISION) | `planner` (revise) |
+| `plan-scheduler` ⚠ | `fast-generalist` | Dispatches READY_ITEMS to workers (terminal step) | (leaf) |
+| `debugger-hypothesis` | `debugger-hypothesis` | Generates/ranks hypotheses for an unknown bug | `debugger-investigate`, `debugger-hard` ↑ |
+| `debugger-investigate` | `debugger-investigate` | Deep investigation of a hypothesis (logs, traces) | `debugger-investigate` (continue), `tester`, `debugger-hard` ↑ |
+| `debugger-hard` | `debugger-hard` | Bugs resisting normal debugging (Opus); hard-fail | `coder` (fix), `tester` |
+| `docs` | `docs` | Updates CLAUDE.md/README/help after API changes | `docs` (continue) |
+| `generalist` | `generalist` | Best all-rounder when no specialist fits | (leaf) |
+| `fast-generalist` | `fast-generalist` | Fastest generalist for quick one-shot answers | (leaf) |
+| `fast-scout` | `fast-scout` | Rapid read-only recon / context mapping | (leaf) |
+| `long-context` | `long-context` | 384K-window retrieval over large spans | (leaf) |
+| `writer` | `writer` | Long-form prose (docs, release notes, guides) | (leaf) |
+| `edge` | `edge` | Tiny-model tasks (classify, summarize, transform) | (leaf) |
+| `vision` | `vision` | Screenshots, diagrams, image OCR | (leaf) |
+| `pdf` | `pdf` | PDF parsing (tables, multi-column, figures) | (leaf) |
+
+**⚠ Non-1:1 rows.** `reviewer-plan` → `code-reviewer` and `plan-scheduler` → `fast-generalist`;
+every other agent maps to its own name. **Utility passthroughs** `WebSearch` / `WebFetch` /
+`Monitor` are tool calls mapped to `fast-scout` in `agent_to_capability` for observability only —
+they are not agent files and the router does not override their model.
 
 ## 4-layer resolution
 
 ```
-Claude Code sends  model: implementer
+Claude Code sends  subagent_type: coder
                           │
                           ▼  agent_to_capability (config/model-map.json)
-                   deep-coder
+                   coder                       (capability alias; 1:1 here)
                           │
-                          ▼  llm_profiles[<detected-hw>][deep-coder]
-                   connected_model / disconnect_model
+                          ▼  llm_profiles[coder][<mode>][<detected-hw-tier>]
+                   per-mode × per-tier model string
                           │
-                          ▼
-                   devstral-small:2  (or tier-appropriate equivalent)
+                          ▼  model_routes → endpoints
+                   gemini-pro @ best-cloud/64gb  (or tier/mode-appropriate equivalent)
 ```
 
-See `docs/hardware-profile-matrix.md` for the full 6-profile × 5-alias table.
+See `docs/hardware-profile-matrix.md` for the full hardware-profile table, and the README
+["Agent routing reference"](../README.md#agent-routing-reference) for the resolved model per agent.
+
+> **⚠ Stale vocabulary below.** The roster and 4-layer sections above were reconciled to the
+> current 22-agent fleet. The wave-lifecycle and STATUS-contract sections that follow still
+> reference a **superseded orchestrator tier** (`explorer`, `implementer`, `plan-orchestrator`,
+> `wave-reviewer`, …) that no longer matches `agents/` or `agent_to_capability`. Read them for
+> the wave *mechanics*, not the agent *names*. A full rewrite of these sections is deferred.
 
 ## Wave lifecycle (7 phases)
 
