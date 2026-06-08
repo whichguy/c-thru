@@ -306,7 +306,7 @@ directories, large unstaged WIP, and local commits ahead of `origin/main`
 ## Agentic plan/wave system
 
 Invoke with `/c-thru-plan <intent>`. State in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/`. Completed plans archived to `~/.claude/c-thru-archive/`.
-Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`.
+Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`. When adding or editing an agent's `description` (its only discovery surface), follow `docs/agent-authoring.md` — enforced by `test/agent-description-quality.test.js`; dispatch edges enforced by `test/agent-dispatch-graph.test.js`.
 
 ### Pipeline agents (12 + 8 utility)
 

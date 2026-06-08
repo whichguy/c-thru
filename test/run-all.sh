@@ -92,6 +92,8 @@ run_suite "agent-invocation-headers (per-agent resolved-via/served-by/journal)" 
   node "$REPO_DIR/test/agent-invocation-headers.test.js"
 run_suite "agent-dispatch-graph (subagent_type targets resolve agent→capability→model)" \
   node "$REPO_DIR/test/agent-dispatch-graph.test.js"
+run_suite "agent-description-quality (description discoverability lint)" \
+  node "$REPO_DIR/test/agent-description-quality.test.js"
 run_suite "llm-mode-resolution-matrix (16-mode matrix)" \
   node "$REPO_DIR/test/llm-mode-resolution-matrix.test.js"
 run_suite "resolve-capability (capability alias graph)" \

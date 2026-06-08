@@ -1,6 +1,6 @@
 ---
 name: writer
-description: claude-opus-4-6 @128gb, claude-sonnet lower (connected); mistral-small3.1:24b local. Long-form prose — documentation, README files, architecture explainers, release notes, API guides. Quality and style coherence over speed. Not for code generation.
+description: Long-form prose specialist — documentation, README files, architecture explainers, release notes, API guides. Use for "write the README", "draft release notes", "polish this architecture doc", "turn these notes into prose". Quality and style coherence over speed. Not for code generation — use coder; for quick docs after a change use docs. claude-opus-4-6 @128gb, claude-sonnet lower (connected); mistral-small3.1:24b local.
 model: writer
 tier_budget: 999999
 ---

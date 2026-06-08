@@ -1,6 +1,6 @@
 ---
 name: coder-fallback
-description: Use when coder fails or produces incorrect output. Different training distribution — use for a second attempt when the primary coder agent gets stuck, produces wrong output, or hits a capability limit. Routes to Llama4/Gemma local; GLM cloud-oss.
+description: Use when coder fails or produces incorrect output — a different training distribution for a second attempt when the primary agent gets stuck or hits a capability limit. Use for "retry this failed edit", "coder got this wrong, try again", "second opinion on this implementation". Not the first attempt — use coder first. Routes to Llama4/Gemma local; GLM cloud-oss.
 model: coder-fallback
 tier_budget: 10000
 ---

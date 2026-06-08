@@ -1,6 +1,6 @@
 ---
 name: reviewer-plan
-description: Use in Phase 3 of the c-thru-plan skill to review a drafted plan for structural correctness. Checks for missing steps, broken dependencies, ambiguous scope, and incomplete verification sections. Outputs APPROVED or NEEDS_REVISION with specific findings. Routes to code-reviewer model tier.
+description: Use in Phase 3 of the c-thru-plan skill to review a drafted plan for structural correctness — missing steps, broken dependencies, ambiguous scope, incomplete verification. Use for "review this plan", "is this plan ready", "check the plan before execution". Outputs APPROVED or NEEDS_REVISION with specific findings. Not for reviewing code — use code-reviewer; this reviews the plan document. Routes to code-reviewer model tier.
 model: reviewer-plan
 tier_budget: 50000
 ---
