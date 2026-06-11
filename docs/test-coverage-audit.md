@@ -289,7 +289,7 @@ These sections have comprehensive tests and should remain:
 ## Command to Run Existing Tests
 
 ```bash
-cd /Users/dadleet/src/c-thru
+cd "$(git rev-parse --show-toplevel)"
 npm test 2>&1 | grep -E "^(✓|×|proxy|model-map|tests?:)" | head -50
 ```
 
@@ -302,9 +302,9 @@ npm test 2>&1 | grep -E "^(✓|×|proxy|model-map|tests?:)" | head -50
 
 ## References
 
-- **Claude-proxy main file:** `/Users/dadleet/src/c-thru/tools/claude-proxy`
-- **Model-map config:** `/Users/dadleet/src/c-thru/tools/model-map-config.js`
-- **Test helpers:** `/Users/dadleet/src/c-thru/test/helpers.js`
+- **Claude-proxy main file:** `tools/claude-proxy`
+- **Model-map config:** `tools/model-map-config.js`
+- **Test helpers:** `test/helpers.js`
 - **TODO entry (CLAUDE.md):** "[review] Test-coverage audit — every guard/check should have a quality test"
 
 ---
