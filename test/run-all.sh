@@ -15,6 +15,56 @@ PASS=0
 FAIL=0
 SKIP=0
 
+# ── Exclusive lock for full runs ───────────────────────────────────────────────
+# Two concurrent full runs cross-fail: proxy-e2e talks to the live Ollama backend
+# (timeouts under contention — observed empirically) and smoke-check exercises the
+# shared proxy lifecycle. Most unit suites bind random free ports and are safe,
+# so --fast runs skip the lock; full runs hold it for the whole run.
+# mkdir-lock with a stale-pid check — NOT flock(1), which is absent on stock
+# macOS (this repo's primary dev machine); flock may be added as a parenthetical
+# fast-path for Linux CI only.
+LOCK_DIR="${TMPDIR:-/tmp}/c-thru-run-all.lock"
+LOCK_HELD=""
+
+release_lock() {
+  [[ -n "$LOCK_HELD" ]] && rm -rf "$LOCK_DIR"
+}
+
+acquire_lock() {
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    local owner=""
+    owner=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+    if [[ -n "$owner" ]] && ! kill -0 "$owner" 2>/dev/null; then
+      echo "  removing stale lock (pid $owner no longer running)"
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
+    if [[ -z "$owner" ]]; then
+      # mkdir→pid-write window is microseconds; a pid-less lock older than 60s
+      # means the holder crashed before writing its pid — reclaim it.
+      local now mtime age
+      now=$(date +%s)
+      mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo "$now")
+      age=$(( now - mtime ))
+      if (( age > 60 )); then
+        echo "  removing stale pid-less lock (age ${age}s)"
+        rm -rf "$LOCK_DIR"
+        continue
+      fi
+    fi
+    echo "  waiting for concurrent run-all.sh (pid ${owner:-unknown}) to release the full-run lock..."
+    sleep 5
+  done
+  echo "$$" > "$LOCK_DIR/pid"
+  LOCK_HELD=1
+  trap release_lock EXIT
+}
+
+# Full runs are exclusive; --fast runs are concurrency-safe and skip the lock.
+if [[ $FAST -eq 0 ]]; then
+  acquire_lock
+fi
+
 run_suite() {
   local label="$1"
   shift

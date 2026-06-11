@@ -46,3 +46,16 @@ self-reports staleness instead — it flags any pinned id that no longer appears
   catalog and **flag** when a model pinned in `config/model-map.json` (e.g. `claude-opus-4-7`)
   disappears upstream. Turns "a snapshot broke mysteriously" into a proactive deprecation warning at
   the source, before the next config edit propagates the drift.
+
+### Upstream watch — claude-code#44385 (Agent tool ignores frontmatter `model:`)
+
+`tools/c-thru-agent-router-hook.sh`'s Agent-tool branch exists **only** because of
+[claude-code#44385](https://github.com/anthropics/claude-code/issues/44385): the Agent tool
+ignores the `model:` field in agent frontmatter, so the PreToolUse hook rewrites
+`subagent_type` → `agent_to_capability` → injects `model` into `updatedInput`.
+
+**Retirement condition:** when #44385 ships upstream, frontmatter `model:` suffices and the
+hook's model-injection branch becomes dead weight *and* a double-override risk (two paths
+setting the model can disagree). At that point retire the Agent-tool model-injection branch —
+keep the observability logging and the WebSearch/WebFetch/Monitor/Plan passthrough untouched.
+A matching comment sits at the top of the hook script.

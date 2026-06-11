@@ -6,6 +6,12 @@
 # Claude Code's Agent tool ignores the model: field in agent frontmatter
 # (known bug #44385), so the hook forces the correct model at the tool-call level.
 #
+# UPSTREAM WATCH — retirement condition (see docs/derived-artifacts.md, Tier 3):
+# when claude-code#44385 ships upstream, frontmatter model: suffices and the
+# Agent-tool model-injection branch below should be RETIRED — it becomes dead
+# weight plus a double-override risk (hook and frontmatter both setting model).
+# Keep the observability logging and the non-Agent passthrough when retiring.
+#
 # Only Agent tool calls are routed (they spawn subagents that make LLM requests).
 # Non-LLM tools (WebSearch, WebFetch, Monitor, Plan) pass through without override
 # since they don't generate LLM requests and setting updatedInput.model on them

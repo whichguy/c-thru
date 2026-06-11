@@ -35,6 +35,11 @@ make test-fast          # run proxy + model-map test suite (~2 min)
 make test               # full suite including smoke tests
 ```
 
+## Concurrent sessions
+
+Multiple Claude sessions may share this working tree. Stage **explicit paths only** — never `git add -A`/`-u`/`.` or other broad adds (they silently stage another session's uncommitted WIP; a past session needed a soft-reset salvage after exactly this).
+Proxy e2e/smoke suites are port- and Ollama-contended: `make test-fast` is safe to run concurrently (unit proxy tests use random free ports), but full `test/run-all.sh` runs need exclusivity — full runs take an mkdir-lock for the whole run (proxy-e2e cross-fails on Ollama contention, observed empirically), so a second full run queues instead of cross-failing.
+
 ## Directory Layout and Path Invariants
 
 The `tools/` + `config/` two-directory structure is **required**. `c-thru` and `claude-proxy` both compute `ROUTER_REPO_ROOT` as `$(dirname $0)/..` and read `$ROUTER_REPO_ROOT/config/model-map.json`. Do not flatten.
