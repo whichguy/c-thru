@@ -12,6 +12,15 @@ if [ -f "$REPO_ROOT/tools/sync-plugin-bundle.sh" ]; then
   }
 fi
 
+# The README "Agent routing reference" table is a derived artifact of config/model-map.json.
+# Fail closed if config changed without regenerating it (else it silently drifts).
+if [ -f "$REPO_ROOT/tools/gen-routing-doc.js" ]; then
+  node "$REPO_ROOT/tools/gen-routing-doc.js" --check || {
+    echo "Run: node tools/gen-routing-doc.js"
+    exit 1
+  }
+fi
+
 bash -n "$REPO_ROOT/tools/c-thru" || { echo "bash syntax error in tools/c-thru"; exit 1; }
 node --check "$REPO_ROOT/tools/claude-proxy" || { echo "node syntax error in tools/claude-proxy"; exit 1; }
 node "$REPO_ROOT/tools/model-map-validate.js" "$REPO_ROOT/config/model-map.json" || {

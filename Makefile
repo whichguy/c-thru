@@ -1,4 +1,4 @@
-.PHONY: test test-fast test-live check lint
+.PHONY: test test-fast test-live check lint docs
 
 # Run the full test suite (including slow smoke tests)
 test:
@@ -22,3 +22,8 @@ check:
 
 lint:
 	@if [ -d node_modules ]; then npx eslint tools test; else echo "lint: run 'npm install' first to install eslint"; exit 0; fi
+
+# Regenerate derived docs (the README "Agent routing reference" table) from config/model-map.json.
+# The pre-commit hook runs `gen-routing-doc.js --check`, so run this after any config bump.
+docs:
+	node tools/gen-routing-doc.js
