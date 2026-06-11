@@ -67,57 +67,49 @@ Claude Code sends  subagent_type: coder
 See `docs/hardware-profile-matrix.md` for the full hardware-profile table, and the README
 ["Agent routing reference"](../README.md#agent-routing-reference) for the resolved model per agent.
 
-> **⚠ Stale vocabulary below.** The roster and 4-layer sections above were reconciled to the
-> current 22-agent fleet. The wave-lifecycle and STATUS-contract sections that follow still
-> reference a **superseded orchestrator tier** (`explorer`, `implementer`, `plan-orchestrator`,
-> `wave-reviewer`, …) that no longer matches `agents/` or `agent_to_capability`. Read them for
-> the wave *mechanics*, not the agent *names*. A full rewrite of these sections is deferred.
+> **Reconciled 2026-06-11.** The sections below were rewritten against the live machinery:
+> `skills/c-thru-plan/SKILL.md` (the executable phase spec), `tools/c-thru-plan-harness.js`
+> (deterministic wave mechanics), and the contract tests `test/agent-status-schema.test.js`,
+> `test/planner-return-schema.test.js`, and `test/agent-dispatch-graph.test.js`. If this
+> document disagrees with those, they win.
 
-## Wave lifecycle (7 phases)
+## Wave lifecycle (Phases 0–5)
 
-0. **Pre-check** — resume/restart/abort if prior plan state exists; contract-version detection for pre-refactor plans
-1. **Discovery** — reconnaissance + gap-fill via `explorer` agents (read-only)
-2. **Plan construction** — `planner` (signal=intent, cloud judge) writes `current.md` with `## Outcome` section + all items
-3. **Plan review loop** — `review-plan` up to 20 rounds
+Driven by `skills/c-thru-plan/SKILL.md`; all agent names below are live `agents/*.md` files.
+
+0. **Pre-check** — resume/restart/abort if prior plan state exists; `.c-thru-contract-version`
+   detection for pre-refactor plans
+1. **Discovery** — read-only reconnaissance by the driver (no agent spawn), then an `explore`
+   gap-advisor call (`GAPS: N`), then a parallel `explore` fan-out, one agent per gap
+   (max 60s each; partial discovery acceptable, missing gaps recorded as `assumed`)
+2. **Plan construction** — `planner` (signal=intent; the only unconditional cloud-judge call)
+   writes `current.md` with an immutable `## Outcome` section + all items
+3. **Plan review loop** — `reviewer-plan` returns `APPROVED` or `NEEDS_REVISION`; revision
+   rounds shared with Phase 5 under the 20-round cap
 4. **Wave loop** — three-branch driver loop repeats until no ready items:
-   - `plan-orchestrator` (pure executor per wave):
-     - Topological sort + resource-conflict batching → `wave.md` (from READY_ITEMS input)
-     - Assemble digest files (reads learnings.md internally)
-     - Dispatch worker batches in parallel with progressive batch injection
-     - Concat findings → `findings.jsonl`; concat outputs → `artifact.md`
-     - Verify (no LLM) → `verify.json`
-     - Write `wave-summary.md`
-     - Append `journal.md`
-     - `git commit` (trailer: `Wave: NNN`)
-   - **Deterministic pre-processor** classifies transition (zero LLM):
-     - `clean` → local 7B generates commit_message; no planner call; next wave proceeds
-     - `dep_update` → `planner-local` (local 27B+) updates affected items' deps; local only
-     - `outcome_risk` → `planner` (cloud judge) re-evaluates outcome integrity; may invoke `auditor` and `wave-synthesizer`
-   - Driver receives compact STATUS block per wave; READY_ITEMS[] drives next wave
-5. **Final review** — `final-reviewer` gap analysis; `planner` (signal=final_review) if gaps found
+   - `coder` (wave executor) receives `current.md` + `READY_ITEMS` + a wave dir; mechanics
+     (topological sort, resource-conflict batching, batch-abort thresholds, `wave.md`
+     marker updates) live in `tools/c-thru-plan-harness.js`, not in an orchestrator agent
+   - **Deterministic pre-processor** — a driver function in the skill (zero LLM) — parses
+     `findings.jsonl`, applies `[x]` markings + dep discoveries to `current.md` atomically,
+     and classifies the transition:
+     - `clean` → commit message generated locally; no planner call; next wave proceeds
+     - `dep_update` → `planner` (signal=wave_summary) updates affected items' deps
+     - `outcome_risk` → `planner` (signal=wave_summary, cloud judge) re-evaluates outcome
+       integrity; `decision.json` / `replan-brief.md` exist only on this exception path
+   - Driver context holds pointers + ≤20-line STATUS blocks, never full file bodies;
+     `READY_ITEMS[]` drives the next wave
+5. **Final review** — `code-reviewer` gap analysis; `planner` (signal=final_review) adds gap
+   items if found
 
-## Local-first cost pyramid
+## Local-first cost discipline
 
-```
-COMPONENT               COST         MODEL           FREQUENCY
-──────────────────────────────────────────────────────────────
-initial planning        cloud        judge           once/plan
-dep-map update          local 27B+   local-planner   per wave if dep_update
-commit_message          local 7B     commit-message-generator  per wave (clean)
-[x] marking             zero         deterministic   per wave
-ready-item selection    zero         deterministic   per wave
-topo-sort / batching    zero         deterministic   per wave
-findings injection      zero         deterministic   per batch
-verification            zero         bash/node       per wave
-git commit              zero         bash            per wave
-learnings summary       local 7B     learnings-consolidator    per wave
-workers: code           local        devstral-small  N per wave
-workers: debug/reason   local        reasoner (deepseek-r1:14b)  N per wave (debug items only)
-workers: scaffolding    local        qwen3.5:1.7b    N per wave
-workers: tests          local        qwen3.5:9b      N per wave
-workers: docs           local        qwen3.5:9b      N per wave
-outcome risk check      cloud        judge           rare, on flag
-```
+Cloud-tier calls happen only at two points: initial plan construction (signal=intent) and
+`outcome_risk` re-planning — everything else is local-tier agents or zero-LLM driver code
+([x] marking, ready-item selection, topo-sort/batching, verification, git commits). The
+concrete model behind each agent at each tier is config-driven — see the README
+["Agent routing reference"](../README.md#agent-routing-reference), regenerated from
+`config/model-map.json` (never hardcode model names here; that table is the derived truth).
 
 ## Revision cap
 
@@ -136,7 +128,7 @@ ${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/
   journal.md          — wave-by-wave log (append-only)
   learnings.md        — cross-wave wiki; refreshed by planner step 2
   plan/snapshots/     — p-NNN.md (current.md snapshot) + wave-NNN.md (wave.md snapshot) per wave
-  discovery/          — explorer summaries from Phase 1
+  discovery/          — explore-agent summaries from Phase 1
   pre-processor.log   — structured log of each wave transition classification
   .c-thru-contract-version  — value 3 = wave.md contract (v2 plans have value 2; v1 plans absent marker)
   waves/
@@ -157,8 +149,8 @@ ${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/
       artifact.md     — consolidated wave output
       verify.json     — deterministic post-wave checks
       batch-abort.log — abort decisions
-      decision.json   — auditor verdict (exception path only)
-      replan-brief.md — wave-synthesizer output (exception path only)
+      decision.json   — outcome_risk escalation verdict (exception path only)
+      replan-brief.md — outcome_risk replan brief (exception path only)
 ```
 
 ### wave.md marker alphabet
@@ -175,7 +167,10 @@ State transitions are written by `node tools/c-thru-plan-harness.js update-marke
 
 ## Worker STATUS contract
 
-All worker agents (implementer, wave-reviewer, test-writer, scaffolder, converger, implementer-cloud, test-writer-cloud, integrator, doc-writer, security-reviewer) return a structured STATUS block. Required fields:
+All worker agents (`coder`, `coder-fallback`, `tester`, `docs`, `code-reviewer`,
+`reviewer-security`, `debugger-hypothesis`, `debugger-investigate`, `debugger-hard`) return a
+structured STATUS block, validated by `test/agent-status-schema.test.js` (the executable spec
+for this section). Required fields:
 
 ```
 STATUS: COMPLETE|PARTIAL|ERROR
@@ -188,19 +183,20 @@ FINDING_CATS: {crisis:N,plan-material:N,contextual:N,trivial:N,augmentation:N,im
 SUMMARY: <≤20 words>
 ```
 
-`CONFIDENCE` is worker self-assessment via the §12.1 rubric embedded in each agent prompt. Absent CONFIDENCE is treated as `medium` by the orchestrator (migration shim — graceful degradation). The orchestrator logs `{item, agent, confidence, verify_pass, compliance}` tuples to `$wave_dir/cascade/<item>.jsonl` after step 6 for Wave-1 calibration measurement.
+`CONFIDENCE` is worker self-assessment via the rubric embedded in each agent prompt. Absent
+CONFIDENCE is treated as `medium` by the driver (migration shim — graceful degradation).
 
-`wave-reviewer` additionally returns `ITERATIONS: N`.
-
-`security-reviewer` uses capability alias `judge-strict` with `hard_fail` — no cascade target exists. On recusal (missing threat-model context for a privilege boundary), it returns `STATUS: RECUSE` with no `RECOMMEND` field. The orchestrator marks the item `blocked` and surfaces to the user; it does NOT attempt further escalation.
-
-`implementer` and `implementer-cloud` additionally return `LINT_ITERATIONS: N` — the number of lint fix-and-retry cycles run before STATUS was returned. Absent `LINT_ITERATIONS` → treated as 0 by the orchestrator (graceful degradation). If lint errors remain after the 5-iteration cap, CONFIDENCE must be `medium` or `low`.
+`reviewer-security` is `hard_fail` — no degraded substitute exists. On recusal (missing
+threat-model context for a privilege boundary), the item is marked `blocked` and surfaced to
+the user; the driver does NOT attempt further escalation.
 
 ---
 
 ## Complexity & deployability signals
 
-The `plan-orchestrator` evaluates plan complexity before wave planning (Step 2.5) and gates several behaviors on the result.
+The `coder` (wave executor) evaluates plan complexity before wave emission (Step 2.5) and gates
+several behaviors on the result. The authoritative contract is the "Complexity & deployability
+contract" section of `skills/c-thru-plan/SKILL.md`.
 
 ### Complexity evaluation
 
@@ -219,13 +215,15 @@ Three structural signals determine complexity (first match wins):
 
 Complexity gates the **deployability guard** only. Migration and CI/CD are handled by per-wave self-questions (see below) — not by complexity tier.
 
-`COMPLEXITY` is emitted in the orchestrator's Step 13 STATUS return block and logged to `$plan_dir/plan.json`. A calibration tuple `{intent_summary, file_count, classification, downstream_wave_count}` is written to `$wave_dir/cascade/complexity.jsonl`.
+`COMPLEXITY` is emitted in the wave executor's STATUS return block. A calibration tuple
+`{intent_summary, file_count, classification, downstream_wave_count}` is written to
+`$wave_dir/cascade/complexity.jsonl`.
 
 Absent `COMPLEXITY` → treated as `moderate` (safe default — does not skip guards).
 
 ### Per-wave self-questions
 
-Before emitting each wave, the orchestrator explicitly reasons through two questions:
+Before emitting each wave, the wave executor explicitly reasons through two questions:
 
 1. **Migration:** *Does this wave touch any state, data, or files that need to be migrated?* (schema changes, renamed runtime fields, data format changes) → sets `MIGRATION_REQUIRED: yes|no`
 2. **CI/CD:** *Could merging this wave break a CI pipeline?* (renamed entry points, changed exports, removed files) → sets `ci_risk: yes` in wave.md frontmatter when yes
@@ -234,7 +232,10 @@ These are reasoning steps answered from item descriptions and recon context — 
 
 ### Test/CI reconnaissance (TEST_FRAMEWORKS)
 
-`discovery-advisor` and `explorer` emit a `TEST_FRAMEWORKS` STATUS field: comma-separated `{framework}@{test-dir}[+ci:{system}]` tokens, or `none`. The orchestrator reads this from `$plan_dir/discovery/` and forwards it into each worker digest's `## Mission context` section as `Test infrastructure: <value>`. Absent → `none` (graceful degradation, no behavioral change).
+The `explore` agent emits a `TEST_FRAMEWORKS` STATUS field: comma-separated
+`{framework}@{test-dir}[+ci:{system}]` tokens, or `none`. The driver reads this from
+`$plan_dir/discovery/` and forwards it into each worker digest's `## Mission context` section
+as `Test infrastructure: <value>`. Absent → `none` (graceful degradation, no behavioral change).
 
 ### Deployability guard
 
@@ -248,46 +249,33 @@ The guard is skipped entirely for `trivial` plans.
 
 ### State migration evaluation (MIGRATION_REQUIRED)
 
-Triggered by the per-wave migration self-question — not by complexity tier. When `MIGRATION_REQUIRED: yes`, a dedicated migration wave is inserted immediately before the schema change wave. Migration items carry `migration_target` and `migration_plan` fields and are dispatched to `deep-coder` tier. Absent `MIGRATION_REQUIRED` → `no` (graceful degradation).
+Triggered by the per-wave migration self-question — not by complexity tier. When `MIGRATION_REQUIRED: yes`, a dedicated migration wave is inserted immediately before the schema change wave. Migration items carry `migration_target` and `migration_plan` fields and are dispatched to `coder`. Absent `MIGRATION_REQUIRED` → `no` (graceful degradation).
 
 ### CI-safety final wave
 
-Appended as the **last wave of the plan** whenever any wave carries `ci_risk: yes` — regardless of complexity tier. The wave parses `TEST_FRAMEWORKS` tokens to derive test commands, then dispatches items to `test-writer` and `wave-reviewer`. Empty or `none` frameworks → falls back to `node --check` on plan target files.
+Appended as the **last wave of the plan** whenever any wave carries `ci_risk: yes` — regardless of complexity tier. The wave parses `TEST_FRAMEWORKS` tokens to derive test commands, then dispatches items to `tester` and `code-reviewer`. Empty or `none` frameworks → falls back to `node --check` on plan target files.
 
 ---
 
-## Escalation chain (Wave-2)
+## Escalation paths
 
-Self-recusal triggers a cascading re-dispatch through capability tiers. The chain never terminates early — it exhausts all tiers before surfacing to the user. Exception: `wave-reviewer` skips `deep-coder` (recusal = redesign, not re-implementation).
+Escalation is encoded in each agent's `UNBLOCKED_TASKS:` block — the inter-agent dispatch
+graph in the roster table above — and verified end-to-end by `test/agent-dispatch-graph.test.js`
+(the executable spec; every `subagent_type` target must resolve agent→capability→model).
+The live escalation edges (`↑` rows in the roster):
 
-```
-pattern-coder    (scaffolder, discovery-advisor)
-      ↓ recuse
-code-analyst     (test-writer, wave-reviewer)
-      ↓ recuse
-deep-coder       (implementer)
-      ↓ recuse
-deep-coder-cloud (implementer-cloud)  †Wave-2
-      ↓ recuse
-judge            (planner, auditor, review-plan)
-      ↓ recuse ← only here: surface to user
-```
-
-**Per-role escalation paths:**
-
-| Agent | Recuses to | Notes |
+| Agent | Escalates to | Trigger |
 |---|---|---|
-| `scaffolder` | `implementer` | Task requires design decision, not scaffolding |
-| `implementer` | `uplift-decider` → `implementer-cloud` | uplift-decider reads partial work, routes accept\|uplift\|restart |
-| `wave-reviewer` | `implementer-cloud` | Skips deep-coder — recusal = redesign |
-| `test-writer` | `test-writer-cloud` | Same role, cloud tier |
-| `converger` | `implementer-cloud` | Unresolvable conflict between parallel outputs |
-| `planner-local` | `planner` | Natural outcome_risk path |
-| `implementer-cloud` | `judge` (sentinel) | `RECOMMEND: judge` is a stop signal — orchestrator marks `blocked` + surfaces to user; does NOT dispatch a judge agent |
-| `test-writer-cloud` | `judge` (sentinel) | Same stop-signal semantics as implementer-cloud |
-| `judge` | surface to user | Last resort only |
+| `planner` | `planner-hard` | high-stakes / ambiguous / cross-system plan |
+| `code-reviewer` | `reviewer-security` | change touches auth/crypto/input-validation surface |
+| `debugger-hypothesis` | `debugger-hard` | hypotheses exhausted |
+| `debugger-investigate` | `debugger-hard` | investigation exhausted |
 
-**Depth cap:** `max_escalations: 3` (default). Hit before judge tier → item marked `blocked` (not surfaced to user). Judge-tier RECOMMEND (sentinel value) → item marked `blocked` + surface to user with full `escalation_log` regardless of escalation_depth.
+`coder-fallback` has no inbound dispatch edge — it is selected by **description** ("Use when
+coder fails or produces incorrect output"), not by an `UNBLOCKED_TASKS` line.
+
+`debugger-hard`, `planner-hard`, and `reviewer-security` are `hard_fail` — no degraded
+substitute; on failure or recusal the item is marked `blocked` and surfaced to the user.
 
 ---
 
@@ -306,31 +294,21 @@ SUMMARY: <≤20 words>
 
 **RECOMMEND is hardcoded per agent** — each agent names its immediate successor only. No agent needs a full escalation table.
 
-**Formatting rules:** Every STATUS block appears AFTER `## Work completed`, `## Findings (jsonl)`, and `## Output INDEX` sections. Each STATUS key on its own line (`^([A-Z_]+): (.*)$`). No markdown formatting inside STATUS key values. `<think>...</think>` blocks appear BEFORE work sections and are stripped by the orchestrator before parsing.
-
-**uplift-decider** does NOT use STATUS: RECUSE. It uses STATUS: COMPLETE with VERDICT: accept|uplift|restart.
+**Formatting rules:** Every STATUS block appears AFTER `## Work completed`, `## Findings (jsonl)`, and `## Output INDEX` sections. Each STATUS key on its own line (`^([A-Z_]+): (.*)$`). No markdown formatting inside STATUS key values. `<think>...</think>` blocks appear BEFORE work sections and are stripped by the driver before parsing.
 
 ---
 
 ## Agent I/O contracts — STATUS value table
 
+Executable spec: `test/agent-status-schema.test.js` (worker shapes) and
+`test/planner-return-schema.test.js` (planner + RECUSE fixtures).
+
 | STATUS | Required fields | Notes |
 |---|---|---|
 | COMPLETE | STATUS, CONFIDENCE, WROTE, INDEX, FINDINGS, FINDING_CATS, SUMMARY | UNCERTAINTY_REASONS omit when high |
-| PARTIAL | Same as COMPLETE | Crisis finding — orchestrator marks item failed after wave-reviewer cap |
+| PARTIAL | Same as COMPLETE | Crisis finding — driver marks the item failed |
 | ERROR | STATUS, SUMMARY | Unrecoverable setup failure |
-| RECUSE | STATUS, ATTEMPTED, RECUSAL_REASON, RECOMMEND, SUMMARY | PARTIAL_OUTPUT only when ATTEMPTED=yes; no WROTE/INDEX/FINDINGS. Exception: `security-reviewer` omits ATTEMPTED, PARTIAL_OUTPUT, and RECOMMEND (recuses before any work; no cascade target) |
-
-**uplift-decider contract (distinct):**
-
-| Field | Values | Notes |
-|---|---|---|
-| STATUS | COMPLETE | Always COMPLETE — routing decisions are not recusals |
-| VERDICT | accept\|uplift\|restart | Routing outcome |
-| CLOUD_CONFIDENCE | high\|medium\|low | Estimate of implementer-cloud confidence on this task |
-| RATIONALE | string | One sentence — why this routing decision |
-| PATCH_SCOPE | string | What to patch; omit when VERDICT=accept or restart |
-| SUMMARY | string | ≤20 words |
+| RECUSE | STATUS, ATTEMPTED, RECUSAL_REASON, RECOMMEND, SUMMARY | PARTIAL_OUTPUT only when ATTEMPTED=yes; no WROTE/INDEX/FINDINGS. Exception: `reviewer-security` omits ATTEMPTED, PARTIAL_OUTPUT, and RECOMMEND (recuses before any work; no cascade target) |
 
 ## Non-standard STATUS shapes by agent
 
@@ -338,17 +316,9 @@ Agents that don't use the standard worker STATUS block:
 
 | Agent | STATUS shape | Key non-standard fields |
 |---|---|---|
-| `auditor` | `VERDICT: continue\|extend\|revise` + `WROTE` + `SUMMARY` | No CONFIDENCE, no FINDINGS |
-| `final-reviewer` | `RECOMMENDATION: complete\|needs_items` + `WROTE` + `GAP_COUNT` + `SUMMARY` | No CONFIDENCE |
-| `review-plan` | `VERDICT: APPROVED\|NEEDS_REVISION` + `WROTE` + `FINDINGS_COUNT` + `SUMMARY` | No CONFIDENCE |
-| `explorer` | `STATUS: COMPLETE\|PARTIAL\|ERROR` + `WROTE` + `ANSWERED` + `SUMMARY` + `TEST_FRAMEWORKS` (CI questions only) | No CONFIDENCE, no FINDING_CATS |
-| `discovery-advisor` | `STATUS: COMPLETE\|ERROR` + `WROTE` + `GAPS: N` + `TEST_FRAMEWORKS` + `SUMMARY` | No CONFIDENCE |
-| `planner` | `STATUS: COMPLETE\|CYCLE\|ERROR` + `VERDICT: ready\|done` + `READY_ITEMS` + `COMMIT_MESSAGE` + `DELTA_*` + `SUMMARY` + `PARALLEL_WAVES` | No CONFIDENCE, no FINDING_CATS |
-| `planner-local` | Same shape as `planner` | Same notes |
-| `journal-digester` | `STATUS: COMPLETE\|ERROR` + `THEMES: N` + `PROPOSALS: N` + `WROTE` + `SUMMARY` | No CONFIDENCE |
-| `wave-synthesizer` | `STATUS: COMPLETE\|ERROR` + `AFFECTED_ITEMS: [...]` + `WROTE` + `SUMMARY` | No CONFIDENCE |
-| `learnings-consolidator` | `STATUS: COMPLETE\|ERROR` + `WROTE` + `INDEX` + `TOPICS` + `NEW_TOPICS` + `SUPERSEDED` + `SUMMARY` | No CONFIDENCE, no FINDING_CATS |
-| `uplift-decider` | `STATUS: COMPLETE` + `VERDICT: accept\|uplift\|restart` + `CLOUD_CONFIDENCE` + `RATIONALE` + `PATCH_SCOPE` + `SUMMARY` | Uses STATUS: COMPLETE for routing decisions |
+| `planner` | `STATUS: COMPLETE\|CYCLE\|ERROR` + `VERDICT: ready\|done` + `READY_ITEMS` + `COMMIT_MESSAGE` + `SUMMARY` (+ `ITEMS` on CYCLE, `PARALLEL_WAVES` annotation) | Validated by `test/planner-return-schema.test.js` rules a–h: VERDICT=ready requires non-empty READY_ITEMS; VERDICT=done forbids READY_ITEMS and COMMIT_MESSAGE |
+| `reviewer-plan` | `VERDICT: APPROVED\|NEEDS_REVISION` + `WROTE` + `FINDINGS_COUNT` + `SUMMARY` | No CONFIDENCE |
+| `explore` | `STATUS: COMPLETE\|PARTIAL\|ERROR` + `WROTE` + `SUMMARY` (+ `GAPS: N` as gap advisor, `TEST_FRAMEWORKS` on CI questions) | No CONFIDENCE, no FINDING_CATS |
 
 ---
 
