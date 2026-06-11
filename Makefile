@@ -1,4 +1,4 @@
-.PHONY: test test-fast test-live check lint docs
+.PHONY: test test-fast test-live check lint docs regen
 
 # Run the full test suite (including slow smoke tests)
 test:
@@ -27,3 +27,17 @@ lint:
 # The pre-commit hook runs `gen-routing-doc.js --check`, so run this after any config bump.
 docs:
 	node tools/gen-routing-doc.js
+
+# Tier-2 regen (docs/derived-artifacts.md): rebuild ALL derived artifacts after a config bump,
+# then show the diff — the human intent-gate stays: review the diff, confirm it is the
+# *intended* change (e.g. only a model-id bump, no null/route-drop transitions), then commit.
+# Honest scope: 2 of 3 derived artifacts regenerate (lineage snapshot, README table);
+# test/resolve-capability.test.js has hand-authored pins with no generator, so the last
+# step self-reports stale ids instead of rewriting them.
+regen:
+	node test/model-map-lineage.test.js --update
+	node tools/gen-routing-doc.js
+	node tools/check-pinned-model-ids.js
+	@echo ""
+	@echo "regen diff (review before committing):"
+	@git diff --stat -- test/model-map-lineage.test.js README.md || true
