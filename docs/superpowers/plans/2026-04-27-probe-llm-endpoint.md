@@ -191,7 +191,7 @@ main().catch(e => { console.error(e); process.exit(1); });
 - [ ] **Step 2: Check that `httpJson` exists in helpers**
 
 ```bash
-grep -n "^function httpJson\|^async function httpJson\|exports.*httpJson" /Users/dadleet/src/c-thru/test/helpers.js
+grep -n "^function httpJson\|^async function httpJson\|exports.*httpJson" test/helpers.js
 ```
 
 Expected: a line showing `httpJson` is exported. If it is NOT present, add this to `test/helpers.js` just before the `module.exports` block:
