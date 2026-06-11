@@ -1,6 +1,6 @@
 ---
 name: pdf
-description: claude-sonnet-4-6 connected / qwen3.6:35b-a3b-coding-nvfp4 local (workhorse tier). PDF parsing — tables, multi-column layouts, embedded figures. Use for "read this PDF", "extract data from this whitepaper", "find the pricing table in". Complex layouts handled best connected.
+description: Use to parse PDF documents — tables, multi-column layouts, embedded figures. Use for "read this PDF", "extract data from this whitepaper", "find the pricing table in". Not for screenshots or standalone images — use vision instead. Complex layouts handled best connected; routes to claude-sonnet-4-6 connected / qwen3.6:35b local.
 model: pdf
 tier_budget: 999999
 ---

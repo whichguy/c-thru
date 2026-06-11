@@ -1,6 +1,6 @@
 ---
 name: fast-generalist
-description: gemma4:26b — 102 t/s, 17GB, hard_fail. Fastest generalist across all 32gb+ tiers (connected and offline same model). Use for "quick: what is", "tl;dr of", "one-line answer", "fast check on". Not for multi-step reasoning — use generalist instead.
+description: Use for instant one-shot answers where speed beats depth — "quick: what is", "tl;dr of", "one-line answer", "fast check on". Not for multi-step reasoning — use generalist instead. Fastest generalist at every tier; routes to gemma4:e4b (same small local model connected and offline).
 model: fast-generalist
 tier_budget: 999999
 ---

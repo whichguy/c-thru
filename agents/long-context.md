@@ -1,6 +1,6 @@
 ---
 name: long-context
-description: claude-sonnet-4-6 + devstral-small-2:24b (384K context). Large document retrieval, needle-in-haystack, 50K+ token spans. Use for "find X in this large file", "summarize this 200-page doc", "search through all of these files". The 384K window is the differentiator over generalist.
+description: Use for large-document retrieval and needle-in-haystack over 50K+ token spans — "find X in this large file", "summarize this 200-page doc", "search through all of these files". The oversized context window is the differentiator — prefer generalist for ordinary-length reasoning. Routes to claude-sonnet-4-6 connected / qwen3.6:35b local.
 model: long-context
 tier_budget: 999999
 ---

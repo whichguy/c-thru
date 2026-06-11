@@ -1,6 +1,6 @@
 ---
 name: writer
-description: Long-form prose specialist — documentation, README files, architecture explainers, release notes, API guides. Use for "write the README", "draft release notes", "polish this architecture doc", "turn these notes into prose". Quality and style coherence over speed. Not for code generation — use coder; for quick docs after a change use docs. claude-opus-4-6 @128gb, claude-sonnet lower (connected); mistral-small3.1:24b local.
+description: Use for long-form prose — documentation, README files, architecture explainers, release notes, API guides. Use for "write the README", "draft release notes", "polish this architecture doc", "turn these notes into prose". Quality and style coherence over speed. Not for code generation — use coder; for quick docs after a change use docs. Routes to claude-opus-4-8 @128gb, claude-sonnet-4-6 below (connected); qwen3.6:35b local.
 model: writer
 tier_budget: 999999
 ---

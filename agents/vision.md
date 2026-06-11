@@ -1,6 +1,6 @@
 ---
 name: vision
-description: claude-sonnet-4-6 connected (full multimodal) / qwen3.6:35b-a3b-coding-nvfp4 local (basic). Screenshots, UI mockups, diagrams, image OCR. Use for "describe this screenshot", "read this diagram", "extract text from image". For dedicated visual analysis, prefer image-analyst.
+description: Use for screenshots, UI mockups, diagrams, and image OCR — "describe this screenshot", "read this diagram", "extract text from image". Not for PDF documents — use pdf instead. Routes to claude-sonnet-4-6 connected (full multimodal) / qwen3.6:35b local (basic).
 model: vision
 tier_budget: 999999
 ---

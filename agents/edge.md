@@ -1,6 +1,6 @@
 ---
 name: edge
-description: Runs on small models optimized for low-RAM or CI environments. Use for "quick classification", "lightweight summarization", "fast label or tag", "simple regex or transform" — tasks where a 1–7B model suffices and speed or resource constraints matter.
+description: Use for tasks where a 1–7B model suffices and speed or resource constraints matter — "quick classification", "lightweight summarization", "fast label or tag", "simple regex or transform". Not for open-ended reasoning — use generalist instead. Routes to small models for low-RAM or CI environments (gemma4:e4b at every tier).
 model: edge
 tier_budget: 999999
 ---

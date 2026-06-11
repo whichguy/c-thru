@@ -1,6 +1,6 @@
 ---
 name: generalist
-description: claude-sonnet-4-6 (connected) / qwen3.6:35b-a3b-coding-nvfp4 local (workhorse tier). Broad instruction-following, trade-off analysis, open-ended Q&A. Use when no specialist fits — "help me think through X", "what are the trade-offs of", "explain this". Best all-rounder at each tier.
+description: Use when no specialist fits — broad instruction-following, trade-off analysis, open-ended Q&A. Use for "help me think through X", "what are the trade-offs of", "explain this". Not for instant one-liners — use fast-generalist instead. Best all-rounder at each tier; routes to claude-sonnet-4-6 connected / qwen3.6:35b local.
 model: generalist
 tier_budget: 999999
 ---
