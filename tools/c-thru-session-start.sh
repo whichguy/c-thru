@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ARCH: SessionStart/PostCompact hook — injects tier/mode context and collects proxy/Ollama issues.
+# ARCH: SessionStart hook — injects tier/mode context and collects proxy/Ollama issues.
 # Always injects active tier + mode so Claude knows its routing environment.
 # A13: `-u` catches unset-var bugs. `-e` off — failed curls are flow control.
 set -uo pipefail
@@ -83,9 +83,10 @@ else
     issues+=("⚠️ proxy down on :${PORT} — API calls will fail. Fix: pkill -f claude-proxy")
 fi
 
-# Check 2: Ollama reachability (only when active route targets an Ollama backend)
-if [ -n "${OLLAMA_URL:-}" ]; then
-    OLLAMA_BASE="${OLLAMA_URL%/}"
+# Check 2: Ollama reachability — prefer OLLAMA_URL (set by c-thru binary) else OLLAMA_BASE_URL
+_ollama_check_url="${OLLAMA_URL:-${OLLAMA_BASE_URL:-}}"
+if [ -n "$_ollama_check_url" ]; then
+    OLLAMA_BASE="${_ollama_check_url%/}"
     if curl --max-time 3 --connect-timeout 2 -sf "${OLLAMA_BASE}/api/tags" >/dev/null 2>&1; then
         # Ollama reachable — spawn GC sweep in background (non-blocking, survives hook exit)
         nohup "${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/tools/c-thru-ollama-gc" sweep </dev/null >/dev/null 2>&1 &
@@ -103,6 +104,12 @@ fi
 
 if [ ${#issues[@]} -gt 0 ]; then
     context_parts+=("${issues[@]}")
+fi
+
+# Dynamic: inject currently installed Ollama tags
+if command -v ollama >/dev/null 2>&1; then
+    _ollama_tags=$(ollama list 2>/dev/null | awk 'NR>1 && $1!="" {printf "%s ", $1}' | sed 's/ $//')
+    [ -n "$_ollama_tags" ] && context_parts+=("(c-thru) installed ollama tags: $_ollama_tags")
 fi
 
 # Check 3: profile pollution — silent on happy path, single advisory line on drift.
