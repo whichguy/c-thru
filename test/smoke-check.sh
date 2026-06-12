@@ -46,61 +46,78 @@ export ANTHROPIC_BASE_URL="http://127.0.0.1:$SMOKE_PORT"
 export CLAUDE_PROXY_PORT="$SMOKE_PORT"
 echo "✅ OK (port $SMOKE_PORT)"
 
+# Steps 1–3 above are true prerequisites and abort the run. Steps 4–7 are
+# mutually independent given a running proxy, so they record-and-continue:
+# an early failure must not hide staleness in the later steps (step 7's grep
+# was stale for an unknown period because step 5 always exited first).
+# The script runs under `set -e`, so every step command below is wrapped
+# (`|| true` on captures, `if !` on bare commands) — only 1–3 keep abort
+# semantics.
+STEP_FAILED=0
+
 # 4. Control Channel: Status (via / interceptor)
 echo -n "4. Testing /c-thru-control status interceptor... "
-status_out=$(tools/c-thru /c-thru-control status 2>&1)
+status_out=$(tools/c-thru /c-thru-control status 2>&1) || true
 if echo "$status_out" | grep -q "C-thru Status"; then
   echo "✅ OK"
 else
   echo "❌ FAILED"
   echo "$status_out"
-  exit 1
+  STEP_FAILED=1
 fi
 
 # 4b. Control Channel: Status (via direct tool)
 echo -n "4b. Testing tools/c-thru-control status... "
-status_direct=$(tools/c-thru-control status 2>&1)
+status_direct=$(tools/c-thru-control status 2>&1) || true
 if echo "$status_direct" | grep -q "C-thru Status"; then
   echo "✅ OK"
 else
   echo "❌ FAILED"
   echo "$status_direct"
-  exit 1
+  STEP_FAILED=1
 fi
 
 # 5. Control Channel: Mode Switch
 echo -n "5. Testing mode switch (legacy 'offline' -> best-local-oss)... "
-tools/c-thru /c-thru-control go offline > /dev/null
-status_after=$(tools/c-thru /c-thru-control status 2>&1)
+if ! tools/c-thru /c-thru-control go offline > /dev/null; then
+  STEP_FAILED=1
+fi
+status_after=$(tools/c-thru /c-thru-control status 2>&1) || true
 if echo "$status_after" | grep -q "\[best-local-oss\]"; then
   echo "✅ OK"
 else
   echo "❌ FAILED"
   echo "$status_after"
-  exit 1
+  STEP_FAILED=1
 fi
 
-# 6. Control Channel: Mode Restore
+# 6. Control Channel: Mode Restore (sequential after 5 — restores connected mode)
 echo -n "6. Testing mode switch (legacy 'connected' -> best-cloud)... "
-tools/c-thru /c-thru-control back online > /dev/null
-status_final=$(tools/c-thru /c-thru-control status 2>&1)
+if ! tools/c-thru /c-thru-control back online > /dev/null; then
+  STEP_FAILED=1
+fi
+status_final=$(tools/c-thru /c-thru-control status 2>&1) || true
 if echo "$status_final" | grep -q "\[best-cloud\]"; then
   echo "✅ OK"
 else
   echo "❌ FAILED"
   echo "$status_final"
-  exit 1
+  STEP_FAILED=1
 fi
 
 # 7. Basic Routing Smoke
 echo -n "7. Testing model resolution logic... "
-res_out=$(C_THRU_DEBUG=1 tools/c-thru --route default --help 2>&1 > /dev/null)
+res_out=$(C_THRU_DEBUG=1 tools/c-thru --route default --help 2>&1 > /dev/null) || true
 if echo "$res_out" | grep -q "EFFECTIVE_MODEL="; then
   echo "✅ OK"
 else
   echo "❌ FAILED"
   echo "$res_out"
-  exit 1
+  STEP_FAILED=1
 fi
 
+if [[ "${STEP_FAILED:-0}" -ne 0 ]]; then
+  echo -e "\033[1;31m--- Smoke FAILED ---\033[0m"
+  exit 1
+fi
 echo -e "\033[1;32m--- All Smoke Tests Passed ---\033[0m"

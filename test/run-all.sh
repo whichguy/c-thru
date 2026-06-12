@@ -65,6 +65,11 @@ if [[ $FAST -eq 0 ]]; then
   acquire_lock
 fi
 
+# Failing-suite output is also persisted here (lazily created on first failure)
+# so a flake in a long full run stays diagnosable after the terminal scrolls.
+# Green runs create nothing.
+FAIL_LOG_DIR="${TMPDIR:-/tmp}/c-thru-runall-$$"
+
 run_suite() {
   local label="$1"
   shift
@@ -78,6 +83,11 @@ run_suite() {
     echo "✗"
     FAIL=$(( FAIL + 1 ))
     echo "$out" | sed 's/^/    /' >&2
+    mkdir -p "$FAIL_LOG_DIR"
+    local slug
+    slug=$(printf '%s' "$label" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/--*/-/g; s/^-//; s/-$//')
+    printf '%s\n' "$out" > "$FAIL_LOG_DIR/$slug.log"
+    echo "    output saved: $FAIL_LOG_DIR/$slug.log" >&2
   fi
 }
 
@@ -335,6 +345,6 @@ if [[ $FAIL -eq 0 ]]; then
     echo "✓ $TOTAL/$TOTAL suites passed"
   fi
 else
-  echo "✗ $FAIL/$TOTAL suites failed"
+  echo "✗ $FAIL/$TOTAL suites failed (failing output saved under $FAIL_LOG_DIR)"
   exit 1
 fi

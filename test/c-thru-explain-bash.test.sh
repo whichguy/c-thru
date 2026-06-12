@@ -272,5 +272,10 @@ echo "8. unknown --mode exits non-zero with clear error"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""
-echo "$PASS/$((PASS+FAIL)) passed${FAIL:+ — $FAIL FAILED}"
+# ${FAIL:+...} alone always expands (FAIL=0 is non-empty) — guard on count
+if [[ $FAIL -gt 0 ]]; then
+  echo "$PASS/$((PASS+FAIL)) passed — $FAIL FAILED"
+else
+  echo "$PASS/$((PASS+FAIL)) passed"
+fi
 [[ "$FAIL" -eq 0 ]]
