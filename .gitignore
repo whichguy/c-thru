@@ -17,13 +17,13 @@ temp_gas_prod/
 # untracked otherwise; we don't want them polluting git status).
 .claude/worktrees/
 
-# Supervisor runtime state — actively written by tools/lib-memory.js,
-# c-thru-state-marker.js, and c-thru-cleanup; local-only, never committed.
+# Supervisor runtime state — supervisor system removed upstream (7b097ca);
+# stale local copies may persist on disk, keep them out of status.
 supervisor_journal.md
 supervisor_state.md
 supervisor_wiki.jsonl
 
-# Proxy runtime logs and mcp-gas local state
+# Runtime proxy logs and mcp-gas local state
 proxy.stderr
 proxy.stdout
 .mcp-gas/
