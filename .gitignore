@@ -16,3 +16,14 @@ temp_gas_prod/
 # Claude Code agent worktrees (locked, managed by `git worktree` —
 # untracked otherwise; we don't want them polluting git status).
 .claude/worktrees/
+
+# Supervisor runtime state — actively written by tools/lib-memory.js,
+# c-thru-state-marker.js, and c-thru-cleanup; local-only, never committed.
+supervisor_journal.md
+supervisor_state.md
+supervisor_wiki.jsonl
+
+# Proxy runtime logs and mcp-gas local state
+proxy.stderr
+proxy.stdout
+.mcp-gas/
