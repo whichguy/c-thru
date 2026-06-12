@@ -197,6 +197,26 @@ console.log('\nBody model-id staleness (tokens must be in the agent\'s own resol
     assert(stale.length === 0,
       `${name}: body model ids all in own resolution set (cap=${cap})${stale.length ? ` — ${detail}` : ''}`);
   }
+
+  // ── Body capability-claim lint ──────────────────────────────────────────────
+  // "Routes to `X` capability" is the structured routing claim agent bodies
+  // make; X must be a real llm_profiles key. pattern-coder/workhorse/orchestrator
+  // were this class of staleness before the 2026-06 body rewrite fixed them by
+  // hand — this keeps the structured subset from drifting again. (Free-prose
+  // agent-name references are out of scope: too noisy to lint.)
+  console.log('\nBody capability claims (Routes to `X` capability → X ∈ llm_profiles)');
+  const CAP_CLAIM_RE = /Routes to `([a-z][\w-]*)` capability/g;
+  const validCaps = Object.keys(profiles);
+  for (const file of AGENT_FILES) {
+    const name = file.replace(/\.md$/, '');
+    const raw = fs.readFileSync(path.join(AGENTS_DIR, file), 'utf8');
+    const body = raw.replace(/^---\n[\s\S]*?\n---\n/, '');
+    const claims = [...body.matchAll(CAP_CLAIM_RE)].map(m => m[1]);
+    if (claims.length === 0) continue;
+    const bad = claims.filter(c => !validCaps.includes(c));
+    assert(bad.length === 0,
+      `${name}: capability claims name real llm_profiles keys${bad.length ? ` — invalid: ${bad.join(', ')}; valid: ${validCaps.join(', ')}` : ` (${claims.join(', ')})`}`);
+  }
 }
 
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
