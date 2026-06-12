@@ -111,6 +111,12 @@ run_suite "agent-router-hook (subagent_type → capability model rewrite)" \
   bash "$REPO_DIR/test/agent-router-hook.test.js"
 run_suite "strict-models (C_THRU_STRICT_MODELS=1 enforcement)" \
   bash "$REPO_DIR/test/strict-models.test.sh"
+if command -v jq >/dev/null 2>&1; then
+  run_suite "self-update-divergence (diverged/stale-WIP advisories)" \
+    bash "$REPO_DIR/test/self-update-divergence.test.sh"
+else
+  skip_suite "self-update-divergence (jq not installed)"
+fi
 
 echo ""
 echo "Node tests:"
