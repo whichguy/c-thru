@@ -3,8 +3,10 @@
 # Verifies the core "Great Simplification" and Control Channel logic.
 set -e
 
-# Use a clean environment
-export CLAUDE_ROUTER_DEBUG=0
+# Use a clean environment (a set-but-"0" CLAUDE_ROUTER_DEBUG still trips the
+# deprecation alias check in tools/c-thru, which tests with -n, not value)
+unset CLAUDE_ROUTER_DEBUG
+export C_THRU_DEBUG=0
 export CLAUDE_PROXY_DEBUG=0
 
 # Ensure we are in the repo root
@@ -67,10 +69,10 @@ else
 fi
 
 # 5. Control Channel: Mode Switch
-echo -n "5. Testing mode switch (connected -> offline)... "
+echo -n "5. Testing mode switch (legacy 'offline' -> best-local-oss)... "
 tools/c-thru /c-thru-control go offline > /dev/null
 status_after=$(tools/c-thru /c-thru-control status 2>&1)
-if echo "$status_after" | grep -q "\[offline\]"; then
+if echo "$status_after" | grep -q "\[best-local-oss\]"; then
   echo "✅ OK"
 else
   echo "❌ FAILED"
@@ -79,10 +81,10 @@ else
 fi
 
 # 6. Control Channel: Mode Restore
-echo -n "6. Testing mode switch (offline -> connected)... "
+echo -n "6. Testing mode switch (legacy 'connected' -> best-cloud)... "
 tools/c-thru /c-thru-control back online > /dev/null
 status_final=$(tools/c-thru /c-thru-control status 2>&1)
-if echo "$status_final" | grep -q "\[connected\]"; then
+if echo "$status_final" | grep -q "\[best-cloud\]"; then
   echo "✅ OK"
 else
   echo "❌ FAILED"
@@ -92,8 +94,8 @@ fi
 
 # 7. Basic Routing Smoke
 echo -n "7. Testing model resolution logic... "
-res_out=$(CLAUDE_ROUTER_DEBUG=1 tools/c-thru --route default --help 2>&1 > /dev/null)
-if echo "$res_out" | grep -q "• model"; then
+res_out=$(C_THRU_DEBUG=1 tools/c-thru --route default --help 2>&1 > /dev/null)
+if echo "$res_out" | grep -q "EFFECTIVE_MODEL="; then
   echo "✅ OK"
 else
   echo "❌ FAILED"

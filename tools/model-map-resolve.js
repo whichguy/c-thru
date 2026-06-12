@@ -23,6 +23,19 @@ const LLM_MODE_ENUM = new Set([
 
 const DEFAULT_MODE = 'best-cloud';
 
+// Translate a requested mode (canonical or legacy vocabulary) to the canonical
+// enum. Mirrors the legacy branches in resolveLlmMode, but returns null for
+// anything unrecognized — callers that take explicit user input (e.g. the
+// proxy's POST /c-thru/mode) must reject garbage rather than silently degrade.
+function normalizeLlmMode(mode) {
+  if (LLM_MODE_ENUM.has(mode)) return mode;
+  return {
+    offline: 'best-local-oss',
+    disconnect: 'best-local-oss',
+    connected: DEFAULT_MODE,
+  }[mode] ?? null;
+}
+
 // USGov filter: models of Chinese origin are blocked in gov modes.
 const CHINESE_ORIGIN_PATTERNS = [/^qwen/, /^deepseek/, /^kimi/, /^moonshot/, /moonshotai\//, /^glm/, /thudm\//];
 function isChineseOrigin(model) {
@@ -311,6 +324,7 @@ module.exports = {
   resolveProfileModel,
   resolveLocalFallback,
   resolveLlmMode,
+  normalizeLlmMode,
   resolveActiveTier,
   resolveCapabilityAlias,
   resolveTerminalTarget,

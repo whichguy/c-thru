@@ -18,6 +18,7 @@ const {
   resolveProfileModel,
   resolveLocalFallback,
   resolveLlmMode,
+  normalizeLlmMode,
   resolveActiveTier,
   resolveCapabilityAlias,
   LLM_MODE_ENUM,
@@ -4209,10 +4210,17 @@ const server = http.createServer((req, res) => {
       if (req.method === 'POST' && (req.url === '/c-thru/mode' || req.url === '/c-thru/mode/')) {
         const buf = await readBody(req);
         let payload; try { payload = JSON.parse(buf.toString()); } catch (e) { return sendAnthropicError(res, 400, `invalid JSON body: ${e.message}`); }
-        const mode = payload?.mode;
-        if (!mode || !LLM_MODE_ENUM.has(mode)) return sendAnthropicError(res, 400, 'invalid mode');
+        const requested = payload?.mode;
+        // Accept legacy vocabulary ('offline'/'disconnect'/'connected') by
+        // translating to the canonical enum; reject everything else — a
+        // mode-switch endpoint must be precise, no silent best-cloud fallback.
+        const mode = requested ? normalizeLlmMode(requested) : null;
+        if (!mode) {
+          return sendAnthropicError(res, 400,
+            `invalid mode '${requested}': valid modes are ${[...LLM_MODE_ENUM].join(', ')} (legacy aliases also accepted: offline, disconnect, connected)`);
+        }
         process.env.CLAUDE_LLM_MODE = mode;
-        proxyLog('mode-switch', { new_mode: mode, source: 'control-channel' });
+        proxyLog('mode-switch', { new_mode: mode, requested_mode: requested, source: 'control-channel' });
         return send(res, 200, { ok: true, new_mode: mode, message: `Mode switched to ${mode}` });
       }
 

@@ -32,7 +32,9 @@ function request(method, urlPath, body = null) {
         if (res.statusCode >= 400) {
           try {
             const err = JSON.parse(data);
-            return reject(new Error(err.error || `HTTP ${res.statusCode}`));
+            // Anthropic-style errors nest an object: { error: { type, message } }
+            const msg = typeof err.error === 'string' ? err.error : err.error?.message || `HTTP ${res.statusCode}`;
+            return reject(new Error(msg));
           } catch {
             return reject(new Error(`HTTP ${res.statusCode}`));
           }
@@ -86,9 +88,10 @@ async function setMode(mode, persist = false) {
         const projectPath = projectMatch ? projectMatch[1] : '';
         const effectivePath = effectiveMatch[1];
 
-        // Read effective, change mode, sync
+        // Read effective, change mode, sync. Persist the server's canonical
+        // mode (res.new_mode), not the legacy input vocabulary.
         const config = JSON.parse(fs.readFileSync(effectivePath, 'utf8'));
-        config.llm_mode = mode;
+        config.llm_mode = res.new_mode || mode;
         const tmpPath = path.join(require('os').tmpdir(), `c-thru-persist-${process.pid}.json`);
         fs.writeFileSync(tmpPath, JSON.stringify(config));
         
