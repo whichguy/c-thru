@@ -122,6 +122,45 @@ if [ -f "$_pollution_script" ] && command -v node >/dev/null 2>&1; then
     fi
 fi
 
+# Check 4: repo divergence & stale WIP — last-fetched state only, NO network
+# (measured ~40ms vs the 10s hook timeout). Gated on the repo root actually
+# being a git checkout (plugin installs may not be); the divergence/behind
+# advisories additionally require an upstream, the stale-WIP one does not.
+if git -C "$ROUTER_REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # Tracked uncommitted changes only: drop untracked (??) lines; keep the
+    # post-rename path for `R old -> new` forms.
+    _tracked_dirty=$(git -C "$ROUTER_REPO_ROOT" status --porcelain 2>/dev/null | grep -v '^??' | grep -v '^$' || true)
+
+    if git -C "$ROUTER_REPO_ROOT" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+        _lr=$(git -C "$ROUTER_REPO_ROOT" rev-list --left-right --count '@{u}...HEAD' 2>/dev/null || true)
+        _behind=""; _ahead=""
+        read -r _behind _ahead <<<"$_lr" || true
+        if [ -n "$_behind" ] && [ -n "$_ahead" ]; then
+            if [ "$_ahead" -gt 0 ] && [ "$_behind" -gt 0 ]; then
+                context_parts+=("(c-thru) repo diverged from origin (ahead $_ahead, behind $_behind) — self-update is paused; merge manually")
+            elif [ "$_behind" -gt 0 ] && [ -n "$_tracked_dirty" ]; then
+                context_parts+=("(c-thru) repo is $_behind commit(s) behind origin but has uncommitted changes — self-update paused")
+            fi
+        fi
+    fi
+
+    # Stale WIP: tracked uncommitted changes with no file touched in 24h.
+    if [ -n "$_tracked_dirty" ]; then
+        _recent=""
+        while IFS= read -r _line; do
+            [ -n "$_line" ] || continue
+            _f=$(printf '%s' "$_line" | sed 's/^...//; s/^.* -> //')
+            if [ -n "$(find "$ROUTER_REPO_ROOT/$_f" -mtime -1 -print -quit 2>/dev/null)" ]; then
+                _recent=1
+                break
+            fi
+        done <<<"$_tracked_dirty"
+        if [ -z "$_recent" ]; then
+            context_parts+=("(c-thru) uncommitted changes untouched for >24h — possible abandoned WIP from a previous session")
+        fi
+    fi
+fi
+
 [ ${#context_parts[@]} -eq 0 ] && exit 0
 
 context=$(printf '%s\n' "${context_parts[@]}" | paste -sd '\n' -)

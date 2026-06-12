@@ -42,7 +42,19 @@ _old_sha="$(git rev-parse HEAD 2>/dev/null || true)"
 (
   git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=3 \
     fetch --quiet --no-tags origin 2>/dev/null || exit 0
-  git merge-base --is-ancestor HEAD @{u} 2>/dev/null || exit 0
+  if ! git merge-base --is-ancestor HEAD @{u} 2>/dev/null; then
+    # Local has commits origin doesn't. Ahead-only is normal unpushed work —
+    # stay silent. Diverged (ahead AND behind) disables self-update until a
+    # manual merge, so surface it instead of skipping silently forever.
+    _counts="$(git rev-list --left-right --count '@{u}...HEAD' 2>/dev/null || true)"
+    _behind=""; _ahead=""
+    read -r _behind _ahead <<<"$_counts" || true
+    if [[ -n "$_behind" && -n "$_ahead" && "$_behind" -gt 0 && "$_ahead" -gt 0 ]]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) self-update skipped: local diverged from origin (ahead $_ahead, behind $_behind) — merge manually" >> "$UPDATE_LOG" 2>/dev/null || true
+      echo "c-thru self-update skipped: local diverged from origin (ahead $_ahead, behind $_behind) — merge manually" >&2
+    fi
+    exit 0
+  fi
   git merge --ff-only --quiet @{u} 2>/dev/null || true
 ) &
 _pull_pid=$!
