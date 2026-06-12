@@ -253,6 +253,8 @@ run_suite "proxy-ollama-passthrough (Ollama /v1/messages passthrough + tool bloc
   node "$REPO_DIR/test/proxy-ollama-passthrough.test.js"
 run_suite "model-map-lineage (full resolution matrix snapshot)" \
   node "$REPO_DIR/test/model-map-lineage.test.js"
+run_suite "lineage-update-roundtrip (--update no-op/update/corrupt behaviors)" \
+  node "$REPO_DIR/test/lineage-update-roundtrip.test.js"
 run_suite "proxy-quality (mapping, fallback cascade, v1 passthrough)" \
   node "$REPO_DIR/test/proxy-quality.test.js"
 
@@ -311,7 +313,12 @@ echo ""
 echo "-----------------"
 TOTAL=$(( PASS + FAIL ))
 if [[ $FAIL -eq 0 ]]; then
-  echo "✓ $TOTAL/$TOTAL suites passed${SKIP:+ ($SKIP skipped)}"
+  # ${SKIP:+...} alone always expands (SKIP=0 is non-empty) — guard on count
+  if [[ $SKIP -gt 0 ]]; then
+    echo "✓ $TOTAL/$TOTAL suites passed ($SKIP skipped)"
+  else
+    echo "✓ $TOTAL/$TOTAL suites passed"
+  fi
 else
   echo "✗ $FAIL/$TOTAL suites failed"
   exit 1
