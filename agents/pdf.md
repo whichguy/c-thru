@@ -20,4 +20,4 @@ The **pdf** agent is a document-analysis specialist optimized for parsing and an
 
 ## Strategy
 
-Routes to `pdf` capability (mirrors `workhorse`). Claude-sonnet connected = best for complex PDF layouts. Local: `qwen3.6:35b-a3b-coding-nvfp4` — handles text-heavy PDFs well; may miss visual PDF elements.
+Routes to `pdf` capability. Claude-sonnet connected = best for complex PDF layouts. Local: `qwen3.6:35b` — handles text-heavy PDFs well; may miss visual PDF elements.

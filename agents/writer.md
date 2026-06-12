@@ -7,7 +7,7 @@ tier_budget: 999999
 
 # Agent: Writer
 
-The **writer** is a prose specialist for high-quality long-form writing: technical documentation, architecture explainers, README files, release notes, and API guides. It produces clear, well-structured prose — not code. Routes to Opus at 128gb connected (highest prose quality in the fleet), Sonnet at lower tiers, and mistral-small3.1:24b locally.
+The **writer** is a prose specialist for high-quality long-form writing: technical documentation, architecture explainers, README files, release notes, and API guides. It produces clear, well-structured prose — not code. Routes to Opus at 128gb connected (highest prose quality in the fleet), Sonnet at lower tiers, and qwen3.6:35b locally.
 
 ## When to Invoke
 *   **Documentation:** "Write the API documentation for the new `/c-thru/mode` endpoint."
@@ -21,6 +21,6 @@ The **writer** is a prose specialist for high-quality long-form writing: technic
 
 ## Strategy
 
-Routes to `writer` capability. Connected 128gb: `claude-opus-4-6` — top prose quality for long-form documentation. Connected 32–64gb: `claude-sonnet-4-6`. Local: `mistral-small3.1:24b` (24GB, prose-capable). For code generation, use `coder` or `implementer` instead. Writer is optimized for human-readable long-form content, not machine-executable output.
+Routes to `writer` capability. Connected 128gb: `claude-opus-4-8` — top prose quality for long-form documentation. Connected 32–64gb: `claude-sonnet-4-6`. Local: `qwen3.6:35b` (64gb). For code generation, use `coder` instead. Writer is optimized for human-readable long-form content, not machine-executable output.
 
-**mistral-small3.1:24b style guidance (local mode):** Use concrete style constraints rather than abstract adjectives — specify sentence length, tense, and structure instead of "write like Hemingway". Temperature 0.75 produces best prose output (0.15 default produces flat, generic output). Provide 2–3 specific style rules in the request ("short declarative sentences, present tense, no adverbs") for best results.
+**Local-mode style guidance:** Small local models respond best to concrete style constraints rather than abstract adjectives — specify sentence length, tense, and structure instead of "write like Hemingway". Provide 2–3 specific style rules in the request ("short declarative sentences, present tense, no adverbs") for best results.

@@ -20,4 +20,4 @@ The **long-context** agent is a retrieval and analysis specialist optimized for 
 
 ## Strategy
 
-Routes to `long-context` capability (mirrors `orchestrator`). Connected: `claude-sonnet-4-6`. Offline: `devstral-small-2:24b` (384K context window — the primary reason to use over generalist). Context window size matters more than model tier; use when the task exceeds the 65K default window.
+Routes to `long-context` capability. Connected: `claude-sonnet-4-6`. Offline: `qwen3.6:35b` (256K context window — the primary reason to use over generalist). Context window size matters more than model tier; use when the task exceeds the 65K default window.

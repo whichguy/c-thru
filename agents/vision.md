@@ -20,4 +20,4 @@ The **vision** agent is a multi-modal specialist designed to interpret and descr
 
 ## Strategy
 
-Routes to `vision` capability (mirrors `workhorse`). Connected: `claude-sonnet-4-6` — full multimodal. Offline: `qwen3.6:35b-a3b-coding-nvfp4` — basic image handling. For pure image analysis tasks, `image-analyst` is the dedicated agent.
+Routes to `vision` capability. Connected: `claude-sonnet-4-6` — full multimodal. Offline: `qwen3.6:35b` — basic image handling. For pure image analysis tasks, `image-analyst` is the dedicated agent.

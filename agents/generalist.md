@@ -20,4 +20,4 @@ The **generalist** is a versatile all-rounder designed for everyday questions, t
 
 ## Strategy
 
-Routes to `workhorse` capability. Connected 32–64gb: `claude-sonnet-4-6`. 128gb always local: `qwen3.6:35b-a3b-coding-nvfp4` (21GB nvfp4). Same backing as `vision` and `pdf`. Use when no specialist role fits and you need a capable all-rounder.
+Routes to `generalist` capability. Connected 32gb+: `claude-sonnet-4-6`. Local: `qwen3.6:35b` (64gb). Use when no specialist role fits and you need a capable all-rounder.

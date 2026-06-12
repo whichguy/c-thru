@@ -20,4 +20,4 @@ The **fast-generalist** is a high-speed all-rounder designed for rapid responses
 
 ## Strategy
 
-Routes to `fast-generalist` capability (mirrors `classifier`) with `hard_fail`. `gemma4:26b` (17GB, 102 t/s) on all 32gb+ tiers — same model connected and offline. Falls to `qwen3:1.7b` at 16gb. Fails hard rather than cascading to a slower model; the contract is speed.
+Routes to `fast-generalist` capability: `gemma4:e4b` on the standard paths (same small local model connected and offline), `phi4-mini:3.8b` in gov modes. The contract is speed — a small always-resident model rather than a slower, smarter one.

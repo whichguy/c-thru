@@ -145,5 +145,59 @@ for (const file of AGENT_FILES) {
   }
 }
 
+// ── Body model-id staleness lint ──────────────────────────────────────────────
+// The frontmatter description lint above keeps routing claims current in the
+// selector-visible text — but agent BODIES carry routing claims too, and they
+// drifted (8 files found stale 2026-06-12, e.g. writer.md claiming
+// mistral-small3.1:24b local and claude-opus-4-6). Every model-id token in an
+// agent body must be in THAT AGENT'S own resolution set: cap =
+// agent_to_capability[agent] || agent, resolved over 5 modes × 5 tiers with the
+// same resolveProfileModel chain the proxy runs. A model_routes-key check would
+// be too loose (re:^claude-.*$ masks any claude-* id, current or not).
+//
+// Token regex is deliberately conservative: ollama families require a `:tag`,
+// claude- requires the version digit, lowercase only — validated against the
+// corpus (13 hits, all genuine model ids, no prose false positives).
+const { resolveProfileModel, LLM_MODE_ENUM } = require('../tools/model-map-resolve.js');
+const MODEL_TOKEN_RE = /(?:claude-(?:opus|sonnet|haiku)-[0-9][\w.-]*|gemini-[\w.-]+|gpt-oss-[\w:.-]+|(?:qwen[\w.-]*|gemma\d+|phi4[\w.-]*|devstral[\w.-]*|mistral[\w.-]*|deepseek[\w.-]*|llama[\w.-]*):[\w.-]+)/g;
+
+console.log('\nBody model-id staleness (tokens must be in the agent\'s own resolution set)');
+{
+  const cfg = JSON.parse(fs.readFileSync(path.join(REPO, 'config', 'model-map.json'), 'utf8'));
+  const a2c = cfg.agent_to_capability || {};
+  const profiles = cfg.llm_profiles || {};
+  const TIERS = ['16gb', '32gb', '48gb', '64gb', '128gb'];
+  const MODES = [...LLM_MODE_ENUM];
+
+  // capability → set of models it resolves to in any mode × tier cell
+  const capSets = {};
+  for (const cap of Object.keys(profiles)) {
+    const set = new Set();
+    for (const mode of MODES) {
+      for (const tier of TIERS) {
+        const m = resolveProfileModel(profiles[cap], tier, mode);
+        if (m) set.add(m.replace(/@[a-zA-Z0-9_-]+$/, '')); // strip backend sigil
+      }
+    }
+    capSets[cap] = set;
+  }
+
+  for (const file of AGENT_FILES) {
+    const name = file.replace(/\.md$/, '');
+    const raw = fs.readFileSync(path.join(AGENTS_DIR, file), 'utf8');
+    const body = raw.replace(/^---\n[\s\S]*?\n---\n/, ''); // strip frontmatter
+    const cap = a2c[name] || name;
+    const own = capSets[cap] || new Set();
+    const tokens = [...new Set(body.match(MODEL_TOKEN_RE) || [])];
+    const stale = tokens.filter(t => !own.has(t));
+    const detail = stale.map(t => {
+      const currentFor = Object.keys(capSets).filter(c => capSets[c].has(t));
+      return `"${t}" is ${currentFor.length ? `current for: ${currentFor.join(', ')}` : 'current for nothing'}, not ${cap}`;
+    }).join('; ');
+    assert(stale.length === 0,
+      `${name}: body model ids all in own resolution set (cap=${cap})${stale.length ? ` — ${detail}` : ''}`);
+  }
+}
+
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

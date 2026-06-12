@@ -20,4 +20,4 @@ The **edge** agent is a resource-optimized specialist designed to run on very sm
 
 ## Strategy
 
-Routes to `pattern-coder` capability — smallest capable local model. On 128GB and most tiers: `qwen3-coder:30b` (18GB, MoE with 3.3B active parameters — fast despite the 30B label). On 16GB: `qwen3:1.7b`. Use when throughput and RAM efficiency matter more than reasoning depth.
+Routes to `edge` capability — smallest capable local model: `gemma4:e4b` on the standard paths, `phi4-mini:3.8b` in gov modes. Use when throughput and RAM efficiency matter more than reasoning depth.
