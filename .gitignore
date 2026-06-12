@@ -16,3 +16,7 @@ temp_gas_prod/
 # Claude Code agent worktrees (locked, managed by `git worktree` —
 # untracked otherwise; we don't want them polluting git status).
 .claude/worktrees/
+
+# Runtime proxy logs
+proxy.stderr
+proxy.stdout
