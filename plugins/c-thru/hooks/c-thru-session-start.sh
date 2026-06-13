@@ -67,24 +67,27 @@ fi
 
 issues=()
 
-# Check 1: proxy reachability. Profile/Mode + the endpoint list now come from
-# the proxy's own /hooks/context block (below), so /ping is purely a health gate.
-if ! curl -sf --max-time 2 "http://127.0.0.1:$PORT/ping" >/dev/null 2>&1; then
-    issues+=("⚠️ proxy down on :${PORT} — API calls will fail. Fix: pkill -f claude-proxy")
-fi
-
-# Canonical control-plane block — fetched from the proxy so the proxy URL +
-# endpoint list have exactly one source (the proxy owns it, Part 1). Bounded
-# like /ping above so a wedged proxy can't blow the 5s CLI hook budget and drop
-# ALL SessionStart context. jq with a node fallback (matches the proxy's JSON).
+# Check 1: proxy reachability AND the canonical control-plane block in ONE probe.
+# A single POST /hooks/context both proves the proxy is up (curl success) and
+# yields the block (Profile/Mode + endpoint list — the proxy owns it, Part 1, so
+# the URL/endpoints have exactly one source). `-sf` makes a connection refusal OR
+# an HTTP error both count as "proxy down", matching the old /ping -sf health
+# gate — and lets us drop the separate /ping curl that this duplicated (a
+# successful /hooks/context already proves the proxy is up; a failing one fails
+# identically to /ping). Bounded with --max-time 2 so a wedged proxy can't blow
+# the 5s CLI hook budget and drop ALL SessionStart context. jq with a node
+# fallback (matches the proxy's JSON). Empty additionalContext on a 200 stays
+# "no block, no advisory" — same as before.
 proxy_ctx=""
 hook_json=""
-if hook_json=$(curl -s --max-time 2 -X POST "http://127.0.0.1:$PORT/hooks/context" 2>/dev/null); then
+if hook_json=$(curl -sf --max-time 2 -X POST "http://127.0.0.1:$PORT/hooks/context" 2>/dev/null); then
     if command -v jq >/dev/null 2>&1; then
         proxy_ctx=$(printf '%s' "$hook_json" | jq -r '.hookSpecificOutput.additionalContext // ""')
     elif command -v node >/dev/null 2>&1; then
         proxy_ctx=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write((d.hookSpecificOutput&&d.hookSpecificOutput.additionalContext)||'')}catch{}" <<<"$hook_json" 2>/dev/null || true)
     fi
+else
+    issues+=("⚠️ proxy down on :${PORT} — API calls will fail. Fix: pkill -f claude-proxy")
 fi
 
 # Check 2: Ollama reachability — prefer OLLAMA_URL (set by c-thru binary) else OLLAMA_BASE_URL

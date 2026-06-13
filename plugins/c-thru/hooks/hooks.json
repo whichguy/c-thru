@@ -4,7 +4,7 @@
     "SessionStart": [{
       "matcher": "*",
       "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-session-start.sh", "timeout": 15 }
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-session-start.sh", "timeout": 5 }
       ]
     }],
     "UserPromptSubmit": [{

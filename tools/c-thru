@@ -46,7 +46,7 @@ LAUNCH_CWD="$(pwd -P 2>/dev/null || pwd)"
 LAUNCH_PROJECT_DIR=""
 ORIGINAL_CLAUDE_PROFILE_DIR="${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 CLAUDE_PROFILE_DIR="$ORIGINAL_CLAUDE_PROFILE_DIR"
-OLLAMA_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
+OLLAMA_URL="${OLLAMA_URL:-${OLLAMA_BASE_URL:-http://localhost:11434}}"
 # Number of models Ollama keeps loaded in parallel (default 4).
 OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-4}"
 # CLAUDE_PROXY_PORT is intentionally NOT defaulted here.  When unset the proxy
@@ -392,6 +392,14 @@ write_ephemeral_settings() {
   # hook curls /hooks/context itself and injects the proxy block (single source,
   # Part 1) — registering both would double-inject. The port-gated branch that
   # used to live here existed only to build that HTTP hook's URL, so it's gone.
+  #
+  # SessionStart timeout budget = 5s (kept identical to the plugin hooks.json
+  # SessionStart entry so the hook has the same headroom in both launch modes).
+  # The hook self-bounds well under this: a single proxy probe (POST
+  # /hooks/context, curl --max-time 2) + the optional Ollama probe (Check 2,
+  # curl --max-time 3, only when OLLAMA_URL/OLLAMA_BASE_URL is set) + sub-second
+  # local checks (pollution/git/ollama-list). Collapsing the old /ping+/hooks
+  # double-curl into one shaved ~2s off the worst case. Typical wall-time << 1s.
   cat > "$EPHEMERAL_SETTINGS_FILE" <<EOF
 {
   "mcpServers": {
