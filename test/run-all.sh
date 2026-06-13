@@ -69,6 +69,10 @@ fi
 # so a flake in a long full run stays diagnosable after the terminal scrolls.
 # Green runs create nothing.
 FAIL_LOG_DIR="${TMPDIR:-/tmp}/c-thru-runall-$$"
+# Failed runs leave their dir behind by design (that's the point) — prune only
+# week-old leftovers so they don't accumulate forever. Prefix can't collide with
+# the c-thru-run-all.lock dir; -mtime +7 never touches a live run's dir.
+find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'c-thru-runall-*' -mtime +7 -exec rm -rf {} + 2>/dev/null || true
 
 run_suite() {
   local label="$1"

@@ -37,6 +37,7 @@ Environment variables that affect c-thru routing, proxy behavior, and Ollama int
 |---|---|
 | `C_THRU_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). |
 | `C_THRU_UPDATE_INTERVAL` | Seconds between self-update fetches (default `3600`). Debounced via `.git/FETCH_HEAD` mtime. |
+| `CLAUDE_ROUTER_UPDATE_GRACE` | Seconds the self-update fetch may run before being killed (default `1`). Tests raise it so a loaded machine can't kill the fetch before its diverged advisory is written. |
 | `C_THRU_BEHAVIORAL_TESTS=1` | Enable behavioral contract tests (`agent-contract-behavioral.test.js`). Requires a running proxy. |
 | `BEHAVIORAL_ONLY` | Comma-separated agent name filter for behavioral test suite (e.g. `auditor,planner`). |
 | `C_THRU_JUDGE=1` | Enable cloud-judge semantic validation in behavioral tests. Requires `ANTHROPIC_API_KEY`. Each agent response is evaluated by `judge-evaluator` (cloud tier); VERDICT=FAIL is a hard failure. |

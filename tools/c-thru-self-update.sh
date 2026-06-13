@@ -59,8 +59,11 @@ _old_sha="$(git rev-parse HEAD 2>/dev/null || true)"
 ) &
 _pull_pid=$!
 
-# 1s foreground grace — kill if still running after 1s
-( sleep 1; kill -0 "$_pull_pid" 2>/dev/null && kill -TERM "$_pull_pid" 2>/dev/null ) 2>/dev/null &
+# Foreground grace — kill the fetch subshell if still running after the window.
+# Default 1s keeps launch snappy; tests raise it (CLAUDE_ROUTER_UPDATE_GRACE=10)
+# so a loaded machine can't TERM the subshell before it writes its advisory.
+_grace="${CLAUDE_ROUTER_UPDATE_GRACE:-1}"
+( sleep "$_grace"; kill -0 "$_pull_pid" 2>/dev/null && kill -TERM "$_pull_pid" 2>/dev/null ) 2>/dev/null &
 _grace_pid=$!
 
 wait "$_pull_pid" 2>/dev/null || true

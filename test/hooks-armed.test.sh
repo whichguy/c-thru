@@ -30,8 +30,11 @@ expected="$(resolve_dir "$REPO_DIR/.githooks")"
 actual=""
 if [[ -n "$configured" ]]; then
   case "$configured" in
-    /*) actual="$(resolve_dir "$configured")" ;;
-    *)  actual="$(resolve_dir "$REPO_DIR/$configured")" ;;
+    /*)   actual="$(resolve_dir "$configured")" ;;
+    # git expands a leading ~/ itself; this script must match, or a ~-pinned
+    # hooksPath gets mangled into $REPO_DIR/~/... and reads as disarmed.
+    "~/"*) actual="$(resolve_dir "$HOME/${configured#"~/"}")" ;;
+    *)    actual="$(resolve_dir "$REPO_DIR/$configured")" ;;
   esac
 fi
 

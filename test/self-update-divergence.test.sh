@@ -89,6 +89,7 @@ run_self_update() {  # $1 = scratch → sets SU_EC, SU_STDERR
   SU_EC=0
   SU_STDERR="$(ROUTER_REPO_ROOT="$1" CLAUDE_ROUTER_UPDATE_INTERVAL=0 \
     CLAUDE_ROUTER_NO_UPDATE="" CLAUDE_PROFILE_DIR="$profile" \
+    CLAUDE_ROUTER_UPDATE_GRACE=10 \
     bash "$REPO_DIR/tools/c-thru-self-update.sh" 2>&1 >/dev/null)" || SU_EC=$?
   sleep 1.2  # backgrounded fetch subshell may write the log after main exits
 }
