@@ -138,6 +138,8 @@ echo ""
 echo "Node tests:"
 run_suite "helpers (self-test: waitForPing ECONNRESET retry, stub routing, spawnCapture)" \
   node "$REPO_DIR/test/helpers.test.js"
+run_suite "hooks-declaration-parity (ephemeral c-thru ↔ plugin hooks.json drift)" \
+  node "$REPO_DIR/test/hooks-declaration-parity.test.js"
 run_suite "session-start-injection (proxy /hooks/context block injected once)" \
   node "$REPO_DIR/test/session-start-injection.test.js"
 run_suite "preflight-model-readiness (/v1/active-models → PULL decisions)" \

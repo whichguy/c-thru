@@ -378,12 +378,18 @@ write_ephemeral_settings() {
   #   3. Add one line to the appropriate event array below.
   # No persistent writes to ~/.claude/settings.json — all hooks are ephemeral.
   #
+  # Shared hooks below MUST agree with plugins/c-thru/hooks/hooks.json on
+  # {event, script-basename, matcher, timeout} — enforced by
+  # test/hooks-declaration-parity.test.js. CLI-only hooks (agent-router across
+  # PreToolUse matchers, the EnterPlanMode planner hint, the MCP server) are
+  # allowlisted there as intentionally ephemeral-only.
+  #
   # Event            Matcher         Script                    Purpose
-  # SessionStart     (all)           c-thru-session-start      proxy+Ollama health + /hooks/context block (curled by the hook)
-  # PostCompact      (all)           c-thru-postcompact-context re-inject context after compaction
+  # SessionStart     *               c-thru-session-start      proxy+Ollama health + /hooks/context block (curled by the hook)
+  # PreCompact       *               c-thru-postcompact-context re-inject context before compaction (PreCompact is the live event; the old PostCompact never fired)
   # UserPromptSubmit *               c-thru-proxy-health       asyncRewake if proxy down
   # UserPromptSubmit *               c-thru-classify           classify_intent tagging
-  # PostToolUse      *               c-thru-map-changed        validate model-map.json on edit
+  # PostToolUse      Write|Edit      c-thru-map-changed        validate model-map.json on edit
   # PreToolUse       Agent|WebSearch|c-thru-agent-router-hook  resolve capability for tool calls (log-only for non-Agent)
   #                   WebFetch|Monitor|Plan
   # PreToolUse       EnterPlanMode   c-thru-enter-plan-hook    advisory hint for /c-thru-plan
@@ -410,13 +416,13 @@ write_ephemeral_settings() {
     }
   },
   "hooks": {
-    "SessionStart": [{"hooks": [{"type": "command", "command": "$session_cmd", "timeout": 5}]}],
-    "PostCompact": [{"hooks": [{"type": "command", "command": "$postcompact_cmd", "timeout": 5}]}],
+    "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "$session_cmd", "timeout": 5}]}],
+    "PreCompact": [{"matcher": "*", "hooks": [{"type": "command", "command": "$postcompact_cmd", "timeout": 10}]}],
     "UserPromptSubmit": [
-      {"matcher": "*", "hooks": [{"type": "command", "command": "$health_cmd", "timeout": 3, "async": true, "asyncRewake": true}]},
-      {"matcher": "*", "hooks": [{"type": "command", "command": "$classify_cmd", "timeout": 5, "async": true}]}
+      {"matcher": "*", "hooks": [{"type": "command", "command": "$health_cmd", "timeout": 5, "async": true, "asyncRewake": true}]},
+      {"matcher": "*", "hooks": [{"type": "command", "command": "$classify_cmd", "timeout": 8, "async": true}]}
     ],
-    "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "$map_changed_cmd", "timeout": 5}]}],
+    "PostToolUse": [{"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "$map_changed_cmd", "timeout": 5}]}],
     "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebSearch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebFetch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Monitor", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Plan", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
   },
   "permissions": {
