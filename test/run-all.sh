@@ -117,6 +117,8 @@ run_suite "c-thru-explain-bash (bash integration: _explain_all_json cache + TSV 
   bash "$REPO_DIR/test/c-thru-explain-bash.test.sh"
 run_suite "c-thru-bootstrap-auth-env (bootstrap auth env helper)" \
   bash "$REPO_DIR/test/c-thru-bootstrap-auth-env.test.sh"
+run_suite "c-thru-lib (env/discovery resolvers: port ladder, profile-dir shadow split, ollama url)" \
+  bash "$REPO_DIR/test/c-thru-lib.test.sh"
 run_suite "c-thru-listen-port (ANTHROPIC_BASE_URL port discovery)" \
   bash "$REPO_DIR/test/c-thru-listen-port.test.sh"
 run_suite "hook-payload-extraction (hook payload extraction)" \

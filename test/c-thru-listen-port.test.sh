@@ -7,16 +7,17 @@
 # BEFORE the pid-file/lsof fallback, so `c-thru --list` / the c-thru-status skill
 # find the proxy in plugin mode — not just CLI mode.
 #
-# Extract the two functions in isolation (per c-thru-bootstrap-auth-env.test.sh)
-# and exercise the branch + its precedence and fall-through guarantees.
+# claude_proxy_listen_port() + proxy_port_from_base_url() now live in
+# c-thru-lib.sh (moved out of tools/c-thru) — source it directly. The previous
+# `awk`-extraction of these defs from tools/c-thru broke the instant they moved;
+# the dedicated c-thru-lib.test.sh covers the lib in full, while this suite stays
+# the ANTHROPIC_BASE_URL discovery regression net.
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CTHRU="$SCRIPT_DIR/../tools/c-thru"
-[[ -f "$CTHRU" ]] || { echo "fatal: cannot find $CTHRU" >&2; exit 1; }
-
-# listen_port calls proxy_port_from_base_url — eval both into this shell.
-eval "$(awk '/^proxy_port_from_base_url\(\) \{/,/^\}$/' "$CTHRU")"
-eval "$(awk '/^claude_proxy_listen_port\(\) \{/,/^\}$/' "$CTHRU")"
+LIB="$SCRIPT_DIR/../tools/c-thru-lib.sh"
+[[ -f "$LIB" ]] || { echo "fatal: cannot find $LIB" >&2; exit 1; }
+# shellcheck source=/dev/null
+source "$LIB"
 
 PASS=0
 FAIL=0
