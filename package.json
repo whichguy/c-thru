@@ -2,7 +2,9 @@
   "name": "c-thru",
   "private": true,
   "scripts": {
-    "lint": "eslint tools test"
+    "lint": "eslint tools test",
+    "test": "bash test/run-all.sh",
+    "test:fast": "bash test/run-all.sh --fast"
   },
   "devDependencies": {
     "eslint": "^9.0.0"

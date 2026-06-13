@@ -602,18 +602,31 @@ _fixture_skeleton=$(awk '
   in_fn { print }
 ' "$REPO_DIR/test/stubs/preflight-skeleton.sh" 2>/dev/null || true)
 
+# Guard the guard: the awk above STOPS at the `grep -qxF` divergence sentinel,
+# which is therefore the last extracted line. If that sentinel is ever
+# removed/renamed, awk silently runs to EOF and the diff compares two
+# whole-function-to-EOF blocks — a guard that has silently changed meaning.
+# Assert the sentinel was actually hit on BOTH sides so a missing sentinel
+# fails loud (with a clear message) instead.
+if printf '%s\n' "$_canonical_skeleton" | tail -n1 | grep -q 'grep -qxF'; then _canon_anchored=yes; else _canon_anchored=no; fi
+if printf '%s\n' "$_fixture_skeleton"   | tail -n1 | grep -q 'grep -qxF'; then _fixture_anchored=yes; else _fixture_anchored=no; fi
+
 if [ ! -f "$REPO_DIR/tools/c-thru" ] || [ ! -f "$REPO_DIR/test/stubs/preflight-skeleton.sh" ]; then
   ok "tools/c-thru or test fixture absent — skipping skeleton sync"
 elif [ -z "$_canonical_skeleton" ]; then
   fail "preflight_model_readiness not found in tools/c-thru"
 elif [ -z "$_fixture_skeleton" ]; then
   fail "preflight_model_readiness skeleton not found in test/stubs/preflight-skeleton.sh"
+elif [ "$_canon_anchored" != yes ]; then
+  fail "Check 10: 'grep -qxF' divergence sentinel missing in tools/c-thru preflight_model_readiness() — the skeleton-diff guard would compare to EOF and silently changed meaning. Re-add the sentinel or update Check 10."
+elif [ "$_fixture_anchored" != yes ]; then
+  fail "Check 10: 'grep -qxF' divergence sentinel missing in test/stubs/preflight-skeleton.sh — the skeleton-diff guard would compare to EOF. Re-add the sentinel or update Check 10."
 elif [ "$_canonical_skeleton" != "$_fixture_skeleton" ]; then
   fail "preflight_model_readiness routing skeleton has drifted — update test/stubs/preflight-skeleton.sh to match tools/c-thru"
 else
   ok "preflight_model_readiness routing skeleton in sync"
 fi
-unset _canonical_skeleton _fixture_skeleton
+unset _canonical_skeleton _fixture_skeleton _canon_anchored _fixture_anchored
 
 # ---------------------------------------------------------------------------
 # Check 11 — LLM_MODE_ENUM / LLM_MODES sync
@@ -641,12 +654,16 @@ _validate_modes=$(node -e "
   process.stdout.write(items.join('\n'));
 " 2>/dev/null || true)
 
+# The two `-z` branches below are the "extraction actually matched" guard:
+# if either side's regex/require yields nothing (enum renamed, Set literal
+# reformatted), fail LOUD rather than silently comparing two empty strings as
+# "in sync". Keep them ahead of the inequality compare.
 if [ ! -f "$REPO_DIR/tools/model-map-resolve.js" ] || [ ! -f "$REPO_DIR/tools/model-map-validate.js" ]; then
   ok "model-map-resolve.js or model-map-validate.js absent — skipping enum sync"
 elif [ -z "$_resolve_modes" ]; then
-  fail "could not extract LLM_MODE_ENUM from tools/model-map-resolve.js"
+  fail "could not extract LLM_MODE_ENUM from tools/model-map-resolve.js (regex/require matched nothing — guard can't verify)"
 elif [ -z "$_validate_modes" ]; then
-  fail "could not extract LLM_MODES from tools/model-map-validate.js"
+  fail "could not extract LLM_MODES from tools/model-map-validate.js (regex matched nothing — guard can't verify)"
 elif [ "$_resolve_modes" != "$_validate_modes" ]; then
   fail "LLM mode enum drift detected — model-map-resolve.js LLM_MODE_ENUM and model-map-validate.js LLM_MODES disagree"
   echo -e "${YELLOW}  resolve.js: $(echo "$_resolve_modes" | tr '\n' ' ')${NC}"
@@ -767,17 +784,34 @@ echo "14. Phantom mode literals in claude-proxy"
 _valid_modes=$(node -e "
   const {LLM_MODE_ENUM}=require('./tools/model-map-resolve.js');
   console.log([...LLM_MODE_ENUM].join('\n'));
-" 2>/dev/null)
+" 2>/dev/null || true)
 _found_modes=$(grep -oE "'best-[a-z-]+'" tools/claude-proxy 2>/dev/null | tr -d "'" | sort -u || true)
 _phantom=0
-while IFS= read -r _m; do
-  [[ -z "$_m" ]] && continue
-  if ! echo "$_valid_modes" | grep -qxF "$_m"; then
-    echo "  FAIL: phantom mode '$_m' in claude-proxy (not in LLM_MODE_ENUM)"
-    _phantom=1
-  fi
-done <<< "$_found_modes"
-[[ $_phantom -eq 0 ]] && echo "  ok (no phantom modes)"
+# Guard the guard's inputs. Two distinct failure modes:
+#  (1) _valid_modes empty = the REFERENCE set (LLM_MODE_ENUM) failed to extract
+#      → every found literal would be a false phantom; the guard is broken. FAIL.
+#  (2) _found_modes empty = the proxy currently hardcodes no 'best-*' mode
+#      literals. That is a LEGITIMATE (desirable) state — modes flow through
+#      config/resolve.js, not hardcoded strings — so it is NOT a failure. But it
+#      DOES mean the guard verified nothing this run, which previously printed a
+#      silent "ok (no phantom modes)". WARN so the dormancy is visible: if the
+#      proxy reintroduces mode literals in a quote style this grep can't see, a
+#      maintainer notices the guard never woke up.
+if [ -z "$_valid_modes" ]; then
+  echo "  FAIL: could not extract LLM_MODE_ENUM from model-map-resolve.js — phantom-mode guard has no valid set to check against (fix extraction or update Check 14)"
+  _phantom=1
+elif [ -z "$_found_modes" ]; then
+  warn "Check 14 dormant: no 'best-*' mode literals in tools/claude-proxy (modes resolve via config — nothing to check). If the proxy reintroduces hardcoded mode strings, confirm Check 14's grep still matches them."
+else
+  while IFS= read -r _m; do
+    [[ -z "$_m" ]] && continue
+    if ! echo "$_valid_modes" | grep -qxF "$_m"; then
+      echo "  FAIL: phantom mode '$_m' in claude-proxy (not in LLM_MODE_ENUM)"
+      _phantom=1
+    fi
+  done <<< "$_found_modes"
+  [[ $_phantom -eq 0 ]] && echo "  ok (no phantom modes)"
+fi
 ISSUES=$(( ISSUES + _phantom ))
 
 # ---------------------------------------------------------------------------
@@ -793,30 +827,44 @@ echo "15. LEGACY_LLM_MODES conversion coverage"
 _has_catchall=0
 grep -qF "Other old mode names" tools/model-map-resolve.js 2>/dev/null && _has_catchall=1
 
+# Distinguish three outcomes via sentinels so the guard can't silently pass
+# when its extraction fails: __NO_FILE__ (validator absent → skip), __NO_MATCH__
+# (LEGACY_LLM_MODES declaration not found → the regex no longer anchors, fail
+# loud), or the mode list (possibly empty for `new Set([])` — a legitimate "no
+# legacy modes"). An empty Set prints empty output, NOT __NO_MATCH__.
 _legacy_modes=$(node -e "
   const fs = require('fs');
-  const src = fs.readFileSync('./tools/model-map-validate.js', 'utf8');
+  let src;
+  try { src = fs.readFileSync('./tools/model-map-validate.js', 'utf8'); }
+  catch (e) { console.log('__NO_FILE__'); process.exit(0); }
   const m = src.match(/LEGACY_LLM_MODES\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
-  if (!m) { process.exit(0); }
+  if (!m) { console.log('__NO_MATCH__'); process.exit(0); }
   const modes = [...m[1].matchAll(/'([^']+)'/g)].map(r => r[1]);
   console.log(modes.join('\n'));
 " 2>/dev/null || true)
 _missing_conv=0
-while IFS= read -r _lm; do
-  [[ -z "$_lm" ]] && continue
-  if grep -qF "'$_lm'" tools/model-map-resolve.js 2>/dev/null; then
-    : # explicit branch present — always ok
-  elif [[ $_has_catchall -eq 0 ]]; then
-    echo "  FAIL: LEGACY_LLM_MODES has '$_lm' and catch-all is missing from resolveLlmMode()"
-    _missing_conv=1
-  fi
-done <<< "$_legacy_modes"
-if [[ $_missing_conv -eq 0 ]]; then
-  _count=$(echo "$_legacy_modes" | grep -c . || true)
-  if [[ $_has_catchall -eq 1 ]]; then
-    echo "  ok (catch-all present; ${_count} legacy modes degrade gracefully)"
-  else
-    echo "  ok (no legacy modes defined)"
+if [ "$_legacy_modes" = "__NO_FILE__" ]; then
+  echo "  ok (model-map-validate.js absent — skipping legacy-mode coverage)"
+elif [ "$_legacy_modes" = "__NO_MATCH__" ]; then
+  echo "  FAIL: LEGACY_LLM_MODES declaration not found in model-map-validate.js — the regex no longer matches (renamed/reformatted?); guard can't verify conversion coverage (update Check 15)"
+  _missing_conv=1
+else
+  while IFS= read -r _lm; do
+    [[ -z "$_lm" ]] && continue
+    if grep -qF "'$_lm'" tools/model-map-resolve.js 2>/dev/null; then
+      : # explicit branch present — always ok
+    elif [[ $_has_catchall -eq 0 ]]; then
+      echo "  FAIL: LEGACY_LLM_MODES has '$_lm' and catch-all is missing from resolveLlmMode()"
+      _missing_conv=1
+    fi
+  done <<< "$_legacy_modes"
+  if [[ $_missing_conv -eq 0 ]]; then
+    _count=$(echo "$_legacy_modes" | grep -c . || true)
+    if [[ $_has_catchall -eq 1 ]]; then
+      echo "  ok (catch-all present; ${_count} legacy modes degrade gracefully)"
+    else
+      echo "  ok (no legacy modes defined)"
+    fi
   fi
 fi
 ISSUES=$(( ISSUES + _missing_conv ))

@@ -136,6 +136,8 @@ run_suite "session-start-seeding (first-run seed + settings registration)" \
 
 echo ""
 echo "Node tests:"
+run_suite "helpers (self-test: waitForPing ECONNRESET retry, stub routing, spawnCapture)" \
+  node "$REPO_DIR/test/helpers.test.js"
 run_suite "session-start-injection (proxy /hooks/context block injected once)" \
   node "$REPO_DIR/test/session-start-injection.test.js"
 run_suite "preflight-model-readiness (/v1/active-models → PULL decisions)" \
