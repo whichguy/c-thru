@@ -98,6 +98,20 @@ async function main() {
     assertEq(msg.headers['x-c-thru-dashboard'], `http://127.0.0.1:${port}/c-thru/dashboard`,
       'header present on a proxied /v1/messages response');
 
+    // ── 4. POST /hooks/context carries the canonical control-plane block ──
+    // This is the Part-1 contract: the proxy owns the single source of the
+    // proxy URL + endpoint list; c-thru-session-start.sh injects it verbatim.
+    console.log('\n4. POST /hooks/context returns the full control-plane block');
+    const hk = await httpJson(port, 'POST', '/hooks/context', null, {}, 3000);
+    assertEq(hk.status, 200, '/hooks/context returns 200');
+    const addl = hk.json && hk.json.hookSpecificOutput && hk.json.hookSpecificOutput.additionalContext;
+    assert(typeof addl === 'string' && addl.length > 0, 'additionalContext is a non-empty string');
+    assert(addl.includes(`http://127.0.0.1:${port}`), `block carries the proxy base URL (http://127.0.0.1:${port})`);
+    assert(addl.includes('/c-thru/status'), 'block lists /c-thru/status');
+    assert(addl.includes('/c-thru/recent'), 'block lists /c-thru/recent');
+    assert(addl.includes('/c-thru/dashboard'), 'block lists /c-thru/dashboard');
+    assert(addl.includes(`http://127.0.0.1:${port}/c-thru/dashboard`), 'block surfaces the dashboard_url');
+
     await killAndWait(child, 'SIGTERM');
     child = null;
   } finally {

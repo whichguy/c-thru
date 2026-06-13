@@ -1131,6 +1131,11 @@ function sendHtml(res, code, html) {
 // dynamic), stamped on every response as x-c-thru-dashboard and surfaced in
 // /c-thru/status + the /hooks/context injection.
 let DASHBOARD_URL = '';
+// Proxy control-plane base URL (scheme+host+port, no path) — computed in the
+// same listen() callback as DASHBOARD_URL. Single source of the URL the
+// /hooks/context block hands to the session; correct for both fixed (plugin)
+// and dynamic (CLI) ports since it is built from this instance's own port.
+let PROXY_BASE_URL = '';
 
 // ── Anthropic-fidelity helpers ───────────────────────────────────────────
 // Make our Ollama->Anthropic-translated responses indistinguishable from real
@@ -4529,10 +4534,22 @@ const server = http.createServer((req, res) => {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
         proxyLog('hook_injection', { tier, mode });
+        // Canonical control-plane block — the single source of the proxy URL +
+        // endpoint list handed to a session. Built from this instance's own live
+        // port (PROXY_BASE_URL) so it is correct for fixed (plugin) and dynamic
+        // (CLI) ports alike. c-thru-session-start.sh injects this verbatim in
+        // both launch modes; nothing else duplicates the endpoint list.
+        const lines = [
+          `(c-thru) proxy control plane: ${PROXY_BASE_URL} — query with curl:`,
+          `  GET /c-thru/status (routes, per-model usage, cooldowns)`,
+          `  GET /c-thru/recent?n=N (recent requests: served model, tokens, latency, errors)`,
+          `  GET /c-thru/dashboard (live HTML stats — open in a browser)`,
+          `Profile: ${tier}, Mode: ${mode}.${DASHBOARD_URL ? ` Dashboard: ${DASHBOARD_URL}` : ''}`,
+        ];
         return send(res, 200, {
           hookSpecificOutput: {
             hookEventName: "SessionStart",
-            additionalContext: `(c-thru) routing active. Profile: ${tier}, Mode: ${mode}.${DASHBOARD_URL ? ` Dashboard: ${DASHBOARD_URL}` : ''}`
+            additionalContext: lines.join('\n')
           }
         });
       }
@@ -4877,7 +4894,8 @@ server.listen(INITIAL_PORT, BIND_ADDR, () => {
   // Dashboard URL — host is 127.0.0.1 for any loopback bind (browsers can't
   // open '::1'-style binds uniformly), the literal bind address otherwise.
   const dashHost = LOOPBACK_ADDRS.has(BIND_ADDR.toLowerCase()) ? '127.0.0.1' : BIND_ADDR;
-  DASHBOARD_URL = `http://${dashHost}:${server.address().port}/c-thru/dashboard`;
+  PROXY_BASE_URL = `http://${dashHost}:${server.address().port}`;
+  DASHBOARD_URL = `${PROXY_BASE_URL}/c-thru/dashboard`;
   console.error(`c-thru dashboard: ${DASHBOARD_URL}`);
   // Ambient-key safety net. When ANTHROPIC_API_KEY is set in the proxy's
   // environment AND the proxy is bound to a non-loopback address, any host
