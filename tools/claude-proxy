@@ -303,6 +303,14 @@ const PROXY_LOG_FILE = process.env.CLAUDE_PROXY_LOG_FILE || path.join(os.homedir
 const PROXY_LOG_MAX_SIZE = 10 * 1024 * 1024;
 const USAGE_STATS_FILE = process.env.CLAUDE_PROXY_USAGE_STATS_FILE || path.join(os.homedir(), '.claude', 'usage-stats.json');
 const PID_FILE = path.join(os.homedir(), '.claude', 'proxy.pid');
+const PROXY_STARTED_AT = nowIso();
+
+// In-memory ring of recently-finalized /v1/messages requests, served by
+// GET /c-thru/recent and the dashboard. Aggregates (usage-stats.json) can't
+// show errors, fallbacks, or per-request latency — the ring can, at the cost
+// of zero persistence (by design: restart = empty ring). 0 disables.
+const RECENT_MAX = numberFromEnv('CLAUDE_PROXY_RECENT_MAX', 256);
+const RECENT_REQUESTS = [];
 
 // Persistent token-usage stats. The FILE is the source of truth — multiple
 // proxy instances (plugin-mode fixed port + CLI launcher dynamic ports) may
@@ -532,6 +540,39 @@ function scheduleUsageFlush() {
 function flushPersistentUsageNowSync() {
   if (usageFlushTimer) { clearTimeout(usageFlushTimer); usageFlushTimer = null; }
   try { flushUsageCore(); } catch (e) { console.error('c-thru: failed to write usage stats:', e.message); }
+}
+
+// Ring push, called from the response-finalize hook — fires exactly once per
+// request whether it finished cleanly, errored, or the client disconnected.
+// Captures what recordUsage skips (4xx/5xx, zero-token, aborted), so the
+// recent view reflects reality, not just billable successes. Control
+// endpoints never build a requestMeta and are naturally excluded (no ctx.meta).
+function pushRecentRequest(ctx, req, res, aborted) {
+  if (RECENT_MAX <= 0) return;
+  const m = ctx.meta;
+  if (!m) return;
+  RECENT_REQUESTS.push({
+    ts: nowIso(),
+    req_id: ctx.id,
+    endpoint: req.url,
+    model: m.originalModel || null,
+    served_by: m.servedBy || null,
+    capability: m.capability || null,
+    backend: m.backendId || null,
+    status: res.statusCode || 0,
+    ok: !aborted && res.statusCode >= 200 && res.statusCode < 400,
+    aborted: !!aborted,
+    stream: !!m.stream,
+    input_tokens: m._tokens ? m._tokens.input : null,
+    output_tokens: m._tokens ? m._tokens.output : null,
+    duration_ms: Date.now() - (m.startedAt || ctx.started),
+    fallback_from: m._fallbackFrom || null,
+    resolution_chain: Array.isArray(m.resolutionChain) && m.resolutionChain.length ? m.resolutionChain : null,
+    tier: m.hwTier || null,
+    mode: m.activeMode || null,
+    user_id: m.userId || null,
+  });
+  if (RECENT_REQUESTS.length > RECENT_MAX) RECENT_REQUESTS.splice(0, RECENT_REQUESTS.length - RECENT_MAX);
 }
 
 function checkRotateProxyLog() {
@@ -1626,6 +1667,9 @@ function shouldFallbackOnStatus(code) {
 // native /api/chat with the (lossy) flattenMessagesForOllama translation.
 // =============================================================================
 async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta) {
+  // Final-dispatch attribution for the recent-requests ring — fallback
+  // re-dispatch re-enters here, so the last write is the pair that served.
+  if (requestMeta) { requestMeta.servedBy = effectiveModel; requestMeta.backendId = backend.id; }
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
@@ -2850,6 +2894,8 @@ function createGeminiCacheAsync(ctx, backend, model, hash, payload) {
 }
 
 async function forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta) {
+  // Final-dispatch attribution for the recent-requests ring (see forwardAnthropic).
+  if (requestMeta) { requestMeta.servedBy = effectiveModel; requestMeta.backendId = backend.id; }
   // /v1/messages/count_tokens -> Gemini :countTokens (no model invocation, no SSE).
   // Translate {totalTokens:N} -> Anthropic {type:"message_count", input_tokens:N}.
   const isCountTokens = typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens');
@@ -3890,6 +3936,8 @@ function mapAnthropicToGemini(body, effectiveModel) {
 // dispatchOllamaBackend.
 // =============================================================================
 async function forwardOllamaLegacy(ctx, req, res, body, backend, effectiveModel, requestMeta) {
+  // Final-dispatch attribution for the recent-requests ring (see forwardAnthropic).
+  if (requestMeta) { requestMeta.servedBy = effectiveModel; requestMeta.backendId = backend.id; }
   const url = backend.url.replace(/\/$/, '') + '/api/chat';
   const headers = scrubCthruHeaders(req.headers);
   headers['content-type'] = 'application/json';
@@ -4272,12 +4320,18 @@ const server = http.createServer((req, res) => {
       });
       traceLog(ctx, 'in.client', req.method, req.url, req.headers);
 
-      const finalize = () => { activeRequests--; };
-      res.on('finish', finalize);
+      let finalized = false;
+      const finalize = (aborted) => {
+        if (finalized) return;
+        finalized = true;
+        activeRequests--;
+        try { pushRecentRequest(ctx, req, res, aborted); } catch {}
+      };
+      res.on('finish', () => finalize(false));
       res.on('close', () => {
         if (!res.writableFinished) {
           ctxLog(ctx, 'client.disconnect', { received_ms: Date.now() - ctx.started });
-          finalize();
+          finalize(true);
         }
       });
 
@@ -4377,6 +4431,21 @@ const server = http.createServer((req, res) => {
           })),
           // Global default-route resolution — ultimate last-resort target.
           default_route: CONFIG.routes && CONFIG.routes.default ? CONFIG.routes.default : null,
+        });
+      }
+
+      if (req.method === 'GET' && (req.url === '/c-thru/recent' || req.url === '/c-thru/recent/' || req.url.startsWith('/c-thru/recent?'))) {
+        let n = 50;
+        try {
+          const raw = new URL(req.url, 'http://x').searchParams.get('n');
+          if (raw !== null) { const parsed = parseInt(raw, 10); if (!isNaN(parsed)) n = parsed; }
+        } catch {}
+        n = Math.max(1, Math.min(n, Math.max(RECENT_MAX, 1)));
+        return send(res, 200, {
+          ok: true,
+          buffered: RECENT_REQUESTS.length,
+          cap: RECENT_MAX,
+          requests: RECENT_REQUESTS.slice(-n).reverse(),  // newest first
         });
       }
 
@@ -4662,8 +4731,15 @@ const server = http.createServer((req, res) => {
           // Surfaced as x-c-thru-resolution-chain on the response. Updated by
           // fallback paths if a different model is ultimately dispatched.
           resolutionChain: resolved.chain || null,
+          // Per-session attribution for the recent-requests ring — Claude Code
+          // sends metadata.user_id on every Messages call.
+          userId: (body.metadata && typeof body.metadata.user_id === 'string') ? body.metadata.user_id : null,
           _configVersion: CONFIG_VERSION,
         };
+        // Ring-buffer hook: finalize() reads ctx.meta. count_tokens shares the
+        // /v1/messages URL prefix but never invokes a model — zero-token
+        // bookkeeping noise, so it stays out of the recent ring.
+        if (!req.url.startsWith('/v1/messages/count_tokens')) ctx.meta = requestMeta;
 
         ctxLog(ctx, 'dispatch', {
           incoming_model: body.model,
