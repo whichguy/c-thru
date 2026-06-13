@@ -1750,6 +1750,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
         recordUsage(effectiveModel, backend.id, inputTokens, outputTokens,
           Date.now() - (requestMeta.startedAt || Date.now()),
           requestMeta.capability || null);
+        requestMeta._tokens = { input: inputTokens, output: outputTokens };
         clearBackendCooldown(backend.id);
         if (shouldJournal(requestMeta.capability)) {
           const rawBuf = Buffer.concat(usageBuf);
@@ -2141,6 +2142,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
     recordUsage(effectiveModel, backend.id, promptTokens, outputTokens,
       Date.now() - (requestMeta.startedAt || Date.now()),
       requestMeta.capability || null);
+    requestMeta._tokens = { input: promptTokens, output: outputTokens };
     clearBackendCooldown(backend.id);
     if (shouldJournal(requestMeta.capability)) {
       writeJournalEntry({
@@ -2328,6 +2330,7 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
       recordUsage(effectiveModel, backend.id, promptTokens, outputTokens,
         Date.now() - (requestMeta.startedAt || Date.now()),
         requestMeta.capability || null);
+      requestMeta._tokens = { input: promptTokens, output: outputTokens };
       clearBackendCooldown(backend.id);
       if (shouldJournal(requestMeta.capability)) {
         let parsedResponse = null;
@@ -3197,6 +3200,13 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
                     output_tokens: candidatesCount + thoughtsCount,
                   },
                 })}\n\n`);
+                // Usage stats — mirrors the Ollama/Anthropic call sites.
+                // output = candidates + thoughts for Anthropic billing parity.
+                const promptCount = (geminiData.usageMetadata || {}).promptTokenCount || 0;
+                recordUsage(effectiveModel, backend.id, promptCount, candidatesCount + thoughtsCount,
+                  Date.now() - ((requestMeta && requestMeta.startedAt) || startedAt),
+                  (requestMeta && requestMeta.capability) || null);
+                if (requestMeta) requestMeta._tokens = { input: promptCount, output: candidatesCount + thoughtsCount };
               }
             } catch (e) {
               ctxLog(ctx, 'gemini.stream.parse_error', { error: e.message, line });
@@ -3338,6 +3348,14 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           );
           res.writeHead(200, respHeaders);
           res.end(JSON.stringify(anthropicRes));
+          // Usage stats — mirrors the Ollama/Anthropic call sites. The
+          // anthropicRes.usage fields already carry Anthropic-parity sums
+          // (output = candidates + thoughts).
+          recordUsage(effectiveModel, backend.id,
+            anthropicRes.usage.input_tokens, anthropicRes.usage.output_tokens,
+            Date.now() - ((requestMeta && requestMeta.startedAt) || startedAt),
+            (requestMeta && requestMeta.capability) || null);
+          if (requestMeta) requestMeta._tokens = { input: anthropicRes.usage.input_tokens, output: anthropicRes.usage.output_tokens };
           clearBackendCooldown(backend.id);
           scheduleCacheCreate();
         } catch (e) {

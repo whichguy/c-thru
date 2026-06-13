@@ -624,6 +624,90 @@ async function testStaleLockReclaim() {
   }
 }
 
+// ── Test K: Gemini path records usage (D1 regression) ─────────────────────
+
+const GEMINI_MODEL = 'stats-gemini-model';
+
+async function testGeminiUsageRecorded() {
+  console.log('\nTest K: forwardGemini records usage — streaming and non-streaming');
+  let state;
+  try {
+    const stub = await stubBackend();
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':streamGenerateContent')) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'stream reply' }] }, finishReason: 'STOP' }],
+          usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 13, thoughtsTokenCount: 0 },
+        })}\n\n`);
+        res.end();
+        return true;
+      }
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'gemini reply' }] }, finishReason: 'STOP' }],
+            // thoughtsTokenCount included: output must be candidates+thoughts (5+10+7=output 17)
+            usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 10, thoughtsTokenCount: 7 },
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-usage-'));
+    const statsFile = path.join(tmpHome, 'usage-stats.json');
+    const configPath = writeConfig(tmpHome, {
+      backends: {
+        gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } },
+      },
+      model_routes: { [GEMINI_MODEL]: 'gemini_stub' },
+    });
+    const { child, port } = await spawnProxy({
+      configPath, tmpHome,
+      env: { CLAUDE_PROXY_USAGE_STATS_FILE: statsFile, CLAUDE_LLM_MODE: 'connected' },
+    });
+    await waitForPing(port, 5000);
+    state = { child, tmpHome, stub };
+
+    const nonStream = await httpJson(port, 'POST', '/v1/messages', {
+      model: GEMINI_MODEL, messages: [{ role: 'user', content: 'hi' }], max_tokens: 50, stream: false,
+    });
+    assertEq(nonStream.status, 200, 'Test K: non-streaming gemini request returned 200');
+
+    const streamed = await httpJson(port, 'POST', '/v1/messages', {
+      model: GEMINI_MODEL, messages: [{ role: 'user', content: 'hi' }], max_tokens: 50, stream: true,
+    });
+    assertEq(streamed.status, 200, 'Test K: streaming gemini request returned 200');
+
+    await killAndWait(child, 'SIGTERM');
+
+    assert(fs.existsSync(statsFile), 'Test K: stats file written after gemini traffic');
+    const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    assert(stats.by_backend && stats.by_backend['gemini_stub'],
+      'Test K: by_backend.gemini_stub entry exists (D1: gemini path no longer invisible)');
+    assertEq(stats.by_backend['gemini_stub'].calls, 2, 'Test K: gemini calls === 2 (non-stream + stream)');
+    const bm = stats.by_model[GEMINI_MODEL];
+    assert(bm, `Test K: by_model entry for ${GEMINI_MODEL} exists`);
+    assertEq(bm.input, 16, 'Test K: input tokens = 5 (non-stream) + 11 (stream)');
+    assertEq(bm.output, 30, 'Test K: output tokens = 17 (10+7 thoughts, non-stream) + 13 (stream)');
+
+    await stub.close();
+    cleanup(tmpHome);
+  } catch (e) {
+    if (state) {
+      try { state.child.kill('SIGKILL'); } catch {}
+      try { await state.stub.close(); } catch {}
+      cleanup(state.tmpHome);
+    }
+    throw e;
+  }
+}
+
 // ── main ───────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -637,6 +721,7 @@ async function main() {
   await testBootStaleness();
   await testClearWins();
   await testStaleLockReclaim();
+  await testGeminiUsageRecorded();
 
   const failed = summary();
   process.exit(failed ? 1 : 0);
