@@ -198,6 +198,8 @@ run_suite "c-thru-explain (explain command resolution)" \
   node "$REPO_DIR/test/c-thru-explain.test.js"
 run_suite "c-thru-plan-harness (plan harness utilities)" \
   node "$REPO_DIR/test/c-thru-plan-harness.test.js"
+run_suite "plan-orchestrator-integration (orchestrator wave lifecycle, hermetic)" \
+  node "$REPO_DIR/test/plan-orchestrator-integration.test.js"
 run_suite "c-thru-target-launch (target launch helpers)" \
   node "$REPO_DIR/test/c-thru-target-launch.test.js"
 run_suite "cli-e2e-flags (CLI flag forwarding e2e)" \
@@ -210,6 +212,8 @@ run_suite "model-map-pollution (config isolation / no cross-test leak)" \
   node "$REPO_DIR/test/model-map-pollution.test.js"
 run_suite "model-map-validate (schema validator unit)" \
   node "$REPO_DIR/test/model-map-validate.test.js"
+run_suite "model-map-validate-dedupe (duplicate-key detection)" \
+  node "$REPO_DIR/test/model-map-validate-dedupe.test.js"
 run_suite "planner-return-schema (planner output schema)" \
   node "$REPO_DIR/test/planner-return-schema.test.js"
 run_suite "proxy-active-models (/v1/active-models endpoint)" \
@@ -284,17 +288,66 @@ run_suite "proxy-quality (mapping, fallback cascade, v1 passthrough)" \
 # proxy-classify.test.js:  CLAUDE_PROXY_CLASSIFY dynamic in-proxy classifier not implemented
 # proxy-targets.test.js:   targets{} config section (request_defaults per model) not implemented
 # benchmark-coverage.test.js: passes now, but low value (0 cells checked since modes not in fixture)
+# proxy-autodetect.test.sh: machine-RAM-dependent wrapper (asserts against the host's
+#   physical memory tier); the hermetic .js variant is registered above
 skip_suite "benchmark-coverage (excluded — 0 cells checked, mode fixture not populated)"
 skip_suite "proxy-classify (excluded — CLAUDE_PROXY_CLASSIFY feature not implemented in proxy)"
 skip_suite "proxy-targets (excluded — targets{} config feature not implemented in proxy)"
+skip_suite "proxy-autodetect.test.sh (excluded — machine-RAM-dependent; .js variant registered)"
 
 if [[ "${C_THRU_LIVE_ANTHROPIC:-0}" == "1" ]]; then
   echo ""
   echo "Live API tests (C_THRU_LIVE_ANTHROPIC=1):"
   run_suite "anthropic-api-coverage-live (real api.anthropic.com via proxy)" \
     node "$REPO_DIR/test/anthropic-api-coverage-live.test.js"
+  run_suite "judge-canary (one real judge call — judge path health)" \
+    node "$REPO_DIR/test/judge-canary.test.js"
 else
   skip_suite "anthropic-api-coverage-live (set C_THRU_LIVE_ANTHROPIC=1 + ANTHROPIC_API_KEY to enable)"
+  skip_suite "judge-canary (set C_THRU_LIVE_ANTHROPIC=1 + ANTHROPIC_API_KEY to enable)"
+fi
+
+# Proxy-required agent tests: each needs a running proxy (and for live/judge
+# variants, real API spend), so each is opt-in behind its own gate.
+echo ""
+echo "Proxy-required agent tests (opt-in):"
+if [[ "${C_THRU_BEHAVIORAL_TESTS:-0}" == "1" ]]; then
+  run_suite "agent-contract-behavioral (behavioral contracts via proxy)" \
+    node "$REPO_DIR/test/agent-contract-behavioral.test.js"
+else
+  skip_suite "agent-contract-behavioral (set C_THRU_BEHAVIORAL_TESTS=1 + running proxy to enable)"
+fi
+if [[ "${C_THRU_LIVE_AGENT_TESTS:-0}" == "1" ]]; then
+  run_suite "agent-contract-live (live agent contract smoke)" \
+    node "$REPO_DIR/test/agent-contract-live.test.js"
+else
+  skip_suite "agent-contract-live (set C_THRU_LIVE_AGENT_TESTS=1 to enable)"
+fi
+if [[ "${C_THRU_HIERARCHY_TESTS:-0}" == "1" ]]; then
+  run_suite "agent-prompt-hierarchy (prompt hierarchy via proxy)" \
+    node "$REPO_DIR/test/agent-prompt-hierarchy.test.js"
+else
+  skip_suite "agent-prompt-hierarchy (set C_THRU_HIERARCHY_TESTS=1 + running proxy to enable)"
+fi
+
+if [[ "${C_THRU_LIVE_GEMINI:-0}" == "1" ]]; then
+  echo ""
+  echo "Live Gemini tests (C_THRU_LIVE_GEMINI=1):"
+  run_suite "proxy-gemini-live-shapes (real Gemini API response shapes)" \
+    node "$REPO_DIR/test/proxy-gemini-live-shapes.test.js"
+  run_suite "proxy-gemini-live-thinking (real Gemini thinking blocks)" \
+    node "$REPO_DIR/test/proxy-gemini-live-thinking.test.js"
+  run_suite "proxy-gemini-live-e2e (Gemini end-to-end via proxy)" \
+    bash "$REPO_DIR/test/proxy-gemini-live-e2e.test.sh"
+  # vertex needs GOOGLE_CLOUD_TOKEN/PROJECT/REGION on top of the gate — it
+  # self-skips inside the gate when those are absent.
+  run_suite "proxy-gemini-live-vertex (Vertex AI endpoint)" \
+    bash "$REPO_DIR/test/proxy-gemini-live-vertex.test.sh"
+else
+  skip_suite "proxy-gemini-live-shapes (set C_THRU_LIVE_GEMINI=1 + GOOGLE_API_KEY to enable)"
+  skip_suite "proxy-gemini-live-thinking (set C_THRU_LIVE_GEMINI=1 + GOOGLE_API_KEY to enable)"
+  skip_suite "proxy-gemini-live-e2e (set C_THRU_LIVE_GEMINI=1 + GOOGLE_API_KEY to enable)"
+  skip_suite "proxy-gemini-live-vertex (set C_THRU_LIVE_GEMINI=1 + Vertex creds to enable)"
 fi
 
 echo ""
@@ -316,6 +369,8 @@ run_suite "gen-routing-doc --check (README routing table drift)" \
   node "$REPO_DIR/tools/gen-routing-doc.js" --check
 run_suite "hooks-armed (core.hooksPath → .githooks, fail-closed)" \
   bash "$REPO_DIR/test/hooks-armed.test.sh"
+run_suite "run-all-coverage (every test/ runnable referenced in this registry)" \
+  node "$REPO_DIR/test/run-all-coverage.test.js"
 
 if [[ $FAST -eq 0 ]]; then
   echo ""
@@ -326,18 +381,30 @@ if [[ $FAST -eq 0 ]]; then
   else
     skip_suite "smoke-check (not found)"
   fi
+  # Stub-driven plan e2e scripts: hermetic (mktemp scratch repo + deterministic
+  # stubs, no network), <1s each — triaged 2026-06-12.
+  run_suite "e2e-plan-execution (/c-thru-plan hierarchy, stubbed)" \
+    bash "$REPO_DIR/test/e2e-plan-execution.sh"
+  run_suite "e2e-programming-assignment (plan harness piecewise e2e, stubbed)" \
+    bash "$REPO_DIR/test/e2e-programming-assignment.sh"
   # Advisory, opt-in: a real Ollama-backed session whose prompt elicits a
   # subagent, verified via the journal. Self-skips (exit 0) unless C_THRU_E2E=1
   # and Ollama + a claude binary are present; never fails the suite.
   if [[ "${C_THRU_E2E:-0}" == "1" ]]; then
     run_suite "agent-scenarios-e2e (prompt→agent→journal, advisory)" \
       bash "$REPO_DIR/test/agent-scenarios-e2e.sh"
+    run_suite "run-hierarchy-e2e (hierarchy via real c-thru + CLAUDE_BIN override)" \
+      bash "$REPO_DIR/test/run-hierarchy-e2e.sh"
   else
     skip_suite "agent-scenarios-e2e (set C_THRU_E2E=1 + Ollama to enable)"
+    skip_suite "run-hierarchy-e2e (set C_THRU_E2E=1 to enable)"
   fi
 else
   skip_suite "smoke-check (--fast mode)"
+  skip_suite "e2e-plan-execution (--fast mode)"
+  skip_suite "e2e-programming-assignment (--fast mode)"
   skip_suite "agent-scenarios-e2e (--fast mode)"
+  skip_suite "run-hierarchy-e2e (--fast mode)"
 fi
 
 echo ""
