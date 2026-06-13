@@ -196,6 +196,8 @@ run_suite "proxy-recent-requests (ring buffer + /c-thru/recent)" \
   node "$REPO_DIR/test/proxy-recent-requests.test.js"
 run_suite "proxy-dashboard (/c-thru/dashboard + discovery header)" \
   node "$REPO_DIR/test/proxy-dashboard.test.js"
+run_suite "proxy-info-injection-e2e (real proxy ↔ session-start hook ↔ --list discovery + skill)" \
+  node "$REPO_DIR/test/proxy-info-injection-e2e.test.js"
 run_suite "agent-contract-static (agent/skill static contracts)" \
   node "$REPO_DIR/test/agent-contract-static.test.js"
 run_suite "agent-status-schema (STATUS block schema)" \

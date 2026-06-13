@@ -27,10 +27,22 @@ function assert(condition, message) {
 
 function makeStubClaude(binDir) {
   const stubPath = path.join(binDir, 'claude');
-  // Stub claude: JSON-dumps args + select env vars to stdout
+  // Stub claude: JSON-dumps args + select env vars to stdout. Also reads the
+  // file passed to --settings (the ephemeral settings written by the launcher)
+  // at exec time — before runCthru cleans up — so C1 can assert its shape.
   const script = `#!/bin/sh
-node -e 'console.log(JSON.stringify({
-  args: process.argv.slice(1),
+node -e '
+const fs = require("fs");
+const args = process.argv.slice(1);
+let settings_content = null;
+const si = args.indexOf("--settings");
+if (si >= 0 && args[si + 1]) {
+  try { settings_content = fs.readFileSync(args[si + 1], "utf8"); }
+  catch (e) { settings_content = "READ_ERROR:" + e.message; }
+}
+console.log(JSON.stringify({
+  args,
+  settings_content,
   anthropic_base_url:    process.env.ANTHROPIC_BASE_URL    || null,
   claude_llm_mode:       process.env.CLAUDE_LLM_MODE       || null,
   claude_llm_profile:    process.env.CLAUDE_LLM_PROFILE    || null,
@@ -40,7 +52,8 @@ node -e 'console.log(JSON.stringify({
   claude_proxy_debug:    process.env.CLAUDE_PROXY_DEBUG    || null,
   claude_router_debug:   process.env.C_THRU_DEBUG          || null,
   claude_router_no_update: process.env.CLAUDE_ROUTER_NO_UPDATE || null,
-}))' -- "$@"
+}));
+' -- "$@"
 `;
   fs.writeFileSync(stubPath, script);
   fs.chmodSync(stubPath, 0o755);
@@ -292,6 +305,59 @@ console.log('\n17. multiple flags combined');
   for (const f of ['--journal', '--proxy-debug', '--no-update']) {
     assert(!args.includes(f), `${f} stripped`);
   }
+}
+
+// ── Test 18 (C1 + C2): ephemeral --settings shape + one-line system-prompt pointer ──
+// Single ollama-backed run (forces a proxy spawn → PROXY_PORT set → the one-line
+// pointer is appended and --settings is forwarded). Asserts BOTH the settings
+// file shape (C1: one command SessionStart hook, no http hook) AND the
+// append-system-prompt drift guard (C2: one-line pointer, not the old endpoint
+// list). CLAUDE_PROXY_STARTUP_PROBE=0 (set in runCthru) keeps it hermetic.
+console.log('\n18. (C1/C2) ollama-backed run: ephemeral --settings shape + system-prompt pointer');
+{
+  const r = runCthru(['--model', 'qwen3:1.7b'], {
+    backends: { ollama: { kind: 'ollama', url: 'http://127.0.0.1:11434' } },
+    routes: { default: 'qwen3:1.7b' },
+    model_routes: { 'qwen3:1.7b': 'ollama' },
+  });
+  assert(r.code === 0, `exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
+  const args = r.json?.args || [];
+
+  // ── C1: the launcher forwarded --settings, and the file is valid JSON ──────
+  assert(args.includes('--settings'), `--settings forwarded to claude (got ${JSON.stringify(args)})`);
+  let settings = null;
+  try { settings = JSON.parse(r.json?.settings_content || ''); } catch {}
+  assert(settings !== null,
+    `--settings file is valid JSON (got ${JSON.stringify((r.json?.settings_content || '').slice(0, 120))})`);
+  if (settings) {
+    const ssHooks = (settings.hooks?.SessionStart || []).flatMap(e => e.hooks || []);
+    assert(ssHooks.length === 1, `SessionStart has exactly one hook (got ${ssHooks.length}: ${JSON.stringify(ssHooks)})`);
+    assert(ssHooks[0]?.type === 'command', `SessionStart hook is type:"command" (got ${JSON.stringify(ssHooks[0]?.type)})`);
+    assert(/c-thru-session-start/.test(ssHooks[0]?.command || ''),
+      `SessionStart command → c-thru-session-start (got ${ssHooks[0]?.command})`);
+    // No HTTP SessionStart hook anywhere — the redundant one was removed.
+    const allHooks = Object.values(settings.hooks || {}).flat().flatMap(e => e.hooks || []);
+    const httpHooks = allHooks.filter(h => h?.type === 'http');
+    assert(httpHooks.length === 0, `no type:"http" hook anywhere (got ${JSON.stringify(httpHooks)})`);
+    // The rest of the ephemeral surface survives the trim.
+    assert(settings.mcpServers && typeof settings.mcpServers === 'object', 'mcpServers present');
+    assert(Array.isArray(settings.hooks?.UserPromptSubmit), 'UserPromptSubmit hooks present');
+    assert(Array.isArray(settings.hooks?.PostToolUse), 'PostToolUse hooks present');
+    assert(Array.isArray(settings.hooks?.PreToolUse), 'PreToolUse hooks present');
+    assert(settings.permissions && Array.isArray(settings.permissions.allow), 'permissions.allow present');
+  }
+
+  // ── C2: --append-system-prompt is the one-line pointer (drift guard) ───────
+  const ai = args.indexOf('--append-system-prompt');
+  assert(ai >= 0, `--append-system-prompt present (got ${JSON.stringify(args)})`);
+  const sysPrompt = ai >= 0 ? (args[ai + 1] || '') : '';
+  assert(/see SessionStart context for endpoints/.test(sysPrompt),
+    `pointer references SessionStart context (got ${JSON.stringify(sysPrompt.slice(0, 200))})`);
+  assert(/http:\/\/127\.0\.0\.1:\d+/.test(sysPrompt),
+    `pointer carries the proxy base URL (got ${JSON.stringify(sysPrompt.slice(0, 200))})`);
+  // The old per-endpoint list must NOT reappear in-band — this is the drift guard.
+  assert(!/Use curl from Bash/.test(sysPrompt), 'no old "Use curl from Bash" endpoint list (drift guard)');
+  assert(!/switch routing mode/.test(sysPrompt), 'no old "switch routing mode" line (drift guard)');
 }
 
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
