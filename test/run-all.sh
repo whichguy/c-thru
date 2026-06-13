@@ -111,8 +111,6 @@ run_suite "install-smoke (idempotency, symlinks, ephemeral arch)" \
   bash "$REPO_DIR/test/install-smoke.test.sh"
 run_suite "ollama-probe (health-check script)" \
   bash "$REPO_DIR/test/ollama-probe.test.sh"
-run_suite "preflight-model-readiness (/v1/active-models)" \
-  bash "$REPO_DIR/test/preflight-model-readiness.test.sh"
 run_suite "c-thru-contract-check (agent/skill contracts)" \
   bash "$REPO_DIR/test/c-thru-contract-check.test.sh"
 run_suite "c-thru-explain-bash (bash integration: _explain_all_json cache + TSV contracts)" \
@@ -135,11 +133,13 @@ else
 fi
 run_suite "session-start-seeding (first-run seed + settings registration)" \
   bash "$REPO_DIR/test/session-start-seeding.test.sh"
-run_suite "session-start-injection (proxy /hooks/context block injected once)" \
-  bash "$REPO_DIR/test/session-start-injection.test.sh"
 
 echo ""
 echo "Node tests:"
+run_suite "session-start-injection (proxy /hooks/context block injected once)" \
+  node "$REPO_DIR/test/session-start-injection.test.js"
+run_suite "preflight-model-readiness (/v1/active-models → PULL decisions)" \
+  node "$REPO_DIR/test/preflight-model-readiness.test.js"
 run_suite "model-map-v12-adapter (regression)" \
   node "$REPO_DIR/test/model-map-v12-adapter.test.js"
 run_suite "proxy-lifecycle (startup, /ping, loopback bind)" \

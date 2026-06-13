@@ -583,7 +583,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # Check 10 — preflight_model_readiness routing skeleton sync
-# The test wrapper (test/preflight-model-readiness.test.sh) copies the routing
+# The test fixture (test/stubs/preflight-skeleton.sh) copies the routing
 # skeleton of preflight_model_readiness() from tools/c-thru, replacing only the
 # pull/warm action block. This check diffs the shared skeleton up to the divergence
 # sentinel line so any change to the routing logic is caught immediately.
@@ -596,24 +596,24 @@ _canonical_skeleton=$(awk '
   in_fn { print }
 ' "$REPO_DIR/tools/c-thru" 2>/dev/null || true)
 
-_wrapper_skeleton=$(awk '
+_fixture_skeleton=$(awk '
   /^preflight_model_readiness\(\)/ { in_fn=1 }
   in_fn && /grep -qxF/ { print; exit }
   in_fn { print }
-' "$REPO_DIR/test/preflight-model-readiness.test.sh" 2>/dev/null || true)
+' "$REPO_DIR/test/stubs/preflight-skeleton.sh" 2>/dev/null || true)
 
-if [ ! -f "$REPO_DIR/tools/c-thru" ] || [ ! -f "$REPO_DIR/test/preflight-model-readiness.test.sh" ]; then
-  ok "tools/c-thru or test wrapper absent — skipping skeleton sync"
+if [ ! -f "$REPO_DIR/tools/c-thru" ] || [ ! -f "$REPO_DIR/test/stubs/preflight-skeleton.sh" ]; then
+  ok "tools/c-thru or test fixture absent — skipping skeleton sync"
 elif [ -z "$_canonical_skeleton" ]; then
   fail "preflight_model_readiness not found in tools/c-thru"
-elif [ -z "$_wrapper_skeleton" ]; then
-  fail "preflight_model_readiness wrapper not found in test/preflight-model-readiness.test.sh"
-elif [ "$_canonical_skeleton" != "$_wrapper_skeleton" ]; then
-  fail "preflight_model_readiness routing skeleton has drifted — update wrapper in test/preflight-model-readiness.test.sh to match tools/c-thru"
+elif [ -z "$_fixture_skeleton" ]; then
+  fail "preflight_model_readiness skeleton not found in test/stubs/preflight-skeleton.sh"
+elif [ "$_canonical_skeleton" != "$_fixture_skeleton" ]; then
+  fail "preflight_model_readiness routing skeleton has drifted — update test/stubs/preflight-skeleton.sh to match tools/c-thru"
 else
   ok "preflight_model_readiness routing skeleton in sync"
 fi
-unset _canonical_skeleton _wrapper_skeleton
+unset _canonical_skeleton _fixture_skeleton
 
 # ---------------------------------------------------------------------------
 # Check 11 — LLM_MODE_ENUM / LLM_MODES sync

@@ -6,7 +6,7 @@
 //   • claude_proxy_listen_port discovers the proxy from ANTHROPIC_BASE_URL alone
 //   • the c-thru-status skill consumes the injected URL + endpoints
 //
-// Unlike session-start-injection.test.sh (stub proxy) and proxy-dashboard.test.js
+// Unlike session-start-injection.test.js (stub proxy) and proxy-dashboard.test.js
 // (proxy-only), this is the END-TO-END system test: a REAL proxy + the REAL
 // scripts, with no stub standing between producer (proxy) and consumer (hook /
 // launcher). It is the green-gate that the producer's block and the consumer's

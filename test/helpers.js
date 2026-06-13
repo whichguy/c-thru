@@ -94,6 +94,88 @@ function getFreePort() {
   });
 }
 
+// ── Generic stub HTTP server ────────────────────────────────────────────────
+// Lightweight 127.0.0.1:0 server for tests that stand a stub in for the proxy or
+// Ollama. `routes` maps a key to a response:
+//   key:   "METHOD /path" (e.g. "POST /hooks/context"), a bare "/path", or "*"
+//          (fallback). Lookup tries the method+path key, then the bare path,
+//          then "*". Unmatched → 404 "{}".
+//   value: a string (sent verbatim as the 200 body — pass already-serialized
+//          JSON), a plain object (JSON.stringify'd → 200 application/json), or an
+//          (req, res) function that owns the response (for slow/dynamic cases).
+// Every request is appended to `.requests` as { method, url, path, headers, body }
+// (body parsed as JSON when possible, else the raw string) — this log powers
+// asserts like "the stub never saw GET /ping". Query strings are stripped from
+// `path` for matching; `url` keeps the raw request target.
+// Returns { server, port, url, requests, close }.
+function startStubServer(routes = {}) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const pathOnly = (req.url || '').split('?')[0];
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      let body = null;
+      try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
+      requests.push({ method: req.method, url: req.url, path: pathOnly, headers: req.headers, body });
+
+      const route =
+        routes[`${req.method} ${pathOnly}`] ??
+        routes[pathOnly] ??
+        routes['*'];
+
+      if (typeof route === 'function') { route(req, res); return; }
+      if (route === undefined || route === null) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end('{}');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(typeof route === 'string' ? route : JSON.stringify(route));
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      resolve({
+        server,
+        port,
+        url: `http://127.0.0.1:${port}`,
+        requests,
+        close: () => new Promise(r => server.close(r)),
+      });
+    });
+    server.on('error', reject);
+  });
+}
+
+// ── Async spawn (capture) ────────────────────────────────────────────────────
+// spawn() wrapper that captures stdout/stderr and resolves on exit. REQUIRED
+// (over child_process.spawnSync) whenever the spawned process talks to an
+// in-process startStubServer: spawnSync blocks THIS process's event loop, so the
+// stub could never accept the connection or answer. opts mirrors spawn options
+// (env, cwd). `opts.timeout` SIGKILLs the child after that many ms. Resolves
+// { status, signal, stdout, stderr } — never rejects on a non-zero exit (only on
+// a spawn error, e.g. ENOENT). status is null when the child was signal-killed.
+function spawnCapture(cmd, args, opts = {}) {
+  const { timeout, ...spawnOpts } = opts;
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, Object.assign({ stdio: ['ignore', 'pipe', 'pipe'] }, spawnOpts));
+    let stdout = '';
+    let stderr = '';
+    let timer = null;
+    if (timeout) timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, timeout);
+    child.stdout.on('data', d => { stdout += d.toString(); });
+    child.stderr.on('data', d => { stderr += d.toString(); });
+    child.on('error', err => { if (timer) clearTimeout(timer); reject(err); });
+    child.on('close', (status, signal) => {
+      if (timer) clearTimeout(timer);
+      resolve({ status, signal, stdout, stderr });
+    });
+  });
+}
+
 // ── Proxy spawn ────────────────────────────────────────────────────────────
 
 // Spawns the proxy with test isolation env and returns { child, port, hooksPort }.
@@ -197,8 +279,10 @@ async function spawnProxy(opts = {}) {
 // Per-attempt timeout grows from 250ms → 1500ms (catches slow first-bind on
 // loaded machines without burning the whole budget on the happy-path first
 // try). Backoff between attempts grows similarly: 30/60/120/250/500ms capped.
-// ECONNREFUSED retries immediately (next event-loop tick) since that
-// definitively means "listener not up yet" and we shouldn't sleep on it.
+// ECONNREFUSED and ECONNRESET both retry immediately (next event-loop tick):
+// ECONNREFUSED = listener not bound yet; ECONNRESET = "socket hang up" (proxy
+// accepted then reset the connection while still coming up under load). Both
+// mean "listener not stable yet" and we shouldn't sleep on either.
 function waitForPing(port, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + timeoutMs;
@@ -220,9 +304,11 @@ function waitForPing(port, timeoutMs = 5000) {
       req.on('error', (err) => {
         lastError.kind = err.code || 'error';
         lastError.message = err.message;
-        // ECONNREFUSED = listener not bound yet. Retry on next tick instead
-        // of waiting full backoff — saves up to 500ms during proxy startup.
-        schedule(err.code === 'ECONNREFUSED');
+        // ECONNREFUSED = listener not bound yet; ECONNRESET = socket hang up
+        // (accepted-then-reset during startup under load). Both mean the
+        // listener isn't stable yet — retry on next tick instead of waiting
+        // full backoff — saves up to 500ms during proxy startup.
+        schedule(err.code === 'ECONNREFUSED' || err.code === 'ECONNRESET');
       });
       req.setTimeout(perAttemptTimeouts[idx], () => {
         lastError.kind = 'timeout';
@@ -796,6 +882,8 @@ module.exports = {
   writeConfig,
   writeConfigFresh,
   getFreePort,
+  startStubServer,
+  spawnCapture,
   spawnProxy,
   waitForPing,
   httpJson,

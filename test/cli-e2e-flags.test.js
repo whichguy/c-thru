@@ -59,7 +59,7 @@ console.log(JSON.stringify({
   fs.chmodSync(stubPath, 0o755);
 }
 
-function runCthru(args, configOverrides = {}) {
+function runCthru(args, configOverrides = {}, envOverrides = {}) {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-cli-e2e-'));
   const homeDir = path.join(tmpRoot, 'home');
   const fakeBin = path.join(tmpRoot, 'bin');
@@ -101,6 +101,7 @@ function runCthru(args, configOverrides = {}) {
       CLAUDE_PROXY_SKIP_OLLAMA_WARMUP: '1',
       OLLAMA_URL: 'http://127.0.0.1:11434',
       CLAUDE_LLM_PROFILE: '16gb',
+      ...envOverrides,
     },
     cwd: tmpRoot,
   });
@@ -358,6 +359,37 @@ console.log('\n18. (C1/C2) ollama-backed run: ephemeral --settings shape + syste
   // The old per-endpoint list must NOT reappear in-band — this is the drift guard.
   assert(!/Use curl from Bash/.test(sysPrompt), 'no old "Use curl from Bash" endpoint list (drift guard)');
   assert(!/switch routing mode/.test(sysPrompt), 'no old "switch routing mode" line (drift guard)');
+
+  // ── C2 (positive invariant): the in-band pointer is exactly one canonical line ──
+  // The denylist above catches the OLD endpoint list reappearing; this asserts
+  // the pointer's exact shape so a multi-line expansion or a re-added endpoint
+  // enumeration trips the test even if it uses new wording. Mirrors c-thru:3669.
+  const promptLines = sysPrompt.split('\n');
+  const pointerLines = promptLines.filter(l => l.includes('proxy control plane'));
+  assert(pointerLines.length === 1,
+    `exactly one 'proxy control plane' line in-band (got ${pointerLines.length}: ${JSON.stringify(pointerLines)})`);
+  assert(pointerLines.length === 1 &&
+    /^c-thru proxy control plane: http:\/\/127\.0\.0\.1:\d+ — see SessionStart context for endpoints$/.test(pointerLines[0]),
+    `pointer line matches the canonical one-line form (got ${JSON.stringify(pointerLines[0])})`);
+  assert(!promptLines.some(l => /GET \/c-thru\//.test(l)),
+    'no endpoint enumeration (GET /c-thru/...) leaked in-band (drift guard)');
+}
+
+// ── Test 19: inbound OLLAMA_URL is honored (precedence regression) ─────────
+// c-thru:49 must NOT clobber a caller-set OLLAMA_URL. The --router-debug=2 env
+// dump (c-thru:3489) prints "OLLAMA_URL=<value>" to stderr. Pass a distinctive
+// closed-port URL inbound and assert it survives verbatim — pre-fix, line 49
+// (`${OLLAMA_BASE_URL:-http://localhost:11434}`) would overwrite it with the
+// localhost:11434 default, so this test would print/assert that instead.
+console.log('\n19. inbound OLLAMA_URL honored (not clobbered by line 49)');
+{
+  const inbound = 'http://127.0.0.1:1';   // closed port — distinctive, never the default
+  const r = runCthru(['--router-debug=2', '--model', 'claude-sonnet-4-6'], {}, { OLLAMA_URL: inbound });
+  assert(r.code === 0, `exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
+  assert(r.stderr.includes(`OLLAMA_URL=${inbound}`),
+    `--router-debug=2 dump echoes inbound OLLAMA_URL=${inbound} (got stderr: ${r.stderr.slice(-400)})`);
+  assert(!/OLLAMA_URL=http:\/\/localhost:11434/.test(r.stderr),
+    'inbound OLLAMA_URL not overwritten by the localhost:11434 default');
 }
 
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
