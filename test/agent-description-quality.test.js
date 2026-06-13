@@ -145,12 +145,14 @@ for (const file of AGENT_FILES) {
   }
 }
 
-// ── Body model-id staleness lint ──────────────────────────────────────────────
-// The frontmatter description lint above keeps routing claims current in the
-// selector-visible text — but agent BODIES carry routing claims too, and they
-// drifted (8 files found stale 2026-06-12, e.g. writer.md claiming
-// mistral-small3.1:24b local and claude-opus-4-6). Every model-id token in an
-// agent body must be in THAT AGENT'S own resolution set: cap =
+// ── Model-id staleness lint (frontmatter + body) ──────────────────────────────
+// The description-quality lint above keeps routing claims structured — but the
+// whole file carries routing claims, and they drifted (8 bodies found stale
+// 2026-06-12, e.g. writer.md claiming mistral-small3.1:24b local and
+// claude-opus-4-6). Descriptions are selector-visible and carry the same
+// concrete model ids (vision.md "Routes to claude-sonnet-4-6 connected"), so
+// the scan covers the FULL file — frontmatter included — not just the body.
+// Every model-id token must be in THAT AGENT'S own resolution set: cap =
 // agent_to_capability[agent] || agent, resolved over 5 modes × 5 tiers with the
 // same resolveProfileModel chain the proxy runs. A model_routes-key check would
 // be too loose (re:^claude-.*$ masks any claude-* id, current or not).
@@ -161,7 +163,7 @@ for (const file of AGENT_FILES) {
 const { resolveProfileModel, LLM_MODE_ENUM } = require('../tools/model-map-resolve.js');
 const MODEL_TOKEN_RE = /(?:claude-(?:opus|sonnet|haiku)-[0-9][\w.-]*|gemini-[\w.-]+|gpt-oss-[\w:.-]+|(?:qwen[\w.-]*|gemma\d+|phi4[\w.-]*|devstral[\w.-]*|mistral[\w.-]*|deepseek[\w.-]*|llama[\w.-]*):[\w.-]+)/g;
 
-console.log('\nBody model-id staleness (tokens must be in the agent\'s own resolution set)');
+console.log('\nModel-id staleness (frontmatter+body tokens must be in the agent\'s own resolution set)');
 {
   const cfg = JSON.parse(fs.readFileSync(path.join(REPO, 'config', 'model-map.json'), 'utf8'));
   const a2c = cfg.agent_to_capability || {};
@@ -184,38 +186,41 @@ console.log('\nBody model-id staleness (tokens must be in the agent\'s own resol
 
   for (const file of AGENT_FILES) {
     const name = file.replace(/\.md$/, '');
-    const raw = fs.readFileSync(path.join(AGENTS_DIR, file), 'utf8');
-    const body = raw.replace(/^---\n[\s\S]*?\n---\n/, ''); // strip frontmatter
+    const text = fs.readFileSync(path.join(AGENTS_DIR, file), 'utf8'); // full file — frontmatter too
     const cap = a2c[name] || name;
     const own = capSets[cap] || new Set();
-    const tokens = [...new Set(body.match(MODEL_TOKEN_RE) || [])];
+    const tokens = [...new Set(text.match(MODEL_TOKEN_RE) || [])];
     const stale = tokens.filter(t => !own.has(t));
     const detail = stale.map(t => {
       const currentFor = Object.keys(capSets).filter(c => capSets[c].has(t));
       return `"${t}" is ${currentFor.length ? `current for: ${currentFor.join(', ')}` : 'current for nothing'}, not ${cap}`;
     }).join('; ');
     assert(stale.length === 0,
-      `${name}: body model ids all in own resolution set (cap=${cap})${stale.length ? ` — ${detail}` : ''}`);
+      `${name}: model ids (frontmatter+body) all in own resolution set (cap=${cap})${stale.length ? ` — ${detail}` : ''}`);
   }
 
-  // ── Body capability-claim lint ──────────────────────────────────────────────
-  // "Routes to `X` capability" is the structured routing claim agent bodies
-  // make; X must be a real llm_profiles key. pattern-coder/workhorse/orchestrator
+  // ── Capability-claim lint (frontmatter + body) ──────────────────────────────
+  // "Routes to X capability" is the structured routing claim agent files make;
+  // X must be a real llm_profiles key. pattern-coder/workhorse/orchestrator
   // were this class of staleness before the 2026-06 body rewrite fixed them by
-  // hand — this keeps the structured subset from drifting again. (Free-prose
-  // agent-name references are out of scope: too noisy to lint.)
-  console.log('\nBody capability claims (Routes to `X` capability → X ∈ llm_profiles)');
-  const CAP_CLAIM_RE = /Routes to `([a-z][\w-]*)` capability/g;
+  // hand — this keeps the structured subset from drifting again. Backticks
+  // around X are optional: descriptions carry the same claim unbackticked
+  // (fast-scout.md "Routes to fast-scout capability"), and descriptions are
+  // the selector-visible text, so frontmatter is scanned too. By design, free
+  // prose without the "capability" keyword stays out of scope — "Routes to
+  // fast-generalist (terminal dispatch step)" and "code-reviewer model tier"
+  // have no structure to anchor on.
+  console.log('\nCapability claims, frontmatter+body (Routes to X capability → X ∈ llm_profiles)');
+  const CAP_CLAIM_RE = /Routes to `?([a-z][\w-]*)`? capability/g;
   const validCaps = Object.keys(profiles);
   for (const file of AGENT_FILES) {
     const name = file.replace(/\.md$/, '');
-    const raw = fs.readFileSync(path.join(AGENTS_DIR, file), 'utf8');
-    const body = raw.replace(/^---\n[\s\S]*?\n---\n/, '');
-    const claims = [...body.matchAll(CAP_CLAIM_RE)].map(m => m[1]);
+    const text = fs.readFileSync(path.join(AGENTS_DIR, file), 'utf8'); // full file — frontmatter too
+    const claims = [...text.matchAll(CAP_CLAIM_RE)].map(m => m[1]);
     if (claims.length === 0) continue;
     const bad = claims.filter(c => !validCaps.includes(c));
     assert(bad.length === 0,
-      `${name}: capability claims name real llm_profiles keys${bad.length ? ` — invalid: ${bad.join(', ')}; valid: ${validCaps.join(', ')}` : ` (${claims.join(', ')})`}`);
+      `${name}: capability claims (frontmatter+body) name real llm_profiles keys${bad.length ? ` — invalid: ${bad.join(', ')}; valid: ${validCaps.join(', ')}` : ` (${claims.join(', ')})`}`);
   }
 }
 
