@@ -34,6 +34,8 @@ For the AI agent's situational awareness, here is the mapping from logical inten
 | Intent (Logical) | Method | Path | Payload |
 |---|---|---|---|
 | **Interrogate Status** | `GET` | `/c-thru/status` | N/A |
+| **Inspect Recent Requests** | `GET` | `/c-thru/recent?n=<N>` | N/A — newest-first ring of recent requests: requested→served model, backend, tokens, latency, errors, fallbacks |
+| **Open Stats Dashboard** | `GET` | `/c-thru/dashboard` | N/A — live HTML dashboard (give the user the URL; also in `dashboard_url` of `/c-thru/status`) |
 | **Set Connectivity Mode** | `POST` | `/c-thru/mode` | `{"mode": "<mode_name>"}` |
 | **Reload Config** | `POST` | `/c-thru/reload` | N/A |
 

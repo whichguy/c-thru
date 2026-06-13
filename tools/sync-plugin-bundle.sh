@@ -52,7 +52,7 @@ for s in "${SKILLS[@]}"; do
 done
 
 # Proxy binary + JS runtime deps (needed for plugin-only installs without install.sh)
-for f in claude-proxy model-map-config.js model-map-resolve.js model-map-layered.js \
+for f in claude-proxy proxy-dashboard.html model-map-config.js model-map-resolve.js model-map-layered.js \
           model-map-validate.js hw-profile.js model-map-apply-recommendations.js; do
   check_or_copy "$ROOT/tools/$f" "$BUNDLE/tools/$f"
 done

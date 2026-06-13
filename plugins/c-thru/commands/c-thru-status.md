@@ -12,3 +12,7 @@ If `$ARGUMENTS` is empty or `--verbose`, run:
 ```bash
 ~/.claude/tools/c-thru --list $ARGUMENTS
 ```
+
+After the listing, surface the live dashboard: `GET /c-thru/status` on the proxy
+returns a `dashboard_url` field (e.g. `http://127.0.0.1:10017/c-thru/dashboard`) —
+mention it so the user can watch per-request stats update live in a browser.

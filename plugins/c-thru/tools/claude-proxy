@@ -1096,6 +1096,23 @@ function send(res, code, obj) {
   res.end(body);
 }
 
+// HTML sibling of send(). no-store: the dashboard asset is read from disk per
+// request (admin-frequency traffic) so live edits show on refresh.
+function sendHtml(res, code, html) {
+  if (res.headersSent) return;
+  res.writeHead(code, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': Buffer.byteLength(html),
+    'Cache-Control': 'no-store',
+  });
+  res.end(html);
+}
+
+// Dashboard discovery URL — computed once after listen() (the port may be
+// dynamic), stamped on every response as x-c-thru-dashboard and surfaced in
+// /c-thru/status + the /hooks/context injection.
+let DASHBOARD_URL = '';
+
 // ── Anthropic-fidelity helpers ───────────────────────────────────────────
 // Make our Ollama->Anthropic-translated responses indistinguishable from real
 // api.anthropic.com responses. These are used by forwardOllamaLegacy only; the
@@ -4320,6 +4337,12 @@ const server = http.createServer((req, res) => {
       });
       traceLog(ctx, 'in.client', req.method, req.url, req.headers);
 
+      // Discovery: every response carries the dashboard URL so any client of
+      // the proxy can find the human surface without out-of-band config.
+      // setHeader merges with later writeHead header objects, so this covers
+      // streaming and non-streaming alike.
+      if (DASHBOARD_URL) res.setHeader('x-c-thru-dashboard', DASHBOARD_URL);
+
       let finalized = false;
       const finalize = (aborted) => {
         if (finalized) return;
@@ -4420,6 +4443,13 @@ const server = http.createServer((req, res) => {
           mode,
           hardware_tier: tier,
           config_source: CONFIG_SOURCE,
+          // Instance identity + dashboard discovery (additive — the .usage
+          // shape consumed by c-thru --list / c-thru-status is untouched).
+          pid: process.pid,
+          port: (server.address() && server.address().port) || null,
+          uptime_s: Math.round(process.uptime()),
+          started_at: PROXY_STARTED_AT,
+          dashboard_url: DASHBOARD_URL || null,
           active_capabilities,
           agent_resolutions,
           usage: mergeUsage(diskUsage, usageDelta),
@@ -4472,6 +4502,18 @@ const server = http.createServer((req, res) => {
         return send(res, 200, { ok: true, message: 'Reloaded' });
       }
 
+      if (req.method === 'GET' && (req.url === '/c-thru/dashboard' || req.url === '/c-thru/dashboard/')) {
+        // Read per request — admin-frequency traffic, and the __dirname
+        // sibling load keeps symlinked installs working (same pattern as
+        // loadBenchmark and the shipped-config fallback).
+        try {
+          const html = fs.readFileSync(path.join(__dirname, 'proxy-dashboard.html'), 'utf8');
+          return sendHtml(res, 200, html);
+        } catch (e) {
+          return send(res, 503, { ok: false, error: `dashboard asset unavailable: ${e.message}` });
+        }
+      }
+
       if (req.method === 'POST' && req.url === '/hooks/context') {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
@@ -4479,7 +4521,7 @@ const server = http.createServer((req, res) => {
         return send(res, 200, {
           hookSpecificOutput: {
             hookEventName: "SessionStart",
-            additionalContext: `(c-thru) routing active. Profile: ${tier}, Mode: ${mode}.`
+            additionalContext: `(c-thru) routing active. Profile: ${tier}, Mode: ${mode}.${DASHBOARD_URL ? ` Dashboard: ${DASHBOARD_URL}` : ''}`
           }
         });
       }
@@ -4821,6 +4863,11 @@ server.on('error', err => {
 server.listen(INITIAL_PORT, BIND_ADDR, () => {
   process.stdout.write(`READY ${server.address().port}\n`);
   console.error(`c-thru listening on ${BIND_ADDR}:${server.address().port}`);
+  // Dashboard URL — host is 127.0.0.1 for any loopback bind (browsers can't
+  // open '::1'-style binds uniformly), the literal bind address otherwise.
+  const dashHost = LOOPBACK_ADDRS.has(BIND_ADDR.toLowerCase()) ? '127.0.0.1' : BIND_ADDR;
+  DASHBOARD_URL = `http://${dashHost}:${server.address().port}/c-thru/dashboard`;
+  console.error(`c-thru dashboard: ${DASHBOARD_URL}`);
   // Ambient-key safety net. When ANTHROPIC_API_KEY is set in the proxy's
   // environment AND the proxy is bound to a non-loopback address, any host
   // that can route to the bind address can issue billed Anthropic calls

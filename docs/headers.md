@@ -16,6 +16,7 @@ mid-stream.
 
 | Header | Set when | Value | Streaming? |
 |---|---|---|---|
+| `x-c-thru-dashboard` | Always (every response, once the listener is up) | Discovery URL of the live stats dashboard, e.g. `http://127.0.0.1:10017/c-thru/dashboard`. Stamped via `res.setHeader` at the top of the request handler — covers control endpoints, proxied Messages calls, and streaming alike. | Yes |
 | `x-c-thru-backend-latency-ms` | Always (when request reaches upstream) | Round-trip time from proxy→backend in milliseconds (integer string) | Yes |
 | `x-c-thru-auth-missing` | `auth_env` (explicit or derived from the host table) is configured on the endpoint but the referenced env var is unset at request time | `1` | Yes |
 | `x-c-thru-auth-derived` | Always (when a request reaches `applyOutboundAuth`) | Profile chosen for outbound auth: `bearer_priority` \| `header_env` \| `passthrough` \| `none` \| `subscription` \| `explicit_object`. Lets you debug "why is my key not being sent?" without reading code. See `docs/subscription-auth.md`. | Yes |
@@ -95,6 +96,7 @@ The headers are stamped from two locations:
 
 1. **`buildCthruResponseHeaders`** (`tools/claude-proxy:~2090`) — Gemini path. Reads non-enumerable `_*` stashes on the response body (e.g. `_thinkingAutoEnabled`, `_cacheStatus`) plus `requestMeta` for resolution-derived fields. Streaming and non-streaming Gemini both call this.
 2. **Inline header writes** (`tools/claude-proxy:~1217, ~1417, ~1815`) — Anthropic / OpenRouter / passthrough paths. Stamp `x-c-thru-served-by` / `-resolved-via` / `-resolution-chain` / `-fallback-from` directly when forming `outHeaders`.
+3. **Handler-top `res.setHeader`** — `x-c-thru-dashboard` only. Set once at the top of the request handler (before any routing) so every response carries it; `setHeader` values merge with later `writeHead` header objects, which is why this works for both control endpoints and streaming responses.
 
 When adding a new header:
 - Pick the function/site that owns the data (don't duplicate logic).

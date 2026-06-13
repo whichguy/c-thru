@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>c-thru proxy dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #262b36;
+    --text: #d7dce3; --dim: #8a93a3; --accent: #5fb3f0;
+    --ok: #4cc38a; --warn: #e5b454; --err: #e0635f;
+    --chip: #232936;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 20px 40px;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.45 "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  h1 span { color: var(--accent); }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 26px 0 8px; }
+  #topbar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px; }
+  .kv { color: var(--dim); white-space: nowrap; }
+  .kv b { color: var(--text); font-weight: 600; }
+  #conn { margin-left: auto; }
+  #conn.ok { color: var(--ok); } #conn.err { color: var(--err); }
+  #cooldown {
+    display: none; margin: 14px 0 0; padding: 8px 12px; border-radius: 6px;
+    background: rgba(224,99,95,.12); border: 1px solid var(--err); color: var(--err);
+  }
+  table { border-collapse: collapse; width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; background: #1b1f28; }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .empty { color: var(--dim); font-style: italic; padding: 10px 12px; }
+  .chip { display: inline-block; background: var(--chip); border: 1px solid var(--border); border-radius: 10px; padding: 0 8px; margin: 1px 3px 1px 0; font-size: 11px; color: var(--dim); }
+  .chip b { color: var(--text); }
+  tr.bad td { background: rgba(224,99,95,.10); }
+  tr.aborted td { background: rgba(229,180,84,.08); }
+  .status-ok { color: var(--ok); } .status-err { color: var(--err); } .status-warn { color: var(--warn); }
+  .dim { color: var(--dim); }
+  .arrow { color: var(--dim); padding: 0 3px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <div id="topbar">
+    <h1>c-thru <span>dashboard</span></h1>
+    <span class="kv">mode <b id="kv-mode">–</b></span>
+    <span class="kv">tier <b id="kv-tier">–</b></span>
+    <span class="kv">port <b id="kv-port">–</b></span>
+    <span class="kv">pid <b id="kv-pid">–</b></span>
+    <span class="kv">uptime <b id="kv-uptime">–</b></span>
+    <span class="kv">config <b id="kv-config">–</b></span>
+    <span class="kv">default route <b id="kv-default">–</b></span>
+    <span id="conn" class="kv">connecting…</span>
+  </div>
+
+  <div id="cooldown"></div>
+
+  <h2>Recent requests <span class="dim" id="recent-meta"></span></h2>
+  <div id="recent"></div>
+
+  <h2>Lifetime totals <span class="dim" id="totals-meta"></span></h2>
+  <div id="by-model"></div>
+
+  <div class="grid">
+    <div>
+      <h2>By agent / capability</h2>
+      <div id="by-agent"></div>
+    </div>
+    <div>
+      <h2>By backend</h2>
+      <div id="by-backend"></div>
+    </div>
+  </div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function fmtNum(n) {
+  if (n == null) return '<span class="dim">–</span>';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e4) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+function fmtMs(ms) {
+  if (ms == null) return '<span class="dim">–</span>';
+  if (ms >= 60000) return (ms / 60000).toFixed(1) + 'm';
+  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's';
+  return Math.round(ms) + 'ms';
+}
+function fmtUptime(s) {
+  if (s == null) return '–';
+  if (s >= 86400) return Math.floor(s / 86400) + 'd ' + Math.floor((s % 86400) / 3600) + 'h';
+  if (s >= 3600) return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+  if (s >= 60) return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+  return s + 's';
+}
+function fmtTime(iso) {
+  try { return new Date(iso).toLocaleTimeString(); } catch { return esc(iso || '–'); }
+}
+function table(headers, rows, emptyMsg) {
+  if (!rows.length) return '<div class="empty">' + esc(emptyMsg) + '</div>';
+  return '<table><thead><tr>' +
+    headers.map(h => `<th${h.num ? ' class="num"' : ''}>${esc(h.label)}</th>`).join('') +
+    '</tr></thead><tbody>' + rows.join('') + '</tbody></table>';
+}
+
+function renderStatus(s) {
+  $('kv-mode').textContent = s.mode || '–';
+  $('kv-tier').textContent = s.hardware_tier || '–';
+  $('kv-port').textContent = s.port != null ? s.port : '–';
+  $('kv-pid').textContent = s.pid != null ? s.pid : '–';
+  $('kv-uptime').textContent = fmtUptime(s.uptime_s);
+  $('kv-config').textContent = s.config_source || '–';
+  $('kv-default').textContent = s.default_route || '–';
+
+  const cd = s.cooldown_backends || [];
+  const banner = $('cooldown');
+  if (cd.length) {
+    banner.style.display = 'block';
+    banner.innerHTML = '&#9888; cooling down: ' + cd.map(c =>
+      `<b>${esc(c.backend)}</b> (${fmtMs(c.expires_in_ms)} left)`).join(', ');
+  } else {
+    banner.style.display = 'none';
+  }
+
+  const u = s.usage || {};
+  $('totals-meta').textContent =
+    `in ${u.total_input || 0} / out ${u.total_output || 0} tokens` +
+    (u.cleared_at ? ` — cleared ${fmtTime(u.cleared_at)}` : '');
+
+  const modelRows = Object.entries(u.by_model || {})
+    .sort((a, b) => (b[1].calls || 0) - (a[1].calls || 0))
+    .map(([model, m]) => `<tr><td>${esc(model)}</td><td class="num">${fmtNum(m.calls)}</td>` +
+      `<td class="num">${fmtNum(m.input)}</td><td class="num">${fmtNum(m.output)}</td>` +
+      `<td class="num">${fmtMs(m.calls ? (m.total_duration_ms || 0) / m.calls : null)}</td>` +
+      `<td class="dim">${m.last_call ? fmtTime(m.last_call) : '–'}</td></tr>`);
+  $('by-model').innerHTML = table(
+    [{label:'model'},{label:'calls',num:1},{label:'in',num:1},{label:'out',num:1},{label:'avg latency',num:1},{label:'last call'}],
+    modelRows, 'no usage recorded yet');
+
+  const agentRows = Object.entries(u.by_agent || {})
+    .sort((a, b) => (b[1].calls || 0) - (a[1].calls || 0))
+    .map(([agent, a]) => {
+      const chips = Object.entries(a.served_by || {})
+        .sort((x, y) => y[1] - x[1])
+        .map(([m, n]) => `<span class="chip">${esc(m)} <b>×${n}</b></span>`).join('');
+      return `<tr><td>${esc(agent)}</td><td class="num">${fmtNum(a.calls)}</td>` +
+        `<td class="num">${fmtNum(a.input)}</td><td class="num">${fmtNum(a.output)}</td><td>${chips || '<span class="dim">–</span>'}</td></tr>`;
+    });
+  $('by-agent').innerHTML = table(
+    [{label:'agent'},{label:'calls',num:1},{label:'in',num:1},{label:'out',num:1},{label:'served by'}],
+    agentRows, 'no capability-routed traffic yet');
+
+  const backendRows = Object.entries(u.by_backend || {})
+    .sort((a, b) => (b[1].calls || 0) - (a[1].calls || 0))
+    .map(([bk, b]) => `<tr><td>${esc(bk)}</td><td class="num">${fmtNum(b.calls)}</td>` +
+      `<td class="num">${fmtNum(b.input)}</td><td class="num">${fmtNum(b.output)}</td></tr>`);
+  $('by-backend').innerHTML = table(
+    [{label:'backend'},{label:'calls',num:1},{label:'in',num:1},{label:'out',num:1}],
+    backendRows, 'no backend traffic yet');
+}
+
+function renderRecent(r) {
+  const reqs = (r && r.requests) || [];
+  $('recent-meta').textContent = r ? `(${r.buffered}/${r.cap} buffered)` : '';
+  const rows = reqs.map(e => {
+    const cls = e.aborted ? 'aborted' : (e.ok ? '' : 'bad');
+    const statusCls = e.aborted ? 'status-warn' : (e.ok ? 'status-ok' : 'status-err');
+    const statusTxt = e.aborted ? 'aborted' : (e.status || '?');
+    const modelCell = e.served_by && e.served_by !== e.model
+      ? `${esc(e.model || '?')}<span class="arrow">&rarr;</span>${esc(e.served_by)}`
+      : esc(e.served_by || e.model || '?');
+    const fallback = e.fallback_from ? ` <span class="chip">fb: ${esc(e.fallback_from)}</span>` : '';
+    return `<tr class="${cls}">` +
+      `<td class="dim">${fmtTime(e.ts)}</td>` +
+      `<td>${esc(e.capability || '–')}</td>` +
+      `<td>${modelCell}${fallback}</td>` +
+      `<td>${esc(e.backend || '–')}</td>` +
+      `<td class="num">${fmtNum(e.input_tokens)}</td>` +
+      `<td class="num">${fmtNum(e.output_tokens)}</td>` +
+      `<td class="num">${fmtMs(e.duration_ms)}</td>` +
+      `<td class="${statusCls}">${esc(statusTxt)}${e.stream ? ' <span class="dim">sse</span>' : ''}</td>` +
+      `<td class="dim">${esc(e.user_id ? e.user_id.slice(0, 24) : '–')}</td>` +
+      '</tr>';
+  });
+  $('recent').innerHTML = table(
+    [{label:'time'},{label:'capability'},{label:'requested → served'},{label:'backend'},
+     {label:'in',num:1},{label:'out',num:1},{label:'latency',num:1},{label:'status'},{label:'session'}],
+    rows, 'no requests yet — traffic appears here within 2s');
+}
+
+async function poll() {
+  try {
+    const [status, recent] = await Promise.all([
+      fetch('/c-thru/status').then(r => r.json()),
+      fetch('/c-thru/recent?n=100').then(r => r.json()),
+    ]);
+    renderStatus(status);
+    renderRecent(recent);
+    const conn = $('conn');
+    conn.textContent = 'live'; conn.className = 'kv ok';
+  } catch (e) {
+    const conn = $('conn');
+    conn.textContent = 'disconnected — ' + e.message; conn.className = 'kv err';
+  }
+}
+
+let timer = null;
+function start() { if (!timer) { poll(); timer = setInterval(poll, 1500); } }
+function stop() { if (timer) { clearInterval(timer); timer = null; } }
+document.addEventListener('visibilitychange', () => {
+  document.visibilityState === 'hidden' ? stop() : start();
+});
+start();
+</script>
+</body>
+</html>

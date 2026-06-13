@@ -3680,6 +3680,8 @@ build_forwarded_args() {
 c-thru proxy control plane: http://127.0.0.1:${PROXY_PORT}
 Use curl from Bash to interact. Key endpoints:
   GET  /c-thru/status   — active mode, hw tier, per-capability model map, cooldown backends
+  GET  /c-thru/recent   — last N requests (?n=, newest first): served model, tokens, latency, errors
+  GET  /c-thru/dashboard — live HTML stats dashboard (open in a browser)
   POST /c-thru/mode     — switch routing mode live: {\"mode\":\"<m>\"} (connected|offline|cloud-only|…)
   POST /c-thru/reload   — reload config from disk after editing model-map.json
   GET  /v1/active-models — list of currently active local + cloud models
