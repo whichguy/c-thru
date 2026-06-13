@@ -1334,6 +1334,20 @@ claude_proxy_listen_port() {
     printf '%s' "$PROXY_PORT"
   elif [[ "${CLAUDE_PROXY_USE_OLLAMA_PORT:-0}" == "1" ]]; then
     printf '%s' "11434"
+  elif [[ -n "${ANTHROPIC_BASE_URL:-}" ]] && \
+       { [[ -n "$(proxy_port_from_base_url "$ANTHROPIC_BASE_URL")" ]] || \
+         [[ "$ANTHROPIC_BASE_URL" =~ ^https?://127\.0\.0\.1 ]]; }; then
+    # Plugin mode: this process has no PROXY_PORT/pid file, but settings.json
+    # pre-wrote ANTHROPIC_BASE_URL at the proxy's fixed port. Derive it here
+    # (mirrors c-thru-session-start.sh PORT resolution) so `c-thru --list` and
+    # the c-thru-status skill find the proxy — not just in CLI mode. A loopback
+    # URL with no explicit port falls back to the plugin default.
+    local _abu_port; _abu_port="$(proxy_port_from_base_url "$ANTHROPIC_BASE_URL")"
+    if [[ -n "$_abu_port" ]]; then
+      printf '%s' "$_abu_port"
+    else
+      printf '%s' "${C_THRU_PLUGIN_PORT:-10017}"
+    fi
   else
     # Fall back to pid-file: find the proxy's listening port via lsof.
     local pid_file="$CLAUDE_PROFILE_DIR/proxy.pid"
