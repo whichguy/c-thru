@@ -186,7 +186,7 @@ run_suite "model-map-config (config path resolution)" \
   node "$REPO_DIR/test/model-map-config.test.js"
 run_suite "proxy-cli-flags (parseCliFlags edge cases)" \
   node "$REPO_DIR/test/proxy-cli-flags.test.js"
-run_suite "proxy-usage-stats (recordUsage debounce + SIGTERM flush)" \
+run_suite "proxy-usage-stats (debounce, SIGTERM flush, multi-instance merge)" \
   node "$REPO_DIR/test/proxy-usage-stats.test.js"
 run_suite "agent-contract-static (agent/skill static contracts)" \
   node "$REPO_DIR/test/agent-contract-static.test.js"

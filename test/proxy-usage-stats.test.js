@@ -23,6 +23,8 @@ const http = require('http');
 const os   = require('os');
 const path = require('path');
 
+const { spawnSync } = require('child_process');
+
 const {
   assert, assertEq, summary,
   stubBackend, writeConfig, httpJson, spawnProxy, waitForPing,
@@ -442,6 +444,186 @@ async function testStatsClear() {
   }
 }
 
+// ── Multi-instance helpers (Tests G–J) ────────────────────────────────────
+
+// Like spawnUsageProxy, but points at a caller-supplied (shared) stats file.
+// Each instance still gets its OWN tmpHome — two proxies sharing a HOME would
+// fight over ~/.claude/proxy.pid, which is not what these tests exercise.
+async function spawnUsageProxySharing(statsFile) {
+  const stub = await stubBackend();
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-usage-'));
+  const configPath = writeConfig(tmpHome, buildConfig(stub.port));
+  const { child, port } = await spawnProxy({
+    configPath,
+    tmpHome,
+    env: { CLAUDE_PROXY_USAGE_STATS_FILE: statsFile },
+  });
+  await waitForPing(port, 5000);
+  return { child, port, tmpHome, stub };
+}
+
+async function teardownInstance(inst) {
+  if (!inst) return;
+  try { inst.child.kill('SIGKILL'); } catch {}
+  try { await inst.stub.close(); } catch {}
+  cleanup(inst.tmpHome);
+}
+
+async function sendPing(port, label) {
+  const { status } = await httpJson(port, 'POST', '/v1/messages', MSG_BODY, {
+    'x-api-key': 'test',
+    'anthropic-version': '2023-06-01',
+  });
+  assertEq(status, 200, label);
+}
+
+// ── Test G: concurrent instances merge instead of clobbering ──────────────
+
+async function testConcurrentMerge() {
+  console.log('\nTest G: two concurrent proxies on one stats file — deltas merge, last writer does not erase the other');
+  const sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-usage-shared-'));
+  const statsFile = path.join(sharedDir, 'usage-stats.json');
+  let p1, p2;
+  try {
+    p1 = await spawnUsageProxySharing(statsFile);
+    p2 = await spawnUsageProxySharing(statsFile);
+
+    for (let i = 0; i < 3; i++) await sendPing(p1.port, `Test G: P1 request ${i + 1} returned 200`);
+    for (let i = 0; i < 2; i++) await sendPing(p2.port, `Test G: P2 request ${i + 1} returned 200`);
+
+    // Both exit before the 5s debounce — the SIGTERM sync flush carries the deltas.
+    await killAndWait(p1.child, 'SIGTERM');
+    await killAndWait(p2.child, 'SIGTERM');
+
+    assert(fs.existsSync(statsFile), 'Test G: shared stats file exists after both exits');
+    const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    assertEq(stats.by_model[CONCRETE_MODEL] && stats.by_model[CONCRETE_MODEL].calls, 5,
+      'Test G: calls === 5 (3 from P1 + 2 from P2, no clobber)');
+    assert(stats.total_input >= 5, `Test G: total_input >= 5 (got ${stats.total_input})`);
+    assertEq(stats.by_backend['stub'] && stats.by_backend['stub'].calls, 5,
+      'Test G: by_backend.stub.calls === 5');
+
+    await p1.stub.close(); await p2.stub.close();
+    cleanup(p1.tmpHome); cleanup(p2.tmpHome);
+  } catch (e) {
+    await teardownInstance(p1); await teardownInstance(p2);
+    throw e;
+  } finally {
+    try { fs.rmSync(sharedDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// ── Test H: sequential instances accumulate (no boot-staleness) ───────────
+
+async function testBootStaleness() {
+  console.log('\nTest H: sequential proxies on one stats file accumulate across restarts');
+  const sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-usage-shared-'));
+  const statsFile = path.join(sharedDir, 'usage-stats.json');
+  let p1, p2;
+  try {
+    p1 = await spawnUsageProxySharing(statsFile);
+    for (let i = 0; i < 2; i++) await sendPing(p1.port, `Test H: P1 request ${i + 1} returned 200`);
+    await killAndWait(p1.child, 'SIGTERM');
+
+    p2 = await spawnUsageProxySharing(statsFile);
+    for (let i = 0; i < 2; i++) await sendPing(p2.port, `Test H: P2 request ${i + 1} returned 200`);
+    await killAndWait(p2.child, 'SIGTERM');
+
+    const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    assertEq(stats.by_model[CONCRETE_MODEL] && stats.by_model[CONCRETE_MODEL].calls, 4,
+      'Test H: calls === 4 across sequential instances (2+2)');
+
+    await p1.stub.close(); await p2.stub.close();
+    cleanup(p1.tmpHome); cleanup(p2.tmpHome);
+  } catch (e) {
+    await teardownInstance(p1); await teardownInstance(p2);
+    throw e;
+  } finally {
+    try { fs.rmSync(sharedDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// ── Test I: clear wins over an unflushed delta in another instance ────────
+
+async function testClearWins() {
+  console.log('\nTest I: /c-thru/stats/clear via P2 erases P1\'s unflushed pre-clear delta');
+  const sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-usage-shared-'));
+  const statsFile = path.join(sharedDir, 'usage-stats.json');
+  let p1, p2, p3;
+  try {
+    p1 = await spawnUsageProxySharing(statsFile);
+    p2 = await spawnUsageProxySharing(statsFile);
+
+    // P1 accumulates an UNFLUSHED delta (debounce window is 5s).
+    for (let i = 0; i < 2; i++) await sendPing(p1.port, `Test I: P1 request ${i + 1} returned 200`);
+
+    // Clear through P2 — stamps cleared_at into the file.
+    const clearResp = await httpJson(p2.port, 'POST', '/c-thru/stats/clear', null, {}, 3000);
+    assertEq(clearResp.status, 200, 'Test I: clear via P2 returned 200');
+
+    // P1 exits — its flush must observe the unfamiliar cleared_at and drop the
+    // pre-clear snapshot instead of resurrecting it.
+    await killAndWait(p1.child, 'SIGTERM');
+    await killAndWait(p2.child, 'SIGTERM');
+
+    let stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    assertEq(stats.total_input, 0, 'Test I: total_input === 0 after clear (P1 delta not resurrected)');
+    assertEq(Object.keys(stats.by_model || {}).length, 0, 'Test I: by_model empty after clear');
+    assert(typeof stats.cleared_at === 'string' && stats.cleared_at, 'Test I: cleared_at stamped in file');
+
+    // A fresh instance accumulates normally on top of the cleared file.
+    p3 = await spawnUsageProxySharing(statsFile);
+    await sendPing(p3.port, 'Test I: P3 request returned 200');
+    await killAndWait(p3.child, 'SIGTERM');
+
+    stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    assertEq(stats.by_model[CONCRETE_MODEL] && stats.by_model[CONCRETE_MODEL].calls, 1,
+      'Test I: post-clear usage records normally (calls === 1)');
+
+    await p1.stub.close(); await p2.stub.close(); await p3.stub.close();
+    cleanup(p1.tmpHome); cleanup(p2.tmpHome); cleanup(p3.tmpHome);
+  } catch (e) {
+    await teardownInstance(p1); await teardownInstance(p2); await teardownInstance(p3);
+    throw e;
+  } finally {
+    try { fs.rmSync(sharedDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// ── Test J: stale lock (dead pid) is reclaimed, flush succeeds ─────────────
+
+async function testStaleLockReclaim() {
+  console.log('\nTest J: a lock dir left by a dead pid is reclaimed — flush still lands');
+  const sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-usage-shared-'));
+  const statsFile = path.join(sharedDir, 'usage-stats.json');
+  const lockDir = `${statsFile}.lock`;
+  let p1;
+  try {
+    // A pid that existed and has exited — guaranteed dead, guaranteed valid format.
+    const deadPid = spawnSync('true').pid;
+    fs.mkdirSync(lockDir);
+    fs.writeFileSync(path.join(lockDir, 'pid'), String(deadPid));
+
+    p1 = await spawnUsageProxySharing(statsFile);
+    await sendPing(p1.port, 'Test J: request returned 200');
+    await killAndWait(p1.child, 'SIGTERM');
+
+    assert(fs.existsSync(statsFile), 'Test J: stats file written despite pre-existing stale lock');
+    const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    assertEq(stats.by_model[CONCRETE_MODEL] && stats.by_model[CONCRETE_MODEL].calls, 1,
+      'Test J: calls === 1 recorded through reclaimed lock');
+    assert(!fs.existsSync(lockDir), 'Test J: stale lock dir removed after flush');
+
+    await p1.stub.close();
+    cleanup(p1.tmpHome);
+  } catch (e) {
+    await teardownInstance(p1);
+    throw e;
+  } finally {
+    try { fs.rmSync(sharedDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
 // ── main ───────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -451,6 +633,10 @@ async function main() {
   await testByAgentServedBy();
   await testDoubleCountGuard();
   await testStatsClear();
+  await testConcurrentMerge();
+  await testBootStaleness();
+  await testClearWins();
+  await testStaleLockReclaim();
 
   const failed = summary();
   process.exit(failed ? 1 : 0);
