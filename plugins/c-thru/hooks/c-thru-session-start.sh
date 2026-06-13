@@ -66,21 +66,25 @@ fi
 [ -n "$PORT" ] || exit 0  # c-thru not active
 
 issues=()
-active_tier=""
-active_mode=""
 
-# Check 1: proxy reachability — also capture tier + mode from /ping
-ping_json=""
-if ping_json=$(curl -sf --max-time 2 "http://127.0.0.1:$PORT/ping" 2>/dev/null); then
-    if command -v jq >/dev/null 2>&1; then
-        active_tier=$(printf '%s' "$ping_json" | jq -r '.active_tier // ""')
-        active_mode=$(printf '%s' "$ping_json" | jq -r '.active_mode // ""')
-    elif command -v node >/dev/null 2>&1; then
-        active_tier=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write(d.active_tier||'')}catch{}" <<<"$ping_json" 2>/dev/null || true)
-        active_mode=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write(d.active_mode||'')}catch{}" <<<"$ping_json" 2>/dev/null || true)
-    fi
-else
+# Check 1: proxy reachability. Profile/Mode + the endpoint list now come from
+# the proxy's own /hooks/context block (below), so /ping is purely a health gate.
+if ! curl -sf --max-time 2 "http://127.0.0.1:$PORT/ping" >/dev/null 2>&1; then
     issues+=("⚠️ proxy down on :${PORT} — API calls will fail. Fix: pkill -f claude-proxy")
+fi
+
+# Canonical control-plane block — fetched from the proxy so the proxy URL +
+# endpoint list have exactly one source (the proxy owns it, Part 1). Bounded
+# like /ping above so a wedged proxy can't blow the 5s CLI hook budget and drop
+# ALL SessionStart context. jq with a node fallback (matches the proxy's JSON).
+proxy_ctx=""
+hook_json=""
+if hook_json=$(curl -s --max-time 2 -X POST "http://127.0.0.1:$PORT/hooks/context" 2>/dev/null); then
+    if command -v jq >/dev/null 2>&1; then
+        proxy_ctx=$(printf '%s' "$hook_json" | jq -r '.hookSpecificOutput.additionalContext // ""')
+    elif command -v node >/dev/null 2>&1; then
+        proxy_ctx=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write((d.hookSpecificOutput&&d.hookSpecificOutput.additionalContext)||'')}catch{}" <<<"$hook_json" 2>/dev/null || true)
+    fi
 fi
 
 # Check 2: Ollama reachability — prefer OLLAMA_URL (set by c-thru binary) else OLLAMA_BASE_URL
@@ -96,10 +100,11 @@ if [ -n "$_ollama_check_url" ]; then
     fi
 fi
 
-# Build context: always include tier/mode if known; append any issues
+# Build context: proxy control-plane block first (carries Profile/Mode + the
+# endpoint list, Part 1), then local advisories.
 context_parts=()
-if [ -n "$active_tier" ] || [ -n "$active_mode" ]; then
-    context_parts+=("(c-thru) routing: tier=${active_tier:-unknown} mode=${active_mode:-unknown}")
+if [ -n "$proxy_ctx" ]; then
+    context_parts+=("$proxy_ctx")
 fi
 
 if [ ${#issues[@]} -gt 0 ]; then

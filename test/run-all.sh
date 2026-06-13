@@ -133,6 +133,8 @@ else
 fi
 run_suite "session-start-seeding (first-run seed + settings registration)" \
   bash "$REPO_DIR/test/session-start-seeding.test.sh"
+run_suite "session-start-injection (proxy /hooks/context block injected once)" \
+  bash "$REPO_DIR/test/session-start-injection.test.sh"
 
 echo ""
 echo "Node tests:"
