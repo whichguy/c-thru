@@ -44,6 +44,9 @@ trap 'rm -rf "$BASE"' EXIT
 SCRATCH="$BASE/scratch"
 mkdir -p "$SCRATCH/tools" "$SCRATCH/config"
 cp "$REPO_DIR/tools/c-thru-session-start.sh" "$SCRATCH/tools/"
+# The hook sources $ROUTER_REPO_ROOT/tools/c-thru-lib.sh for its port ladder —
+# co-locate it so the hook exercises its real path to the port gate.
+cp "$REPO_DIR/tools/c-thru-lib.sh" "$SCRATCH/tools/"
 printf '{"sentinel":"seeding-test"}\n' > "$SCRATCH/config/model-map.json"
 SENTINEL="$SCRATCH/config/model-map.json"
 

@@ -55,15 +55,16 @@ if [ -f "$_bundled_config" ] && [ ! -f "$_sys_map" ]; then
     fi
 fi
 
-PORT="${CLAUDE_PROXY_PORT:-}"
-if [ -z "$PORT" ] && [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
-    PORT=$(printf '%s' "$ANTHROPIC_BASE_URL" | sed -nE 's#^https?://[^/:]+:([0-9]+).*$#\1#p')
+# Canonical hook port ladder via the shared lib (CLAUDE_PROXY_PORT → PROXY_PORT
+# → USE_OLLAMA_PORT → ANTHROPIC_BASE_URL → plugin default). Fail-open: lib
+# unreadable → PORT empty → the guard below no-ops (same as "c-thru not active").
+PORT=""
+if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
+    # shellcheck source=c-thru-lib.sh
+    . "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh"
+    PORT="$(cthru_hook_listen_port)"
 fi
-# If URL matched 127.0.0.1 but had no port, fall back to plugin default
-if [ -z "$PORT" ] && printf '%s' "${ANTHROPIC_BASE_URL:-}" | grep -qE '^https?://127\.0\.0\.1'; then
-    PORT="${C_THRU_PLUGIN_PORT:-10017}"
-fi
-[ -n "$PORT" ] || exit 0  # c-thru not active
+[ -n "$PORT" ] || exit 0  # c-thru not active (or lib unavailable — fail open)
 
 issues=()
 

@@ -97,6 +97,8 @@ run_self_update() {  # $1 = scratch → sets SU_EC, SU_STDERR
 run_session_start() {  # $1 = scratch → prints additionalContext (jq = JSON assert)
   mkdir -p "$1/tools"
   cp "$REPO_DIR/tools/c-thru-session-start.sh" "$1/tools/"
+  # The hook sources $ROUTER_REPO_ROOT/tools/c-thru-lib.sh — co-locate it.
+  cp "$REPO_DIR/tools/c-thru-lib.sh" "$1/tools/"
   local out profile
   profile="$(mktemp -d "$BASE/profile.XXXXXX")"
   out="$(CLAUDE_PROXY_PORT=1 OLLAMA_URL="" OLLAMA_BASE_URL="" \

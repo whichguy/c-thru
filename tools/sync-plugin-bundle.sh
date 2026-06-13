@@ -51,8 +51,10 @@ for s in "${SKILLS[@]}"; do
   check_or_copy "$ROOT/skills/$s/SKILL.md" "$BUNDLE/skills/$s/SKILL.md"
 done
 
-# Proxy binary + JS runtime deps (needed for plugin-only installs without install.sh)
-for f in claude-proxy proxy-dashboard.html model-map-config.js model-map-resolve.js model-map-layered.js \
+# Proxy binary + JS runtime deps (needed for plugin-only installs without install.sh).
+# c-thru-lib.sh: the bundled hooks source it from $ROUTER_REPO_ROOT/tools/ (which
+# resolves to $BUNDLE/tools/ in plugin mode), so it must ship here too.
+for f in c-thru-lib.sh claude-proxy proxy-dashboard.html model-map-config.js model-map-resolve.js model-map-layered.js \
           model-map-validate.js hw-profile.js model-map-apply-recommendations.js; do
   check_or_copy "$ROOT/tools/$f" "$BUNDLE/tools/$f"
 done

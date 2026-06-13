@@ -9,10 +9,23 @@ set -uo pipefail
 prompt=""
 context=""
 
-# Only fire when c-thru is active (port in ANTHROPIC_BASE_URL)
-PORT="${CLAUDE_PROXY_PORT:-}"
-if [ -z "$PORT" ] && [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
-    PORT=$(printf '%s' "$ANTHROPIC_BASE_URL" | sed -nE 's#^https?://[^/:]+:([0-9]+).*$#\1#p')
+# Only fire when c-thru is active. Resolve script location (follow symlinks) so
+# the shared resolver lib is found via symlink, repo direct, or plugin bundle.
+_src="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_src" ]; do
+    _dir=$(cd -P "$(dirname "$_src")" && pwd)
+    _src=$(readlink "$_src")
+    case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+ROUTER_REPO_ROOT=$(cd -P "$(dirname "$_src")/.." && pwd)
+
+# Canonical hook port ladder (NO lsof tail — this is the per-prompt hot path).
+# Fail-open: lib unreadable → PORT empty → no-op (same as "c-thru not active").
+PORT=""
+if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
+    # shellcheck source=c-thru-lib.sh
+    . "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh"
+    PORT="$(cthru_hook_listen_port)"
 fi
 [ -n "$PORT" ] || exit 0
 

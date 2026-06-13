@@ -13,10 +13,23 @@ set -uo pipefail
 [[ "${CLAUDE_ROUTER_NO_BENCHMARK_UPDATE:-}" == "1" ]] && exit 0
 
 ROUTER_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROFILE_DIR="${CLAUDE_PROFILE_DIR:-${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}}"
-STAMP="$PROFILE_DIR/.benchmarks-stamp"
+# The 24h debounce STAMP must be DURABLE — under the user's original profile
+# dir, NOT the ephemeral session shadow (CLAUDE_PROFILE_DIR). Otherwise an
+# rm -rf of the shadow between sessions loses the stamp and the "daily" fetch
+# fires every session. proxy.pid belongs to the CURRENT session's proxy, so it
+# stays on the shadow (effective) resolver.
+if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
+  # shellcheck source=c-thru-lib.sh
+  . "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh"
+  STAMP="$(cthru_original_profile_dir)/.benchmarks-stamp"
+  PROXY_PID_FILE="$(cthru_effective_profile_dir)/proxy.pid"
+else
+  # Fail-soft fallback (pre-lib hybrid ladder) if the lib is unavailable.
+  _pd="${CLAUDE_PROFILE_DIR:-${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}}"
+  STAMP="$_pd/.benchmarks-stamp"
+  PROXY_PID_FILE="$_pd/proxy.pid"
+fi
 BENCH_PATH="$ROUTER_REPO_ROOT/docs/benchmark.json"
-PROXY_PID_FILE="$PROFILE_DIR/proxy.pid"
 
 # 24h debounce — if stamp is fresh, skip silently.
 if [[ -f "$STAMP" ]]; then
@@ -26,7 +39,7 @@ if [[ -f "$STAMP" ]]; then
   fi
 fi
 
-mkdir -p "$PROFILE_DIR" 2>/dev/null || true
+mkdir -p "$(dirname "$STAMP")" 2>/dev/null || true
 
 # Discover origin URL of the c-thru repo (script knows its own location).
 remote=$(git -C "$ROUTER_REPO_ROOT" config --get remote.origin.url 2>/dev/null || true)

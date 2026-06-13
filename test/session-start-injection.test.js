@@ -32,6 +32,9 @@ const {
 
 const REPO_DIR    = path.join(__dirname, '..');
 const HOOK_SOURCE = path.join(REPO_DIR, 'tools', 'c-thru-session-start.sh');
+// The hook sources the shared resolver lib from $ROUTER_REPO_ROOT/tools/ — it
+// must be co-located in the scratch tree (as it is in every real deployment).
+const LIB_SOURCE  = path.join(REPO_DIR, 'tools', 'c-thru-lib.sh');
 
 console.log('session-start-injection (Node port: proxy /hooks/context block injected once)\n');
 
@@ -63,6 +66,7 @@ async function main() {
   fs.mkdirSync(scratchTools, { recursive: true });
   const scratchHook = path.join(scratchTools, 'c-thru-session-start.sh');
   fs.copyFileSync(HOOK_SOURCE, scratchHook);
+  fs.copyFileSync(LIB_SOURCE, path.join(scratchTools, 'c-thru-lib.sh'));
   const profileDir = path.join(base, 'profile');
   fs.mkdirSync(profileDir, { recursive: true });
 
