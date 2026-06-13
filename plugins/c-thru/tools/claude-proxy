@@ -84,7 +84,7 @@ const BIND_ADDR = process.env.CLAUDE_PROXY_BIND || '127.0.0.1';
 // the proxy on all interfaces and should warn when paired with an ambient key.
 const LOOPBACK_ADDRS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]', '::ffff:127.0.0.1']);
 const DEBUG = numberFromEnv('CLAUDE_PROXY_DEBUG', numberFromEnv('CLAUDE_ROUTER_DEBUG', 0));
-const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+const DEFAULT_OLLAMA_URL = process.env.OLLAMA_URL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 
 // Tunable timing constants — env-overridable for tests + power users.
 // THREE-TIER UPSTREAM WATCHDOG (each catches a distinct failure mode;

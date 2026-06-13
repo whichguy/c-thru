@@ -293,6 +293,8 @@ run_suite "lineage-update-roundtrip (--update no-op/update/corrupt behaviors)" \
   node "$REPO_DIR/test/lineage-update-roundtrip.test.js"
 run_suite "proxy-quality (mapping, fallback cascade, v1 passthrough)" \
   node "$REPO_DIR/test/proxy-quality.test.js"
+run_suite "proxy-ollama-fallback-url (OLLAMA_URL honored in not-in-routes fallback)" \
+  node "$REPO_DIR/test/proxy-ollama-fallback-url.test.js"
 
 # EXCLUDED (tests for features not yet implemented in the proxy):
 # proxy-classify.test.js:  CLAUDE_PROXY_CLASSIFY dynamic in-proxy classifier not implemented
