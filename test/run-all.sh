@@ -131,6 +131,8 @@ if command -v jq >/dev/null 2>&1; then
 else
   skip_suite "self-update-divergence (jq not installed)"
 fi
+run_suite "session-start-seeding (first-run seed + settings registration)" \
+  bash "$REPO_DIR/test/session-start-seeding.test.sh"
 
 echo ""
 echo "Node tests:"
