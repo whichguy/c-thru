@@ -484,12 +484,35 @@ function recordUsage(model, backendId, input, output, durationMs, agentName) {
   scheduleUsageFlush();
 }
 
+// recordUsage + stamp the per-request token totals onto requestMeta for the
+// recent-requests ring (which reads ctx.meta at finalize and can't recompute
+// tokens). Single choke point so a new backend dispatch path can't record
+// usage while forgetting the ring stamp. Mirrors recordUsage's arg order with
+// requestMeta prepended.
+function recordUsageAndStamp(requestMeta, model, backendId, input, output, durationMs, agentName) {
+  recordUsage(model, backendId, input, output, durationMs, agentName);
+  if (requestMeta) requestMeta._tokens = { input, output };
+}
+
+// Clear-wins reconciliation. If the file carries a cleared_at this instance
+// hasn't seen, another instance cleared while our delta accumulated — adopt
+// the marker and drop the pre-clear delta. Returns whether a clear was just
+// observed so callers can also drop an in-hand snapshot. Single source of the
+// rule, shared by flushUsageCore and the /c-thru/status view.
+function reconcileClearIfNeeded(disk) {
+  if ((disk.cleared_at || null) !== lastSeenClearedAt) {
+    lastSeenClearedAt = disk.cleared_at || null;
+    usageDelta = emptyUsage();
+    return true;
+  }
+  return false;
+}
+
 // Core merge-on-flush. Snapshot+reset the in-process delta, then under the
-// advisory lock: read the file fresh, honor clear-wins (an unfamiliar
-// cleared_at means another instance cleared while this delta accumulated —
-// drop the pre-clear snapshot rather than resurrect cleared totals), merge,
-// atomic-rename. On write failure the snapshot folds back into usageDelta so
-// the next debounce retries. All sync — shutdown handlers depend on it.
+// advisory lock: read the file fresh, honor clear-wins (drop the pre-clear
+// snapshot rather than resurrect cleared totals), merge, atomic-rename. On
+// write failure the snapshot folds back into usageDelta so the next debounce
+// retries. All sync — shutdown handlers depend on it.
 let flushInFlight = false;
 function flushUsageCore() {
   if (flushInFlight) return;
@@ -501,11 +524,7 @@ function flushUsageCore() {
     const locked = acquireUsageLock(200);
     try {
       const disk = readUsageFileFresh();
-      let toMerge = snapshot;
-      if ((disk.cleared_at || null) !== lastSeenClearedAt) {
-        lastSeenClearedAt = disk.cleared_at || null;
-        toMerge = emptyUsage();  // clear wins — drop the pre-clear delta
-      }
+      const toMerge = reconcileClearIfNeeded(disk) ? emptyUsage() : snapshot;
       try {
         atomicWriteUsage(mergeUsage(disk, toMerge));
       } catch (e) {
@@ -1808,10 +1827,9 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
           inputTokens = obj.usage?.input_tokens || 0;
           outputTokens = obj.usage?.output_tokens || 0;
         }
-        recordUsage(effectiveModel, backend.id, inputTokens, outputTokens,
+        recordUsageAndStamp(requestMeta, effectiveModel, backend.id, inputTokens, outputTokens,
           Date.now() - (requestMeta.startedAt || Date.now()),
           requestMeta.capability || null);
-        requestMeta._tokens = { input: inputTokens, output: outputTokens };
         clearBackendCooldown(backend.id);
         if (shouldJournal(requestMeta.capability)) {
           const rawBuf = Buffer.concat(usageBuf);
@@ -2200,10 +2218,9 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
       output_tokens: outputTokens,
       stop_reason: stopReason,
     });
-    recordUsage(effectiveModel, backend.id, promptTokens, outputTokens,
+    recordUsageAndStamp(requestMeta, effectiveModel, backend.id, promptTokens, outputTokens,
       Date.now() - (requestMeta.startedAt || Date.now()),
       requestMeta.capability || null);
-    requestMeta._tokens = { input: promptTokens, output: outputTokens };
     clearBackendCooldown(backend.id);
     if (shouldJournal(requestMeta.capability)) {
       writeJournalEntry({
@@ -2388,10 +2405,9 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
         output_tokens: outputTokens,
         stop_reason: stopReason,
       });
-      recordUsage(effectiveModel, backend.id, promptTokens, outputTokens,
+      recordUsageAndStamp(requestMeta, effectiveModel, backend.id, promptTokens, outputTokens,
         Date.now() - (requestMeta.startedAt || Date.now()),
         requestMeta.capability || null);
-      requestMeta._tokens = { input: promptTokens, output: outputTokens };
       clearBackendCooldown(backend.id);
       if (shouldJournal(requestMeta.capability)) {
         let parsedResponse = null;
@@ -3266,10 +3282,9 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
                 // Usage stats — mirrors the Ollama/Anthropic call sites.
                 // output = candidates + thoughts for Anthropic billing parity.
                 const promptCount = (geminiData.usageMetadata || {}).promptTokenCount || 0;
-                recordUsage(effectiveModel, backend.id, promptCount, candidatesCount + thoughtsCount,
+                recordUsageAndStamp(requestMeta, effectiveModel, backend.id, promptCount, candidatesCount + thoughtsCount,
                   Date.now() - ((requestMeta && requestMeta.startedAt) || startedAt),
                   (requestMeta && requestMeta.capability) || null);
-                if (requestMeta) requestMeta._tokens = { input: promptCount, output: candidatesCount + thoughtsCount };
               }
             } catch (e) {
               ctxLog(ctx, 'gemini.stream.parse_error', { error: e.message, line });
@@ -3414,11 +3429,10 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           // Usage stats — mirrors the Ollama/Anthropic call sites. The
           // anthropicRes.usage fields already carry Anthropic-parity sums
           // (output = candidates + thoughts).
-          recordUsage(effectiveModel, backend.id,
+          recordUsageAndStamp(requestMeta, effectiveModel, backend.id,
             anthropicRes.usage.input_tokens, anthropicRes.usage.output_tokens,
             Date.now() - ((requestMeta && requestMeta.startedAt) || startedAt),
             (requestMeta && requestMeta.capability) || null);
-          if (requestMeta) requestMeta._tokens = { input: anthropicRes.usage.input_tokens, output: anthropicRes.usage.output_tokens };
           clearBackendCooldown(backend.id);
           scheduleCacheCreate();
         } catch (e) {
@@ -4434,10 +4448,7 @@ const server = http.createServer((req, res) => {
         // concurrent clear can't be resurrected in the status view before this
         // instance's next flush.
         const diskUsage = readUsageFileFresh();
-        if ((diskUsage.cleared_at || null) !== lastSeenClearedAt) {
-          lastSeenClearedAt = diskUsage.cleared_at || null;
-          usageDelta = emptyUsage();
-        }
+        reconcileClearIfNeeded(diskUsage);
         return send(res, 200, {
           ok: true,
           mode,
