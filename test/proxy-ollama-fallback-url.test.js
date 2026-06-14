@@ -23,7 +23,7 @@
 
 const {
   assert, assertEq, summary,
-  writeConfig, withProxy, httpJson, ollamaStubBackend,
+  writeConfig, withProxy, httpJson, httpStream, ollamaStubBackend,
 } = require('./helpers');
 
 const fs   = require('fs');
@@ -56,7 +56,7 @@ function fallbackConfig() {
 
 // Drives one unknown-model request through the proxy with the given env and
 // returns how many requests the stub (standing in for the Ollama endpoint) saw.
-async function probeFallback(tmpDir, envVars) {
+async function probeFallback(tmpDir, envVars, stream = false) {
   const stub = await ollamaStubBackend(HEALTHY_NDJSON);
   const env = Object.assign({}, envVars, {
     OLLAMA_URL: envVars.OLLAMA_URL === '__STUB__' ? `http://127.0.0.1:${stub.port}` : envVars.OLLAMA_URL,
@@ -66,10 +66,12 @@ async function probeFallback(tmpDir, envVars) {
     const configPath = writeConfig(tmpDir, fallbackConfig());
     let status = null;
     await withProxy({ configPath, profile: '128gb', mode: 'best-cloud', env }, async ({ port }) => {
-      const r = await httpJson(port, 'POST', '/v1/messages', {
-        model: UNKNOWN_MODEL, stream: false,
-        messages: [{ role: 'user', content: 'hi' }], max_tokens: 10,
-      });
+      const body = { model: UNKNOWN_MODEL, stream, messages: [{ role: 'user', content: 'hi' }], max_tokens: 10 };
+      // The assertion is on the recorded stub hit (URL routing); the response is
+      // ollama ndjson on the streaming path, passed through verbatim.
+      const r = stream
+        ? await httpStream(port, 'POST', '/v1/messages', body)
+        : await httpJson(port, 'POST', '/v1/messages', body);
       status = r.status;
     });
     return { hits: stub.requests.length, status, firstPath: stub.requests[0] ? stub.requests[0].path : null };
@@ -114,6 +116,19 @@ async function main() {
       });
       assert(hits >= 1, `fallback used OLLAMA_URL (the live stub) over the dead OLLAMA_BASE_URL (got ${hits})`);
       assertEq(status, 200, 'client saw a 200 round-trip through the OLLAMA_URL stub');
+    }
+
+    // ── Case 4: the streaming path (stream:true) also routes via OLLAMA_URL ────
+    // forwardAnthropic relays the request to <OLLAMA_URL>/v1/messages regardless
+    // of stream; this proves URL routing holds on the SSE-passthrough path, not
+    // just stream:false.
+    console.log('\n4. Unknown-model fallback honors OLLAMA_URL on the streaming path too');
+    {
+      const { hits, firstPath } = await probeFallback(tmpDir, {
+        OLLAMA_URL: '__STUB__', OLLAMA_BASE_URL: '',
+      }, true);
+      assert(hits >= 1, `streaming fallback hit the OLLAMA_URL stub (got ${hits} requests)`);
+      assertEq(firstPath, '/v1/messages', 'streaming forwarded to the /v1/messages adapter path');
     }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -21,8 +21,9 @@ mkdir -p "$FAKE_HOME"
 export HOME="$FAKE_HOME"
 export CLAUDE_DIR="$FAKE_CLAUDE"
 
-# Snapshot real settings.json mtime before the run
-REAL_SETTINGS="$HOME/.claude/settings.json"  # resolves inside sandbox — safe
+# (The durable ~/.claude/settings.json byte-identity invariant is asserted
+# hermetically by cli-e2e-flags.test.js; this suite asserts "no persistent
+# hooks/MCP" below.)
 
 trap 'rm -rf "$TMP"' EXIT
 

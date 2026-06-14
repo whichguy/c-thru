@@ -2,7 +2,7 @@
 # Unit test for tools/c-thru-lib.sh — the sourceable env/discovery resolvers.
 #
 # Covers: port-ladder precedence, the shadow-vs-durable profile-dir split
-# (and its shadow-isolation guarantee), cthru_ollama_url precedence, and the
+# (and its shadow-isolation guarantee), and the
 # key structural claim of the refactor — the hook ladder DROPS the pid-file/lsof
 # tail while the full claude_proxy_listen_port ladder KEEPS it.
 #
@@ -114,11 +114,6 @@ assert_eq "CLAUDE_CONFIG_DIR next"   "/c"            "$(run cthru_original_profi
 # THE shadow-isolation guarantee: a session shadow must NOT leak into the durable
 # resolver. With only CLAUDE_PROFILE_DIR set, original is $HOME/.claude, not /shadow.
 assert_eq "ignores CLAUDE_PROFILE_DIR" "$HOME/.claude" "$(run cthru_original_profile_dir CLAUDE_PROFILE_DIR=/shadow)"
-
-echo "6. cthru_ollama_url precedence"
-assert_eq "OLLAMA_URL wins"          "http://u" "$(run cthru_ollama_url OLLAMA_URL=http://u OLLAMA_BASE_URL=http://b)"
-assert_eq "OLLAMA_BASE_URL next"     "http://b" "$(run cthru_ollama_url OLLAMA_BASE_URL=http://b)"
-assert_eq "default localhost:11434"  "http://localhost:11434" "$(run cthru_ollama_url)"
 
 echo ""
 if [[ $FAIL -gt 0 ]]; then

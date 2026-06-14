@@ -59,12 +59,20 @@ console.log(JSON.stringify({
   fs.chmodSync(stubPath, 0o755);
 }
 
-function runCthru(args, configOverrides = {}, envOverrides = {}) {
+function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-cli-e2e-'));
   const homeDir = path.join(tmpRoot, 'home');
   const fakeBin = path.join(tmpRoot, 'bin');
   fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true });
   fs.mkdirSync(fakeBin, { recursive: true });
+  // Optionally seed the DURABLE ~/.claude/settings.json before the launch so a
+  // test can prove the ephemeral write never touches it. Captures its mtime.
+  let durableSettings = null, seedMtimeMs = null;
+  if (opts.seedSettings != null) {
+    durableSettings = path.join(homeDir, '.claude', 'settings.json');
+    fs.writeFileSync(durableSettings, opts.seedSettings);
+    seedMtimeMs = fs.statSync(durableSettings).mtimeMs;
+  }
   fs.symlinkSync(path.join(__dirname, '..', 'tools'), path.join(homeDir, '.claude', 'tools'));
   makeStubClaude(fakeBin);
 
@@ -108,8 +116,9 @@ function runCthru(args, configOverrides = {}, envOverrides = {}) {
 
   let parsed = null;
   try { parsed = JSON.parse((result.stdout || '').trim()); } catch {}
-  try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
-  return { code: result.status, stdout: result.stdout || '', stderr: result.stderr || '', json: parsed };
+  if (!opts.keepSandbox) { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {} }
+  return { code: result.status, stdout: result.stdout || '', stderr: result.stderr || '', json: parsed,
+           tmpRoot, homeDir, durableSettings, seedMtimeMs };
 }
 
 console.log('c-thru CLI flag-stripping e2e tests\n');
@@ -390,6 +399,25 @@ console.log('\n19. inbound OLLAMA_URL honored (not clobbered by line 49)');
     `--router-debug=2 dump echoes inbound OLLAMA_URL=${inbound} (got stderr: ${r.stderr.slice(-400)})`);
   assert(!/OLLAMA_URL=http:\/\/localhost:11434/.test(r.stderr),
     'inbound OLLAMA_URL not overwritten by the localhost:11434 default');
+}
+
+// ── Test 20: a launch leaves the DURABLE ~/.claude/settings.json untouched ──
+// The inline-override invariant: ephemeral session settings are written to a
+// temp session dir, NEVER the user's real settings.json. This is a tripwire —
+// it fails if a future change repoints the ephemeral write at the durable dir.
+console.log('\n20. launch leaves durable ~/.claude/settings.json byte-identical + mtime-unchanged');
+{
+  const sentinel = JSON.stringify({ env: { C_THRU_SENTINEL: 'durable-must-not-change' } }, null, 2);
+  const r = runCthru(['--route', 'heavy'], {}, {}, { keepSandbox: true, seedSettings: sentinel });
+  try {
+    assert(r.code === 0, `launch exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 160)})`);
+    const after = fs.readFileSync(r.durableSettings, 'utf8');
+    assert(after === sentinel, 'durable settings.json is byte-identical after a launch (ephemeral write must not touch it)');
+    const afterMtimeMs = fs.statSync(r.durableSettings).mtimeMs;
+    assert(afterMtimeMs === r.seedMtimeMs, `durable settings.json mtime unchanged (seed ${r.seedMtimeMs}, after ${afterMtimeMs})`);
+  } finally {
+    try { fs.rmSync(r.tmpRoot, { recursive: true, force: true }); } catch {}
+  }
 }
 
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);

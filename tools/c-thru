@@ -93,8 +93,8 @@ CTHRU_SELF_DIR="$(dirname "$CTHRU_SELF_REAL")"
 CTHRU_REPO_ROOT="$(cd "$CTHRU_SELF_DIR/.." 2>/dev/null && pwd -P || true)"
 # Shared env/proxy-discovery resolvers — single source of truth for tools/c-thru
 # AND the hooks: proxy_port_from_base_url, claude_proxy_listen_port,
-# cthru_hook_listen_port, cthru_effective_profile_dir, cthru_original_profile_dir,
-# cthru_ollama_url. (Function defs only — safe to source under set -e.)
+# cthru_hook_listen_port, cthru_effective_profile_dir, cthru_original_profile_dir.
+# (Function defs only — safe to source under set -e.)
 # shellcheck source=c-thru-lib.sh
 if ! source "$CTHRU_SELF_DIR/c-thru-lib.sh"; then
   echo "c-thru: fatal — cannot source c-thru-lib.sh (expected at $CTHRU_SELF_DIR/c-thru-lib.sh)" >&2

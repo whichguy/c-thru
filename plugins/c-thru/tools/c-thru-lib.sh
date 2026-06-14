@@ -82,9 +82,3 @@ cthru_effective_profile_dir() {
 cthru_original_profile_dir() {
   printf '%s' "${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 }
-
-# Inbound Ollama base URL. Precedence matches claude-proxy:87: OLLAMA_URL is the
-# inline var c-thru injects at launch; OLLAMA_BASE_URL is the legacy fallback.
-cthru_ollama_url() {
-  printf '%s' "${OLLAMA_URL:-${OLLAMA_BASE_URL:-http://localhost:11434}}"
-}
