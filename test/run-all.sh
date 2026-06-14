@@ -395,6 +395,8 @@ run_suite "hooks-armed (core.hooksPath → .githooks, fail-closed)" \
   bash "$REPO_DIR/test/hooks-armed.test.sh"
 run_suite "run-all-coverage (every test/ runnable referenced in this registry)" \
   node "$REPO_DIR/test/run-all-coverage.test.js"
+run_suite "gate-coverage (every pre-commit artifact registered in this suite)" \
+  node "$REPO_DIR/test/gate-coverage.test.js"
 
 if [[ $FAST -eq 0 ]]; then
   echo ""
