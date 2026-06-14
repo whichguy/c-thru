@@ -137,6 +137,8 @@ else
 fi
 run_suite "session-start-seeding (first-run seed + settings registration)" \
   bash "$REPO_DIR/test/session-start-seeding.test.sh"
+run_suite "benchmarks-update (durable stamp vs shadow pid + SIGHUP)" \
+  bash "$REPO_DIR/test/benchmarks-update.test.sh"
 
 echo ""
 echo "Node tests:"
@@ -144,6 +146,8 @@ run_suite "helpers (self-test: waitForPing ECONNRESET retry, stub routing, spawn
   node "$REPO_DIR/test/helpers.test.js"
 run_suite "hooks-declaration-parity (ephemeral c-thru ↔ plugin hooks.json drift)" \
   node "$REPO_DIR/test/hooks-declaration-parity.test.js"
+run_suite "hook-port-resolution (proxy-health + classify spawn, tools + plugin, fail-open)" \
+  node "$REPO_DIR/test/hook-port-resolution.test.js"
 run_suite "session-start-injection (proxy /hooks/context block injected once)" \
   node "$REPO_DIR/test/session-start-injection.test.js"
 run_suite "preflight-model-readiness (/v1/active-models → PULL decisions)" \
