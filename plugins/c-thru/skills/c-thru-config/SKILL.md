@@ -519,7 +519,7 @@ if [ -f "$PID_FILE" ]; then
   if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
     echo "proxy:    pid $PID  running"
     # Find the listening port via lsof
-    PORT=$(lsof -iTCP -sTCP:LISTEN -n -P -p "$PID" 2>/dev/null | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1)
+    PORT=$(lsof -a -iTCP -sTCP:LISTEN -n -P -p "$PID" 2>/dev/null | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1)
     if [ -n "$PORT" ]; then
       PING=$(curl -sf --max-time 2 "http://127.0.0.1:$PORT/ping" 2>/dev/null || true)
       if [ -n "$PING" ]; then

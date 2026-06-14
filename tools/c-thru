@@ -3992,7 +3992,7 @@ cmd_reload() {
   # Fall back to CLAUDE_PROXY_PORT when lsof is unavailable; fail if neither is known.
   local proxy_port=""
   if command -v lsof >/dev/null 2>&1; then
-    proxy_port="$(lsof -iTCP -sTCP:LISTEN -n -P -p "$proxy_pid" 2>/dev/null | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1 || true)"
+    proxy_port="$(lsof -a -iTCP -sTCP:LISTEN -n -P -p "$proxy_pid" 2>/dev/null | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1 || true)"
   fi
   [[ -z "$proxy_port" ]] && proxy_port="${CLAUDE_PROXY_PORT:-}"
   if [[ -z "$proxy_port" ]]; then
@@ -4044,7 +4044,7 @@ cmd_restart() {
   # Derive the actual listening port from lsof before signaling; the proxy port is
   # dynamic when CLAUDE_PROXY_PORT is unset — guessing 9997 is unsafe.
   if [[ -n "$proxy_pid" ]] && kill -0 "$proxy_pid" 2>/dev/null && command -v lsof >/dev/null 2>&1; then
-    old_port="$(lsof -iTCP -sTCP:LISTEN -n -P -p "$proxy_pid" 2>/dev/null | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1 || true)"
+    old_port="$(lsof -a -iTCP -sTCP:LISTEN -n -P -p "$proxy_pid" 2>/dev/null | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1 || true)"
   fi
   [[ -z "$old_port" ]] && old_port="${CLAUDE_PROXY_PORT:-}"
   if [[ -z "$old_port" ]]; then

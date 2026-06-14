@@ -77,11 +77,31 @@ full_pid_port="$(
   export PATH="$BINDIR:$PATH"
   claude_proxy_listen_port
 )"
-assert_eq "full ladder consults pid-file via lsof" "4242" "$full_pid_port"
+assert_eq "full ladder consults pid-file via lsof (hermetic, fixed fake)" "4242" "$full_pid_port"
 
 # Full ladder still honors the leading env ladder (delegates to the hook ladder).
 assert_eq "full ladder env signal wins over pid" "9999" \
   "$(run claude_proxy_listen_port CLAUDE_PROXY_PORT=9999 CLAUDE_PROFILE_DIR="$PIDDIR")"
+
+# Real-lsof case (gated on lsof + node): proves the pid tail returns the ACTUAL
+# listening port — bites the missing `-a` OR-vs-AND bug (without -a, lsof lists
+# every system listener and head -1 picks a foreign port), the head -1 ordering,
+# and the column-9 parse. run() scrubs the env ladder so we reach the pid tail,
+# and does NOT add the fake lsof to PATH, so the REAL lsof runs.
+if command -v lsof >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+  REALPIDDIR="$(mktemp -d "${TMPDIR:-/tmp}/c-thru-lib-realpid.XXXXXX")"
+  node -e 'const net=require("net");const s=net.createServer().listen(0,"127.0.0.1",()=>{require("fs").writeFileSync(process.argv[1], s.address().port+" "+process.pid)});setTimeout(()=>process.exit(0),10000)' "$REALPIDDIR/info" &
+  _real_bg=$!
+  for _i in $(seq 1 50); do [ -s "$REALPIDDIR/info" ] && break; sleep 0.1; done
+  read -r REAL_PORT REAL_PID < "$REALPIDDIR/info"
+  echo "$REAL_PID" > "$REALPIDDIR/proxy.pid"
+  assert_eq "full ladder returns the REAL listener's port (real lsof + -a)" "$REAL_PORT" \
+    "$(run claude_proxy_listen_port CLAUDE_PROFILE_DIR="$REALPIDDIR")"
+  kill "$_real_bg" 2>/dev/null || true
+  rm -rf "$REALPIDDIR"
+else
+  echo "  SKIP  full ladder real-lsof case (lsof or node absent)"
+fi
 
 echo "4. cthru_effective_profile_dir (the session SHADOW)"
 assert_eq "CLAUDE_PROFILE_DIR wins"  "/p"            "$(run cthru_effective_profile_dir CLAUDE_PROFILE_DIR=/p CLAUDE_CONFIG_DIR=/c CLAUDE_DIR=/d)"

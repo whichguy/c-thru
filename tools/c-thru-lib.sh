@@ -61,7 +61,7 @@ claude_proxy_listen_port() {
   if [[ -f "$pid_file" ]] && command -v lsof >/dev/null 2>&1; then
     local pid; pid="$(cat "$pid_file" 2>/dev/null)"
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-      lsof -iTCP -sTCP:LISTEN -n -P -p "$pid" 2>/dev/null \
+      lsof -a -iTCP -sTCP:LISTEN -n -P -p "$pid" 2>/dev/null \
         | awk 'NR>1{print $9}' | grep -oE '[0-9]+$' | head -1
     fi
   fi
