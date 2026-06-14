@@ -388,7 +388,7 @@ write_ephemeral_settings() {
   # No persistent writes to ~/.claude/settings.json — all hooks are ephemeral.
   #
   # Shared hooks below MUST agree with plugins/c-thru/hooks/hooks.json on
-  # {event, script-basename, matcher, timeout} — enforced by
+  # {event, script-basename, matcher, timeout, async, asyncRewake} — enforced by
   # test/hooks-declaration-parity.test.js. CLI-only hooks (agent-router across
   # PreToolUse matchers, the EnterPlanMode planner hint, the MCP server) are
   # allowlisted there as intentionally ephemeral-only.

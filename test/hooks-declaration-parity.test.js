@@ -65,7 +65,12 @@ function extractEphemeral(src) {
 
   const events   = [...block.matchAll(eventRe)].map(m => ({ index: m.index, event: m[1] }));
   const matchers = [...block.matchAll(matcherRe)].map(m => ({ index: m.index, matcher: m[1] }));
-  const commands = [...block.matchAll(cmdRe)].map(m => ({ index: m.index, varName: m[1], timeout: Number(m[2]) }));
+  const commands = [...block.matchAll(cmdRe)].map(m => ({
+    index: m.index, varName: m[1], timeout: Number(m[2]),
+    // async/asyncRewake live in the same flat hook object (m[0]); absent → false.
+    async:       /"async"\s*:\s*true/.test(m[0]),
+    asyncRewake: /"asyncRewake"\s*:\s*true/.test(m[0]),
+  }));
 
   const lastBefore = (arr, idx, lowerBound = -1) => {
     let best = null;
@@ -85,6 +90,8 @@ function extractEphemeral(src) {
       matcher: mt ? mt.matcher : '(absent)',
       basename: norm(basename),
       timeout: c.timeout,
+      async: c.async,
+      asyncRewake: c.asyncRewake,
     });
   }
   return tuples;
@@ -103,6 +110,8 @@ function extractHooksJson(json) {
           matcher,
           basename: norm(path.basename(h.command)),
           timeout: h.timeout,
+          async: h.async === true,
+          asyncRewake: h.asyncRewake === true,
         });
       }
     }
@@ -163,9 +172,11 @@ function main() {
     assertEq(e.length, 1, `${name}: appears once in the ephemeral block`);
     assertEq(j.length, 1, `${name}: appears once in hooks.json`);
     const ee = e[0], jj = j[0];
-    assertEq(ee.event,   jj.event,   `${name}: event agrees`);
-    assertEq(ee.matcher, jj.matcher, `${name}: matcher agrees`);
-    assertEq(ee.timeout, jj.timeout, `${name}: timeout agrees`);
+    assertEq(ee.event,       jj.event,       `${name}: event agrees`);
+    assertEq(ee.matcher,     jj.matcher,     `${name}: matcher agrees`);
+    assertEq(ee.timeout,     jj.timeout,     `${name}: timeout agrees`);
+    assertEq(ee.async,       jj.async,       `${name}: async agrees`);
+    assertEq(ee.asyncRewake, jj.asyncRewake, `${name}: asyncRewake agrees`);
   }
 
   // The compaction hook must be on the LIVE event (PreCompact), not the dead PostCompact.
