@@ -782,10 +782,10 @@ fi
 # ---------------------------------------------------------------------------
 echo "14. Phantom mode literals in claude-proxy"
 _valid_modes=$(node -e "
-  const {LLM_MODE_ENUM}=require('./tools/model-map-resolve.js');
+  const {LLM_MODE_ENUM}=require('$REPO_DIR/tools/model-map-resolve.js');
   console.log([...LLM_MODE_ENUM].join('\n'));
 " 2>/dev/null || true)
-_found_modes=$(grep -oE "'best-[a-z-]+'" tools/claude-proxy 2>/dev/null | tr -d "'" | sort -u || true)
+_found_modes=$(grep -oE "'best-[a-z-]+'" "$REPO_DIR/tools/claude-proxy" 2>/dev/null | tr -d "'" | sort -u || true)
 _phantom=0
 # Guard the guard's inputs. Two distinct failure modes:
 #  (1) _valid_modes empty = the REFERENCE set (LLM_MODE_ENUM) failed to extract
@@ -825,7 +825,7 @@ ISSUES=$(( ISSUES + _phantom ))
 # ---------------------------------------------------------------------------
 echo "15. LEGACY_LLM_MODES conversion coverage"
 _has_catchall=0
-grep -qF "Other old mode names" tools/model-map-resolve.js 2>/dev/null && _has_catchall=1
+grep -qF "Other old mode names" "$REPO_DIR/tools/model-map-resolve.js" 2>/dev/null && _has_catchall=1
 
 # Distinguish three outcomes via sentinels so the guard can't silently pass
 # when its extraction fails: __NO_FILE__ (validator absent → skip), __NO_MATCH__
@@ -835,7 +835,7 @@ grep -qF "Other old mode names" tools/model-map-resolve.js 2>/dev/null && _has_c
 _legacy_modes=$(node -e "
   const fs = require('fs');
   let src;
-  try { src = fs.readFileSync('./tools/model-map-validate.js', 'utf8'); }
+  try { src = fs.readFileSync('$REPO_DIR/tools/model-map-validate.js', 'utf8'); }
   catch (e) { console.log('__NO_FILE__'); process.exit(0); }
   const m = src.match(/LEGACY_LLM_MODES\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
   if (!m) { console.log('__NO_MATCH__'); process.exit(0); }
@@ -851,7 +851,7 @@ elif [ "$_legacy_modes" = "__NO_MATCH__" ]; then
 else
   while IFS= read -r _lm; do
     [[ -z "$_lm" ]] && continue
-    if grep -qF "'$_lm'" tools/model-map-resolve.js 2>/dev/null; then
+    if grep -qF "'$_lm'" "$REPO_DIR/tools/model-map-resolve.js" 2>/dev/null; then
       : # explicit branch present — always ok
     elif [[ $_has_catchall -eq 0 ]]; then
       echo "  FAIL: LEGACY_LLM_MODES has '$_lm' and catch-all is missing from resolveLlmMode()"

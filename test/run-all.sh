@@ -113,6 +113,8 @@ run_suite "ollama-probe (health-check script)" \
   bash "$REPO_DIR/test/ollama-probe.test.sh"
 run_suite "c-thru-contract-check (agent/skill contracts)" \
   bash "$REPO_DIR/test/c-thru-contract-check.test.sh"
+run_suite "contract-check-guards-bite (10/11/14/15 fail-loud guards bite on mutation)" \
+  bash "$REPO_DIR/test/contract-check-guards-bite.test.sh"
 run_suite "c-thru-explain-bash (bash integration: _explain_all_json cache + TSV contracts)" \
   bash "$REPO_DIR/test/c-thru-explain-bash.test.sh"
 run_suite "c-thru-bootstrap-auth-env (bootstrap auth env helper)" \
