@@ -787,9 +787,15 @@ _valid_modes=$(node -e "
 " 2>/dev/null || true)
 _found_modes=$(grep -oE "'best-[a-z-]+'" "$REPO_DIR/tools/claude-proxy" 2>/dev/null | tr -d "'" | sort -u || true)
 _phantom=0
-# Guard the guard's inputs. Two distinct failure modes:
-#  (1) _valid_modes empty = the REFERENCE set (LLM_MODE_ENUM) failed to extract
-#      → every found literal would be a false phantom; the guard is broken. FAIL.
+# Guard the guard's inputs. Three distinct cases:
+#  (0) source files absent = $REPO_DIR points at a synthetic workspace (the
+#      contract-check fixture harness rewrites REPO_DIR to a fixtures dir that
+#      has no tools/) → there is nothing to check; SKIP, matching the sibling
+#      "file absent" guards in Checks 11/12/15. Must precede the -z checks below
+#      so a missing file reads as "skip", not "extraction failed → FAIL".
+#  (1) _valid_modes empty (file PRESENT) = the REFERENCE set (LLM_MODE_ENUM)
+#      failed to extract → every found literal would be a false phantom; the
+#      guard is broken. FAIL. (Renaming the export in a present file still bites.)
 #  (2) _found_modes empty = the proxy currently hardcodes no 'best-*' mode
 #      literals. That is a LEGITIMATE (desirable) state — modes flow through
 #      config/resolve.js, not hardcoded strings — so it is NOT a failure. But it
@@ -797,7 +803,9 @@ _phantom=0
 #      silent "ok (no phantom modes)". WARN so the dormancy is visible: if the
 #      proxy reintroduces mode literals in a quote style this grep can't see, a
 #      maintainer notices the guard never woke up.
-if [ -z "$_valid_modes" ]; then
+if [ ! -f "$REPO_DIR/tools/model-map-resolve.js" ] || [ ! -f "$REPO_DIR/tools/claude-proxy" ]; then
+  ok "model-map-resolve.js or claude-proxy absent — skipping phantom-mode check"
+elif [ -z "$_valid_modes" ]; then
   echo "  FAIL: could not extract LLM_MODE_ENUM from model-map-resolve.js — phantom-mode guard has no valid set to check against (fix extraction or update Check 14)"
   _phantom=1
 elif [ -z "$_found_modes" ]; then
