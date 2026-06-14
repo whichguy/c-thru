@@ -318,14 +318,24 @@ node test/model-map-v12-adapter.test.js      # adapter regression
 bash test/c-thru-bootstrap-auth-env.test.sh  # interactive auth bootstrap (TTY-mocked)
 ```
 
-Before committing changes to `skills/c-thru-plan/SKILL.md` or any `agents/*.md` file:
+The plugin bundle at `plugins/c-thru/` must mirror the source `tools/` and `skills/` directories. After editing a source file, sync with `tools/sync-plugin-bundle.sh`.
+
+### Git gates (`.githooks/`, armed via `core.hooksPath`)
+
+Two tiers run automatically on commit and push — you don't have to remember them, but you can run any piece by hand:
+
+- **pre-commit** (fast, deterministic): bundle + routing-table sync (`sync-plugin-bundle.sh --check`, `gen-routing-doc.js --check`), `bash -n` / `node --check` syntax + `model-map` schema validation, and the agent/skill **contract check** (`c-thru-contract-check.sh`) with its guard-bite meta-test (`contract-check-guards-bite.test.sh`).
+- **pre-push** (broad): the full hermetic suite via `test/run-all.sh --fast` (same as `make test-fast`) — which includes the contract-check *harness* that exercises the `REPO_DIR` rewrite the commit-time checker alone cannot. Override with `git push --no-verify`.
+
+A `gate-coverage` meta-test (`test/gate-coverage.test.js`) keeps the two tiers bound: every artifact pre-commit runs must also be a registered suite in `run-all.sh`, so a green commit can never mean less than a green suite.
+
+Run any check directly:
 
 ```bash
 bash tools/c-thru-contract-check.sh   # exit 0 = clean; exit 1 = contract violations
-bash tools/c-thru-hygiene-check.sh    # working-tree hygiene check
+bash tools/c-thru-hygiene-check.sh    # working-tree hygiene check (not gated)
+bash test/run-all.sh --fast           # the pre-push suite
 ```
-
-The plugin bundle at `plugins/c-thru/` must mirror the source `tools/` and `skills/` directories. After editing a source file, sync with `tools/sync-plugin-bundle.sh`; the pre-commit hook (`.githooks/pre-commit`) runs `--check` mode automatically.
 
 ---
 
