@@ -27,3 +27,13 @@ node "$REPO_ROOT/tools/model-map-validate.js" "$REPO_ROOT/config/model-map.json"
   echo "model-map.json schema validation failed"
   exit 1
 }
+
+# Agent/skill contract check + its guard-bite meta-test. Cheap (~3s + ~13s) and
+# deterministic, so they run at commit. The broad hermetic suite (incl. the
+# contract-check harness that exercises the REPO_DIR rewrite) runs at pre-push.
+if [ -f "$REPO_ROOT/tools/c-thru-contract-check.sh" ]; then
+  bash "$REPO_ROOT/tools/c-thru-contract-check.sh" || { echo "agent/skill contract check failed (tools/c-thru-contract-check.sh)"; exit 1; }
+fi
+if [ -f "$REPO_ROOT/test/contract-check-guards-bite.test.sh" ]; then
+  bash "$REPO_ROOT/test/contract-check-guards-bite.test.sh" || { echo "contract-check guard-bite meta-test failed — a fail-loud guard stopped biting"; exit 1; }
+fi
