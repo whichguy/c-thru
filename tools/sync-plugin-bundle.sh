@@ -58,6 +58,13 @@ for f in c-thru-lib.sh claude-proxy proxy-dashboard.html model-map-config.js mod
   check_or_copy "$ROOT/tools/$f" "$BUNDLE/tools/$f"
 done
 
+# Analysis tools (user-facing, not proxy runtime deps): per-agent offload telemetry
+# read from Claude Code transcripts. c-thru-agent-usage.js requires ./agent-offload-lib.js,
+# so both must ship together. Surfaced by the c-thru-status command.
+for f in agent-offload-lib.js c-thru-agent-usage.js; do
+  check_or_copy "$ROOT/tools/$f" "$BUNDLE/tools/$f"
+done
+
 # Shipped config (model routing defaults)
 check_or_copy "$ROOT/config/model-map.json"            "$BUNDLE/config/model-map.json"
 

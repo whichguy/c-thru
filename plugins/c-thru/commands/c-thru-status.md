@@ -33,3 +33,17 @@ curl -s --max-time 2 "$BASE/c-thru/status"
 ```
 Surface that `dashboard_url` so the user can watch per-request stats update live
 in a browser.
+
+**4. Per-agent offload (from transcripts)** — the proxy's usage stats above are
+per-**capability**, not per-agent: the PreToolUse hook resolves `subagent_type` →
+capability before the request reaches the proxy, so the proxy cannot tell
+`reviewer-plan` from `code-reviewer` (both map to the `code-reviewer` capability).
+For an agent-**precise** breakdown (calls, tokens, duration, last-seen per real
+subagent), read Claude Code's session transcripts instead:
+```bash
+node ~/.claude/tools/c-thru-agent-usage.js            # all projects
+node ~/.claude/tools/c-thru-agent-usage.js --project <slug> --since 2026-06-01
+```
+This is retroactive over existing sessions and touches no proxy. To actively test
+whether *natural* prompts cause delegation at all, run the advisory harness
+`C_THRU_OFFLOAD=1 node test/agent-offload-coverage.js` (repo-only).
