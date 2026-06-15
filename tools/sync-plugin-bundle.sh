@@ -42,7 +42,6 @@ done
 
 # Skill SKILL.md files — only public-facing skills synced to the marketplace bundle.
 # The following skills are intentionally excluded:
-#   competitive-evolution, concurrent-evolution — internal dev/experiment workflows
 #   logical-gearbox                             — internal routing research
 #   review-fix, review-plan                     — review-suite; shipped via separate plugin
 #   update-model-research                       — internal capability research tool

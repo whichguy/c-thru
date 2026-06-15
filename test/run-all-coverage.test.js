@@ -39,8 +39,7 @@ const INFRA_ALLOWLIST = new Set([
   'agent-prompt-unit.js', // manual CLI driver (invoked by a human or by run-hierarchy-e2e.sh)
 ]);
 
-// Non-recursive on purpose: subdirs (stubs/, supervisor-benchmark/) are
-// fixtures/tooling, not suites.
+// Non-recursive on purpose: subdirs (e.g. stubs/) are fixtures/tooling, not suites.
 const files = fs.readdirSync(TEST_DIR, { withFileTypes: true })
   .filter(e => e.isFile() && /\.(js|sh)$/.test(e.name))
   .map(e => e.name)

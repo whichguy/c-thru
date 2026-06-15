@@ -62,9 +62,6 @@ function compileAll(srcDir, distDir) {
 
 module.exports = { parseFrontmatter, serializeFrontmatter, compilePrompt, compileAll };
 
-if (require.main === module) {
-  compileAll(
-    path.join(__dirname, '../agents/src'),
-    path.join(__dirname, '../agents')
-  );
-}
+// No CLI entrypoint: agents/src/ (the supervisor cluster) was removed; compileAll
+// stays exported for tests/reuse. Re-add a require.main block if an agents/src/
+// source directory returns.

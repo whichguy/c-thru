@@ -170,9 +170,9 @@ Detail: `docs/model-map.md` *(schema section is stale — see verification)*, `d
   debugger-hard, vision, pdf, writer, edge, generalist, fast-generalist, fast-scout, long-context.
 - **Public skills (3, shipped in plugin):** `c-thru-config`, `c-thru-control`, `c-thru-plan`.
 - **Dev/internal skills (not shipped in plugin):** `logical-gearbox`, `review-fix`, `review-plan`,
-  `update-model-research`, and the **dead** `competitive-evolution` / `concurrent-evolution` (see
-  [orphan-disposition.md](orphan-disposition.md)).
-- **`agents/src/supervisor.md`** — legacy, intentionally excluded from routing; orphan (see disposition).
+  `update-model-research`. (The dead `competitive-evolution` / `concurrent-evolution` skills and
+  `agents/src/supervisor.md` — the un-removed second half of `7b097ca` — were deleted in this audit;
+  see [orphan-disposition.md](orphan-disposition.md).)
 
 ---
 
@@ -261,5 +261,6 @@ Summarized here, detailed with evidence in [functionality-verification.md](funct
 - **`sessionEffectivePath`**: no collision/stale-file guard (negligible probability).
 - **Doc bugs**: proxy-health exit-2 claim (CLAUDE.md:59 + script comment); `model-map.md` documents the
   old tier-outer schema; several ops tools undocumented.
-- **Dead file cluster**: supervisor / competitive-evolution / tournament / supervisor-benchmark — the
-  un-removed second half of commit `7b097ca` (see [orphan-disposition.md](orphan-disposition.md)).
+- **Dead file cluster (removed)**: supervisor / competitive-evolution / tournament / supervisor-benchmark
+  — the un-removed second half of commit `7b097ca`, deleted in this audit (see
+  [orphan-disposition.md](orphan-disposition.md)).
