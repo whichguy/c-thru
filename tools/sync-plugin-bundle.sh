@@ -54,12 +54,11 @@ done
 # c-thru-lib.sh: the bundled hooks source it from $ROUTER_REPO_ROOT/tools/ (which
 # resolves to $BUNDLE/tools/ in plugin mode), so it must ship here too.
 for f in c-thru-lib.sh claude-proxy proxy-dashboard.html model-map-config.js model-map-resolve.js model-map-layered.js \
-          model-map-validate.js hw-profile.js model-map-apply-recommendations.js; do
+          model-map-validate.js hw-profile.js; do
   check_or_copy "$ROOT/tools/$f" "$BUNDLE/tools/$f"
 done
 
 # Shipped config (model routing defaults)
 check_or_copy "$ROOT/config/model-map.json"            "$BUNDLE/config/model-map.json"
-check_or_copy "$ROOT/config/recommended-mappings.json" "$BUNDLE/config/recommended-mappings.json"
 
 [ "$drift" -eq 0 ] || { echo "Run tools/sync-plugin-bundle.sh to fix drift."; exit 1; }

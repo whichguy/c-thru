@@ -121,12 +121,6 @@ if (args.all) {
   const LOCAL_RE = /localhost|127\.0\.0\.1|0\.0\.0\.0/;
   const GOV    = new Set(['best-cloud-gov', 'best-local-gov']);
 
-  let rec = null;
-  try {
-    const rp = path.join(__dirname, '..', 'config', 'recommended-mappings.json');
-    if (fs.existsSync(rp)) rec = JSON.parse(fs.readFileSync(rp, 'utf8'));
-  } catch {}
-
   const results = [];
   for (const [cap, entry] of Object.entries(config.llm_profiles || {})) {
     const model = resolveProfileModel(entry, theTier, theMode);
@@ -167,7 +161,7 @@ if (args.all) {
       endpoint_format:   epFmt,
       local:             isLocal,
       ollama:            isOllama,
-      is_recommended:    !!(rec && rec.recommendations?.[cap]?.[theTier] === base),
+      is_recommended:    false, // recommended-mappings feature retired; kept for output-schema stability
     });
   }
 

@@ -47,7 +47,7 @@ complete.
 |---|---|---|---|---|
 | 3-tier (layer) resolution corner cases (missing tier, unknown mode/model, fallback-to-default) | full | yes (`resolve-capability`, layer-precedence integration) | yes | none for resolution; **doc** `model-map.md` is stale (documents old tier-outer schema vs live capability-outer) |
 | Intent / dynamic role classification | **none** | no (test **excluded** in `run-all.sh:312`) | yes (verified absent) | **severe doc/code divergence** — see §4a |
-| `recommended-mappings` + apply-recommendations | **partial** | no (apply fn untested; validator unit-tested but ineffective) | yes | **dead vs shipped data** — see §4b |
+| `recommended-mappings` + apply-recommendations | **RETIRED** | n/a (feature removed in this audit) | yes | was **dead vs shipped data** — config + apply tool + `--rec` flag removed; see §4b |
 
 ## 4. Doc-says-shipped / code-says-absent divergences (the substantive findings)
 
@@ -63,7 +63,15 @@ complete.
 - **Fix (doc-only, trivial):** re-mark `dynamic-classification-phase-a.md` as *proposed/unimplemented* and
   correct the `c-thru-classify.sh` header comment. *(Brought for go/no-go — not auto-applied.)*
 
-### 4b. `recommended-mappings.json` — schema-mismatched, apply is a permanent no-op
+### 4b. `recommended-mappings.json` — schema-mismatched, apply is a permanent no-op  → **RETIRED in this audit**
+
+> **Resolution (decision: retire the feature).** `config/recommended-mappings.json`,
+> `tools/model-map-apply-recommendations.js`, the `tools/c-thru` apply step, the `install.sh`
+> `apply_recommendations` step, and `model-map-validate.js`'s `--rec` path /
+> `validateRecommendedMappings` export were all removed. `c-thru explain`'s `is_recommended`
+> output field is kept (hardcoded `false`) for output-schema stability. The analysis below is
+> retained as the rationale for the removal.
+
 - `config/recommended-mappings.json` capability names (`judge, orchestrator, local-planner, deep-coder,
   code-analyst, pattern-coder`) **do not exist** in shipped `llm_profiles` (`planner, coder, tester, …`).
   `applyRecommendations` guards on cap existence (`model-map-apply-recommendations.js:53`) → running it
@@ -123,7 +131,7 @@ file write**:
 | OpenAI 501 stub | intentional | document as roadmap, no action | — |
 | Dynamic-classification-phase-a "shipped" claim | doc bug | re-mark proposed/unimplemented (trivial) | go/no-go (doc-only) |
 | `c-thru-classify.sh` header comment | doc bug | correct wording (trivial) | go/no-go (doc-only) |
-| `recommended-mappings.json` mismatch | dead feature | fix data + gate `--rec`, or retire | go/no-go |
+| `recommended-mappings.json` mismatch | dead feature | **RETIRED** (config + apply tool + `--rec` removed) | done |
 | proxy-health exit-2 claim (CLAUDE.md:59 + script comment) | doc bug | correct to "always exit 0" (trivial) | go/no-go (doc-only) |
 | `model-map.md` stale schema | doc drift | update to capability-outer schema | go/no-go (doc-only) |
 | Bedrock backend (task #20) | feature | spec + build, or close #20 | go/no-go |

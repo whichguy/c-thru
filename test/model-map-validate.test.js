@@ -6,7 +6,7 @@
 
 const { spawnSync } = require('child_process');
 const path = require('path');
-const { validateConfig, validateRecommendedMappings } = require('../tools/model-map-validate.js');
+const { validateConfig } = require('../tools/model-map-validate.js');
 
 let passed = 0;
 let failed = 0;
@@ -195,32 +195,6 @@ console.log('\n13. CLI exit code on invalid config');
   require('fs').unlinkSync(tmp);
   assert(result.status === 1, `CLI exits 1 for invalid config (got ${result.status})`);
   assert(result.stderr.includes('llm_mode'), `stderr mentions llm_mode (got: ${result.stderr.slice(0, 120)})`);
-}
-
-// ── 14. validateRecommendedMappings — valid passes ─────────────────────────
-console.log('\n14. validateRecommendedMappings valid');
-{
-  const rec = {
-    schema_version: 1,
-    updated_at: '2026-01-01',
-    recommendations: { coder: { '64gb': 'some-model' } },
-  };
-  const errs = [];
-  validateRecommendedMappings(rec, errs);
-  assert(errs.length === 0, `valid recommended-mappings → no errors (got: ${errs.join('; ')})`);
-}
-
-// ── 15. validateRecommendedMappings — unknown capability ──────────────────
-console.log('\n15. validateRecommendedMappings unknown capability');
-{
-  const rec = {
-    schema_version: 1,
-    updated_at: '2026-01-01',
-    recommendations: { 'not-a-real-cap': { '64gb': 'some-model' } },
-  };
-  const errs = [];
-  validateRecommendedMappings(rec, errs);
-  assert(errs.length > 0, 'unknown capability → error');
 }
 
 // ── 16. Invalid on_failure value ────────────────────────────────────────────

@@ -144,16 +144,6 @@ sync_layered_profile_model_map() {
 
   # 3-Tier Sync: Defaults -> Global Overrides -> Project Overrides (stored in _discovered_project_config)
   node "$sync_tool" "$MODEL_MAP_DEFAULTS_FILE" "$MODEL_MAP_OVERRIDES_FILE" "${_discovered_project_config:-}" "$CLAUDE_PROFILE_DIR/model-map.json" >/dev/null
-  # Apply recommended-mappings.json as lowest-precedence tier (no-op if absent)
-  local rec_tool="$CTHRU_SELF_DIR/model-map-apply-recommendations.js"
-  if [[ -f "$rec_tool" && -n "$CTHRU_REPO_ROOT" ]]; then
-    local _tmp="$CLAUDE_PROFILE_DIR/model-map.json.rec.$$"
-    if node "$rec_tool" "$CTHRU_REPO_ROOT" "$CLAUDE_PROFILE_DIR/model-map.json" > "$_tmp" 2>/dev/null; then
-      mv "$_tmp" "$CLAUDE_PROFILE_DIR/model-map.json"
-    else
-      rm -f "$_tmp"
-    fi
-  fi
 }
 
 find_parent_model_map() {

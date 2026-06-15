@@ -62,10 +62,8 @@ tools/
   c-thru-ollama-gc.sh     # GC tool — tracks c-thru-pulled Ollama tags; sweeps unreferenced ones. Subcommands: init|record|sweep|purge
   c-thru-self-update.sh   # startup self-update: best-effort git ff-merge with 1s grace; opt-out via C_THRU_NO_UPDATE=1
   hw-profile.js             # shared 5-tier hardware detection (tierForGb); used by router and proxy
-  model-map-apply-recommendations.js  # merges config/recommended-mappings.json as lowest-precedence tier
 config/
   model-map.json          # shipped defaults (standard JSON — no comments; parsed with JSON.parse)
-  recommended-mappings.json  # community capability→model recommendations per hw tier (lowest precedence)
 test/
   model-map-v12-adapter.test.js  # adapter fixture test; run with: node test/model-map-v12-adapter.test.js
 ```

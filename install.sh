@@ -64,7 +64,7 @@ chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" "$TOOLS_SRC/c-thru-ollama-probe.sh" "$TOOLS_SRC/c-thru-postcompact-context.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TOOLS_SRC/c-thru-statusline-overlay.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" "$TOOLS_SRC/c-thru-hygiene-check.sh" 2>/dev/null || true
-chmod +x "$TOOLS_SRC/model-map-apply-recommendations.js" "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-resolve.js" "$TOOLS_SRC/c-thru-resolve" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-enter-plan-hook.sh" "$TOOLS_SRC/c-thru-agent-router-hook.sh" 2>/dev/null || true
 
@@ -255,31 +255,6 @@ extend_model_map() {
     echo -e "  ${GREEN}✅ model-map.system.json extended${NC}"
 }
 
-# --- Apply community recommendations into the effective model-map ---
-apply_recommendations() {
-    command -v node >/dev/null 2>&1 || return 0
-    local rec_script="$TOOLS_SRC/model-map-apply-recommendations.js"
-    [ -f "$rec_script" ] || return 0
-    [ -f "$USER_MAP" ] || return 0
-
-    local tmp="${USER_MAP}.rec.$$" stderr_tmp="${USER_MAP}.rec.err.$$"
-    if CLAUDE_ROUTER_DEBUG=1 node "$rec_script" "$REPO_DIR" "$USER_MAP" >"$tmp" 2>"$stderr_tmp"; then
-        local applied
-        applied=$(grep -oE 'applied [0-9]+' "$stderr_tmp" 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)
-        rm -f "$stderr_tmp"
-        if [ "${applied:-0}" -gt 0 ] 2>/dev/null; then
-            mv "$tmp" "$USER_MAP"
-            echo -e "  ${GREEN}✅ model-map.json — ${applied} community recommendation(s) applied (rec)${NC}"
-        else
-            rm -f "$tmp"
-            echo -e "  ${GRAY}✓  recommendations already current${NC}"
-        fi
-    else
-        rm -f "$tmp" "$stderr_tmp"
-        echo -e "  ${YELLOW}⚠️  recommendations apply failed (run CLAUDE_ROUTER_DEBUG=1 ./install.sh for details)${NC}"
-    fi
-}
-
 cleanup_old_persistent_config() {
     echo ""
     echo "Cleanup (migrating to ephemeral config):"
@@ -338,7 +313,6 @@ cleanup_old_persistent_config
 install_skill
 install_cplan_command
 extend_model_map
-apply_recommendations
 
 # --- Migration warning: planning-suite dependency ---
 # plan-scheduler requires the /schedule-plan-tasks skill from planning-suite.

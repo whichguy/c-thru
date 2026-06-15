@@ -147,10 +147,10 @@ Detail: `docs/model-map.md` *(schema section is stale — see verification)*, `d
 | llm_mode precedence resolution (env→config→autodetect→best-cloud) | `resolveLlmMode` | full | `tools/model-map-resolve.js:101` |
 | Active HW-tier resolution (env→config→RAM→`tierForGb`) | `resolveActiveTier` | full | `tools/model-map-resolve.js:144` |
 | Gov Chinese-origin model filter (gov modes) | `applyModeFilter` | full | `tools/model-map-resolve.js:246` |
-| Validation (schema + auth/url warnings; `--rec` opt-in) | `model-map-validate.js` | full *(but `--rec` ungated + ineffective — see verification)* | `tools/model-map-validate.js:888` |
+| Validation (schema + auth/url warnings) | `model-map-validate.js` | full | `tools/model-map-validate.js:941` |
 | Edit CLI (JSON edit-spec, deep-merge + validate) | `model-map-edit.js` | full | `tools/model-map-edit.js:43` |
 | Pollution detect/clean (project entries leaked into profile) | `--detect-pollution`/`--clean-pollution` | full | `tools/model-map-config.js:260` |
-| apply-recommendations (inject `recommended-mappings.json`) | `applyRecommendations` | **partial — no-op vs shipped data** (see verification) | `tools/model-map-apply-recommendations.js:41` |
+| apply-recommendations (inject `recommended-mappings.json`) | — | **removed/retired** (was a permanent no-op; see verification) | n/a |
 | `/hooks/context` prompt-submit injection (static control-plane block) | `c-thru-classify.sh` → proxy | full *(misnamed: no classification)* | `tools/claude-proxy:4533` |
 | Dynamic role classifier (`CLAUDE_PROXY_CLASSIFY`) | — | **absent** (doc says shipped) | n/a — `docs/dynamic-classification-phase-a.md` |
 
@@ -257,7 +257,7 @@ Summarized here, detailed with evidence in [functionality-verification.md](funct
 - **Bedrock is not a backend** (task #20 premise absent — would be a new feature, not a fix).
 - **OpenAI translation is a 501 stub** (intentional).
 - **Dynamic role classifier**: `docs/dynamic-classification-phase-a.md` says "shipped"; code is absent.
-- **`recommended-mappings.json`**: capability names mismatch `llm_profiles` → apply is a permanent no-op.
+- **`recommended-mappings.json`**: capability names mismatched `llm_profiles` → apply was a permanent no-op; **feature retired in this audit** (config + tool + `--rec` flag removed).
 - **`sessionEffectivePath`**: no collision/stale-file guard (negligible probability).
 - **Doc bugs**: proxy-health exit-2 claim (CLAUDE.md:59 + script comment); `model-map.md` documents the
   old tier-outer schema; several ops tools undocumented.
