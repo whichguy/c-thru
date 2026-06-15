@@ -137,18 +137,18 @@ Multi-stage resolution with cooldowns and layered fallback. Detail: `docs/model-
 
 `config/model-map.json` + `tools/model-map-*.js`. The "3 tiers" are config **layers** (defaults → global
 overrides `~/.claude/model-map.overrides.json` → project `$PWD/.claude/model-map.json`), deep-merged.
-Detail: `docs/model-map.md` *(schema section is stale — see verification)*, `docs/hardware-profile-matrix.md`.
+Detail: `docs/model-map.md`, `docs/hardware-profile-matrix.md`.
 
 | Capability | Entrypoint | Status | Impl |
 |---|---|---|---|
-| Layered load + deep-merge (defaults→overrides→project) | `loadLayeredConfig` | full | `tools/model-map-layered.js:29` |
+| Layered load + deep-merge (defaults→overrides→project) | `loadLayeredConfig` | full | `tools/model-map-layered.js:155` |
 | `llm_profiles[capability][mode][hw-tier]` resolution (20 caps, 5 modes) | `resolveProfileModel` | full | `tools/model-map-resolve.js:67` |
 | agent→capability alias (2-hop, unknown→passthrough) | `resolveCapabilityAlias` | full | `tools/model-map-resolve.js:160` |
 | llm_mode precedence resolution (env→config→autodetect→best-cloud) | `resolveLlmMode` | full | `tools/model-map-resolve.js:101` |
 | Active HW-tier resolution (env→config→RAM→`tierForGb`) | `resolveActiveTier` | full | `tools/model-map-resolve.js:144` |
 | Gov Chinese-origin model filter (gov modes) | `applyModeFilter` | full | `tools/model-map-resolve.js:246` |
-| Validation (schema + auth/url warnings) | `model-map-validate.js` | full | `tools/model-map-validate.js:941` |
-| Edit CLI (JSON edit-spec, deep-merge + validate) | `model-map-edit.js` | full | `tools/model-map-edit.js:43` |
+| Validation (schema + auth/url warnings) | `model-map-validate.js` | full | `tools/model-map-validate.js:886` |
+| Edit CLI (JSON edit-spec, deep-merge + validate) | `model-map-edit.js` | full | `tools/model-map-edit.js:235` |
 | Pollution detect/clean (project entries leaked into profile) | `--detect-pollution`/`--clean-pollution` | full | `tools/model-map-config.js:260` |
 | apply-recommendations (inject `recommended-mappings.json`) | — | **removed/retired** (was a permanent no-op; see verification) | n/a |
 | `/hooks/context` prompt-submit injection (static control-plane block) | `c-thru-classify.sh` → proxy | full *(misnamed: no classification)* | `tools/claude-proxy:4533` |
@@ -218,7 +218,7 @@ All outbound auth in `applyOutboundAuth`/`deriveAuthProfile` (`tools/claude-prox
 | Journaling (per-request JSONL) | `--journal` / `CLAUDE_PROXY_JOURNAL=1` | full (record-only Phase A) | `docs/journaling.md` |
 | Usage stats + live dashboard (`/c-thru/dashboard`, `/status`, `/recent`) | `tools/proxy-dashboard.html` | full | `docs/headers.md` |
 | Statusline + fallback overlay | `c-thru-statusline.sh`, `…-overlay.sh` | full | **undocumented** |
-| Proxy-health CLI | `c-thru-proxy-health.sh` | full | CLAUDE.md:59 — **inaccurate (exit-2 claim false)** |
+| Proxy-health CLI | `c-thru-proxy-health.sh` | full | CLAUDE.md:59 (fail-open, exit 0) |
 | Hygiene-check (working-tree hazards) | `c-thru-hygiene-check.sh [dir]` | full | CLAUDE.md |
 | HW-profile (`tierForGb` → 16/32/48/64/128gb) | `tools/hw-profile.js` | full | `docs/hardware-profile-matrix.md` |
 | Ollama GC / probe | `c-thru-ollama-gc.sh`, `…-probe.sh` | full | partial / undocumented |
@@ -259,8 +259,9 @@ Summarized here, detailed with evidence in [functionality-verification.md](funct
 - **Dynamic role classifier**: `docs/dynamic-classification-phase-a.md` says "shipped"; code is absent.
 - **`recommended-mappings.json`**: capability names mismatched `llm_profiles` → apply was a permanent no-op; **feature retired in this audit** (config + tool + `--rec` flag removed).
 - **`sessionEffectivePath`**: no collision/stale-file guard (negligible probability).
-- **Doc bugs**: proxy-health exit-2 claim (CLAUDE.md:59 + script comment); `model-map.md` documents the
-  old tier-outer schema; several ops tools undocumented.
+- **Doc bugs**: several ops tools undocumented (statusline/overlay, ollama gc/probe). *(proxy-health
+  exit-2 claim — CLAUDE.md:59 + script comment — and `model-map.md`'s old tier-outer schema were both
+  fixed in 0345fb8.)*
 - **Dead file cluster (removed)**: supervisor / competitive-evolution / tournament / supervisor-benchmark
   — the un-removed second half of commit `7b097ca`, deleted in this audit (see
   [orphan-disposition.md](orphan-disposition.md)).

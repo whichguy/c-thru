@@ -12,7 +12,7 @@ OpenRouter, Bedrock, Vertex, Gemini, LiteLLM) without changing the vendor CLI.
 | `/c-thru-status` | Show active profile, agent → model assignments, proxy URL, Ollama state, per-model usage stats |
 | `/cplan <intent>` | Wave-based agentic planner (shortcut for `/c-thru-plan`) |
 | Skills | `c-thru-plan` (planner/coder/tester/reviewer pipeline), `c-thru-config`, `c-thru-control` |
-| Hooks | SessionStart proxy+Ollama health check, UserPromptSubmit proxy-health gate + classify_intent context injection, PostToolUse model-map.json validation, PreCompact context re-injection |
+| Hooks | SessionStart proxy+Ollama health check, UserPromptSubmit proxy-health gate + static control-plane context injection, PostToolUse model-map.json validation, PreCompact context re-injection |
 
 ## Install
 

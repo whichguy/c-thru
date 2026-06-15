@@ -45,23 +45,24 @@ complete.
 
 | Capability | implemented | test-covered | corner-cases | GAP |
 |---|---|---|---|---|
-| 3-tier (layer) resolution corner cases (missing tier, unknown mode/model, fallback-to-default) | full | yes (`resolve-capability`, layer-precedence integration) | yes | none for resolution; **doc** `model-map.md` is stale (documents old tier-outer schema vs live capability-outer) |
+| 3-tier (layer) resolution corner cases (missing tier, unknown mode/model, fallback-to-default) | full | yes (`resolve-capability`, layer-precedence integration) | yes | none for resolution; **doc** `model-map.md` schema corrected to capability-outer in 0345fb8 |
 | Intent / dynamic role classification | **none** | no (test **excluded** in `run-all.sh:312`) | yes (verified absent) | **severe doc/code divergence** — see §4a |
 | `recommended-mappings` + apply-recommendations | **RETIRED** | n/a (feature removed in this audit) | yes | was **dead vs shipped data** — config + apply tool + `--rec` flag removed; see §4b |
 
 ## 4. Doc-says-shipped / code-says-absent divergences (the substantive findings)
 
-### 4a. Dynamic role classifier — documented "shipped", absent from code
-- `docs/dynamic-classification-phase-a.md:1` marks the role classifier (`CLAUDE_PROXY_CLASSIFY`,
-  `classifyRole()`, `x-c-thru-classified-role`) as **"shipped"**. It is **not in `tools/claude-proxy`**
-  (`grep classifyRole` → nothing; only unrelated `classifyFailure`). The symbol exists only in
-  `test/proxy-classify.test.js`, which `test/run-all.sh:312` **explicitly excludes** with the comment
-  *"CLAUDE_PROXY_CLASSIFY feature not implemented in proxy."*
-- Separately, `tools/c-thru-classify.sh`'s header comment claims "classify_intent-based context injection",
-  but the `/hooks/context` endpoint it calls (`tools/claude-proxy:4542`) returns a **static** control-plane
-  block and never inspects the prompt. No `classify_intent` logic exists anywhere.
-- **Fix (doc-only, trivial):** re-mark `dynamic-classification-phase-a.md` as *proposed/unimplemented* and
-  correct the `c-thru-classify.sh` header comment. *(Brought for go/no-go — not auto-applied.)*
+### 4a. Dynamic role classifier — absent from code (doc/script wording corrected in 0345fb8)
+- The role classifier (`CLAUDE_PROXY_CLASSIFY`, `classifyRole()`, `x-c-thru-classified-role`) is **not in
+  `tools/claude-proxy`** (`grep classifyRole` → nothing; only unrelated `classifyFailure`). The symbol
+  exists only in `test/proxy-classify.test.js`, which `test/run-all.sh:312` **explicitly excludes** with
+  the comment *"CLAUDE_PROXY_CLASSIFY feature not implemented in proxy."* `docs/dynamic-classification-phase-a.md`
+  previously marked it **"shipped"**; 0345fb8 re-marked it *proposed / not yet implemented*.
+- The `/hooks/context` endpoint `tools/c-thru-classify.sh` calls returns a **static** control-plane block
+  and never inspects the prompt; no `classify_intent` logic exists anywhere. The script header previously
+  claimed "classify_intent-based context injection"; 0345fb8 corrected it to state the endpoint returns a
+  fixed block.
+- **Status: doc/script wording fixed in 0345fb8.** The underlying gap — no classifier in code — remains,
+  by design (the feature is unimplemented, not broken).
 
 ### 4b. `recommended-mappings.json` — schema-mismatched, apply is a permanent no-op  → **RETIRED in this audit**
 
@@ -78,9 +79,9 @@ complete.
   against the real config yields **`applied 0`**. The whole community-recommendations feature is dead.
 - It also injects only into `best-local-oss` yet recommends `claude-opus-4-8` (a cloud model) for `judge`
   — a semantic contradiction in a no-cloud-egress mode.
-- `validateRecommendedMappings` (`model-map-validate.js:888`) **cannot catch this** — it derives caps from
-  the rec file itself (which has no `llm_profiles`), falling back to hardcoded keys; and `--rec` is wired
-  into no gate. `applyRecommendations` has no direct test.
+- `validateRecommendedMappings` (since removed) **could not catch this** — it derived caps from the rec
+  file itself (which had no `llm_profiles`), falling back to hardcoded keys; and `--rec` was wired into no
+  gate. `applyRecommendations` had no direct test.
 - **Fix (non-trivial — go/no-go):** either rewrite `recommended-mappings.json` to real capability names
   (and a local model for local modes), or formally retire the feature; and if kept, gate
   `model-map-validate --rec` so the mismatch can't recur.
@@ -129,10 +130,10 @@ file write**:
 |---|---|---|---|
 | `sessionEffectivePath` collision guard | code gap (negligible prob) | add provenance check, or accept-as-is with a note | go/no-go |
 | OpenAI 501 stub | intentional | document as roadmap, no action | — |
-| Dynamic-classification-phase-a "shipped" claim | doc bug | re-mark proposed/unimplemented (trivial) | go/no-go (doc-only) |
-| `c-thru-classify.sh` header comment | doc bug | correct wording (trivial) | go/no-go (doc-only) |
+| Dynamic-classification-phase-a "shipped" claim | doc bug | **FIXED** 0345fb8 (re-marked proposed/unimplemented) | done |
+| `c-thru-classify.sh` header comment | doc bug | **FIXED** 0345fb8 (header corrected) | done |
 | `recommended-mappings.json` mismatch | dead feature | **RETIRED** (config + apply tool + `--rec` removed) | done |
-| proxy-health exit-2 claim (CLAUDE.md:59 + script comment) | doc bug | correct to "always exit 0" (trivial) | go/no-go (doc-only) |
-| `model-map.md` stale schema | doc drift | update to capability-outer schema | go/no-go (doc-only) |
+| proxy-health exit-2 claim (CLAUDE.md:59 + script comment) | doc bug | **FIXED** 0345fb8 (corrected to "always exit 0") | done |
+| `model-map.md` stale schema | doc drift | **FIXED** 0345fb8 (capability-outer schema) | done |
 | Bedrock backend (task #20) | feature | spec + build, or close #20 | go/no-go |
 | Injection #10 → `--settings-json` | conformance polish | convert iff CC build supports it | go/no-go |

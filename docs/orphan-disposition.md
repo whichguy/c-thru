@@ -3,10 +3,13 @@
 > Reverse coverage (code → requirement): is every file justified by the shipped router/proxy, or is it a
 > delinquent / zombie / orphan left from an abandoned intention? Verdicts are evidence-driven — every row
 > cites a live ref count and carries a **premise-verified-live** line, per the repo's audit discipline.
-> **Nothing here has been deleted.** Removals are *proposed* for go/no-go.
+> **Status:** the supervisor / competitive-evolution dead cluster was removed in `a743659` (rows below
+> marked **DELETED a743659**); `docs/tournament_2026-04-25.md` was retained per its ARCHIVE verdict, and
+> the 3 untracked `supervisor_*` working-tree files were also removed. `tools/ollama-repull.sh` is the one
+> remaining REMOVE-CANDIDATE.
 >
-> Verdict legend: **KEEP** · **REMOVE-CANDIDATE** (propose deletion) · **INVESTIGATE** · **ARCHIVE**
-> (historical, don't hard-delete).
+> Verdict legend: **KEEP** · **REMOVE-CANDIDATE** (propose deletion) · **DELETED** (executed) ·
+> **INVESTIGATE** · **ARCHIVE** (historical, don't hard-delete).
 
 ## Shipped baseline (the "live" set everything is measured against)
 - **Launcher** `tools/c-thru` (dynamically exec's `c-thru-control`, `model-map-config.js`,
@@ -25,8 +28,8 @@
 | Path | Ref count (evidence) | Verdict | Rationale | premise verified live |
 |---|---|---|---|---|
 | `tools/ollama-repull.sh` | **0** (`grep -rn ollama-repull .`) | **REMOVE-CANDIDATE** | Zero refs; not in install.sh/Makefile/hooks/run-all/plugin. (install.sh links `c-thru-ollama-gc.sh` + `…-probe.sh`, not this.) | yes |
-| `tools/c-thru-tournament` (bash) | 1 self-ref | **REMOVE-CANDIDATE** | Broken superseded stub: line 2 `/**` under a bash shebang = syntax error; body is echo placeholders. Successor `.js` is v5; bash is v4 stub. Not symlinked by install.sh. | yes |
-| `tools/c-thru-tournament.js` | 3 (competitive-evolution ×2 + self) | **REMOVE-CANDIDATE (cluster)** | Real impl but **also broken** — `CLEANUP_TOOL='./tools/c-thru-cleanup'` (`:14`); `c-thru-cleanup` was deleted in `7b097ca`. Only caller is the unshipped competitive-evolution skill. | yes |
+| `tools/c-thru-tournament` (bash) | 1 self-ref | **DELETED a743659** | Broken superseded stub: line 2 `/**` under a bash shebang = syntax error; body is echo placeholders. Successor `.js` is v5; bash is v4 stub. Not symlinked by install.sh. | yes |
+| `tools/c-thru-tournament.js` | 3 (competitive-evolution ×2 + self) | **DELETED a743659** | Real impl but **also broken** — `CLEANUP_TOOL='./tools/c-thru-cleanup'` (`:14`); `c-thru-cleanup` was deleted in `7b097ca`. Only caller is the unshipped competitive-evolution skill. | yes |
 | `tools/c-thru-control` (bash) | 41 | **KEEP** | Live: exec'd by launcher (`tools/c-thru:748`); in `sync-plugin-bundle.sh:49`; backs `/c-thru-control`; in smoke-check. | yes |
 | `tools/c-thru-control.js` | exec'd at `c-thru-control:30` | **KEEP** | Control-channel impl behind the launcher interceptor. | yes |
 | `tools/c-thru-resolve` | 128 (incl. `install.sh:116`, `resolve-capability.test.js`) | **KEEP** | Live CLI wrapper for `model-map-resolve.js`; symlinked; integration-tested. | yes |
@@ -75,53 +78,51 @@ tools call deleted ones.
 
 | Path / cluster | Ref count (evidence) | Verdict | premise verified live |
 |---|---|---|---|
-| `agents/src/supervisor.md` | 1 (`compile-prompts.js:67` scans `agents/src/`) | **REMOVE-CANDIDATE** | yes — compiled output is untracked + absent from the 22 router-loaded `agents/*.md`; `compile-prompts.test.js` uses tmp fixtures. Sole reason `agents/src/` exists. |
-| `test/supervisor-benchmark/` (~45 files) | referenced only by `c-thru-tournament.js:13` (dead) + `run-all-coverage.test.js:42` which **excludes** it | **REMOVE-CANDIDATE** | yes — never run by run-all.sh; only consumer is the broken tournament |
-| `skills/competitive-evolution/` | invokes broken `c-thru-tournament.js` + uncompiled `supervisor*.md`; flagged "internal dev/experiment" (`sync-plugin-bundle.sh:45`); not in plugin `SKILLS` | **REMOVE-CANDIDATE** | yes |
-| `skills/concurrent-evolution/` | references deleted `supervisor_state.md`; "internal dev/experiment"; not in plugin | **REMOVE-CANDIDATE** | yes |
-| `tools/c-thru-tournament` + `…​.js` | both broken (see Group 1) | **REMOVE-CANDIDATE** | yes |
-| `supervisor_journal.md`, `supervisor_state.md`, `supervisor_wiki.jsonl` (top-level) | **untracked** (gitignored by `7b097ca`); on disk dated Apr 25 | **REMOVE-CANDIDATE** (rm from working tree; already un-versioned) | yes |
-| `docs/tournament_2026-04-25.md` | cross-linked from `benchmark.json`, `connectivity-modes.md`, `model-map-research-2026-04-25.md` | **ARCHIVE** (don't hard-delete — cross-linked) | yes |
+| `agents/src/supervisor.md` | 1 (`compile-prompts.js:67` scans `agents/src/`) | **DELETED a743659** | yes — compiled output is untracked + absent from the 22 router-loaded `agents/*.md`; `compile-prompts.test.js` uses tmp fixtures. Sole reason `agents/src/` existed (now-empty dir also removed). |
+| `test/supervisor-benchmark/` (~45 files) | referenced only by `c-thru-tournament.js:13` (dead) + `run-all-coverage.test.js:42` which **excludes** it | **DELETED a743659** | yes — never run by run-all.sh; only consumer was the broken tournament |
+| `skills/competitive-evolution/` | invokes broken `c-thru-tournament.js` + uncompiled `supervisor*.md`; flagged "internal dev/experiment" (`sync-plugin-bundle.sh:45`); not in plugin `SKILLS` | **DELETED a743659** | yes |
+| `skills/concurrent-evolution/` | references deleted `supervisor_state.md`; "internal dev/experiment"; not in plugin | **DELETED a743659** | yes |
+| `tools/c-thru-tournament` + `…​.js` | both broken (see Group 1) | **DELETED a743659** | yes |
+| `supervisor_journal.md`, `supervisor_state.md`, `supervisor_wiki.jsonl` (top-level) | **untracked** (gitignored by `7b097ca`); on disk dated Apr 25 | **DELETED** (working-tree rm; were untracked) | yes — confirmed absent from disk |
+| `docs/tournament_2026-04-25.md` | cross-linked from `benchmark.json`, `connectivity-modes.md`, `model-map-research-2026-04-25.md` | **ARCHIVE** (retained in a743659 — cross-linked) | yes |
 
-### DEAD-vs-LIVE conclusion: **DEAD.**
-No shipped artifact depends on the cluster. The proxy/launcher load `agents/*.md` (not `agents/src/`);
-`run-all.sh` never runs `supervisor-benchmark` or the tournament; the plugin bundle excludes the evolution
-skills by design; the surviving tournament tools call a deleted dependency (`c-thru-cleanup`) and cannot
-run. The cluster is the un-removed second half of `7b097ca`.
+### DEAD-vs-LIVE conclusion: **DEAD → REMOVED in `a743659`.**
+No shipped artifact depended on the cluster. The proxy/launcher load `agents/*.md` (not `agents/src/`);
+`run-all.sh` never ran `supervisor-benchmark` or the tournament; the plugin bundle excluded the evolution
+skills by design; the surviving tournament tools called a deleted dependency (`c-thru-cleanup`) and could
+not run. The cluster was the un-removed second half of `7b097ca`, and `a743659` removed it.
 
-### Proposed removal batch (human go/no-go) — ~53 tracked files + 3 untracked
+### Removal batch — **EXECUTED in `a743659`** (~53 tracked files; 3 untracked working-tree files also removed)
 ```
-# tracked
-agents/src/supervisor.md            (+ remove now-empty agents/src/)
+# tracked — DELETED in a743659
+agents/src/supervisor.md            (now-empty agents/src/ also removed)
 skills/competitive-evolution/       (SKILL.md + any assets)
 skills/concurrent-evolution/
 tools/c-thru-tournament
 tools/c-thru-tournament.js
 test/supervisor-benchmark/          (entire dir, ~45 files)
-docs/tournament_2026-04-25.md       (ARCHIVE rather than hard-delete — cross-linked)
+docs/tournament_2026-04-25.md       (RETAINED — ARCHIVE verdict; cross-linked, not deleted)
 
-# untracked working-tree zombies (already gitignored)
+# untracked working-tree zombies (were gitignored) — removed from disk
 supervisor_journal.md
 supervisor_state.md
 supervisor_wiki.jsonl
 ```
 
-### Pre-removal fixups (must accompany the removal, or these break)
-1. **`compile-prompts.js`** — drop the `agents/src/` scan branch in its `require.main` block, or it scans an
-   empty dir.
-2. **`install.sh:install_skills_cthru()`** — it symlinks **every** `skills/*/` to end-users, so
-   `competitive-evolution` / `concurrent-evolution` *are* installed today. Removal changes what install.sh
-   symlinks — not a silent no-op. Update expectations.
-3. **`run-all-coverage.test.js:42`** — update the `supervisor-benchmark` exclusion comment.
-4. **If `tournament_2026-04-25.md` is removed rather than archived** — strip the now-orphaned cross-links in
-   `docs/benchmark.json`, `docs/connectivity-modes.md`, `docs/model-map-research-2026-04-25.md`.
+### Pre-removal fixups — applied in `a743659`
+1. **`compile-prompts.js`** — done: the `agents/src/` scan branch was dropped (9 lines changed in `a743659`).
+2. **`install.sh:install_skills_cthru()`** — no change needed: it globs `skills/*/`, so the removed evolution
+   skills are simply no longer symlinked; `install.sh` was untouched in `a743659` and the suite stayed green.
+3. **`run-all-coverage.test.js:42`** — done: the `supervisor-benchmark` exclusion comment was updated in `a743659`.
+4. **`tournament_2026-04-25.md`** — archived (retained), so its cross-links in `docs/benchmark.json`,
+   `docs/connectivity-modes.md`, `docs/model-map-research-2026-04-25.md` remain valid; no stripping needed.
 
 ---
 
 ## Bottom line
 
 - **Confirm-remove now (trivial, 0 refs):** `tools/ollama-repull.sh`.
-- **Dead cluster (~53 tracked + 3 untracked):** ready for a single removal PR *with the 4 fixups above*,
-  pending go/no-go. It is the un-removed second half of `7b097ca`.
+- **Dead cluster (~53 tracked + 3 untracked):** removed in `a743659` with the fixups above. It was the
+  un-removed second half of `7b097ca`.
 - **Everything else** (`c-thru-control(.js)`, `c-thru-resolve`, `shared/`, `plugins/`, `wiki/`,
   `eslint.config.js`, `package.json`) is genuinely live or a deliberate repo-only artifact.

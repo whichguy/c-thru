@@ -5,8 +5,11 @@ Build is deferred; this doc is the contract a future implementation must satisfy
 
 > Premise verified live (2026-06-14): **Bedrock is entirely greenfield.** A full
 > repo grep for `bedrock|BEDROCK|sigv4|SigV4|Converse|InvokeModel|AWS_BEARER_TOKEN_BEDROCK`
-> finds **zero code references** — only doc mentions that name it as a future backend
+> finds **no functional code** — only 2 inert comment mentions (`tools/claude-proxy:126`
+> fallback-chain example, `tools/c-thru:4` supported-backends banner) plus doc mentions
 > (`docs/functionality-map.md:108,257`). No scaffolding exists to reconcile against.
+> (Note: the `tools/c-thru:14` help line `c-thru --model bedrock-opus — Bedrock (from
+> model-map.json)` is stale — no `bedrock` endpoint exists in `config/model-map.json` today.)
 
 ---
 
@@ -87,8 +90,17 @@ mode toggled by an endpoint field (`call_style: "bedrock-native"` → Path A;
 ## 3. Endpoint config schema
 
 Add a Bedrock endpoint to `config/model-map.json` `endpoints{}` using the **existing field
-vocabulary** (no schema migration needed — `format`/`call_style`/`auth`/`auth_env`/`env` are
-already first-class, per `tools/claude-proxy:normalizeBackend` 707–735):
+vocabulary** — these fields already exist, but they are consumed in different places, and one
+schema change is still required:
+
+- `format`/`call_style`/`auth` are normalized by `tools/claude-proxy:normalizeBackend`
+  (707–735); `auth_env` is read by `isAuthMissing` (`claude-proxy:825–833`) and
+  `applyOutboundAuth` (912/931); the endpoint `env{}` block is honored **only** by the
+  launcher's `apply_provider_block` (`tools/c-thru:4353–4357`), **never** by the proxy.
+- **Schema change required:** `VALID_CALL_STYLES` (`tools/claude-proxy:699`) is currently
+  `{anthropic, gemini, openai}`, so `normalizeBackend` (728–733) would **warn-and-drop** the
+  new `"bedrock"`/`"bedrock-native"` values below. The set must gain both tokens before this
+  schema works — see §7 step 0.
 
 ```jsonc
 "endpoints": {
@@ -136,16 +148,17 @@ the same `backendHost` env-interpolation path that handles `${GOOGLE_CLOUD_REGIO
 
 ## 4. Launcher integration (`tools/c-thru`)
 
-The change is localized to `apply_resolved_backend` (4376–4407), which today classifies by
-`format // kind // "anthropic"` and dispatches proxy-vs-direct.
+The Bedrock arm goes in `apply_resolved_backend` (4376–4407), which classifies by
+`format // kind // "anthropic"` and dispatches proxy-vs-direct — **but the change is not
+localized to that function alone** (see the dispatch-gate caveat below).
 
 Add a Bedrock arm **before** the generic cloud-direct `else`:
 
 - `call_style == "bedrock"` (Path B) → route **through the proxy**, exactly like the
   `ollama`/`gemini` arm: spawn/ensure the proxy, set `ANTHROPIC_BASE_URL` to the proxy base
   (`apply_ollama_client_block "$ENSURED_PROXY_HTTP_BASE" …`). This is where the **#20 rule** is
-  mechanically enforced: a Bedrock route can never reach `apply_provider_block "$BASE_URL" …`
-  with the commercial Anthropic URL.
+  mechanically enforced — *once the dispatch gate admits Bedrock* (see caveat below): a Bedrock
+  route then can never reach `apply_provider_block "$BASE_URL" …` with the commercial Anthropic URL.
 - `call_style == "bedrock-native"` (Path A) → **do not** spawn the proxy; export
   `CLAUDE_CODE_USE_BEDROCK=1` + `AWS_REGION` (+ the resolved `modelId` via Claude Code's
   Bedrock model env, e.g. `ANTHROPIC_MODEL`) through the existing endpoint `env{}` mechanism
@@ -158,6 +171,20 @@ Add a Bedrock arm **before** the generic cloud-direct `else`:
   behavior.
 
 No change to `apply_provider_block` itself for Path B; Path A reuses its `env{}` export loop.
+
+> **Dispatch-gate caveat — the change is _not_ localized to `apply_resolved_backend`.** The
+> `targets{}` resolution path runs **before** `model_routes`: `resolve_target_backend_for_model`
+> (def `tools/c-thru:1461`, called at 4419) sets `TARGET_FORCE_PROXY=1`, and the block at 4428
+> gates entry to `apply_resolved_backend` behind a **format allowlist at 4443–4444** that admits
+> only `ollama | gemini | anthropic+localhost/127.0.0.1`. A `format:"bedrock"` backend resolved
+> via `targets{}` falls to the `else` at 4447 → `apply_proxy_fallback_client_block` and **never
+> enters the Bedrock arm above.** Consequence splits by path: **Path B** (proxy) still proxies, so
+> the #20 no-leak rule holds *incidentally*; but **Path A (`bedrock-native`) is actively wrong** —
+> the 4447 fallthrough spawns a proxy that Path A forbids. Therefore the build must add
+> `bedrock`/`bedrock-native` to **both** the `targets{}` allowlist (4443–4444) **and** the
+> symmetric allowlist inside `apply_resolved_backend` (≈4392), not only insert an arm. The §1 #20
+> claim "a Bedrock route can never reach `apply_provider_block` with the commercial Anthropic URL"
+> holds only once both allowlists admit Bedrock.
 
 ---
 
@@ -213,9 +240,9 @@ Extend the auth layer (`applyOutboundAuth` 845–973; `deriveAuthProfile`/KNOWN_
 Bedrock streaming is **AWS event-stream framed** (`application/vnd.amazon.eventstream`:
 length-prefixed binary frames with CRC), **not** raw SSE. `dispatchBedrockBackend` must:
 
-- **Non-stream:** unwrap the `InvokeModel` JSON envelope back to an Anthropic
-  `messages`-shaped response (the inner payload is already Anthropic-shaped; mostly a passthrough
-  of the decoded body + restoring the top-level `model`).
+- **Non-stream:** the `InvokeModel` response body **is already** the Anthropic
+  `messages`-shaped payload — there is no enclosing envelope to unwrap; this is mostly a
+  passthrough of the decoded body + restoring the top-level `model`.
 - **Stream:** decode the binary event-stream frames and **re-emit them as Anthropic SSE**
   (`text/event-stream` with `message_start`/`content_block_delta`/… events) so the downstream
   Claude Code client — which only understands Anthropic SSE — sees a native stream. This event
@@ -257,10 +284,15 @@ other backend, which is the whole point of choosing Path B.
 
 ## 7. Build checklist (when approved)
 
+0. **Prereq (spec-level):** extend `VALID_CALL_STYLES` (`tools/claude-proxy:699`) to
+   `{anthropic, gemini, openai, bedrock, bedrock-native}` so `normalizeBackend` stops
+   warn-and-dropping the new call styles (§3).
 1. `config/model-map.json` — add the `bedrock` endpoint (schema §3); mirror to plugin bundle via
    `tools/sync-plugin-bundle.sh`.
-2. `tools/c-thru` — Bedrock arm in `apply_resolved_backend` (§4), with the #20 routing guarantee
-   and auth bootstrap.
+2. `tools/c-thru` — Bedrock arm in `apply_resolved_backend` (§4) **and** add `bedrock`/
+   `bedrock-native` to both dispatch allowlists (the `targets{}` gate at 4443–4444 and the
+   symmetric one at ≈4392 — see the §4 dispatch-gate caveat), with the #20 routing guarantee and
+   auth bootstrap.
 3. `tools/claude-proxy` — `dispatchBedrockBackend` (request adapt §5.2, auth §5.3, response/SSE
    decode §5.4) + the dispatch branch; `bearer` auth first, `sigv4` behind a stub-or-implement
    decision.
