@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # ARCH: UserPromptSubmit hook — reads prompt from stdin JSON, calls /hooks/context
-# on the proxy (dynamic port from ANTHROPIC_BASE_URL) for classify_intent-based
-# context injection. Silent on healthy/unclassified path. Does NOT block — exits 0 always.
+# on the proxy (dynamic port from ANTHROPIC_BASE_URL) to fetch a static control-plane
+# context block. NOTE: /hooks/context returns a fixed block and does NOT inspect the
+# prompt — there is no classify_intent logic in the proxy. Silent on healthy path.
+# Does NOT block — exits 0 always.
 # A13: `-u` catches unset-var bugs. `-e` is intentionally off because the
 # hook uses command failures as flow control (exit 0 on anything unexpected).
 set -uo pipefail

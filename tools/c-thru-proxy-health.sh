@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # c-thru proxy health check — UserPromptSubmit hook
 # Derive port from explicit env var or from ANTHROPIC_BASE_URL set by c-thru.
-# A13: `-u` catches unset-var bugs; `-e` off so curl failure falls through to exit 2.
+# A13: `-u` catches unset-var bugs; `-e` off so a curl failure falls through to the
+# warn-and-exit-0 path below (fail-open: a down proxy warns on stderr, never blocks).
 set -uo pipefail
 
 # Resolve script location (follow symlinks) so the shared resolver lib is found

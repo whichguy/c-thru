@@ -56,9 +56,9 @@ tools/
   verify-llm-capabilities-mcp.sh  # shell smoke-test for the MCP server
   verify-lmstudio-ollama-compat.sh # spike: run when LM Studio available to confirm kind:"ollama" vs kind:"openai"
   c-thru-session-start.sh # SessionStart/PostCompact hook — proxy+Ollama health check, silent on happy path
-  c-thru-proxy-health.sh  # UserPromptSubmit hook — asyncRewake (exit 2, stderr) on proxy down
+  c-thru-proxy-health.sh  # UserPromptSubmit hook — warns on stderr (exit 0, fail-open) on proxy down
   c-thru-map-changed.sh   # FileChanged/PostToolUse hook — validates model-map.json on edit
-  c-thru-classify.sh      # UserPromptSubmit hook — sends prompt to /hooks/context on the proxy for classify_intent context injection
+  c-thru-classify.sh      # UserPromptSubmit hook — fetches a static /hooks/context block (no classify_intent; proxy ignores prompt content)
   c-thru-ollama-gc.sh     # GC tool — tracks c-thru-pulled Ollama tags; sweeps unreferenced ones. Subcommands: init|record|sweep|purge
   c-thru-self-update.sh   # startup self-update: best-effort git ff-merge with 1s grace; opt-out via C_THRU_NO_UPDATE=1
   hw-profile.js             # shared 5-tier hardware detection (tierForGb); used by router and proxy
