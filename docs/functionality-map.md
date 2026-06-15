@@ -50,11 +50,12 @@ proxy if needed, and `exec`s the real `claude` binary. Detail: README Appendix B
 ## 2. Injection layer (USER DESIGN PRIORITY)
 
 **Design principle:** configuration must reach the spawned `claude`/proxy **inline** — env vars, CLI
-flags (`--model`, `--settings-json`, `--agents`, `--append-system-prompt`), in-memory — and **avoid
+flags (`--model`, `--settings`, `--agents`, `--append-system-prompt`), in-memory — and **avoid
 file-based** mechanisms. This section is the conformance audit of that principle.
 
-**Verdict: the design already largely conforms.** Of 13 injection points, **11 are inline/ephemeral-env/CLI
-or unavoidable runtime IPC; 1 is necessary directory-level isolation; only 1 is an avoidable file write.**
+**Verdict: the design conforms.** Of 13 injection points, **12 are inline/ephemeral-env/CLI or unavoidable
+runtime IPC; 1 is necessary directory-level isolation; 0 are avoidable file writes** (the lone avoidable
+one, #10, was converted to an inline `--settings` JSON string).
 
 | # | What is injected | Mechanism | Class | Loc | Necessary / Avoidable |
 |---|---|---|---|---|---|
@@ -67,25 +68,25 @@ or unavoidable runtime IPC; 1 is necessary directory-level isolation; only 1 is 
 | 7 | `--dangerously-skip-permissions` | CLI arg | INLINE | `:3637` | necessary |
 | 8 | System-info + proxy URL + `/no_thinking` | `--append-system-prompt` CLI arg | INLINE | `:3658` | necessary |
 | 9 | `CLAUDE_MODEL_MAP_PATH` → proxy | `env VAR=… claude-proxy` at spawn | INLINE (passes a path, writes nothing) | `:1854` | necessary |
-| 10 | **Per-session settings.json** (hooks/mcp/permissions) | **`mktemp` file** → `--settings <file>` | **FILE-BASED** | write `:418`, flag `:3666` | **AVOIDABLE** → see note |
+| 10 | Per-session settings (hooks/mcp/permissions) | JSON built in-memory → `--settings <json>` CLI arg | INLINE arg | build `:410`, flag `:3659` | necessary (converted from a temp-file write) |
 | 11 | **Ephemeral session dir** shadowing `~/.claude` | **`mktemp -d` + symlinks/cp** → `CLAUDE_CONFIG_DIR` | **FILE-BASED** | `:246` | necessary (isolation) |
 | 12 | `--agents <json>` | CLI arg (JSON built from agent `.md`) | INLINE arg | `:3668` | necessary |
 | 13 | `proxy.pid` + ready FIFO + startup log | files in profile dir | FILE-BASED (runtime IPC) | `:1848` | necessary (process IPC) |
 
-- **#10 is the one avoidable file write.** The settings JSON is statically known at write time (the
-  PROXY_PORT dependency was already removed — see comment at `tools/c-thru:359`). Claude Code accepts
-  inline settings via `--settings-json '<json>'`. **Proposed conversion:** build the JSON into a shell var
-  and pass `--settings-json "$json"` instead of writing the temp file. **Caveat:** verify the targeted
-  Claude Code build accepts `--settings-json`; if only `--settings <file>` is supported, the file is
-  required by the consumer's contract, not by c-thru's design. *(Proposed only — see
-  [functionality-verification.md](functionality-verification.md#injection-conformance-p3); no conversion
-  performed.)*
+- **#10 was the one avoidable file write — now converted.** The settings JSON is statically known (no
+  PROXY_PORT dependency). `write_ephemeral_settings` builds it into the `EPHEMERAL_SETTINGS_JSON` shell var
+  and `build_forwarded_args` passes it inline as `--settings "$json"` — the flag accepts "a JSON file path
+  **or** a JSON string" (verified against Claude Code 2.1.177), so nothing is written to disk. This mirrors
+  the existing inline `--agents "$json"` (#12). Covered by `test/cli-e2e-flags.test.js` Test 18 (the inline
+  arg parses and has the expected SessionStart-hook shape) and Test 20 (the durable
+  `~/.claude/settings.json` stays byte-identical and mtime-unchanged across a launch).
 - **#11 is genuinely not avoidable.** This is per-session filesystem *isolation* — shadowing `~/.claude`
   so injected agents/skills/settings don't pollute the durable profile — not user-supplied config. Claude
   Code reads a whole `CLAUDE_CONFIG_DIR`; there is no inline equivalent for "a directory." The
   effective(shadow) vs original(durable) split (`cthru_effective_profile_dir` / `cthru_original_profile_dir`,
-  `tools/c-thru-lib.sh:74`) is the deliberate encoding of this. The only file *content* placed inside it
-  is #10 (settings.json); everything else is symlinks to the user's real files.
+  `tools/c-thru-lib.sh:74`) is the deliberate encoding of this. Since #10 went inline, the only file
+  *content* placed inside the dir is an additive copy of `~/.claude.json` (line 253, to silence a
+  config-not-found warning); everything else is symlinks to the user's real files.
 
 Detail: `docs/subscription-auth.md` (auth env), `docs/env-vars.md` (the full env surface).
 

@@ -84,7 +84,7 @@ LLM_PROFILE_CACHE_SOURCE=""
 LLM_PROFILE_CACHE_MEMORY_GB=""
 PROXY_PROFILE_SUMMARY_LOGGED=0
 EPHEMERAL_SESSION_DIR=""
-EPHEMERAL_SETTINGS_FILE=""
+EPHEMERAL_SETTINGS_JSON=""
 EPHEMERAL_AGENTS_JSON=""
 
 # Canonical path of this script (for PATH walk — skip ourselves when installed as `claude`).
@@ -225,8 +225,8 @@ resolve_model_map_config() {
 }
 
 # ARCH: setup_ephemeral_session — creates a per-session tmpdir that shadows ~/.claude so
-#   the injected settings.json, agents, and skills don't pollute the user's permanent config.
-#   settings.json is written LATER by write_ephemeral_settings() once the proxy port is known;
+#   the injected settings (inline), agents, and skills don't pollute the user's permanent config.
+#   the settings JSON is built LATER by write_ephemeral_settings() and passed inline via --settings;
 #   only the directory skeleton (symlinks + agent/skill dirs) is built here.
 #   No-op when CLAUDE_PROXY_BYPASS=1 — the session is transparent so injection is unnecessary.
 setup_ephemeral_session() {
@@ -234,8 +234,9 @@ setup_ephemeral_session() {
   [[ "${CLAUDE_PROXY_BYPASS:-0}" == "1" ]] && return 0
   
   EPHEMERAL_SESSION_DIR=$(mktemp -d "${TMPDIR:-/tmp}/c-thru-session.XXXXXXXX")
-  EPHEMERAL_SETTINGS_FILE="$EPHEMERAL_SESSION_DIR/settings.json"
-  
+  # settings.json is no longer materialized on disk — write_ephemeral_settings()
+  # builds it into EPHEMERAL_SETTINGS_JSON and it is passed inline via --settings.
+
   # 1. Shadow the entire .claude directory to make the session fully ephemeral
   # Link everything except what we override (settings, agents, skills) or what causes noise (backups)
   local item name
@@ -331,8 +332,8 @@ setup_ephemeral_session() {
   # 4. Export the ephemeral config dir for the child process
   export CLAUDE_CONFIG_DIR="$EPHEMERAL_SESSION_DIR"
   export CLAUDE_PROFILE_DIR="$EPHEMERAL_SESSION_DIR"
-  # settings.json is written later by write_ephemeral_settings() once the proxy
-  # port is known (after the READY handshake).
+  # the settings JSON is built later by write_ephemeral_settings() and passed
+  # inline via --settings (after the READY handshake); nothing is written here.
 }
 
 cleanup_ephemeral_session() {
@@ -344,13 +345,14 @@ cleanup_ephemeral_session() {
   fi
 }
 
-# Write (or rewrite) the ephemeral settings.json from scratch.
-# No-op in bypass mode (EPHEMERAL_SETTINGS_FILE is empty).
+# Build the ephemeral settings JSON in memory. It is passed inline to claude via
+# --settings "$json" (a JSON string — never written to disk) in build_forwarded_args.
+# No-op in bypass mode (no ephemeral session dir).
 # The proxy block (URL + endpoints + Profile/Mode) is injected by the
 # c-thru-session-start command hook, which curls /hooks/context itself — so this
 # registers no SessionStart HTTP hook, and the output no longer depends on PROXY_PORT.
 write_ephemeral_settings() {
-  [[ -n "${EPHEMERAL_SETTINGS_FILE:-}" ]] || return 0
+  [[ -n "${EPHEMERAL_SESSION_DIR:-}" ]] || return 0
   local tools_dest="$CTHRU_SELF_DIR"
 
   # Resolve actual path for a tool (checks for .sh suffix too).
@@ -405,7 +407,7 @@ write_ephemeral_settings() {
   # curl --max-time 3, only when OLLAMA_URL/OLLAMA_BASE_URL is set) + sub-second
   # local checks (pollution/git/ollama-list). Collapsing the old /ping+/hooks
   # double-curl into one shaved ~2s off the worst case. Typical wall-time << 1s.
-  cat > "$EPHEMERAL_SETTINGS_FILE" <<EOF
+  EPHEMERAL_SETTINGS_JSON=$(cat <<EOF
 {
   "mcpServers": {
     "llm-capabilities": {
@@ -429,6 +431,7 @@ write_ephemeral_settings() {
   }
 }
 EOF
+)
 }
 
 
@@ -3652,8 +3655,8 @@ c-thru proxy control plane: http://127.0.0.1:${PROXY_PORT} — see SessionStart 
   fi
 
   # ── Per-Process Ephemeral Injection ──────────────────────────────────────
-  if [[ -n "$EPHEMERAL_SETTINGS_FILE" ]]; then
-    forwarded+=("--settings" "$EPHEMERAL_SETTINGS_FILE")
+  if [[ -n "$EPHEMERAL_SETTINGS_JSON" ]]; then
+    forwarded+=("--settings" "$EPHEMERAL_SETTINGS_JSON")
   fi
   if [[ -n "$EPHEMERAL_AGENTS_JSON" && "$EPHEMERAL_AGENTS_JSON" != "{}" ]]; then
     forwarded+=("--agents" "$EPHEMERAL_AGENTS_JSON")

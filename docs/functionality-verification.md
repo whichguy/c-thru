@@ -110,17 +110,18 @@ and a Bedrock wire translator in the proxy (Converse/InvokeModel — currently a
 ## 6. Injection conformance (P3) — detail
 
 Full 13-point classification is in [functionality-map.md §2](functionality-map.md#2-injection-layer-user-design-priority).
-**Conformance: already strong** — 11/13 inline-or-necessary-IPC, 1 necessary isolation dir, **1 avoidable
-file write**:
+**Conformance: full** — 12/13 inline-or-necessary-IPC, 1 necessary isolation dir, **0 avoidable
+file writes**:
 
-- **#10 ephemeral `settings.json` → `--settings-json`** (the only avoidable file-based config injection).
-  Proposed conversion: build the JSON into a shell var, pass `--settings-json "$json"` instead of writing a
-  temp file and passing `--settings <file>`. **Blocker to verify first:** that the targeted Claude Code
-  build accepts `--settings-json`. If it only accepts `--settings <file>`, the file is required by the
-  consumer contract, not by c-thru's design, and #10 is reclassified necessary.
+- **#10 ephemeral settings → inline `--settings` (converted).** `write_ephemeral_settings` now builds the
+  settings JSON into the `EPHEMERAL_SETTINGS_JSON` shell var, and `build_forwarded_args` passes it inline as
+  `--settings "$json"` — no temp file. The blocker resolved in c-thru's favor: Claude Code 2.1.177's
+  `--settings` accepts "a JSON file path **or** a JSON string", so the inline form is supported. Verified by
+  `test/cli-e2e-flags.test.js` Test 18 (inline arg parses + correct SessionStart-hook shape) and Test 20
+  (the durable `~/.claude/settings.json` stays byte-identical and mtime-unchanged across a launch).
 - **#11 ephemeral profile dir** is necessary isolation (no inline equivalent for a whole `CLAUDE_CONFIG_DIR`).
 
-*(Proposals only — no conversion performed. Brought for go/no-go.)*
+*(Injection #10 converted to inline; #11 remains necessary isolation. No further conformance gaps.)*
 
 ---
 
@@ -136,4 +137,4 @@ file write**:
 | proxy-health exit-2 claim (CLAUDE.md:59 + script comment) | doc bug | **FIXED** 0345fb8 (corrected to "always exit 0") | done |
 | `model-map.md` stale schema | doc drift | **FIXED** 0345fb8 (capability-outer schema) | done |
 | Bedrock backend (task #20) | feature | spec + build, or close #20 | go/no-go |
-| Injection #10 → `--settings-json` | conformance polish | convert iff CC build supports it | go/no-go |
+| Injection #10 → inline `--settings` | conformance polish | **DONE** (converted to inline JSON string) | done |

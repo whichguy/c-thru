@@ -27,18 +27,17 @@ function assert(condition, message) {
 
 function makeStubClaude(binDir) {
   const stubPath = path.join(binDir, 'claude');
-  // Stub claude: JSON-dumps args + select env vars to stdout. Also reads the
-  // file passed to --settings (the ephemeral settings written by the launcher)
-  // at exec time — before runCthru cleans up — so C1 can assert its shape.
+  // Stub claude: JSON-dumps args + select env vars to stdout. Also captures the
+  // inline JSON string passed to --settings (the launcher now passes settings
+  // inline, not as a file path) so C1 can assert its shape.
   const script = `#!/bin/sh
 node -e '
-const fs = require("fs");
 const args = process.argv.slice(1);
 let settings_content = null;
 const si = args.indexOf("--settings");
 if (si >= 0 && args[si + 1]) {
-  try { settings_content = fs.readFileSync(args[si + 1], "utf8"); }
-  catch (e) { settings_content = "READ_ERROR:" + e.message; }
+  // c-thru passes settings inline as a JSON string, not a file path.
+  settings_content = args[si + 1];
 }
 console.log(JSON.stringify({
   args,

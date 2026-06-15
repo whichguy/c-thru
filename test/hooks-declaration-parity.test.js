@@ -51,9 +51,9 @@ function extractEphemeral(src) {
     varMap[m[1]] = m[2];
   }
 
-  // 2. isolate the EPHEMERAL_SETTINGS_FILE heredoc body.
-  const here = src.match(/cat > "\$EPHEMERAL_SETTINGS_FILE" <<EOF\n([\s\S]*?)\nEOF\b/);
-  if (!here) throw new Error('could not locate the EPHEMERAL_SETTINGS_FILE heredoc in tools/c-thru');
+  // 2. isolate the EPHEMERAL_SETTINGS_JSON heredoc body (built inline, passed via --settings).
+  const here = src.match(/EPHEMERAL_SETTINGS_JSON=\$\(cat <<EOF\n([\s\S]*?)\nEOF\b/);
+  if (!here) throw new Error('could not locate the EPHEMERAL_SETTINGS_JSON heredoc in tools/c-thru');
   const block = here[1];
 
   // 3. token scan: event starts, matchers, and command+timeout objects, by index.
