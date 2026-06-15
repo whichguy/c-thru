@@ -182,6 +182,10 @@ run_suite "agent-dispatch-graph (subagent_type targets resolve agent→capabilit
   node "$REPO_DIR/test/agent-dispatch-graph.test.js"
 run_suite "agent-description-quality (description discoverability lint)" \
   node "$REPO_DIR/test/agent-description-quality.test.js"
+run_suite "agent-offload-lib (delegation parser: parse-not-grep, call↔result join)" \
+  node "$REPO_DIR/test/agent-offload-lib.test.js"
+run_suite "c-thru-agent-usage (per-agent transcript telemetry CLI)" \
+  node "$REPO_DIR/test/c-thru-agent-usage.test.js"
 run_suite "llm-mode-resolution-matrix (16-mode matrix)" \
   node "$REPO_DIR/test/llm-mode-resolution-matrix.test.js"
 run_suite "resolve-capability (capability alias graph)" \
