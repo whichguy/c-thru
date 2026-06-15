@@ -128,6 +128,16 @@ if command -v jq >/dev/null 2>&1; then
     # Idempotency: settings.json still has no persistent hooks after second run
     has_hooks2=$(jq 'has("hooks")' "$SETTINGS" 2>/dev/null || echo "false")
     check 'No persistent hooks after second run' "false" "$has_hooks2"
+
+    # Idempotency: extend_model_map is now guardless (it re-runs every install). Verify the
+    # deep-merge preserves the shipped capability-outer profile across a re-install rather
+    # than corrupting/dropping it. (Probes a real capability — `planner` — not the dead
+    # `judge` key the removed guard used.)
+    if [ -f "$FAKE_CLAUDE/model-map.system.json" ]; then
+        sys_planner=$(jq -r '.llm_profiles.planner["best-cloud"]["128gb"] // ""' "$FAKE_CLAUDE/model-map.system.json" 2>/dev/null || echo "")
+        shipped_planner=$(jq -r '.llm_profiles.planner["best-cloud"]["128gb"] // ""' "$REPO_DIR/config/model-map.json" 2>/dev/null || echo "")
+        check 'system-map planner profile preserved after second run' "$shipped_planner" "$sys_planner"
+    fi
 fi
 
 echo ""

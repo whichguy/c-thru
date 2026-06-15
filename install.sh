@@ -244,9 +244,11 @@ extend_model_map() {
     local system_map="$CLAUDE_DIR/model-map.system.json"
     local shipped_map="$REPO_DIR/config/model-map.json"
     [ -f "$system_map" ] || return 0
-    local already
-    already=$(jq -r '.llm_profiles["128gb"]["judge"] // empty' "$system_map" 2>/dev/null || true)
-    [ -n "$already" ] && return 0
+    # No idempotency guard: this is a deep-merge of the shipped profiles into the system
+    # map and is idempotent (shipped + shipped == shipped). The prior guard probed a
+    # tier-outer key (.llm_profiles["128gb"]["judge"]) absent from the capability-outer
+    # schema, so it was always empty — dead, not protective. (And restoring it to a real
+    # key would wrongly skip the merge on the node-absent path where cp@SYS_MAP is skipped.)
     local tmp="${system_map}.tmp.$$"
     jq --slurpfile shipped "$shipped_map" '
         .llm_profiles = (.llm_profiles // {} | to_entries | map(.value = (.value + $shipped[0].llm_profiles[.key]) | select(.value != null)) | from_entries) |

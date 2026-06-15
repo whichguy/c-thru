@@ -5,8 +5,8 @@
 > cites a live ref count and carries a **premise-verified-live** line, per the repo's audit discipline.
 > **Status:** the supervisor / competitive-evolution dead cluster was removed in `a743659` (rows below
 > marked **DELETED a743659**); `docs/tournament_2026-04-25.md` was retained per its ARCHIVE verdict, and
-> the 3 untracked `supervisor_*` working-tree files were also removed. `tools/ollama-repull.sh` is the one
-> remaining REMOVE-CANDIDATE.
+> the 3 untracked `supervisor_*` working-tree files were also removed. `tools/ollama-repull.sh` (0 live
+> refs) was the last REMOVE-CANDIDATE and is now deleted too (this housekeeping commit).
 >
 > Verdict legend: **KEEP** · **REMOVE-CANDIDATE** (propose deletion) · **DELETED** (executed) ·
 > **INVESTIGATE** · **ARCHIVE** (historical, don't hard-delete).
@@ -27,7 +27,7 @@
 
 | Path | Ref count (evidence) | Verdict | Rationale | premise verified live |
 |---|---|---|---|---|
-| `tools/ollama-repull.sh` | **0** (`grep -rn ollama-repull .`) | **REMOVE-CANDIDATE** | Zero refs; not in install.sh/Makefile/hooks/run-all/plugin. (install.sh links `c-thru-ollama-gc.sh` + `…-probe.sh`, not this.) | yes |
+| `tools/ollama-repull.sh` | **0** (`grep -rn ollama-repull .` → only this doc) | **DELETED** (this housekeeping commit) | Zero refs; not in install.sh/Makefile/hooks/run-all/plugin. (install.sh links `c-thru-ollama-gc.sh` + `…-probe.sh`, not this.) | yes |
 | `tools/c-thru-tournament` (bash) | 1 self-ref | **DELETED a743659** | Broken superseded stub: line 2 `/**` under a bash shebang = syntax error; body is echo placeholders. Successor `.js` is v5; bash is v4 stub. Not symlinked by install.sh. | yes |
 | `tools/c-thru-tournament.js` | 3 (competitive-evolution ×2 + self) | **DELETED a743659** | Real impl but **also broken** — `CLEANUP_TOOL='./tools/c-thru-cleanup'` (`:14`); `c-thru-cleanup` was deleted in `7b097ca`. Only caller is the unshipped competitive-evolution skill. | yes |
 | `tools/c-thru-control` (bash) | 41 | **KEEP** | Live: exec'd by launcher (`tools/c-thru:748`); in `sync-plugin-bundle.sh:49`; backs `/c-thru-control`; in smoke-check. | yes |
@@ -121,7 +121,7 @@ supervisor_wiki.jsonl
 
 ## Bottom line
 
-- **Confirm-remove now (trivial, 0 refs):** `tools/ollama-repull.sh`.
+- **Removed (trivial, 0 refs):** `tools/ollama-repull.sh` — deleted in this housekeeping commit.
 - **Dead cluster (~53 tracked + 3 untracked):** removed in `a743659` with the fixups above. It was the
   un-removed second half of `7b097ca`.
 - **Everything else** (`c-thru-control(.js)`, `c-thru-resolve`, `shared/`, `plugins/`, `wiki/`,
