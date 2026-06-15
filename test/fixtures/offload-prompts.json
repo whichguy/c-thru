@@ -1,0 +1,65 @@
+{
+  "_comment": "Natural prompts for the agent-offload-coverage harness. The point is to test whether c-thru's INJECTED descriptions alone make Claude choose the right subagent — so prompts must NOT name an agent or say 'use the Task tool'. `expect[0]` is the primary agent; the rest are acceptable alternates (selection is non-deterministic). Placeholders {{PY}}, {{PLAN}}, {{DIR}} are substituted with scratch paths by the harness.",
+  "prompts": [
+    {
+      "id": "security-review",
+      "prompt": "Review the code in {{PY}} for security vulnerabilities and report what you find.",
+      "expect": ["reviewer-security", "code-reviewer"],
+      "note": "security framing should prefer the security reviewer over the routine one"
+    },
+    {
+      "id": "plan-feature",
+      "prompt": "I want to add token-bucket rate limiting to an HTTP API service. Plan how to approach it before any code is written.",
+      "expect": ["planner", "planner-hard"],
+      "note": "design/plan framing"
+    },
+    {
+      "id": "write-tests",
+      "prompt": "Write thorough unit tests for the functions in {{PY}}.",
+      "expect": ["tester", "coder"],
+      "note": "test authoring"
+    },
+    {
+      "id": "debug-failure",
+      "prompt": "The function in {{PY}} returns the wrong result for some inputs. Figure out the root cause.",
+      "expect": ["debugger-hypothesis", "debugger-investigate", "debugger-hard", "code-reviewer"],
+      "note": "debugging framing — any debugger tier is fine"
+    },
+    {
+      "id": "explore-codebase",
+      "prompt": "Find where and how the code under {{DIR}} validates its inputs. Just locate it; don't change anything.",
+      "expect": ["explore", "fast-scout"],
+      "note": "read-only reconnaissance"
+    },
+    {
+      "id": "implement-function",
+      "prompt": "Implement a function in {{PY}} that merges two already-sorted integer lists into one sorted list.",
+      "expect": ["coder", "coder-fallback"],
+      "note": "implementation work"
+    },
+    {
+      "id": "write-docs",
+      "prompt": "Write clear API documentation for the module in {{PY}}.",
+      "expect": ["docs", "writer"],
+      "note": "documentation authoring"
+    },
+    {
+      "id": "review-plan",
+      "prompt": "Here is a plan file: {{PLAN}}. Review it for gaps, risks, and missing steps before implementation.",
+      "expect": ["reviewer-plan", "planner", "code-reviewer"],
+      "note": "plan review"
+    },
+    {
+      "id": "quick-summary",
+      "prompt": "Give me a one-paragraph summary of what {{PY}} does.",
+      "expect": ["fast-scout", "fast-generalist", "explore", "generalist"],
+      "note": "lightweight one-shot — may legitimately answer inline (no-offload is informative)"
+    },
+    {
+      "id": "code-review-changes",
+      "prompt": "Do a careful code review of {{PY}} and flag correctness, style, and edge-case issues.",
+      "expect": ["code-reviewer", "reviewer-security"],
+      "note": "general code review"
+    }
+  ]
+}

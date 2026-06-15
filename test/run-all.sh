@@ -351,6 +351,15 @@ if [[ "${C_THRU_LIVE_AGENT_TESTS:-0}" == "1" ]]; then
 else
   skip_suite "agent-contract-live (set C_THRU_LIVE_AGENT_TESTS=1 to enable)"
 fi
+# Advisory: drives real `claude -p` sessions on NATURAL prompts and scores whether
+# the injected descriptions make Claude delegate to the right subagent. Never fails
+# the suite (the harness exits 0). Self-skips unless C_THRU_OFFLOAD=1 + a claude binary.
+if [[ "${C_THRU_OFFLOAD:-0}" == "1" ]]; then
+  run_suite "agent-offload-coverage (natural-prompt offload scorecard, advisory)" \
+    node "$REPO_DIR/test/agent-offload-coverage.js"
+else
+  skip_suite "agent-offload-coverage (set C_THRU_OFFLOAD=1 + a claude binary to enable)"
+fi
 if [[ "${C_THRU_HIERARCHY_TESTS:-0}" == "1" ]]; then
   run_suite "agent-prompt-hierarchy (prompt hierarchy via proxy)" \
     node "$REPO_DIR/test/agent-prompt-hierarchy.test.js"
