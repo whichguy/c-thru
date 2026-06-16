@@ -4401,7 +4401,20 @@ apply_resolved_backend() {
     [[ "$OLLAMA_PREP_SWEEP_STARTED" != "1" ]] && run_background_ollama_prep_sweep "$effective_model" "$(ollama_cli_host "$OLLAMA_BACKEND_URL")" "$OLLAMA_CLI_KEY" "$backend_id"
   else
     API_KEY="${AUTH_ENV:+${!AUTH_ENV}}"
-    if final_model_has_fallback_strategy "$effective_model"; then
+    if [[ "${C_THRU_PROXY_ALWAYS:-0}" == "1" ]]; then
+      # Per-agent routing requires the proxy in-loop, but subagents inherit the
+      # session's ANTHROPIC_BASE_URL (no per-subagent base URL). So for cloud
+      # Anthropic we can route the WHOLE session through the local proxy; it forwards
+      # main-thread traffic upstream with the OAuth Bearer that
+      # inject_subscription_oauth_from_store already placed in ANTHROPIC_AUTH_TOKEN
+      # (verified header/auth/streaming-safe: claude-proxy scrubCthruHeaders keeps
+      # anthropic-beta/version + Authorization; bearer_priority forwards the token).
+      # Subagent traffic then carries the [[c-thru-agent:..]] sentinel and is
+      # re-routed per-agent. Flag-gated (default OFF) — high blast radius (every
+      # session goes through the proxy, not just delegations).
+      ensure_proxy_http_base || exit 1
+      export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
+    elif final_model_has_fallback_strategy "$effective_model"; then
       apply_proxy_fallback_client_block "" "{}"
     else
       apply_provider_block "$BASE_URL" "" "$API_KEY" "" "{}"

@@ -1,8 +1,34 @@
 # Agent delegation findings — why the agent fleet is idle, and what's fixable
 
-**Status:** findings + proposed fix (no code changed yet). **Date:** 2026-06-16.
-**Method:** empirical — real `claude -p` sessions (Claude Code 2.1.178) through `tools/c-thru`,
-observed via the PreToolUse hook log, stream-json, and the proxy journal/`served_by`.
+**Status:** IMPLEMENTED (2026-06-16). **Method:** empirical — real `claude -p` sessions
+(Claude Code 2.1.178) through `tools/c-thru`, observed via the PreToolUse hook log, stream-json,
+and the proxy journal/`served_by`. The investigation below is preserved as the record; the
+implemented design is summarized here.
+
+## Implemented design — the hook→prompt sentinel handshake
+
+The fix carries the agent identity to the proxy **in-band, per-request, statelessly** — so many
+agents → many models work concurrently in one session:
+
+- **Hook** (`tools/c-thru-agent-router-hook.sh`), on every Agent call: (1) injects a VALID model
+  alias (`C_THRU_AGENT_FALLBACK_ALIAS`, default `sonnet`) to pass Claude Code's enum and as the
+  proxy-absent fallback; (2) prepends `[[c-thru-agent:<subagent_type>]]` to the task prompt, which
+  becomes the subagent's first user message and rides in `body.messages`.
+- **Proxy** (`tools/claude-proxy`), before `resolveBackend`: scans `body.messages` for the
+  sentinel; if it resolves to a known agent, sets `body.model=<agent>` (→ agent→capability→model)
+  and attributes usage to the AGENT (`by_agent` is now a true per-agent scoreboard).
+- **Part D** (`tools/c-thru`, `C_THRU_PROXY_ALWAYS`, **default OFF**): routes the whole session
+  through the proxy even in subscription/best-cloud mode (subagents inherit the session's
+  `ANTHROPIC_BASE_URL`; the proxy forwards main-thread traffic upstream with the OAuth Bearer).
+  Flag-gated because it routes ALL traffic through the proxy — flip the default ON only after
+  you're comfortable with that blast radius.
+
+Agent definitions are untouched. Validated end-to-end (proxy journal `served_by` + subagent
+self-report, distinguishing non-Anthropic models): OSS mode — `coder`→`qwen3.6:35b-a3b-coding-nvfp4`
+and `fast-scout`→`phi4-mini:3.8b` in one session; subscription mode (`C_THRU_PROXY_ALWAYS=1`) —
+main→`claude-sonnet-4-6` (auth/streaming intact) and `fast-scout`→`phi4-mini:3.8b`. Hook suite
+38/38; `make test-fast` 107/107. Known limitation: the sentinel lives in `body.messages[0]`, which
+a long subagent run could compact away mid-task → graceful fallback to the alias model.
 
 ## TL;DR
 
