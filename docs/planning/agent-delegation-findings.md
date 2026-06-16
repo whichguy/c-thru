@@ -17,11 +17,13 @@ agents → many models work concurrently in one session:
 - **Proxy** (`tools/claude-proxy`), before `resolveBackend`: scans `body.messages` for the
   sentinel; if it resolves to a known agent, sets `body.model=<agent>` (→ agent→capability→model)
   and attributes usage to the AGENT (`by_agent` is now a true per-agent scoreboard).
-- **Part D** (`tools/c-thru`, `C_THRU_PROXY_ALWAYS`, **default OFF**): routes the whole session
-  through the proxy even in subscription/best-cloud mode (subagents inherit the session's
-  `ANTHROPIC_BASE_URL`; the proxy forwards main-thread traffic upstream with the OAuth Bearer).
-  Flag-gated because it routes ALL traffic through the proxy — flip the default ON only after
-  you're comfortable with that blast radius.
+- **Part D** (`tools/c-thru`, `C_THRU_PROXY_ALWAYS`, **default ON**, opt out with `=0`): routes the
+  whole session through the proxy even in subscription/best-cloud mode (subagents inherit the
+  session's `ANTHROPIC_BASE_URL`; the proxy forwards main-thread traffic upstream with the OAuth
+  Bearer). Per-agent routing is an everyday feature, so it's on by default; **graceful fallback** —
+  if the proxy can't be brought up, the session falls back to direct Anthropic (per-agent routing
+  lost for that session only) instead of failing to launch, bounding the blast radius of the proxy
+  being load-bearing for every session.
 
 Agent definitions are untouched. Validated end-to-end (proxy journal `served_by` + subagent
 self-report, distinguishing non-Anthropic models): OSS mode — `coder`→`qwen3.6:35b-a3b-coding-nvfp4`

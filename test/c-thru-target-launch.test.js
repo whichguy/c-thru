@@ -32,7 +32,7 @@ node -e 'console.log(JSON.stringify({args: process.argv.slice(1), anthropic_base
   fs.chmodSync(stubPath, 0o755);
 }
 
-function runCthru({ modelArg, ...config }) {
+function runCthru({ modelArg, extraEnv = {}, ...config }) {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-launch-'));
   const homeDir = path.join(tmpRoot, 'home');
   const fakeBin = path.join(tmpRoot, 'bin');
@@ -56,6 +56,7 @@ function runCthru({ modelArg, ...config }) {
       CLAUDE_PROXY_STARTUP_PROBE: '0',
       CLAUDE_PROXY_SKIP_OLLAMA_WARMUP: '1',
       OLLAMA_URL: 'http://127.0.0.1:11434',
+      ...extraEnv,
     },
     cwd: tmpRoot,
   });
@@ -74,6 +75,12 @@ async function main() {
   {
     const result = runCthru({
       modelArg: 'claude-sonnet-4-6',
+      // This case checks BACKEND SELECTION (legacy claude label → the anthropic
+      // backend, not targets.default). The selected backend is only observable via
+      // the direct base URL, so opt out of the default proxy-always (C_THRU_PROXY_ALWAYS,
+      // now on by default for per-agent routing) — otherwise the URL is just the proxy
+      // and hides which backend was chosen. Proxy-always itself is exercised by case 2.
+      extraEnv: { C_THRU_PROXY_ALWAYS: '0' },
       backends: {
         anthropic: { kind: 'anthropic', url: 'https://anthropic.example' },
         ignored_default: { kind: 'ollama', url: 'http://127.0.0.1:11434' },
@@ -84,7 +91,7 @@ async function main() {
     });
     assert(result.code === 0, `launcher exits 0 for unmatched legacy label (got ${result.code})`);
     assert(result.json?.anthropic_base_url === 'https://anthropic.example',
-      `legacy anthropic autodetect wins over targets.default (got ${JSON.stringify(result.json?.anthropic_base_url)})`);
+      `legacy anthropic autodetect wins over targets.default, direct mode (got ${JSON.stringify(result.json?.anthropic_base_url)})`);
     assert((result.json?.args || []).some(arg => arg === '--model=claude-sonnet-4-6' || arg === 'claude-sonnet-4-6'),
       `forwarded args preserve unmatched model label (got ${JSON.stringify(result.json?.args)})`);
   }
