@@ -4744,6 +4744,45 @@ const server = http.createServer((req, res) => {
           }
         }
 
+        // ── Per-agent sentinel routing (the hook handshake) ─────────────────
+        // The PreToolUse hook prepends [[c-thru-agent:<name>]] to each delegation's
+        // task prompt, so the marker rides in body.messages (the subagent's first
+        // user turn) on its requests. It is the only reliable channel for the agent
+        // identity to reach the proxy (Claude Code exposes no per-subagent header /
+        // out-of-band tag, and the Agent tool's model param is a 4-alias enum — see
+        // docs/planning/agent-delegation-findings.md). Routing is PER-REQUEST and
+        // stateless: each request self-identifies, so many agents → many models can
+        // run concurrently in one session without races. When present, route by the
+        // AGENT, overriding body.model (the hook's don't-block alias). Scan the first
+        // user message first (where the hook puts it); fall back to scanning all
+        // message text. We do NOT route off arbitrary message content beyond the
+        // sentinel pattern, and the marker must resolve to a known agent.
+        let sentinelAgent = null;
+        {
+          const msgs = Array.isArray(body.messages) ? body.messages : [];
+          const blockText = (c) => typeof c === 'string'
+            ? c
+            : Array.isArray(c)
+              ? c.map(b => (b && typeof b === 'object') ? (b.text || '') : (typeof b === 'string' ? b : '')).join('\n')
+              : '';
+          const RE = /\[\[c-thru-agent:([A-Za-z0-9_-]+)\]\]/;
+          let m = msgs.length ? blockText(msgs[0].content).match(RE) : null;     // fast path: first turn
+          if (!m) {
+            for (const msg of msgs) { m = blockText(msg.content).match(RE); if (m) break; }  // persisted in history
+          }
+          if (m) {
+            const agentName = m[1];
+            // Honor the sentinel only if it resolves to a known agent/capability.
+            if (resolveCapabilityAlias(agentName, CONFIG)) {
+              ctxLog(ctx, 'sentinel_override', { agent: agentName, from_model: body.model });
+              body.model = agentName;  // resolveBackend resolves agent → capability → model
+              sentinelAgent = agentName;
+            } else {
+              ctxLog(ctx, 'sentinel_unresolved', { agent: agentName });
+            }
+          }
+        }
+
         let resolved = resolveBackend(body.model, CONFIG, hwTier, activeMode);
         if (resolved.error) {
           ctxLog(ctx, 'routing_error', { incoming_model: body.model, error: resolved.error });
@@ -4806,6 +4845,11 @@ const server = http.createServer((req, res) => {
           userId: (body.metadata && typeof body.metadata.user_id === 'string') ? body.metadata.user_id : null,
           _configVersion: CONFIG_VERSION,
         };
+        // When a sentinel identified the agent, attribute usage to the AGENT (not
+        // just its capability) so by_agent / the journal become a true per-agent
+        // scoreboard — distinguishing e.g. reviewer-plan from code-reviewer, which
+        // share a capability and are otherwise indistinguishable to the proxy.
+        if (sentinelAgent) requestMeta.capability = sentinelAgent;
         // Ring-buffer hook: finalize() reads ctx.meta. count_tokens shares the
         // /v1/messages URL prefix but never invokes a model — zero-token
         // bookkeeping noise, so it stays out of the recent ring.

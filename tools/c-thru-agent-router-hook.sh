@@ -112,21 +112,47 @@ esac
 [ -n "$capability" ] || { printf '[c-thru-agent-router] no capability mapping for lookup_key=%s — pass through\n' "$lookup_key" >&2; exit 0; }
 
 # --- Output updatedInput ---------------------------------------------
-# Override model=<capability> in the full tool_input so the proxy receives
-# the correct capability alias regardless of whether Claude Code does a
-# field-level merge or full replace with updatedInput.
-[ -n "$DEBUG_LOG" ] && printf '[%s] OUTPUT model=%s\n' "$(date +%H:%M:%S)" "$capability" >> "$DEBUG_LOG"
+# This hook is the per-delegation HANDSHAKE that carries the agent identity to the
+# proxy. It does two things on every Agent call (so N agents → N models works
+# dynamically within one session — nothing here is static or one-time):
+#
+#   1. model — Claude Code validates the Agent tool's `model` against a small alias
+#      enum (sonnet/opus/haiku/fable) and BLOCKS the delegation on anything else
+#      (injecting a capability name was the prior, silently-blocking behavior). So we
+#      inject a VALID alias purely to pass that validation; it is also the graceful
+#      fallback model when the proxy isn't in-loop.
+#   2. prompt — we prepend a [[c-thru-agent:<subagent_type>]] sentinel to the task
+#      prompt. It becomes the subagent's first user message and rides in body.messages
+#      on the subagent's requests; the proxy reads it and routes THIS request to the
+#      agent's mapped model (overriding the alias). The only reliable channel for the
+#      agent identity to reach the proxy — Claude Code exposes no per-subagent header
+#      or out-of-band tag. Per-request + stateless, so concurrent agents don't race.
+#      See docs/planning/agent-delegation-findings.md.
+inject_model="${C_THRU_AGENT_FALLBACK_ALIAS:-sonnet}"
+sentinel="[[c-thru-agent:${lookup_key}]]"$'\n'
+[ -n "$DEBUG_LOG" ] && printf '[%s] capability=%s OUTPUT model=%s sentinel=agent:%s (proxy routes per sentinel)\n' "$(date +%H:%M:%S)" "$capability" "$inject_model" "$lookup_key" >> "$DEBUG_LOG"
 
 if command -v jq >/dev/null 2>&1; then
-  # Merge model into the original tool_input for safety against full-replace behavior
-  printf '%s' "$stdin_data" | jq -c --arg model "$capability" '{
+  # Merge model + sentinel-prefixed prompt into the original tool_input (preserves
+  # all other fields; safe against full-replace behavior).
+  printf '%s' "$stdin_data" | jq -c --arg model "$inject_model" --arg sentinel "$sentinel" '{
     "hookSpecificOutput": {
       "hookEventName": "PreToolUse",
       "permissionDecision": "allow",
-      "updatedInput": (.tool_input + {model: $model})
+      "updatedInput": (.tool_input + {model: $model, prompt: ($sentinel + (.tool_input.prompt // ""))})
     }
   }'
 else
-  # Fallback: output model-only (relies on field-level merge in Claude Code)
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"model":"%s"}}}' "$capability"
+  # node fallback (no jq): same full merge — preserve tool_input, set model, prefix prompt.
+  printf '%s' "$stdin_data" | node -e '
+let d=""; process.stdin.setEncoding("utf8");
+process.stdin.on("data", c => d += c);
+process.stdin.on("end", () => {
+  let inp = {};
+  try { inp = (JSON.parse(d).tool_input) || {}; } catch (e) {}
+  const model = process.argv[1], sentinel = process.argv[2];
+  const updatedInput = Object.assign({}, inp, { model, prompt: sentinel + (inp.prompt || "") });
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput } }));
+});
+' "$inject_model" "$sentinel"
 fi
