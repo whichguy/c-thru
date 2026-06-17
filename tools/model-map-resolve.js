@@ -69,11 +69,30 @@ function normalizeLlmMode(mode, config) {
 }
 
 // USGov filter: models of Chinese origin are blocked in gov modes.
-const CHINESE_ORIGIN_PATTERNS = [/^qwen/, /^deepseek/, /^kimi/, /^moonshot/, /moonshotai\//, /^glm/, /thudm\//];
+// Matching must catch provider-prefixed slugs (OpenRouter/Ollama-cloud name Qwen as
+// 'qwen/qwen3-...', GLM 4.5+ as 'z-ai/glm-4.6'), not only bare 'qwen3' — a start-anchored
+// regex let those bypass the gov block entirely. We over-block by design: in a gov context
+// a false positive (refusing a model) is far safer than a false negative (serving a banned one).
+// Family tokens are matched at string start OR right after a '/' or ':' separator, bounded so
+// they don't match mid-word (e.g. 'gemini' must not match 'yi').
+const CHINESE_FAMILY_TOKENS = [
+  'qwen', 'qwq', 'deepseek', 'kimi', 'moonshot', 'glm', 'chatglm', 'minimax',
+  'baichuan', 'internlm', 'ernie', 'hunyuan', 'doubao', 'yi', 'telechat',
+  'skywork', 'step', 'xverse', 'orion', 'cogvlm', 'cogagent',
+];
+// Vendor/org slugs that denote Chinese origin regardless of the family token.
+const CHINESE_VENDOR_TOKENS = [
+  'moonshotai', 'thudm', 'zhipu', 'z-ai', '01-ai', 'alibaba', 'dashscope',
+  'baidu', 'bytedance', 'stepfun', 'minimaxai', 'deepseek-ai', 'qwen', 'tencent',
+];
+const CHINESE_FAMILY_RE = new RegExp('(^|[/:])(' + CHINESE_FAMILY_TOKENS.join('|') + ')($|[-_.:/0-9])');
 function isChineseOrigin(model) {
   if (!model || typeof model !== 'string') return false;
   const lower = model.toLowerCase();
-  return CHINESE_ORIGIN_PATTERNS.some(p => p.test(lower));
+  for (const v of CHINESE_VENDOR_TOKENS) {
+    if (lower === v || lower.startsWith(v + '/') || lower.includes('/' + v + '/') || lower.includes('/' + v + ':') || lower.startsWith(v + ':')) return true;
+  }
+  return CHINESE_FAMILY_RE.test(lower);
 }
 
 function detectConnectivity() {

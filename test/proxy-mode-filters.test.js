@@ -64,6 +64,14 @@ async function main() {
           'best-cloud-gov': { '128gb': 'qwen3-test'         },
           'best-local-gov': { '128gb': 'qwen3-test'         },
         },
+        // Chinese gov primary with NO fallback_chains entry — the shipped-config
+        // bypass: applyModeFilter only ran inside `if (capChain)`, so this was
+        // dispatched unfiltered. Must now 502 (unconditional primary backstop).
+        no_chain_cap: {
+          'best-cloud':     { '128gb': 'qwen3-test'         },
+          'best-cloud-gov': { '128gb': 'qwen3-test'         },
+          'best-local-gov': { '128gb': 'qwen3-test'         },
+        },
       },
       fallback_chains: {
         '128gb': {
@@ -153,6 +161,26 @@ async function main() {
       assertEq(r.status, 200, 'status 200');
       assertEq(via(r).served_by, 'phi4-local', 'best-local-gov uses phi4-local (non-Chinese)');
       assertEq(via(r).mode, 'best-local-gov', 'header mode = best-local-gov');
+    });
+
+    // ── Test 7: gov mode, Chinese primary, NO fallback_chains → 502 (the C5 bypass) ─
+    console.log(`\n${testNum++}. best-cloud-gov: Chinese primary with NO fallback_chains → 502 (unconditional backstop)`);
+    allowed_stub.requests.length = 0; blocked_stub.requests.length = 0;
+    await withProxy({ configPath, profile: '128gb', mode: 'best-cloud-gov' }, async ({ port }) => {
+      const r = await send(port, 'no_chain_cap');
+      assertEq(r.status, 502, 'no-chain Chinese gov primary → 502 (not served)');
+      assertEq(blocked_stub.requests.length, 0, 'Chinese stub NEVER touched (was the bypass)');
+      assertEq(allowed_stub.requests.length, 0, 'no upstream call at all');
+    });
+
+    // ── Test 8: same capability in non-gov mode → served normally (filter is gov-only) ─
+    console.log(`\n${testNum++}. best-cloud (non-gov): no_chain_cap Chinese primary served (filter is gov-only)`);
+    allowed_stub.requests.length = 0; blocked_stub.requests.length = 0;
+    await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port }) => {
+      const r = await send(port, 'no_chain_cap');
+      assertEq(r.status, 200, 'non-gov serves the Chinese model');
+      assertEq(via(r).served_by, 'qwen3-test', 'non-gov no_chain_cap → qwen3-test');
+      assertEq(blocked_stub.requests.length, 1, 'Chinese stub got the request (no gov filter)');
     });
 
   } finally {

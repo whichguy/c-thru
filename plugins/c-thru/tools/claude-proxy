@@ -24,6 +24,7 @@ const {
   resolveCapabilityAlias,
   LLM_MODE_ENUM,
   applyModeFilter,
+  filterFor,
 } = require('./model-map-resolve.js');
 const { parseAgentSentinel } = require('./agent-sentinel.js');
 
@@ -1563,6 +1564,12 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
   const triedModels = requestMeta._triedModels || (requestMeta._triedModels = new Set());
   triedModels.add(body.model);
 
+  // Mode filter (e.g. gov Chinese-origin block) must apply to EVERY fallback hop, not
+  // just the pre-dispatch primary selection — otherwise a gov request that fails over
+  // would silently dispatch a banned model. null for non-filter modes (no-op).
+  const modeFilterPred = filterFor(requestMeta.activeMode, CONFIG);
+  const modeAllows = (m) => !modeFilterPred || modeFilterPred(m, CONFIG.model_routes || {}, CONFIG.endpoints || CONFIG.backends || {});
+
   // Walk the per-backend chain, transparently skipping cooldowned
   // intermediate nodes. Terminal nodes (no fallback_to) always get tried,
   // even if recently failed.
@@ -1591,6 +1598,16 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
       cursor = resolved.backend;
       hopsWalked++;
       continue;
+    }
+    // Mode filter: never fail over onto a model the active mode forbids
+    // (e.g. Chinese-origin under a gov mode). Skip like a cooldown'd node — descend
+    // into its own fallback_to if it has one, else stop walking this chain.
+    if (!modeAllows(resolved.effectiveModel)) {
+      ctxLog(ctx, 'fallback.skip_mode_filter', {
+        backend: resolved.backend.id, model: resolved.effectiveModel, mode: requestMeta.activeMode,
+      });
+      if (resolved.backend.fallback_to) { chain.add(resolved.backend.id); cursor = resolved.backend; hopsWalked++; continue; }
+      break;
     }
     // INVARIANT: only cooldown-skipped intermediates get chain.add()'d in
     // this loop (L694 above). The dispatched target adds itself on re-entry
@@ -1629,6 +1646,10 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
       if (candidateResolved.error) continue;
       if (triedModels.has(m)) continue;
       if (candidateResolved.backend.fallback_to && isInCooldown(candidateResolved.backend.id)) continue;
+      if (!modeAllows(candidateResolved.effectiveModel)) {
+        ctxLog(ctx, 'fallback.skip_mode_filter', { model: candidateResolved.effectiveModel, capability: capKey, mode: requestMeta.activeMode });
+        continue;
+      }
       // Do NOT add to chain here — the dispatched candidate adds itself on the next
       // tryFallbackOrFail entry (chain.add(backend.id) at top), matching the
       // invariant used by the per-backend fallback_to walk.
@@ -1668,6 +1689,13 @@ function tryGlobalDefaultFallback(ctx, req, res, body, requestMeta) {
   }
   if (chain.has(resolved.backend.id)) {
     ctxLog(ctx, 'fallback.global_default_already_tried', { default_model: defaultModel, backend: resolved.backend.id });
+    return false;
+  }
+  // Mode filter: the system-wide default must also honor a gov block — never serve a
+  // forbidden model as the last resort.
+  const gdPred = filterFor(requestMeta.activeMode, CONFIG);
+  if (gdPred && !gdPred(resolved.effectiveModel, CONFIG.model_routes || {}, CONFIG.endpoints || CONFIG.backends || {})) {
+    ctxLog(ctx, 'fallback.global_default_blocked', { default_model: defaultModel, model: resolved.effectiveModel, mode: requestMeta.activeMode });
     return false;
   }
   ctxLog(ctx, 'fallback.global_default', {
@@ -4833,6 +4861,17 @@ const server = http.createServer((req, res) => {
                 Object.assign(swapped, { logicalRole: capKey }));
             }
           }
+        }
+
+        // Unconditional mode-filter backstop: applyModeFilter above only runs when a
+        // fallback_chains entry exists for the capability. In a gov mode a capability
+        // with no chain (the shipped config's common state) would otherwise dispatch a
+        // blocked (e.g. Chinese-origin) primary model unfiltered. Refuse rather than serve.
+        const modeFilterPred = filterFor(activeMode, CONFIG);
+        if (modeFilterPred && !modeFilterPred(effectiveModel, CONFIG.model_routes || {}, CONFIG.endpoints || CONFIG.backends || {})) {
+          ctxLog(ctx, 'mode_filter.reject_primary', { mode: activeMode, capability: capKey, model: effectiveModel });
+          return sendAnthropicError(res, 502,
+            `No ${activeMode}-compliant model for '${capKey || effectiveModel}': '${effectiveModel}' is blocked by the ${activeMode} filter and no compliant fallback is configured`);
         }
 
         const { tierForGb } = require('./hw-profile.js');

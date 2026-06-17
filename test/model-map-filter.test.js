@@ -239,5 +239,26 @@ console.log('\nGov-based custom modes — runtime filter engages via base');
   );
 }
 
+// ── isChineseOrigin: provider-prefixed slugs + extended family coverage ──────
+// Regression for the start-anchored hole (qwen/..., z-ai/glm-...) and the missing
+// families. Gov over-blocks by design; non-Chinese models must NOT be caught.
+console.log('\nisChineseOrigin — provider-prefixed slugs + extended families');
+{
+  const { isChineseOrigin } = require('../tools/model-map-resolve');
+  const block = [
+    'qwen3:1.7b', 'qwen/qwen3-coder', 'alibaba/qwen3-235b', 'dashscope/qwen-max',
+    'z-ai/glm-4.6', 'glm-5.1:cloud', 'thudm/glm-4', 'deepseek/deepseek-v3', 'deepseek-v4-pro:cloud',
+    'moonshotai/kimi-k2', 'minimax-m2', 'yi-large', '01-ai/yi-34b', 'baichuan2', 'internlm2',
+    'ernie-4.5', 'hunyuan-large', 'stepfun/step-2', 'bytedance/doubao-pro',
+  ];
+  const allow = [
+    'claude-opus-4-8', 'claude-sonnet-4-6', 'gpt-4o', 'gemini-2.5-pro', 'gemma4:26b',
+    'phi4-reasoning:plus', 'llama3.3:70b', 'mistral-large', 'command-r-plus', 'gpt-oss-120b',
+    'devstral-small:2', 'nemotron-4', 'yarn-mistral', 'aya-23',
+  ];
+  for (const m of block) assertEq(isChineseOrigin(m), true, `blocks Chinese-origin: ${m}`);
+  for (const m of allow) assertEq(isChineseOrigin(m), false, `allows non-Chinese: ${m}`);
+}
+
 const failed = summary();
 process.exit(failed ? 1 : 0);
