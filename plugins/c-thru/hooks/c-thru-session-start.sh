@@ -173,5 +173,11 @@ fi
 [ ${#context_parts[@]} -eq 0 ] && exit 0
 
 context=$(printf '%s\n' "${context_parts[@]}" | paste -sd '\n' -)
-printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}' \
-    "$(printf '%s' "$context" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//')"
+# JSON-escape via jq -Rs (or node JSON.stringify fallback) so raw control chars
+# (tabs, etc.) are \u-escaped — a hand-rolled sed chain produces invalid JSON.
+if command -v jq >/dev/null 2>&1; then
+    context_json=$(printf '%s' "$context" | jq -Rs .)
+else
+    context_json=$(node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(d)));" <<< "$context")
+fi
+printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%s}}' "$context_json"

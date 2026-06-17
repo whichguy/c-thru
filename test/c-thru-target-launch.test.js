@@ -160,6 +160,32 @@ async function main() {
       `mcp passthrough has no session-injected flags (got ${JSON.stringify(args)})`);
   }
 
+  console.log('\n3. ollama-sentinel auth_token preserves injected OAuth (does not export placeholder)');
+  {
+    // apply_provider_block treats auth_token=="ollama" as a sentinel: it must NOT
+    // export a placeholder ANTHROPIC_AUTH_TOKEN, since that would shadow Claude
+    // Code's keychain OAuth on Anthropic-fallback hops. Seed a pre-existing OAuth
+    // token and route through an ollama backend; the child must still see the
+    // original token, not 'ollama'/a placeholder.
+    const result = runCthru({
+      // An unmatched label falls through to targets.default (the only target
+      // exempt from the "named targets require .model" validator rule).
+      modelArg: 'ollama-route',
+      extraEnv: { ANTHROPIC_AUTH_TOKEN: 'fake-oauth' },
+      backends: {
+        // kind:ollama → apply_ollama_client_block passes the literal "ollama"
+        // sentinel to apply_provider_block, exercising the no-export branch.
+        local_ollama: { kind: 'ollama', url: 'http://127.0.0.1:11434' },
+      },
+      targets: {
+        default: { backend: 'local_ollama' },
+      },
+    });
+    assert(result.code === 0, `launcher exits 0 for ollama-sentinel route (got ${result.code})`);
+    assert(result.json?.anthropic_auth_token === 'fake-oauth',
+      `injected OAuth preserved through ollama sentinel (expected 'fake-oauth', got ${JSON.stringify(result.json?.anthropic_auth_token)})`);
+  }
+
   console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

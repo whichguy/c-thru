@@ -73,6 +73,12 @@ fi
 
 [ -n "$context" ] || exit 0
 
-# Output hookSpecificOutput with additionalContext
-printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' \
-    "$(printf '%s' "$context" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//')"
+# Output hookSpecificOutput with additionalContext.
+# JSON-escape via jq -Rs (or node JSON.stringify fallback) so raw control chars
+# (tabs, etc.) are \u-escaped — a hand-rolled sed chain produces invalid JSON.
+if command -v jq >/dev/null 2>&1; then
+    context_json=$(printf '%s' "$context" | jq -Rs .)
+else
+    context_json=$(node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(d)));" <<< "$context")
+fi
+printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":%s}}' "$context_json"

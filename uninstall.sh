@@ -28,7 +28,10 @@ YELLOW='\033[1;33m'
 GRAY='\033[0;90m'
 NC='\033[0m'
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# pwd -P (physical) so REPO_DIR matches link_targets_repo()'s canonicalization
+# (also pwd -P). Under a symlinked path component, logical pwd would diverge and
+# repo-pointing symlinks would never be classified for removal.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
 TOOLS_DEST="$CLAUDE_DIR/tools"
 TMPDIR_EFF="${TMPDIR:-/tmp}"
@@ -291,9 +294,13 @@ else
                 jq --arg re "$hook_regex" '
                     if .hooks then
                       .hooks |= with_entries(
-                        .value |= map(
+                        # Parenthesize the |= RHS: without it, "| map(...)" binds
+                        # at document scope (not to .value) and jq errors with
+                        # "Cannot index string with string hooks", leaving the
+                        # scrub a silent no-op.
+                        .value |= (map(
                           .hooks |= map(select((.command // "") | test($re) | not))
-                        ) | map(select(.hooks | length > 0))
+                        ) | map(select(.hooks | length > 0)))
                       ) | .hooks |= with_entries(select(.value | length > 0))
                       | (if (.hooks | length) == 0 then del(.hooks) else . end)
                     else . end

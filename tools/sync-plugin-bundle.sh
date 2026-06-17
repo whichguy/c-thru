@@ -15,8 +15,13 @@ BUNDLE="$ROOT/plugins/c-thru"
 mode="${1:-sync}"
 drift=0
 
+# Every destination we sync is recorded here so the reverse-drift pass (--check)
+# can flag bundle files that no longer correspond to any source list entry.
+EXPECTED_DESTS=()
+
 check_or_copy() {
   local src="$1" dst="$2"
+  EXPECTED_DESTS+=("$dst")
   if [ "$mode" = "--check" ]; then
     if ! cmp -s "$src" "$dst" 2>/dev/null; then
       echo "DRIFT: $dst differs from $src"
@@ -67,5 +72,28 @@ done
 
 # Shipped config (model routing defaults)
 check_or_copy "$ROOT/config/model-map.json"            "$BUNDLE/config/model-map.json"
+
+# Reverse-drift pass (--check only): a forward sync proves every source has a
+# matching destination, but never catches a STALE bundle file that lingers after
+# its source was dropped from a list. Walk the bundle's synced subtrees and flag
+# any file that isn't an expected destination.
+#   hooks.json is hand-maintained in the bundle (not copied from a source list),
+#   so it is allowlisted rather than flagged.
+if [ "$mode" = "--check" ]; then
+  BUNDLE_ALLOWLIST=("$BUNDLE/hooks/hooks.json")
+  is_expected() {
+    local f="$1" e
+    for e in "${EXPECTED_DESTS[@]}" "${BUNDLE_ALLOWLIST[@]}"; do
+      [ "$f" = "$e" ] && return 0
+    done
+    return 1
+  }
+  while IFS= read -r -d '' f; do
+    if ! is_expected "$f"; then
+      echo "STALE: $f (no corresponding source entry in sync lists)"
+      drift=1
+    fi
+  done < <(find "$BUNDLE"/tools "$BUNDLE"/hooks "$BUNDLE"/skills "$BUNDLE"/config -type f -print0 2>/dev/null)
+fi
 
 [ "$drift" -eq 0 ] || { echo "Run tools/sync-plugin-bundle.sh to fix drift."; exit 1; }

@@ -109,6 +109,8 @@ echo ""
 echo "Shell tests:"
 run_suite "install-smoke (idempotency, symlinks, ephemeral arch)" \
   bash "$REPO_DIR/test/install-smoke.test.sh"
+run_suite "uninstall-smoke (symlink removal C24, hook scrub, overrides preserved)" \
+  bash "$REPO_DIR/test/uninstall-smoke.test.sh"
 run_suite "ollama-probe (health-check script)" \
   bash "$REPO_DIR/test/ollama-probe.test.sh"
 run_suite "c-thru-contract-check (agent/skill contracts)" \

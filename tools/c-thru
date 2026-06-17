@@ -337,11 +337,16 @@ setup_ephemeral_session() {
 }
 
 cleanup_ephemeral_session() {
-  if [[ -n "$EPHEMERAL_SESSION_DIR" && -d "$EPHEMERAL_SESSION_DIR" ]]; then
+  # Idempotent: callable from both the EXIT trap and the composed proxy-cleanup
+  # trap (and proxy_signal_handler). After removal we clear EPHEMERAL_SESSION_DIR
+  # so a second invocation is a no-op rather than re-attempting rm -rf "".
+  if [[ -n "${EPHEMERAL_SESSION_DIR:-}" && -d "$EPHEMERAL_SESSION_DIR" ]]; then
     rm -rf "$EPHEMERAL_SESSION_DIR"
+    EPHEMERAL_SESSION_DIR=""
   fi
   if [[ -n "${C_THRU_SESSION_ID:-}" ]]; then
     rm -f "${TMPDIR:-/tmp}/c-thru-warned.${C_THRU_SESSION_ID}" 2>/dev/null || true
+    C_THRU_SESSION_ID=""
   fi
 }
 
@@ -1741,6 +1746,9 @@ proxy_signal_handler() {
   local sig="$1"
   trap - EXIT INT TERM HUP
   cleanup_proxy_children 0
+  # Also reap the ephemeral session tmpdir: signal-handler exits bypass the
+  # EXIT trap, so the shadow dir would otherwise leak on Ctrl-C / TERM / HUP.
+  cleanup_ephemeral_session
   case "$sig" in
     INT)  exit 130 ;;
     TERM) exit 143 ;;
@@ -1755,7 +1763,11 @@ proxy_signal_handler() {
 arm_proxy_cleanup() {
   [[ "$PROXY_CLEANUP_ARMED" == "1" ]] && return 0
   PROXY_CLEANUP_ARMED=1
-  trap 'cleanup_proxy_children $?' EXIT
+  # Compose both cleanups in the EXIT trap. This trap REPLACES the earlier
+  # `trap cleanup_ephemeral_session EXIT` armed at launch, so it must also run
+  # cleanup_ephemeral_session — otherwise the shadow tmpdir leaks on every
+  # proxied launch. cleanup_ephemeral_session is idempotent.
+  trap 'cleanup_proxy_children $?; cleanup_ephemeral_session' EXIT
   trap 'proxy_signal_handler INT' INT
   trap 'proxy_signal_handler TERM' TERM
   trap 'proxy_signal_handler HUP' HUP
@@ -2032,7 +2044,11 @@ ensure_proxy_running() {
   # without bringing up a proxy — block on the lock so we can take over
   # and spawn one ourselves, rather than returning "success" with nothing
   # listening.
-  if command -v flock >/dev/null 2>&1; then
+  # The flock branch uses bash 4.1+ named-fd syntax (`exec {lock_fd}>...`), which
+  # is a hard parse error on bash 3.2 (macOS system bash). Guard on both flock(1)
+  # presence AND bash >= 4.1; otherwise fall through to the mkdir-lockdir path.
+  if command -v flock >/dev/null 2>&1 && \
+     ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 1))); then
     exec {lock_fd}>"$CLAUDE_PROFILE_DIR/proxy.$port.lock"
     if ! flock -n "$lock_fd"; then
       if wait_proxy_ping_ready "$port" 50; then
@@ -2071,6 +2087,11 @@ ensure_proxy_running() {
         # Take over the stale lockdir and fall through.
         rmdir "$lock_dir" 2>/dev/null || true
         if ! mkdir "$lock_dir" 2>/dev/null; then
+          # Lost the takeover race to another router. It may already have brought
+          # the proxy up — re-poll /ping before failing the launch.
+          if wait_proxy_ping_ready "$port" 50; then
+            return 0
+          fi
           echo "c-thru: unable to acquire proxy lockdir on :$port after takeover attempt" >&2
           return 1
         fi
