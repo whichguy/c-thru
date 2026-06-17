@@ -1015,6 +1015,135 @@ async function main() {
       }
     }
 
+    // ── Test C31a: gemini 503 (no fallback_to) → capability fallback_chains hop ─
+    // Batch 3 ungated forwardGemini's non-2xx cascade from `backend.fallback_to`.
+    // C9 proves routes.default catches it; C31a proves the OTHER tier the ungate
+    // unlocked: a capability-level fallback_chains[tier][cap] candidate. capKey is
+    // non-null only when the request routes through a capability (llm_profiles key),
+    // so the client model is the capability name 'workhorse' — resolveCapabilityAlias
+    // makes requestMeta.capability = 'workhorse', and tryFallbackOrFail reads
+    // CONFIG.fallback_chains['128gb']['workhorse'] after the (empty) per-backend walk.
+    console.log('\nC31a. gemini 503 (no fallback_to) → cascades to capability fallback_chains candidate');
+    {
+      const gemini = await stubBackend({ failWith: 503 });
+      const chainAlt = await stubBackend({
+        responseBody: {
+          id: 'msg_cap_chain',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'served-by-cap-chain' }],
+          model: 'claude-sonnet-4-6',
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      });
+      try {
+        const cfg = {
+          endpoints: {
+            // NOTE: deliberately NO fallback_to on the gemini endpoint.
+            gemini_ai: {
+              format: 'gemini',
+              url: `http://127.0.0.1:${gemini.port}`,
+              auth: 'none',
+            },
+            anthropic: {
+              kind: 'anthropic',
+              url: `http://127.0.0.1:${chainAlt.port}`,
+            },
+          },
+          model_routes: {
+            // Primary capability model resolves to the gemini endpoint.
+            'gemini-primary': { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
+            // The capability-chain candidate resolves to the anthropic stub.
+            'chain-alt':      'anthropic',
+          },
+          // Capability route: client sends model 'workhorse' (an llm_profiles key),
+          // so requestMeta.capability = 'workhorse' (capKey non-null).
+          llm_profiles: {
+            workhorse: { 'best-cloud': { '128gb': 'gemini-primary' } },
+          },
+          // The tier-2 capability cascade the Batch 3 fix unlocked.
+          fallback_chains: {
+            '128gb': { workhorse: ['chain-alt'] },
+          },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'workhorse', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r.status, 200, 'C31a gemini 503 (no fallback_to) → 200 via capability fallback_chains');
+          const text = (r.json?.content || []).map(b => b.text).join('');
+          assert(text.includes('served-by-cap-chain'),
+            `C31a served by fallback_chains candidate, not raw gemini error (got: ${text})`);
+          assertEq(gemini.requests.length, 1, 'C31a gemini tried once');
+          assertEq(chainAlt.requests.length, 1, 'C31a capability-chain candidate served once');
+        });
+      } finally {
+        await gemini.close().catch(() => {});
+        await chainAlt.close().catch(() => {});
+      }
+    }
+
+    // ── Test C31c: gemini connection error (no fallback_to) → routes.default ────
+    // Mirrors C11's connection-error path, but where C11 has NO fallback anywhere
+    // (→ 502), C31c configures routes.default. The Batch 3 ungate means forwardGemini's
+    // up.on('error') handler ALWAYS walks the cascade; with the per-backend chain
+    // and any capability chain empty, tryGlobalDefaultFallback must catch the
+    // connection error and serve routes.default (200) instead of a raw 502.
+    console.log('\nC31c. gemini connection error (no fallback_to) + routes.default → cascades to default (200)');
+    {
+      const fallback = await stubBackend({
+        responseBody: {
+          id: 'msg_default_conn_fb',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'served-by-default-on-conn-error' }],
+          model: 'claude-sonnet-4-6',
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      });
+      try {
+        const cfg = {
+          endpoints: {
+            // Unreachable port → connection error (not HTTP). No fallback_to.
+            gemini_ai: {
+              format: 'gemini',
+              url: 'http://127.0.0.1:1',
+              auth: 'none',
+            },
+            anthropic: {
+              kind: 'anthropic',
+              url: `http://127.0.0.1:${fallback.port}`,
+            },
+          },
+          model_routes: {
+            'gemini-pro':        { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
+            'claude-sonnet-4-6': 'anthropic',
+          },
+          routes: { default: 'claude-sonnet-4-6' },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'gemini-pro', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          }, {}, 10000);
+          assertEq(r.status, 200, 'C31c gemini conn-error (no fallback_to) → 200 via routes.default');
+          const text = (r.json?.content || []).map(b => b.text).join('');
+          assert(text.includes('served-by-default-on-conn-error'),
+            `C31c served by routes.default after connection error, not a raw 502 (got: ${text})`);
+          assertEq(fallback.requests.length, 1, 'C31c routes.default backend served once');
+        });
+      } finally {
+        await fallback.close().catch(() => {});
+      }
+    }
+
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

@@ -47,6 +47,42 @@ function stubBackend() {
   });
 }
 
+// Delayed-failing stub: accepts the request, holds the response open until
+// release() is called, then returns the given status (default 500). Lets a test
+// keep a request's FIRST hop pending in-flight while it sends a SIGHUP, then
+// release the hop so the cascade continues. release() is idempotent.
+function pausingFailBackend(status = 500) {
+  const requests = [];
+  let releaseFn = null;
+  const released = new Promise(resolve => { releaseFn = resolve; });
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      let body = null;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+      requests.push({ headers: req.headers, body });
+      // Hold the response open until the test releases it.
+      released.then(() => {
+        if (!res.writableEnded) {
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: `paused ${status}` } }));
+        }
+      });
+    });
+  });
+  return new Promise(resolve => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        port: server.address().port,
+        requests,
+        release: () => releaseFn(),
+        close: () => new Promise(r => server.close(r)),
+      });
+    });
+  });
+}
+
 async function main() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-fr-'));
 
@@ -177,6 +213,82 @@ async function main() {
         assert(r.status !== undefined, 'response completed (not a timeout)');
       });
     } finally { await stub.close().catch(() => {}); }
+  }
+
+  // ── Test C43: SIGHUP lands MID-cascade of a single in-flight request ───────
+  // Tests 1-3 SIGHUP *between* requests. C43 sends the SIGHUP while ONE request
+  // is paused at its first cascade hop. C30 deleted the mid-request _fallbackChain
+  // reset (CONFIG is per-request snapshot-pinned), so a SIGHUP must NOT mutate the
+  // in-flight request's routing graph or its cycle/depth state. The observable
+  // contract: the cascade still TERMINATES (no infinite loop, bounded by
+  // MAX_FALLBACK_HOPS, no re-dispatch of an already-tried backend) and the client
+  // gets a final response (200 from the fallback, or a clean 5xx). We assert
+  // behavior only — NOT the deleted _configVersion-reset internals.
+  console.log('\nC43. SIGHUP mid-cascade of an in-flight request → cascade still terminates');
+  {
+    const primary = await pausingFailBackend(500);  // first hop: paused, then 500
+    const stub = await stubBackend();                // healthy fallback terminal
+    try {
+      // primary (500 after release) → fallback_to: stub (200). stub is also the
+      // global default, so even if primary's chain were emptied the request lands.
+      const cascadeConfig = {
+        backends: {
+          primary: { kind: 'anthropic', url: `http://127.0.0.1:${primary.port}`, fallback_to: 'stub' },
+          stub:    { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` },
+        },
+        model_routes: { 'test-model': 'primary', 'stub-model': 'stub' },
+        llm_profiles: { workhorse: { 'best-cloud': { '128gb': 'stub-model' } } },  // global default = stub
+        routes: { default: 'stub-model' },
+      };
+      const configPath = writeConfig(tmpDir, cascadeConfig);
+
+      await withProxy({ configPath, profile: '128gb', mode: 'best-cloud' }, async ({ port, child }) => {
+        // Fire the request WITHOUT awaiting — it parks at primary (paused first hop).
+        const inflight = httpJson(port, 'POST', '/v1/messages', {
+          model: 'test-model', messages: [{ role: 'user', content: 'hi' }], max_tokens: 5,
+        }, {}, 8000);
+
+        // Wait until the proxy has actually dispatched to primary (first hop pending).
+        const t0 = Date.now();
+        while (primary.requests.length < 1 && Date.now() - t0 < 3000) {
+          await new Promise(r => setTimeout(r, 20));
+        }
+        assert(primary.requests.length >= 1, 'C43 first hop reached primary (request is in-flight)');
+
+        // SIGHUP arrives MID-cascade — first hop's error is still pending.
+        fs.writeFileSync(configPath, JSON.stringify({ ...cascadeConfig, _reload_marker: 43 }));
+        process.kill(child.pid, 'SIGHUP');
+        // Generous settle for the reload under proxy-spawn load (per known flake).
+        await new Promise(r => setTimeout(r, 150));
+
+        // Release the paused first hop → its 500 surfaces → cascade continues.
+        primary.release();
+
+        // The cascade must terminate with a final response — no hang, no loop.
+        let r, hung = false;
+        try {
+          r = await inflight;
+        } catch (e) {
+          hung = /timed out/.test(e.message);
+        }
+        assert(!hung, 'C43 in-flight request did NOT hang across the mid-cascade SIGHUP');
+        assert(r && r.status >= 200 && r.status < 600,
+          `C43 cascade terminated with a final response (status ${r && r.status})`);
+        // The mid-cascade SIGHUP must not have spawned a re-dispatch loop: primary
+        // (the only fallback_to-bearing node) is hit at most twice (cooldown bounds it),
+        // never an unbounded count.
+        assert(primary.requests.length <= 2,
+          `C43 primary not re-dispatched in a loop (hits ${primary.requests.length}, ≤ 2)`);
+
+        // Proxy must still be alive after the mid-cascade reload.
+        const ping = await httpJson(port, 'GET', '/ping', null);
+        assertEq(ping.status, 200, 'C43 /ping ok after mid-cascade SIGHUP');
+      });
+    } finally {
+      primary.release();  // idempotent — ensure no socket left hanging
+      await primary.close().catch(() => {});
+      await stub.close().catch(() => {});
+    }
   }
 
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
