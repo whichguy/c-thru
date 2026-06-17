@@ -1085,7 +1085,11 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
   }
 
   const sigilMatch = model.match(BACKEND_SIGIL_RE);
-  if (sigilMatch) {
+  // C45: BACKEND_SIGIL_RE's `.*` base lets bare "@anthropic" match with an
+  // empty baseModel, which would forward effectiveModel:'' upstream. Require a
+  // non-empty base; otherwise fall through to normal resolution (mirrors the
+  // `model:` pin's empty-guard above).
+  if (sigilMatch && sigilMatch[1].trim()) {
     const [, baseModel, backendId] = sigilMatch;
     const raw = endpointsOrBackends[backendId];
     if (raw) {
@@ -2618,6 +2622,10 @@ function geminiHttpRequest(backend, method, urlPath, body, extraHeaders) {
       resp.on('error', reject);
     });
     req.on('error', reject);
+    // C32: opts.timeout arms socket.setTimeout but won't destroy the socket
+    // without a 'timeout' listener — a hung Files-API upstream would never
+    // abort. Destroy on timeout so the resulting 'error' rejects the promise.
+    req.on('timeout', () => req.destroy(new Error('gemini files timeout')));
     if (body) req.write(body);
     req.end();
   });
@@ -3087,7 +3095,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
     if (statusCode >= 400) {
       let errBody = '';
       upRes.on('data', d => errBody += d);
-      upRes.on('end', () => {
+      upRes.on('end', async () => {
         // G4: stale-cache retry. If we attached a cachedContent ref and the
         // upstream rejected (404 / cache-not-found), drop the entry and retry
         // once with a clean body. Costs an extra round-trip, only at the TTL
@@ -3114,48 +3122,34 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         }
         if (res.headersSent) return;
         // Backend-level fallback on retryable upstream errors. Mirrors the
-        // forwardAnthropic path (~line 1202): mark the backend as failed
-        // (puts it in cooldown if appropriate) and ask tryFallbackOrFail to
-        // walk the configured chain. Only fires when the endpoint declares
-        // fallback_to — otherwise relays the error directly. Without this,
-        // gemini_ai's `fallback_to: claude-sonnet-4-6` would only kick in
-        // on network errors, not 5xx / auth / quota responses.
+        // forwardAnthropic path (~line 1822): mark the backend as failed
+        // (puts it in cooldown if appropriate) and ALWAYS ask tryFallbackOrFail
+        // to walk the cascade. It self-noops when nothing applies, so gating on
+        // backend.fallback_to was wrong — it skipped capability-level
+        // fallback_chains, tryLocalTerminalFallback, and tryGlobalDefaultFallback
+        // (none of which require the failing backend to declare fallback_to).
+        // Only relay the raw error when the cascade didn't handle the request.
         markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(statusCode, errBody));
-        if (backend.fallback_to) {
-          tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
+        const relayError = () => {
+          if (res.headersSent) return;
+          res.writeHead(statusCode, Object.assign(
+            { 'Content-Type': 'application/json' },
+            extraHeaders,
+          ));
+          res.end(JSON.stringify({
+            type: 'error',
+            error: { type: errType, message: `Gemini error: ${errBody}` },
+          }));
+        };
+        try {
+          const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
             reason: `gemini ${statusCode}: ${errBody.slice(0, 200)}`,
             statusCode,
-          }).then(handled => {
-            if (handled || res.headersSent) return;
-            res.writeHead(statusCode, Object.assign(
-              { 'Content-Type': 'application/json' },
-              extraHeaders,
-            ));
-            res.end(JSON.stringify({
-              type: 'error',
-              error: { type: errType, message: `Gemini error: ${errBody}` },
-            }));
-          }).catch(() => {
-            if (res.headersSent) return;
-            res.writeHead(statusCode, Object.assign(
-              { 'Content-Type': 'application/json' },
-              extraHeaders,
-            ));
-            res.end(JSON.stringify({
-              type: 'error',
-              error: { type: errType, message: `Gemini error: ${errBody}` },
-            }));
           });
-          return;
+          if (!handled) relayError();
+        } catch {
+          relayError();
         }
-        res.writeHead(statusCode, Object.assign(
-          { 'Content-Type': 'application/json' },
-          extraHeaders,
-        ));
-        res.end(JSON.stringify({
-          type: 'error',
-          error: { type: errType, message: `Gemini error: ${errBody}` },
-        }));
       });
       return;
     }
@@ -3215,6 +3209,13 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
       let lastClosedBlockType = null;
       let toolBlockEmittedInputDelta = false;
       let currentThinkingSignature = '';
+      // C10: track whether a terminal finishReason was seen so the 'end'
+      // handler can close an open block + emit a synthetic message_delta when
+      // Gemini ends the stream without one (mirrors Ollama's closeMessage
+      // idempotency: the guard prevents double-closing when a finishReason DID
+      // arrive).
+      let messageClosed = false;
+      let lastPromptTokens = 0;
 
       const closeOpenBlock = () => {
         if (openBlockType === null) return;
@@ -3355,9 +3356,14 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
                 // Usage stats — mirrors the Ollama/Anthropic call sites.
                 // output = candidates + thoughts for Anthropic billing parity.
                 const promptCount = (geminiData.usageMetadata || {}).promptTokenCount || 0;
+                lastPromptTokens = promptCount;
                 recordUsageAndStamp(requestMeta, effectiveModel, backend.id, promptCount, candidatesCount + thoughtsCount,
                   Date.now() - ((requestMeta && requestMeta.startedAt) || startedAt),
                   (requestMeta && requestMeta.capability) || null);
+                // Terminal frames emitted (content_block_stop already done via
+                // closeOpenBlock above; message_delta just sent). Mark closed so
+                // the 'end' handler doesn't re-close a well-formed stream.
+                messageClosed = true;
               }
             } catch (e) {
               ctxLog(ctx, 'gemini.stream.parse_error', { error: e.message, line });
@@ -3368,6 +3374,22 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
 
       upRes.on('end', () => {
         stopGeminiPing();
+        // C10: Gemini can end the stream after emitting text/thinking/tool
+        // blocks but WITHOUT a terminal finishReason. The finishReason branch
+        // (which closes the open block + emits message_delta) never ran, so the
+        // open content block is unterminated and no stop_reason/usage was sent —
+        // a malformed Anthropic SSE stream. Mirror Ollama's closeMessage: close
+        // the open block and emit a synthetic message_delta. messageClosed is the
+        // idempotency guard so we never double-close when a finishReason WAS seen.
+        if (!messageClosed && res.writable) {
+          closeOpenBlock();
+          res.write(`event: message_delta\ndata: ${JSON.stringify({
+            type: 'message_delta',
+            delta: { stop_reason: 'end_turn', stop_sequence: null },
+            usage: { input_tokens: lastPromptTokens, output_tokens: 0 },
+          })}\n\n`);
+          messageClosed = true;
+        }
         res.write(`event: message_stop\ndata: {"type": "message_stop"}\n\n`);
         res.end();
         clearBackendCooldown(backend.id);
@@ -3516,10 +3538,23 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
     }
   });
 
-  up.on('error', (e) => {
+  up.on('error', async (e) => {
     ctxLog(ctx, 'gemini.request_error', { error: e.message });
-    tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, { reason: e.message, statusCode: 502 });
+    // Connection-error path — no HTTP status to read. Mirror forwardAnthropic:
+    // mark the backend failed, walk the cascade, and if nothing handled it
+    // surface a 502 so the client socket isn't left hanging forever.
+    markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+    const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, { reason: e.message, statusCode: 502 });
+    if (!handled && !res.headersSent) {
+      sendAnthropicError(res, 502, `backend gemini at ${targetUrl.origin} error: ${e.message}`);
+    }
   });
+
+  // C32: options.timeout arms socket.setTimeout but does NOT destroy the socket
+  // on its own — without a 'timeout' listener a hung upstream never aborts. Wire
+  // one so the 60s setting actually fires; the resulting 'error' flows into the
+  // up.on('error') handler above (cascade or 502, never a silent hang).
+  up.on('timeout', () => up.destroy(new Error('gemini upstream timeout')));
 
   const cancelUpstream = () => {
     if (upstreamCancelled) return;

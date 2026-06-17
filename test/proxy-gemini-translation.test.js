@@ -2318,6 +2318,120 @@ async function main() {
         `x-c-thru-redacted-thinking-dropped absent (got '${r.headers?.['x-c-thru-redacted-thinking-dropped']}')`);
     });
 
+    // ── C10. Stream ends WITHOUT a finishReason ─────────────────────────────
+    // Gemini emits text parts then closes the stream with no terminal
+    // finishReason. The proxy must still close the open content block and emit
+    // a synthetic message_delta (stop_reason + usage) so the client gets a
+    // well-formed Anthropic SSE stream instead of a hung/unterminated block.
+    console.log('\nC10. Streaming: Gemini ends w/o finishReason -> client still gets content_block_stop + message_delta + message_stop');
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':streamGenerateContent')) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        // Text part(s) opened, but the stream ends with NO finishReason chunk.
+        res.write('data: ' + JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'partial' }] } }]
+        }) + '\n\n');
+        res.end();  // <- no finishReason ever sent
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const anthropicReq = {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'say partial' }],
+        stream: true,
+      };
+      return new Promise((resolve) => {
+        const r = http.request({
+          port, method: 'POST', path: '/v1/messages',
+          headers: { 'Content-Type': 'application/json' },
+        }, (res) => {
+          const events = [];
+          let buffer = '';
+          res.on('data', d => {
+            buffer += d.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try { events.push(JSON.parse(line.slice(6))); } catch {}
+              }
+            }
+          });
+          res.on('end', () => {
+            const types = events.map(e => e.type);
+            assert(types.includes('content_block_stop'),
+              `C10 open block closed via content_block_stop (got types: ${types.join(',')})`);
+            const md = events.find(e => e.type === 'message_delta');
+            assert(md != null, 'C10 synthetic message_delta emitted');
+            assert(md?.delta?.stop_reason === 'end_turn',
+              `C10 message_delta stop_reason='end_turn' (got '${md?.delta?.stop_reason}')`);
+            assert(md?.usage != null, 'C10 message_delta carries usage');
+            assert(events[events.length - 1]?.type === 'message_stop',
+              `C10 stream terminates with message_stop (got '${events[events.length - 1]?.type}')`);
+            resolve();
+          });
+        });
+        r.write(JSON.stringify(anthropicReq));
+        r.end();
+      });
+    });
+
+    // ── C10b. Stream WITH finishReason is not double-closed ──────────────────
+    // Idempotency guard: when a finishReason DID arrive, the 'end' handler must
+    // NOT emit a second content_block_stop or message_delta.
+    console.log('\nC10b. Streaming: finishReason present -> exactly one content_block_stop + one message_delta (no double-close)');
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':streamGenerateContent')) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write('data: ' + JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'hi' }] }, finishReason: 'STOP' }],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+        }) + '\n\n');
+        res.end();
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const anthropicReq = {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'say hi' }],
+        stream: true,
+      };
+      return new Promise((resolve) => {
+        const r = http.request({
+          port, method: 'POST', path: '/v1/messages',
+          headers: { 'Content-Type': 'application/json' },
+        }, (res) => {
+          const events = [];
+          let buffer = '';
+          res.on('data', d => {
+            buffer += d.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try { events.push(JSON.parse(line.slice(6))); } catch {}
+              }
+            }
+          });
+          res.on('end', () => {
+            const stops = events.filter(e => e.type === 'content_block_stop').length;
+            const deltas = events.filter(e => e.type === 'message_delta').length;
+            assert(stops === 1, `C10b exactly one content_block_stop (got ${stops})`);
+            assert(deltas === 1, `C10b exactly one message_delta — no double-close (got ${deltas})`);
+            assert(events[events.length - 1]?.type === 'message_stop',
+              `C10b terminates with message_stop (got '${events[events.length - 1]?.type}')`);
+            resolve();
+          });
+        });
+        r.write(JSON.stringify(anthropicReq));
+        r.end();
+      });
+    });
+
   } finally {
     if (stub) await stub.close().catch(() => {});
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}

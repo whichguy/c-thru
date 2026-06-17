@@ -800,6 +800,152 @@ async function main() {
       }
     }
 
+    // ── Test C9: gemini 503 with NO fallback_to but a routes.default ────────
+    // Regression for the `if (backend.fallback_to)` gate in forwardGemini's
+    // non-2xx handler. routes.default / local-terminal / capability chains do
+    // NOT require the failing backend to declare fallback_to — gating on it
+    // meant a Gemini backend without fallback_to relayed the raw 503 instead of
+    // cascading. After the fix the cascade always runs (self-noops if nothing
+    // applies), so routes.default catches it.
+    console.log('\nC9. gemini 503 (no fallback_to) + routes.default → cascades to default backend');
+    {
+      const gemini = await stubBackend({ failWith: 503 });
+      const fallback = await stubBackend({
+        responseBody: {
+          id: 'msg_default_fb',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'served-by-routes-default' }],
+          model: 'claude-sonnet-4-6',
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      });
+      try {
+        const cfg = {
+          endpoints: {
+            // NOTE: deliberately NO fallback_to on the gemini endpoint.
+            gemini_ai: {
+              format: 'gemini',
+              url: `http://127.0.0.1:${gemini.port}`,
+              auth: 'none',
+            },
+            anthropic: {
+              kind: 'anthropic',
+              url: `http://127.0.0.1:${fallback.port}`,
+            },
+          },
+          model_routes: {
+            'gemini-pro':        { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
+            'claude-sonnet-4-6': 'anthropic',
+          },
+          routes: { default: 'claude-sonnet-4-6' },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'gemini-pro', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r.status, 200, 'C9 gemini 503 (no fallback_to) → 200 via routes.default');
+          const text = (r.json?.content || []).map(b => b.text).join('');
+          assert(text.includes('served-by-routes-default'),
+            `C9 served by routes.default backend, not raw gemini error (got: ${text})`);
+          assertEq(gemini.requests.length, 1, 'C9 gemini tried once');
+          assertEq(fallback.requests.length, 1, 'C9 routes.default backend served once');
+        });
+      } finally {
+        await gemini.close().catch(() => {});
+        await fallback.close().catch(() => {});
+      }
+    }
+
+    // ── Test C11: gemini connection error with NO fallback at all → 502 ─────
+    // forwardGemini's up.on('error') previously ignored tryFallbackOrFail's
+    // boolean and never sent a response when nothing handled it — the client
+    // socket hung forever. With no fallback_to, no routes.default, and no local
+    // terminal, the proxy must now surface a 502 (mirrors forwardAnthropic).
+    // If the bug regresses, httpJson rejects on timeout and this test fails.
+    console.log('\nC11. gemini connection error + no fallback → 502 (not a hang)');
+    {
+      const cfg = {
+        endpoints: {
+          // Unreachable port, no fallback_to, no routes.default below.
+          gemini_ai: {
+            format: 'gemini',
+            url: 'http://127.0.0.1:1',
+            auth: 'none',
+          },
+        },
+        model_routes: {
+          'gemini-pro': { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
+        },
+      };
+      const configPath = writeConfig(tmpDir, cfg);
+      await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+        let r, hung = false;
+        try {
+          r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'gemini-pro', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          }, {}, 8000);
+        } catch (e) {
+          hung = /timed out/.test(e.message);
+        }
+        assert(!hung, 'C11 client did NOT hang (got a response before timeout)');
+        assertEq(r?.status, 502, `C11 connection error surfaced as 502 (got ${r?.status})`);
+        assert(r?.json?.type === 'error',
+          `C11 502 carries an Anthropic-shape error envelope (got type: ${r?.json?.type})`);
+      });
+    }
+
+    // ── Test C45: empty-base @sigil must NOT forward an empty model ─────────
+    // BACKEND_SIGIL_RE's `.*` base lets bare "@anthropic" match with an empty
+    // baseModel → resolveBackend used to return effectiveModel:'' and forward
+    // model:"" upstream. The non-empty guard makes "@anthropic" fall through to
+    // normal resolution instead. The defining assertion: the anthropic backend
+    // never receives a request whose model is empty.
+    console.log('\nC45. model "@anthropic" (empty base) does not forward an empty model upstream');
+    {
+      const anthropic = await stubBackend({
+        responseBody: {
+          id: 'msg_c45',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'served' }],
+          model: 'claude-sonnet-4-6',
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      });
+      try {
+        const cfg = {
+          endpoints: {
+            anthropic: { kind: 'anthropic', url: `http://127.0.0.1:${anthropic.port}` },
+          },
+          model_routes: { 'claude-sonnet-4-6': 'anthropic' },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          // Best-effort request; we don't care about its status, only that the
+          // anthropic stub is never handed model:"".
+          await httpJson(port, 'POST', '/v1/messages', {
+            model: '@anthropic', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          }, {}, 8000).catch(() => {});
+          const emptyModelHit = anthropic.requests.some(
+            req => req.model_used === '' || req.body?.model === ''
+          );
+          assert(!emptyModelHit,
+            `C45 anthropic backend never received an empty model (hits: ${JSON.stringify(anthropic.requests.map(r => r.model_used))})`);
+        });
+      } finally {
+        await anthropic.close().catch(() => {});
+      }
+    }
+
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
