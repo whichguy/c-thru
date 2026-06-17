@@ -357,7 +357,18 @@ function expectNonEmptyString(parent, key, context) {
 function validateCapabilityEntry(capabilityName, entry, report, options) {
   const opts = options || {};
   const reachable = opts.reachable;
+  const modelRoutes = opts.modelRoutes;
+  const capabilityAliases = opts.capabilityAliases;
+  const activeTier = opts.ctx && opts.ctx.tier;
   const warn = (msg) => { if (shouldEmitWarning(msg)) console.warn(msg); };
+  // C37: scoped routability warning. Only fires for cells the active session can reach,
+  // so a best-cloud session does not warn about best-local-oss orphans.
+  const warnIfUnroutable = (model, cellKey, ctxLabel) => {
+    if (typeof model !== 'string' || !model.trim()) return;
+    if (reachable && !reachable.reachableCells.has(cellKey)) return;
+    if (isRoutableModel(model, modelRoutes, capabilityAliases)) return;
+    warn(`model-map-validate: warning: '${ctxLabel}' model '${model}' is not routable — not a model_routes key, re: pattern, @backend sigil, capability alias, model: pin, or claude-via-* alias; requests using this entry will fail at runtime`);
+  };
   if (!isObject(entry)) {
     report(`'llm_profiles.${capabilityName}' must be an object`);
     return;
@@ -394,6 +405,10 @@ function validateCapabilityEntry(capabilityName, entry, report, options) {
         if (!reachable || reachable.reachableCells.has(`${capabilityName}.${key}.*`)) {
           warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}' is a placeholder (${value}) — requests using this entry will fail at runtime`);
         }
+      } else {
+        // C37: a :TODO placeholder is already covered by its own warning; only check
+        // non-placeholder strings here to avoid double-warning the same cell.
+        warnIfUnroutable(value, `${capabilityName}.${key}.*`, `llm_profiles.${capabilityName}.${key}`);
       }
     } else if (isObject(value)) {
       const definedTiers = [];
@@ -409,6 +424,27 @@ function validateCapabilityEntry(capabilityName, entry, report, options) {
           if (!reachable || reachable.reachableCells.has(`${capabilityName}.${key}.${tier}`)) {
             warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}.${tier}' is a placeholder (${model}) — requests using this entry will fail at runtime`);
           }
+        } else {
+          // C37: routability for non-placeholder tier-pinned models (reachable-scoped).
+          warnIfUnroutable(model, `${capabilityName}.${key}.${tier}`, `llm_profiles.${capabilityName}.${key}.${tier}`);
+        }
+      }
+      // C35(b): when the active tier is PINNED (CLAUDE_LLM_PROFILE) and this reachable
+      // mode's tier-object omits that exact tier, resolveProfileModel returns null →
+      // a guaranteed runtime 503 (no cross-TIER fallback). Surface it as a config-time
+      // ERROR. Skipped when tier is unpinned (auto-detect → ctx.tier null).
+      //
+      // Scope by MODE-reachability, not the missing cell: computeReachableSets only
+      // records cells for tiers that ARE defined, so the missing active-tier cell is
+      // never in reachableCells. A mode is reachable when any of its defined-tier cells
+      // is — or, defensively, when it is the active/best-cloud mode in ctx.
+      if (activeTier && HARDWARE_TIERS.has(activeTier) && !definedTiers.includes(activeTier)) {
+        const ctxMode = opts.ctx && opts.ctx.mode;
+        const modeReachable = !reachable
+          || key === ctxMode || key === 'best-cloud'
+          || definedTiers.some(t => reachable.reachableCells.has(`${capabilityName}.${key}.${t}`));
+        if (modeReachable) {
+          report(`'llm_profiles.${capabilityName}.${key}' is missing the active tier '${activeTier}' (defined tiers: ${definedTiers.join(', ') || 'none'}) — resolveProfileModel returns null for the pinned tier with no cross-tier fallback, a guaranteed runtime 503`);
         }
       }
       // V4: warn when higher tiers exist but are not covered
@@ -433,6 +469,31 @@ function validateCapabilityEntry(capabilityName, entry, report, options) {
   if (entry.fallback_to != null && typeof entry.fallback_to !== 'string') {
     report(`'llm_profiles.${capabilityName}.fallback_to' must be a string when present`);
   }
+}
+
+// C37: a model string is "routable" if the proxy can resolve it to a backend.
+// Mirrors the membership/regex test in validateFallbackChains + the resolution-coverage
+// Test 8 helper, extended with the alias forms resolveCapabilityAlias understands.
+//   - direct model_routes key
+//   - model_routes `re:` pattern key
+//   - backend @sigil (self-routing)
+//   - itself a known llm_profiles capability key (2-hop alias)
+//   - a `model:` pin
+//   - a `claude-via-*` alias
+function isRoutableModel(model, modelRoutes, capabilityAliases) {
+  if (typeof model !== 'string' || !model.trim()) return false;
+  if (BACKEND_SIGIL_RE.test(model)) return true;
+  if (model.startsWith('model:')) return true;
+  if (model.startsWith('claude-via-')) return true;
+  if (capabilityAliases && capabilityAliases.has(model)) return true;
+  if (isObject(modelRoutes)) {
+    if (Object.prototype.hasOwnProperty.call(modelRoutes, model)) return true;
+    return Object.keys(modelRoutes).some(k => {
+      if (!k.startsWith('re:')) return false;
+      try { return new RegExp(k.slice(3)).test(model); } catch { return false; }
+    });
+  }
+  return false;
 }
 
 function validateQualityScore(value, context) {
@@ -659,6 +720,10 @@ function validateConfig(config, _errors, options) {
     opts.reachable = computeReachableSets(config, ctx);
   }
   const reachable = opts.reachable;
+  // C37: routability context for validateCapabilityEntry — model_routes membership +
+  // the set of capability keys (model names may alias another capability via 2-hop lookup).
+  opts.modelRoutes = isObject(config.model_routes) ? config.model_routes : {};
+  opts.capabilityAliases = deriveCapabilityAliases(config);
 
   for (const key of ['backends', 'endpoints', 'model_routes', 'routes']) {
     if (config[key] != null && !isObject(config[key])) {

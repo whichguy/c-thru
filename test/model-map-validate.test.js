@@ -561,6 +561,152 @@ console.log('\nGov-safety — Chinese-origin model on built-in gov key');
   assert(!errs.some(e => /Chinese-origin/.test(e)), 'non-Chinese on gov key → no gov error');
 }
 
+// ── C35: tier-completeness — pinned active tier missing from a reachable mode ─
+// resolveProfileModel returns null when a mode entry is a tier-keyed object that
+// is PRESENT but omits the active (pinned) tier — the intended "no cross-TIER
+// fallback" contract → runtime 503. Catch it at config time as an ERROR, but only
+// when the tier is pinned (opts.ctx.tier set via CLAUDE_LLM_PROFILE).
+console.log('\nC35: tier-completeness validation (pinned active tier)');
+{
+  const c35cfg = (capObj) => ({
+    backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+    model_routes: { 'cloud-16': 'local', 'cloud-64': 'local', 'cloud-128': 'local' },
+    llm_profiles: { coder: capObj },
+    llm_mode: 'best-cloud',
+  });
+
+  // (a) reachable mode tier-object omits the PINNED active tier → ERROR
+  {
+    const cfg = c35cfg({ 'best-cloud': { '16gb': 'cloud-16', '64gb': 'cloud-64' } }); // missing 128gb
+    const errs = validate(cfg, { ctx: { mode: 'best-cloud', tier: '128gb' } });
+    assert(errs.some(e => /coder.*best-cloud.*missing the active tier '128gb'/.test(e)),
+      `pinned tier 128gb absent from reachable best-cloud tier-object → error (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (b) interior tier gap below the max-defined tier → WARNING (not error).
+  // {16gb, 128gb} defines up to 128gb but skips 32/48/64 — the V4 "missing higher
+  // tiers" warning does NOT fire (128gb is the top), so the interior gap surfaces
+  // only via C35 when a missing interior tier is pinned. With an UNPINNED tier the
+  // gap must stay a warning-class concern, never a hard error.
+  {
+    const cfg = c35cfg({ 'best-cloud': { '16gb': 'cloud-16', '128gb': 'cloud-128' } }); // gap: 32/48/64
+    // Unpinned (no ctx.tier) → C35(b) skipped, no hard error for the interior gap.
+    const errsUnpinned = validate(cfg, { ctx: { mode: 'best-cloud', tier: null } });
+    assert(!errsUnpinned.some(e => /missing the active tier/.test(e)),
+      `interior gap with UNPINNED tier → no tier-completeness error (got: ${errsUnpinned.join('; ') || 'none'})`);
+    // Pin an interior missing tier (64gb) → ERROR (guaranteed 503 for that session).
+    const errsPinned = validate(cfg, { ctx: { mode: 'best-cloud', tier: '64gb' } });
+    assert(errsPinned.some(e => /coder.*best-cloud.*missing the active tier '64gb'/.test(e)),
+      `interior gap with PINNED missing tier 64gb → error (got: ${errsPinned.join('; ') || 'none'})`);
+  }
+
+  // (c) complete tiers → clean (no tier-completeness error), even when pinned.
+  {
+    const cfg = c35cfg({
+      'best-cloud': {
+        '16gb': 'cloud-16', '32gb': 'cloud-16', '48gb': 'cloud-16',
+        '64gb': 'cloud-64', '128gb': 'cloud-128',
+      },
+    });
+    const errs = validate(cfg, { ctx: { mode: 'best-cloud', tier: '64gb' } });
+    assert(!errs.some(e => /missing the active tier/.test(e)),
+      `complete tier-object, tier pinned → no tier-completeness error (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (d) a NON-reachable mode (best-local-oss) missing the pinned tier under a
+  // best-cloud session → NOT flagged (scoped to reachable cells only).
+  {
+    const cfg = c35cfg({
+      'best-cloud':     { '16gb': 'cloud-16', '64gb': 'cloud-64', '128gb': 'cloud-128', '32gb': 'cloud-16', '48gb': 'cloud-16' },
+      'best-local-oss': { '16gb': 'cloud-16' }, // missing 64gb — but not reachable in best-cloud session
+    });
+    const errs = validate(cfg, { ctx: { mode: 'best-cloud', tier: '64gb' } });
+    assert(!errs.some(e => /best-local-oss.*missing the active tier/.test(e)),
+      `unreachable mode's tier gap not flagged in best-cloud session (got: ${errs.join('; ') || 'none'})`);
+  }
+}
+
+// ── C37: routability warning for llm_profiles model strings ───────────────────
+// A reachable llm_profiles model that is NOT routable (no model_routes key, no re:
+// pattern, no @sigil, not a capability alias, not model:/claude-via-*) → WARNING.
+console.log('\nC37: llm_profiles model routability warning');
+{
+  // (a) unroutable model in a REACHABLE cell → warning
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'known-model': 'local' },
+      llm_profiles: { coder: { 'best-cloud': { '64gb': 'ghost-model-not-routed' } } },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    const errs = validate(cfg);
+    console.warn = origWarn;
+    assert(errs.length === 0, `unroutable model → warning, not hard error (got: ${errs.join('; ') || 'none'})`);
+    assert(warnMessages.some(m => m.includes('ghost-model-not-routed') && m.includes('not routable')),
+      `unroutable model emits routability warning (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+
+  // (b) routable forms → NO warning: direct route key, @sigil, re: pattern, cap alias,
+  // model: pin, claude-via-* alias.
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' }, gemini_ai: { format: 'gemini', url: 'http://localhost:1', auth_env: 'X' } },
+      model_routes: {
+        'known-model': 'local',
+        're:^qwen.*$': 'local',
+        'claude-via-gemini-pro': { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
+      },
+      llm_profiles: {
+        coder: {
+          'best-cloud': {
+            '16gb': 'known-model',            // direct key
+            '32gb': 'qwen-anything',          // re: pattern
+            '48gb': 'somemodel@local',        // @sigil
+            '64gb': 'planner',                // capability alias (planner is a profile key)
+            '128gb': 'model:literal-pin',     // model: pin
+          },
+        },
+        planner: { 'best-cloud': { '64gb': 'claude-via-gemini-pro' } }, // claude-via-* alias
+      },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    const errs = validate(cfg);
+    console.warn = origWarn;
+    assert(errs.length === 0, `all-routable config → no hard error (got: ${errs.join('; ') || 'none'})`);
+    assert(!warnMessages.some(m => m.includes('not routable')),
+      `every routable form is silent (got routability warns: ${warnMessages.filter(m => m.includes('not routable')).join(' | ') || 'none'})`);
+  }
+
+  // (c) unroutable model in a NON-reachable cell (best-local-oss while session is
+  // best-cloud) → NO warning (reachable-scoped).
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'known-model': 'local' },
+      llm_profiles: {
+        coder: {
+          'best-cloud':     { '64gb': 'known-model' },
+          'best-local-oss': { '64gb': 'ghost-orphan-model' }, // unroutable but unreachable
+        },
+      },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    const errs = validate(cfg);
+    console.warn = origWarn;
+    assert(!warnMessages.some(m => m.includes('ghost-orphan-model')),
+      `unroutable model in unreachable cell → no warning (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+}
+
 // ── Summary ────────────────────────────────────────────────────────────────
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
