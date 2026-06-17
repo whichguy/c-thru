@@ -126,10 +126,22 @@ if (args.all) {
   const theBaseMode = baseModeFor(theMode, config);
   const results = [];
   for (const [cap, entry] of Object.entries(config.llm_profiles || {})) {
-    const model = resolveProfileModel(entry, theTier, theMode, theBaseMode);
+    let model = resolveProfileModel(entry, theTier, theMode, theBaseMode);
     if (!model) continue;
-    // gov filter — engages for gov-built-in AND gov-based custom modes
-    if (isGovMode(theMode, config) && isChineseOrigin(model)) continue;
+    // gov filter — engages for gov-built-in AND gov-based custom modes.
+    // Mirror the proxy: when the primary is gov-blocked, walk
+    // fallback_chains[tier][cap] via applyModeFilter for a compliant model
+    // instead of dropping the capability outright. Drop only if none compliant.
+    if (isGovMode(theMode, config)) {
+      const chainModels = (config.fallback_chains?.[theTier]?.[cap] || [])
+        .map(c => (typeof c === 'string' ? c : c && c.model)).filter(Boolean);
+      const filtered = applyModeFilter(
+        theMode, model, chainModels,
+        config.model_routes || {}, config.endpoints || config.backends || {}, config
+      );
+      if (filtered === null) continue;
+      model = filtered;
+    }
 
     // Strip @sigil
     const sig    = model.match(/^(.+)@([A-Za-z0-9_-]+)$/);
@@ -316,12 +328,25 @@ const slotSource = explainSlotSource(entry, tier, mode);
 line('1. Slot pick', slotPick || '(null)', slotSource);
 
 // 2. Gov filter (gov modes — built-in or gov-based custom — block Chinese-origin models)
+// Mirror the proxy: when the primary slot pick is gov-blocked, walk
+// fallback_chains[tier][capability] via applyModeFilter to find a compliant
+// model rather than reporting null outright.
 let final = slotPick;
+let govFallbackUsed = false;
 if (isGovMode(mode, config) && slotPick) {
-  const { isChineseOrigin } = require('./model-map-resolve.js');
-  if (isChineseOrigin(slotPick)) {
-    line('2. Gov filter', `BLOCKED: ${slotPick}`, 'Chinese-origin model blocked in gov mode');
+  const chainModels = (config.fallback_chains?.[tier]?.[capability] || [])
+    .map(c => (typeof c === 'string' ? c : c && c.model)).filter(Boolean);
+  const filtered = applyModeFilter(
+    mode, slotPick, chainModels,
+    config.model_routes || {}, config.endpoints || config.backends || {}, config
+  );
+  if (filtered === null) {
+    line('2. Gov filter', `BLOCKED: ${slotPick}`, 'Chinese-origin model blocked in gov mode, no compliant fallback');
     final = null;
+  } else if (filtered !== slotPick) {
+    line('2. Gov filter', filtered, `primary ${slotPick} gov-blocked, served by compliant fallback`);
+    final = filtered;
+    govFallbackUsed = true;
   } else {
     line('2. Gov filter', slotPick, 'passes USGov filter (not Chinese-origin)');
   }
@@ -330,7 +355,10 @@ if (isGovMode(mode, config) && slotPick) {
 // 4. Backend
 console.log('');
 header('Final routing');
-line('served_by', final || '(null)', 'concrete model the proxy will forward to');
+line('served_by', final || '(null)',
+  final ? (govFallbackUsed ? 'concrete model the proxy will forward to (primary gov-blocked)'
+                           : 'concrete model the proxy will forward to')
+        : 'concrete model the proxy will forward to');
 const routeEntry = config.model_routes?.[final];
 const endpointsMap = config.endpoints || config.backends || {};
 let realBackendId, backend;

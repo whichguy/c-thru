@@ -946,6 +946,75 @@ async function main() {
       }
     }
 
+    // ── Test C44: local terminal already tried under its CONCRETE name is NOT re-dispatched ─
+    // tryLocalTerminalFallback resolves the LOGICAL profile fallback model
+    // through resolveBackend to its concrete effectiveModel, then de-dups on the
+    // concrete name (triedM.has(termResolved.effectiveModel)). Construct a
+    // capability whose primary connected model and local-fallback model are two
+    // DIFFERENT logical names ('local-concrete' vs 'local-alias') that resolve to
+    // the SAME concrete model 'local-concrete' (via a model_routes alias) on the
+    // SAME local backend. The primary attempt fails (404) and records
+    // 'local-concrete' in _triedModels. When the cascade reaches the local
+    // terminal, the logical name 'local-alias' is NOT in the tried set — pre-fix
+    // it re-dispatched the same concrete model a 2nd time. Post-fix it resolves
+    // 'local-alias' → 'local-concrete', sees the concrete name already tried, and
+    // skips: the local backend is hit exactly ONCE and the original 404 surfaces.
+    console.log('\nC44. local terminal resolving to an already-tried concrete model is NOT re-dispatched');
+    {
+      // Bare http server (NOT ollamaStubBackend, which always 200s) that records
+      // every request and always returns 404, so the cascade runs to the terminal.
+      const http = require('http');
+      const localRequests = [];
+      const local = await new Promise((resolve, reject) => {
+        const s = http.createServer((req, res) => {
+          const chunks = [];
+          req.on('data', c => chunks.push(c));
+          req.on('end', () => {
+            let b = null; try { b = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+            localRequests.push({ model_used: b?.model || null });
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'model not found' }));
+          });
+        });
+        s.on('error', reject);
+        s.listen(0, '127.0.0.1', () => resolve(s));
+      });
+      try {
+        const cfg = {
+          backends: {
+            local_be: { kind: 'ollama', url: `http://127.0.0.1:${local.address().port}`, legacy_ollama_chat: true },
+          },
+          model_routes: {
+            'local-concrete': 'local_be',
+            'local-alias':    'local-concrete',   // logical alias → SAME concrete model
+          },
+          llm_profiles: {
+            // Primary (connected) → local-concrete; local terminal (best-local-oss)
+            // → local-alias which resolves to the SAME concrete 'local-concrete'.
+            workhorse: {
+              'best-cloud':     { '128gb': 'local-concrete' },
+              'best-local-oss': { '128gb': 'local-alias' },
+            },
+          },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'workhorse', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          }, {}, 8000);
+          // Original 404 surfaces (terminal skipped, no global default configured).
+          assertEq(r.status, 404, 'C44 original 404 surfaces (local terminal skipped, not re-dispatched)');
+          // The defining assertion: the local backend was hit exactly ONCE — the
+          // primary attempt — NOT a second time via tryLocalTerminalFallback.
+          assertEq(localRequests.length, 1, 'C44 local backend hit exactly once (concrete model not double-dispatched)');
+          assertEq(localRequests[0].model_used, 'local-concrete', 'C44 the single hit used the concrete model');
+        });
+      } finally {
+        await new Promise(r => local.close(r));
+      }
+    }
+
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

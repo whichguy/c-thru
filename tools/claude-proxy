@@ -1555,14 +1555,22 @@ function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
   const termModel = resolveLocalFallback(CONFIG.llm_profiles?.[capKey], requestMeta.hwTier, requestMeta.activeMode, CONFIG);
   if (!termModel) return false;
   const triedM = requestMeta._triedModels || new Set();
+  // termModel is a LOGICAL profile model string; tryFallbackOrFail records tried
+  // models by their CONCRETE body.model (effectiveModel). Resolve first, then
+  // dedupe on the concrete name so an already-tried terminal isn't re-dispatched.
   if (triedM.has(termModel)) return false;
   const termResolved = resolveBackend(termModel, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
   if (termResolved.error || !isLocalBackend(termResolved.backend)) return false;
+  if (triedM.has(termResolved.effectiveModel)) return false;
   requestMeta._localTerminalAppended = true;
   requestMeta._fallbackFrom = requestMeta._fallbackFrom || termResolved.backend.id;
   body.model = termResolved.effectiveModel;
   if (termResolved.chain) requestMeta.resolutionChain = termResolved.chain;
-  ctxLog(ctx, 'fallback.local_terminal', { model: termModel, backend: termResolved.backend.id, capability: capKey });
+  // Record both logical + concrete in the tried set so a later hop won't retry.
+  const triedSet = requestMeta._triedModels || (requestMeta._triedModels = new Set());
+  triedSet.add(termModel);
+  triedSet.add(termResolved.effectiveModel);
+  ctxLog(ctx, 'fallback.local_terminal', { model: termModel, effective_model: termResolved.effectiveModel, backend: termResolved.backend.id, capability: capKey });
   dispatchOllamaBackend(ctx, req, res, body, termResolved.backend, termResolved.effectiveModel, requestMeta);
   return true;
 }
@@ -1580,15 +1588,9 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
   // _seen Set for route-chain cycles within a single resolution; this Set
   // tracks across DISPATCH hops (separate invocations of dispatchOllamaBackend /
   // forwardAnthropic).
-  // If the config was reloaded mid-flight (SIGHUP), cycles introduced by the
-  // new graph would be undetectable against the old visited-set. Reset the
-  // chain so subsequent hops cycle-check against the new config graph.
-  // Hops intentionally see the live CONFIG, not a snapshot — this only resets
-  // the visited-set, not the config reference.
-  if (requestMeta._configVersion !== CONFIG_VERSION) {
-    requestMeta._fallbackChain = new Set();
-    requestMeta._configVersion = CONFIG_VERSION;
-  }
+  // CONFIG is snapshot-pinned per request (configStorage.run pins the snapshot;
+  // global CONFIG getter returns it), so the routing graph cannot change
+  // mid-request even across a SIGHUP — cycle state persists for the whole request.
   const chain = requestMeta._fallbackChain || (requestMeta._fallbackChain = new Set());
   if (chain.has(backend.id)) {
     ctxLog(ctx, 'fallback.cycle_detected', { from_backend: backend.id, chain: [...chain] });
@@ -4966,7 +4968,6 @@ const server = http.createServer((req, res) => {
           // Per-session attribution for the recent-requests ring — Claude Code
           // sends metadata.user_id on every Messages call.
           userId: (body.metadata && typeof body.metadata.user_id === 'string') ? body.metadata.user_id : null,
-          _configVersion: CONFIG_VERSION,
         };
         // When a sentinel identified the agent, attribute usage to the AGENT (not
         // just its capability) so by_agent / the journal become a true per-agent

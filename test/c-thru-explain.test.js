@@ -7,6 +7,8 @@
 //
 // Run: node test/c-thru-explain.test.js
 
+const fs   = require('fs');
+const os   = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -219,6 +221,74 @@ console.log('\n16. --all with unknown mode exits with clear error');
   assert(r.code !== 0, `non-zero exit (got ${r.code})`);
   assert(r.stderr.includes('bogus-mode') && r.stderr.includes('valid:'),
     `error names the bad mode and lists valid modes (got: ${r.stderr.slice(0, 200)})`);
+}
+
+// ── 17 + 18: gov-filter walks fallback_chains for a compliant model (C46) ──
+// When a gov mode blocks the primary slot pick (Chinese-origin), explain now
+// walks config.fallback_chains[tier][cap] via applyModeFilter and reports the
+// first compliant model instead of null. Uses a fixture config passed through
+// CLAUDE_MODEL_MAP_PATH so the assertions are deterministic (the shipped config
+// may not have a gov capability whose primary is Chinese-origin with a chain).
+{
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-explain-c46-'));
+  const fixturePath = path.join(tmpDir, 'model-map.json');
+  // gov-cap-fallback: gov primary is qwen3-test (Chinese-origin) but its
+  //   fallback_chains[64gb] has a compliant claude-* model present in model_routes.
+  // gov-cap-blocked: gov primary is qwen3-test but its chain is only another
+  //   Chinese-origin model → nothing compliant → still blocked/null.
+  fs.writeFileSync(fixturePath, JSON.stringify({
+    llm_profiles: {
+      'gov-cap-fallback': { 'best-cloud-gov': 'qwen3-test', 'best-cloud': 'qwen3-test' },
+      'gov-cap-blocked':  { 'best-cloud-gov': 'qwen3-test', 'best-cloud': 'qwen3-test' },
+    },
+    fallback_chains: {
+      '64gb': {
+        'gov-cap-fallback': ['claude-test-compliant'],
+        'gov-cap-blocked':  ['deepseek-test-blocked'],
+      },
+    },
+    model_routes: {
+      'qwen3-test':            'oss_backend',
+      'claude-test-compliant': 'anthropic_backend',
+      'deepseek-test-blocked': 'oss_backend',
+    },
+    endpoints: {
+      anthropic_backend: { kind: 'anthropic', url: 'https://api.anthropic.com' },
+      oss_backend:       { kind: 'ollama',    url: 'http://127.0.0.1:11434' },
+    },
+  }));
+
+  try {
+    // ── 17: gov primary blocked but a compliant fallback exists → served by it ──
+    console.log('\n17. gov mode walks fallback_chains to a compliant model (C46)');
+    {
+      const env = { CLAUDE_MODEL_MAP_PATH: fixturePath };
+      const r = run(['--capability', 'gov-cap-fallback', '--mode', 'best-cloud-gov', '--tier', '64gb'], env);
+      assert(r.code === 0, `exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
+      const servedBy = (r.stdout.match(/served_by\s+(\S+)/) || [])[1] || '';
+      assertEq(servedBy, 'claude-test-compliant',
+        'served_by is the compliant fallback, not null/blocked');
+      assert(!/BLOCKED/.test(r.stdout) || servedBy === 'claude-test-compliant',
+        `output is not a bare block (servedBy=${servedBy})`);
+      assert(!/qwen|deepseek|kimi|glm/i.test(servedBy),
+        `served model is not Chinese-origin (got ${servedBy})`);
+    }
+
+    // ── 18 (inverse): gov primary blocked with NO compliant chain → still null ──
+    console.log('\n18. gov mode with no compliant fallback stays blocked/null (C46 inverse)');
+    {
+      const env = { CLAUDE_MODEL_MAP_PATH: fixturePath };
+      const r = run(['--capability', 'gov-cap-blocked', '--mode', 'best-cloud-gov', '--tier', '64gb'], env);
+      assert(r.code === 0, `exit 0 (got ${r.code})`);
+      const servedBy = (r.stdout.match(/served_by\s+(\S+)/) || [])[1] || '';
+      assert(r.stdout.includes('BLOCKED') || servedBy === '(null)',
+        `output is blocked/null when no compliant fallback (stdout: ${r.stdout.slice(0, 400)})`);
+      assert(!/served_by\s+(qwen|deepseek|kimi|glm)/i.test(r.stdout),
+        `no Chinese-origin model is served (stdout: ${r.stdout.slice(0, 400)})`);
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 const failed = summary();

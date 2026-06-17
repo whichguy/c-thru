@@ -142,8 +142,11 @@ sync_layered_profile_model_map() {
   # NOT do the staleness check. Prefer the --shell-env path that uses
   # model-map-config.js so updates are picked up automatically.
 
-  # 3-Tier Sync: Defaults -> Global Overrides -> Project Overrides (stored in _discovered_project_config)
-  node "$sync_tool" "$MODEL_MAP_DEFAULTS_FILE" "$MODEL_MAP_OVERRIDES_FILE" "${_discovered_project_config:-}" "$CLAUDE_PROFILE_DIR/model-map.json" >/dev/null
+  # Profile sync: Defaults -> Global Overrides only (system+global, mirroring
+  # Node Pass 1). The project tier is intentionally NOT merged here: the shared
+  # ~/.claude/model-map.json profile must stay project-agnostic. The session's
+  # project overlay is produced separately and selected via CLAUDE_MODEL_MAP_PATH.
+  node "$sync_tool" "$MODEL_MAP_DEFAULTS_FILE" "$MODEL_MAP_OVERRIDES_FILE" "" "$CLAUDE_PROFILE_DIR/model-map.json" >/dev/null
 }
 
 find_parent_model_map() {

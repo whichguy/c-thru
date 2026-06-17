@@ -12,6 +12,7 @@ const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(REPO_ROOT, 'tools', 'model-map-config.js');
+const SYNC_TOOL = path.join(REPO_ROOT, 'tools', 'model-map-sync.js');
 const REPO_DEFAULTS = path.join(REPO_ROOT, 'config', 'model-map.json');
 
 let passed = 0;
@@ -232,6 +233,77 @@ console.log('model-map-pollution tests\n');
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
 })();
+
+// ── Test 9 + 10: sync_tool with '' project arg keeps profile project-agnostic (C1) ──
+// tools/c-thru's sync_layered_profile_model_map passes '' for the project tier
+// when invoking model-map-sync.js, so the shared ~/.claude/model-map.json profile
+// never receives project-tier entries. model-map-sync.js coerces a falsy project
+// arg to projectPath:null, so syncLayeredConfig merges only defaults+global into
+// the profile. These tests invoke the same sync_tool directly with the same
+// positional args (defaults, global, '', output) and assert the resulting profile
+// carries the global key but NOT the project-only key.
+{
+  // Minimal valid config tree, mirroring model-map-layered.test.js's BASE shape.
+  const DEFAULTS = {
+    backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+    model_routes: { 'base-model': 'local' },
+    llm_mode: 'best-cloud',
+    llm_profiles: { workhorse: { 'best-cloud': { '16gb': 'base-model' } } },
+  };
+  const GLOBAL  = { model_routes: { 'global-only-model': 'local' } };
+  const PROJECT = { model_routes: { 'project-only-model': 'local' } };
+
+  function runSync(tmpDir, projectArg, outName) {
+    const defaultsPath = path.join(tmpDir, 'defaults.json');
+    const globalPath   = path.join(tmpDir, 'global.json');
+    const projectPath  = path.join(tmpDir, 'project.json');
+    const outPath      = path.join(tmpDir, outName);
+    fs.writeFileSync(defaultsPath, JSON.stringify(DEFAULTS));
+    fs.writeFileSync(globalPath,   JSON.stringify(GLOBAL));
+    fs.writeFileSync(projectPath,  JSON.stringify(PROJECT));
+    // projectArg of '' (the C1 fix) → model-map-sync.js coerces to projectPath:null.
+    const arg = projectArg === '' ? '' : projectPath;
+    const r = spawnSync(process.execPath, [SYNC_TOOL, defaultsPath, globalPath, arg, outPath], {
+      cwd: REPO_ROOT, encoding: 'utf8',
+    });
+    const profile = fs.existsSync(outPath)
+      ? JSON.parse(fs.readFileSync(outPath, 'utf8')) : null;
+    return { result: r, profile };
+  }
+
+  // ── Test 9: '' project arg → profile has NO project-only key ──────────────
+  (function testSyncEmptyProjectArg() {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-sync-c1-'));
+    try {
+      const { result, profile } = runSync(tmpDir, '', 'profile.json');
+      assertEq(result.status, 0, "test9: sync_tool with '' project arg exits 0");
+      assert(profile !== null, 'test9: profile output written');
+      const routes = (profile && profile.model_routes) || {};
+      assert('global-only-model' in routes,
+        "test9: profile carries the global-tier key (system+global merged)");
+      assert(!('project-only-model' in routes),
+        `test9: profile has NO project-only key (got keys: ${Object.keys(routes).join(', ')})`);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  })();
+
+  // ── Test 10: contrast — passing the project path DOES merge the project key ──
+  // Proves test9's assertion is load-bearing: the project key is project-agnostic
+  // only because the '' project arg drops it, not because the data is absent.
+  (function testSyncWithProjectArg() {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-sync-c1b-'));
+    try {
+      const { result, profile } = runSync(tmpDir, 'with-project', 'profile.json');
+      assertEq(result.status, 0, 'test10: sync_tool with project path exits 0');
+      const routes = (profile && profile.model_routes) || {};
+      assert('project-only-model' in routes,
+        `test10: passing the project path DOES merge the project key (got keys: ${Object.keys(routes).join(', ')})`);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  })();
+}
 
 const exitCode = summary();
 process.exit(exitCode ? 1 : 0);
