@@ -4705,9 +4705,10 @@ const server = http.createServer((req, res) => {
 
       if (req.method === 'POST' && req.url.startsWith('/v1/messages')) {
         const buf = await readBody(req);
+        const bodyText = buf.toString();
         let body;
         try {
-          body = JSON.parse(buf.toString());
+          body = JSON.parse(bodyText);
         } catch (e) {
           // Malformed request body. Real Anthropic returns 400 invalid_request_error
           // for this; previously we let it throw into the outer catch and returned 500
@@ -4746,33 +4747,35 @@ const server = http.createServer((req, res) => {
 
         // ── Per-agent sentinel routing (the hook handshake) ─────────────────
         // The PreToolUse hook prepends [[c-thru-agent:<name>]] to each delegation's
-        // task prompt, so the marker rides in body.messages (the subagent's first
-        // user turn) on its requests. It is the only reliable channel for the agent
-        // identity to reach the proxy (Claude Code exposes no per-subagent header /
-        // out-of-band tag, and the Agent tool's model param is a 4-alias enum — see
+        // task prompt, so the marker rides in the request body on the subagent's
+        // requests. It is the only reliable channel for the agent identity to reach the
+        // proxy (Claude Code exposes no per-subagent header / out-of-band tag, and the
+        // Agent tool's model param is a 4-alias enum — see
         // docs/planning/agent-delegation-findings.md). Routing is PER-REQUEST and
-        // stateless: each request self-identifies, so many agents → many models can
-        // run concurrently in one session without races. When present, route by the
-        // AGENT, overriding body.model (the hook's don't-block alias). Scan the first
-        // user message first (where the hook puts it); fall back to scanning all
-        // message text. We do NOT route off arbitrary message content beyond the
-        // sentinel pattern, and the marker must resolve to a known agent.
+        // stateless, so many agents → many models run concurrently in one session
+        // without races. When present, route by the AGENT, overriding body.model (the
+        // hook's don't-block alias). Marker must resolve to a known agent (anti-spoof).
+        //
+        // Detection is cheapest-first and does NOT parse the payload (the JSON parse
+        // above is needed for routing regardless; we add no structured walk):
+        //   1. O(1) header check — well-known identifier, future-proof (empty today).
+        //   2. one raw-body byte-scan (indexOf) to LOCATE the marker — over the WHOLE
+        //      body (not a bounded prefix, so a long system prompt can't hide it) —
+        //      then a fixed <=50-byte window read to extract the name.
         let sentinelAgent = null;
         {
-          const msgs = Array.isArray(body.messages) ? body.messages : [];
-          const blockText = (c) => typeof c === 'string'
-            ? c
-            : Array.isArray(c)
-              ? c.map(b => (b && typeof b === 'object') ? (b.text || '') : (typeof b === 'string' ? b : '')).join('\n')
-              : '';
-          const RE = /\[\[c-thru-agent:([A-Za-z0-9_-]+)\]\]/;
-          let m = msgs.length ? blockText(msgs[0].content).match(RE) : null;     // fast path: first turn
-          if (!m) {
-            for (const msg of msgs) { m = blockText(msg.content).match(RE); if (m) break; }  // persisted in history
+          let agentName = null;
+          const hdr = req.headers['x-c-thru-agent'];
+          if (typeof hdr === 'string' && /^[A-Za-z0-9_-]+$/.test(hdr)) {
+            agentName = hdr;                                   // tier 1: header
+          } else {
+            const i = bodyText.indexOf('[[c-thru-agent:');     // tier 2: locate (byte search)
+            if (i >= 0) {
+              const m = bodyText.slice(i, i + 50).match(/\[\[c-thru-agent:([A-Za-z0-9_-]+)\]\]/);  // read fixed window
+              if (m) agentName = m[1];
+            }
           }
-          if (m) {
-            const agentName = m[1];
-            // Honor the sentinel only if it resolves to a known agent/capability.
+          if (agentName) {
             if (resolveCapabilityAlias(agentName, CONFIG)) {
               ctxLog(ctx, 'sentinel_override', { agent: agentName, from_model: body.model });
               body.model = agentName;  // resolveBackend resolves agent → capability → model
