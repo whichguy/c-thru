@@ -4,6 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+// Single source of truth for the gov-mode Chinese-origin filter (custom_modes gov safety).
+const { isChineseOrigin } = require('./model-map-resolve.js');
 
 // Per-c-thru-session warning dedupe. When C_THRU_SESSION_ID is set (exported by
 // tools/c-thru as $$), each warning string is fingerprinted and recorded in a
@@ -361,11 +363,13 @@ function validateCapabilityEntry(capabilityName, entry, report, options) {
     return;
   }
   const RESERVED_KEYS = new Set(['on_failure', 'fallback_to', 'fallback_chains']);
+  const customModes = opts.customModes || new Set();
   let hasModeKey = false;
   for (const [key, value] of Object.entries(entry)) {
     if (RESERVED_KEYS.has(key)) continue;
-    if (!LLM_MODES.has(key)) {
-      report(`'llm_profiles.${capabilityName}.${key}' is not a valid mode (expected one of: ${[...LLM_MODES].join(', ')}) and not a reserved key (${[...RESERVED_KEYS].join(', ')})`);
+    if (!LLM_MODES.has(key) && !customModes.has(key)) {
+      const expected = [...LLM_MODES, ...customModes];
+      report(`'llm_profiles.${capabilityName}.${key}' is not a valid mode (expected one of: ${expected.join(', ')}) and not a reserved key (${[...RESERVED_KEYS].join(', ')})`);
       continue;
     }
     hasModeKey = true;
@@ -575,6 +579,59 @@ function validateConfig(config, _errors, options) {
 
   if (!isObject(config)) { report('top-level config must be an object'); return; }
 
+  // custom_modes — user-declared named modes: a label mapping capabilities → models
+  // via a `base` built-in mode plus per-capability overrides in llm_profiles. Validate
+  // here (before llm_profiles) so capability entries may reference custom-mode keys.
+  const customModeNames = new Set();
+  if (config.custom_modes != null) {
+    if (!isObject(config.custom_modes)) {
+      report("'custom_modes' must be an object when present");
+    } else {
+      const GOV_BASES = new Set(['best-cloud-gov', 'best-local-gov']);
+      const profilesForCheck = isObject(config.llm_profiles) ? config.llm_profiles : {};
+      for (const [name, def] of Object.entries(config.custom_modes)) {
+        if (LLM_MODES.has(name)) {
+          report(`'custom_modes.${name}' shadows a built-in mode — choose a different name`);
+          continue;
+        }
+        if (LEGACY_LLM_MODES.has(name)) {
+          report(`'custom_modes.${name}' shadows a legacy mode alias — choose a different name`);
+          continue;
+        }
+        if (!isObject(def)) { report(`'custom_modes.${name}' must be an object`); continue; }
+        const base = def.base;
+        if (typeof base !== 'string' || !base.trim()) {
+          report(`'custom_modes.${name}.base' is required and must name a built-in mode (one of: ${[...LLM_MODES].join(', ')})`);
+          continue;
+        }
+        if (!LLM_MODES.has(base)) {
+          report(`'custom_modes.${name}.base' must be a built-in mode (got '${base}'; expected one of: ${[...LLM_MODES].join(', ')})`);
+          continue;
+        }
+        if (def.description != null && typeof def.description !== 'string') {
+          report(`'custom_modes.${name}.description' must be a string when present`);
+        }
+        customModeNames.add(name);
+        // Gov safety: a gov-based custom mode must not be subverted by per-capability
+        // overrides that name a Chinese-origin model under this mode's key.
+        if (GOV_BASES.has(base)) {
+          for (const [cap, entry] of Object.entries(profilesForCheck)) {
+            if (!isObject(entry)) continue;
+            const ov = entry[name];
+            const models = typeof ov === 'string' ? [ov]
+              : isObject(ov) ? Object.values(ov).filter(v => typeof v === 'string') : [];
+            for (const m of models) {
+              if (isChineseOrigin(m)) {
+                report(`'llm_profiles.${cap}.${name}' names Chinese-origin model '${m}' but custom mode '${name}' has gov base '${base}' — blocked in gov modes`);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  opts.customModes = customModeNames;
+
   if (!opts.reachable && isObject(config)) {
     const ctx = opts.ctx || getActiveContext();
     // Honor config-declared llm_mode when env doesn't pin a mode — otherwise
@@ -668,8 +725,10 @@ function validateConfig(config, _errors, options) {
     }
   }
 
-  if (config.llm_mode != null && !LLM_MODES.has(config.llm_mode) && !LEGACY_LLM_MODES.has(config.llm_mode)) {
-    report(`'llm_mode' must be one of: ${[...LLM_MODES].join(', ')} (or a legacy mode for backward compat)`);
+  if (config.llm_mode != null && !LLM_MODES.has(config.llm_mode)
+      && !LEGACY_LLM_MODES.has(config.llm_mode) && !customModeNames.has(config.llm_mode)) {
+    const validList = [...LLM_MODES, ...customModeNames].join(', ');
+    report(`'llm_mode' must be one of: ${validList} (or a legacy mode for backward compat)`);
   }
 
   if (config.llm_connectivity_mode != null) {

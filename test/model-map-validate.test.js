@@ -466,6 +466,76 @@ console.log('\n29. V3: endpoint URL with unset template var emits warning');
   );
 }
 
+// ── Custom modes (user-declared named modes) ─────────────────────────────────
+console.log('\nCustom modes — accept, base validation, shadow guard, gov safety');
+{
+  const withProfiles = (custom_modes, profiles, llm_mode) => ({
+    backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+    model_routes: { 'test-model': 'local', 'deepseek-v4-pro:cloud': 'local', 'claude-opus-4-8': 'local' },
+    llm_profiles: profiles,
+    custom_modes,
+    llm_mode: llm_mode || 'best-cloud',
+  });
+
+  // 1. Valid custom mode (deepseek-hybrid shape) + a per-capability override key accepted
+  {
+    const errs = validate(withProfiles(
+      { 'deepseek-hybrid': { base: 'best-cloud-oss', description: 'DeepSeek v4 + best OSS' } },
+      {
+        coder:          { 'best-cloud': 'claude-opus-4-8', 'best-cloud-oss': 'deepseek-v4-pro:cloud' },
+        'planner-hard': { 'best-cloud': 'claude-opus-4-8', 'best-cloud-oss': 'deepseek-v4-pro:cloud', 'deepseek-hybrid': 'claude-opus-4-8' },
+      },
+    ));
+    assert(errs.length === 0, `valid custom mode + override key → no errors (got: ${errs.join('; ')})`);
+  }
+
+  // 2. Custom mode selectable as llm_mode
+  {
+    const errs = validate(withProfiles(
+      { 'deepseek-hybrid': { base: 'best-cloud-oss' } },
+      { coder: { 'best-cloud': 'claude-opus-4-8', 'best-cloud-oss': 'deepseek-v4-pro:cloud' } },
+      'deepseek-hybrid',
+    ));
+    assert(errs.length === 0, `custom mode as llm_mode value → accepted (got: ${errs.join('; ')})`);
+  }
+
+  // 3. Missing base → error
+  {
+    const errs = validate(withProfiles({ foo: { description: 'no base' } },
+      { coder: { 'best-cloud': 'test-model' } }));
+    assert(errs.some(e => /custom_modes\.foo\.base.*required/.test(e)), 'missing base → error');
+  }
+
+  // 4. base not a built-in → error
+  {
+    const errs = validate(withProfiles({ foo: { base: 'not-a-real-mode' } },
+      { coder: { 'best-cloud': 'test-model' } }));
+    assert(errs.some(e => /custom_modes\.foo\.base.*built-in/.test(e)), 'non-builtin base → error');
+  }
+
+  // 5. Name shadows a built-in mode → error
+  {
+    const errs = validate(withProfiles({ 'best-cloud': { base: 'best-cloud-oss' } },
+      { coder: { 'best-cloud': 'test-model' } }));
+    assert(errs.some(e => /shadows a built-in mode/.test(e)), 'shadowing a built-in mode → error');
+  }
+
+  // 6. Gov safety — gov base subverted by a Chinese-origin override → error
+  {
+    const errs = validate(withProfiles(
+      { 'gov-hybrid': { base: 'best-cloud-gov' } },
+      { coder: { 'best-cloud': 'claude-opus-4-8', 'best-cloud-gov': 'claude-opus-4-8', 'gov-hybrid': 'deepseek-v4-pro:cloud' } },
+    ));
+    assert(errs.some(e => /Chinese-origin.*gov base/.test(e)), 'gov base + Chinese-origin override → blocked');
+  }
+
+  // 7. An undeclared mode key on a capability is still rejected
+  {
+    const errs = validate(withProfiles({}, { coder: { 'best-cloud': 'test-model', 'made-up': 'x' } }));
+    assert(errs.some(e => /made-up.*not a valid mode/.test(e)), 'undeclared mode key still rejected');
+  }
+}
+
 // ── Summary ────────────────────────────────────────────────────────────────
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

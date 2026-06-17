@@ -43,6 +43,12 @@
   },
   "llm_active_profile": "auto",
   "llm_mode": "best-cloud",
+  "custom_modes": {
+    "deepseek-hybrid": {
+      "base": "best-cloud-oss",
+      "description": "DeepSeek v4 + best OSS; Claude for high-stakes (planner-hard, reviewer-security)"
+    }
+  },
   "llm_profiles": {
     "planner": {
       "best-cloud": {
@@ -86,6 +92,7 @@
     "planner-hard": {
       "best-cloud": "claude-opus-4-8",
       "best-cloud-oss": "deepseek-v4-flash:cloud",
+      "deepseek-hybrid": "claude-opus-4-8",
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "qwen3.6:27b",
@@ -281,6 +288,7 @@
     "reviewer-security": {
       "best-cloud": "claude-opus-4-8",
       "best-cloud-oss": "deepseek-v4-flash:cloud",
+      "deepseek-hybrid": "claude-opus-4-8",
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "qwen3.6:27b",

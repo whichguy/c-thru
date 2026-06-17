@@ -19,6 +19,7 @@ const {
   resolveLocalFallback,
   resolveLlmMode,
   normalizeLlmMode,
+  baseModeFor,
   resolveActiveTier,
   resolveCapabilityAlias,
   LLM_MODE_ENUM,
@@ -1068,10 +1069,12 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
       if (nested.error) return nested;
       return { ...nested, logicalRole: nested.logicalRole || model, capability: model, chain };
     }
-    // New schema: llm_profiles[capability] (capability-outer, not tier-outer)
+    // New schema: llm_profiles[capability] (capability-outer, not tier-outer).
+    // For a custom mode, capabilities it doesn't override resolve under its `base`.
     const entry = (cfg.llm_profiles || {})[capAlias] || null;
     if (entry) {
-      const resolved = resolveProfileModel(entry, tier, mode);
+      const baseMode = baseModeFor(mode, cfg);
+      const resolved = resolveProfileModel(entry, tier, mode, baseMode);
       if (resolved) {
         chain.push(`cap(${capAlias}->${mode}/${tier}->${resolved})`);
         const nested = resolveBackend(resolved, cfg, tier, mode, seen, chain);
@@ -4408,11 +4411,12 @@ const server = http.createServer((req, res) => {
       if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/' || req.url.startsWith('/c-thru/status?'))) {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
+        const baseMode = baseModeFor(mode, CONFIG);
         // New schema: llm_profiles[capability] (capability-outer, not tier-outer)
         const allProfiles = CONFIG.llm_profiles || {};
         const active_capabilities = {};
         for (const [capabilityName, entry] of Object.entries(allProfiles)) {
-          const m = resolveProfileModel(entry, tier, mode);
+          const m = resolveProfileModel(entry, tier, mode, baseMode);
           if (m) active_capabilities[capabilityName] = m.replace(BACKEND_SIGIL_RE, '$1');
         }
         // agent_resolutions: overridden agents only by default; ?verbose=1 shows all.
@@ -4440,7 +4444,7 @@ const server = http.createServer((req, res) => {
             };
           } else {
             const profEntry = allProfiles[capVal];
-            let resolvedModel = profEntry ? resolveProfileModel(profEntry, tier, mode) : null;
+            let resolvedModel = profEntry ? resolveProfileModel(profEntry, tier, mode, baseMode) : null;
             if (resolvedModel) resolvedModel = resolvedModel.replace(BACKEND_SIGIL_RE, '$1');
             agent_resolutions[agent] = {
               capability: capVal || null,
@@ -4458,6 +4462,15 @@ const server = http.createServer((req, res) => {
         return send(res, 200, {
           ok: true,
           mode,
+          // The base built-in mode the active mode resolves under (null for built-ins).
+          base_mode: baseMode,
+          // User-declared custom modes available for --mode selection.
+          custom_modes: CONFIG.custom_modes && typeof CONFIG.custom_modes === 'object'
+            ? Object.fromEntries(Object.entries(CONFIG.custom_modes).map(([n, d]) => [n, {
+                base: (d && d.base) || null,
+                description: (d && d.description) || null,
+              }]))
+            : {},
           hardware_tier: tier,
           config_source: CONFIG_SOURCE,
           // Instance identity + dashboard discovery (additive — the .usage
@@ -4500,13 +4513,15 @@ const server = http.createServer((req, res) => {
         const buf = await readBody(req);
         let payload; try { payload = JSON.parse(buf.toString()); } catch (e) { return sendAnthropicError(res, 400, `invalid JSON body: ${e.message}`); }
         const requested = payload?.mode;
-        // Accept legacy vocabulary ('offline'/'disconnect'/'connected') by
-        // translating to the canonical enum; reject everything else — a
-        // mode-switch endpoint must be precise, no silent best-cloud fallback.
-        const mode = requested ? normalizeLlmMode(requested) : null;
+        // Accept built-in modes, user-declared custom modes (config.custom_modes), and
+        // legacy vocabulary ('offline'/'disconnect'/'connected'); reject everything else
+        // — a mode-switch endpoint must be precise, no silent best-cloud fallback.
+        const mode = requested ? normalizeLlmMode(requested, CONFIG) : null;
         if (!mode) {
+          const customModes = Object.keys(CONFIG.custom_modes || {});
+          const validList = [...LLM_MODE_ENUM, ...customModes].join(', ');
           return sendAnthropicError(res, 400,
-            `invalid mode '${requested}': valid modes are ${[...LLM_MODE_ENUM].join(', ')} (legacy aliases also accepted: offline, disconnect, connected)`);
+            `invalid mode '${requested}': valid modes are ${validList} (legacy aliases also accepted: offline, disconnect, connected)`);
         }
         process.env.CLAUDE_LLM_MODE = mode;
         proxyLog('mode-switch', { new_mode: mode, requested_mode: requested, source: 'control-channel' });
@@ -4657,12 +4672,13 @@ const server = http.createServer((req, res) => {
       if (req.method === 'GET' && (req.url === '/v1/active-models' || req.url === '/v1/active-models/')) {
         const tier = resolveActiveTier(CONFIG);
         const mode = resolveLlmMode(CONFIG);
+        const baseMode2 = baseModeFor(mode, CONFIG);
         // New schema: llm_profiles[capability] (capability-outer)
         const allProfiles2 = CONFIG.llm_profiles || {};
         const local_models = [];
         const capabilities = [];
         for (const [alias, entry] of Object.entries(allProfiles2)) {
-          const m = resolveProfileModel(entry, tier, mode);
+          const m = resolveProfileModel(entry, tier, mode, baseMode2);
           if (!m) continue;
           const sigilMatch = m.match(BACKEND_SIGIL_RE);
           const base = sigilMatch ? sigilMatch[1] : m;

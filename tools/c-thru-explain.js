@@ -16,6 +16,8 @@ const os   = require('os');
 const {
   resolveProfileModel,
   resolveCapabilityAlias,
+  baseModeFor,
+  validModes,
   applyModeFilter,
   pickBenchmarkBest,
   isClaude, isCloud, isOpenSource, isChineseOrigin,
@@ -102,8 +104,9 @@ const modelName = args.model;
 // --all branch: resolve every capability for the given tier × mode
 if (args.all) {
   const theMode = args.mode || process.env.CLAUDE_LLM_MODE || 'best-cloud';
-  if (!LLM_MODE_ENUM.has(theMode)) {
-    console.error(`explain: unknown mode '${theMode}' (valid: ${[...LLM_MODE_ENUM].join(', ')})`);
+  const theValidModes = validModes(config);
+  if (!theValidModes.has(theMode)) {
+    console.error(`explain: unknown mode '${theMode}' (valid: ${[...theValidModes].join(', ')})`);
     process.exit(1);
   }
   let theTier = args.tier || process.env.CLAUDE_LLM_PROFILE;
@@ -121,9 +124,10 @@ if (args.all) {
   const LOCAL_RE = /localhost|127\.0\.0\.1|0\.0\.0\.0/;
   const GOV    = new Set(['best-cloud-gov', 'best-local-gov']);
 
+  const theBaseMode = baseModeFor(theMode, config);
   const results = [];
   for (const [cap, entry] of Object.entries(config.llm_profiles || {})) {
-    const model = resolveProfileModel(entry, theTier, theMode);
+    const model = resolveProfileModel(entry, theTier, theMode, theBaseMode);
     if (!model) continue;
     if (GOV.has(theMode) && isChineseOrigin(model)) continue;
 
@@ -257,8 +261,9 @@ if (agent && !capability) {
 }
 
 const mode = args.mode || process.env.CLAUDE_LLM_MODE || 'best-cloud';
-if (!LLM_MODE_ENUM.has(mode)) {
-  console.error(`explain: unknown mode '${mode}' (valid: ${[...LLM_MODE_ENUM].join(', ')})`);
+const validModesForReq = validModes(config);
+if (!validModesForReq.has(mode)) {
+  console.error(`explain: unknown mode '${mode}' (valid: ${[...validModesForReq].join(', ')})`);
   process.exit(1);
 }
 
@@ -304,8 +309,9 @@ function line(label, value, note = '') {
 header(`Resolution chain — capability=${capability} mode=${mode} tier=${tier}`);
 console.log('');
 
-// 1. Slot resolution (the resolver's job) — new 3-argument form (entry, tier, mode)
-const slotPick = resolveProfileModel(entry, tier, mode);
+// 1. Slot resolution (the resolver's job) — custom modes resolve un-overridden
+// capabilities under their `base` built-in mode.
+const slotPick = resolveProfileModel(entry, tier, mode, baseModeFor(mode, config));
 const slotSource = explainSlotSource(entry, tier, mode);
 line('1. Slot pick', slotPick || '(null)', slotSource);
 

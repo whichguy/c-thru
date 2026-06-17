@@ -78,11 +78,21 @@ function resolveCapabilityAlias(input, config, tier) {
   const key = cap === 'general-default' ? 'default' : cap;
   return profiles[key] ? key : null;
 }
-function resolveProfileModel(entry, tier, mode) {
-  return (entry[mode] && entry[mode][tier]) || null;
+function resolveProfileModel(entry, tier, mode, baseMode) {
+  let v = entry[mode];
+  if (!v && baseMode) v = entry[baseMode];
+  return (v && v[tier]) || null;
+}
+function validModes(config) {
+  const custom = config && config.custom_modes ? Object.keys(config.custom_modes) : [];
+  return new Set([...LLM_MODE_ENUM, ...custom]);
+}
+function baseModeFor(mode, config) {
+  const cm = config && config.custom_modes && config.custom_modes[mode];
+  return cm && typeof cm.base === 'string' ? cm.base : null;
 }
 function resolveTerminalTarget(_config, _label) { return null; }
-module.exports = { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, LLM_MODE_ENUM };
+module.exports = { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, validModes, baseModeFor, LLM_MODE_ENUM };
 `;
   fs.writeFileSync(path.join(toolsDir, 'model-map-resolve.js'), resolveStub, 'utf8');
 

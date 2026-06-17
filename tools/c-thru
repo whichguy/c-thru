@@ -1263,12 +1263,15 @@ resolve_profile_alias_model() {
   llm_mode="$(resolve_llm_mode)"
   profile_key="$(profile_alias_key "$requested")"
   # llm_mode: mode-aware model selection — mirrors resolveProfileModel() in model-map-resolve.js
-  # New schema: llm_profiles[$key][$mode] is a string or tier-keyed object {$p: model}
+  # New schema: llm_profiles[$key][$mode] is a string or tier-keyed object {$p: model}.
+  # Custom modes (custom_modes[$mode].base) resolve un-overridden capabilities under
+  # their base built-in mode, then best-cloud — mirrors baseModeFor()+resolveProfileModel().
   resolved="$(jq -r --arg p "$profile" --arg key "$profile_key" --arg mode "$llm_mode" '
+    ((.custom_modes // {})[$mode].base) as $base |
     (.llm_profiles // {})[$key] as $cap |
     if $cap == null then empty
     else
-      (($cap[$mode] // $cap["best-cloud"]) as $modeVal |
+      (($cap[$mode] // (if $base != null then $cap[$base] else null end) // $cap["best-cloud"]) as $modeVal |
       if $modeVal == null then empty
       elif ($modeVal | type) == "string" then $modeVal
       elif ($modeVal | type) == "object" then ($modeVal[$p] // empty)
@@ -3886,6 +3889,20 @@ show_models() {
 
   # Configured routes
   print_config_section "routes" "Configured routes (model-map.json)"
+
+  # User-declared custom modes (labels mapping capabilities → models via base + overrides)
+  if [[ -f "$CONFIG" ]]; then
+    local custom_modes_list
+    custom_modes_list="$(jq -r '
+      (.custom_modes // {}) | to_entries[] |
+      "  \(.key)  (base: \(.value.base // "?"))\(if .value.description then "  — \(.value.description)" else "" end)"
+    ' "$CONFIG" 2>/dev/null)" || true
+    if [[ -n "$custom_modes_list" ]]; then
+      echo "Custom modes (select with --mode <name>):"
+      printf '%s\n' "$custom_modes_list"
+      echo ""
+    fi
+  fi
 
   # Local Ollama
   local ollama_http_base="${OLLAMA_URL%/api}"

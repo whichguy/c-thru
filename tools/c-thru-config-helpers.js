@@ -145,7 +145,7 @@ function cmdResolve(args) {
 
   const selected = readSelectedConfig();
   const config = selected.config;
-  const { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, LLM_MODE_ENUM, MODEL_PIN_PREFIX } = loadResolve();
+  const { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, validModes, baseModeFor, MODEL_PIN_PREFIX } = loadResolve();
 
   const mode     = resolveLlmMode(config);
   const tier     = resolveActiveTier(config);
@@ -159,7 +159,7 @@ function cmdResolve(args) {
   const envMode = process.env.CLAUDE_LLM_MODE;
   const modeSource = envMode
     ? 'CLAUDE_LLM_MODE env'
-    : (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) ? `${selected.path} (${selected.source})` : 'default';
+    : (config.llm_mode && validModes(config).has(config.llm_mode)) ? `${selected.path} (${selected.source})` : 'default';
 
   // model: prefix — agent is pinned directly to a model, bypassing capability tiers.
   if (capAlias.startsWith(MODEL_PIN_PREFIX)) {
@@ -188,7 +188,7 @@ function cmdResolve(args) {
     process.exit(2);
   }
 
-  const resolved = resolveProfileModel(entry, tier, mode);
+  const resolved = resolveProfileModel(entry, tier, mode, baseModeFor(mode, config));
   if (!resolved) { die(`resolveProfileModel returned empty for ${JSON.stringify(capAlias)}`); }
   const target = resolveTerminalTarget(config, resolved);
   const providerModel = target ? target.providerModel : resolved;
@@ -216,12 +216,16 @@ function cmdModeRead(_args) {
   try { config    = JSON.parse(fs.readFileSync(MAP_PATH,       'utf8')); } catch {}
   try { overrides = JSON.parse(fs.readFileSync(OVERRIDES_PATH, 'utf8')); } catch {}
 
+  // Built-in modes + custom_modes declared in either layer are all selectable.
+  const { validModes } = loadResolve();
+  const valid = validModes({ custom_modes: { ...(config.custom_modes || {}), ...(overrides.custom_modes || {}) } });
+
   const envMode = process.env.CLAUDE_LLM_MODE;
-  if (envMode && LLM_MODE_ENUM.has(envMode)) {
+  if (envMode && valid.has(envMode)) {
     process.stdout.write(`mode: ${envMode}  (source: CLAUDE_LLM_MODE env — transient, not persisted)\n`);
-  } else if (overrides.llm_mode && LLM_MODE_ENUM.has(overrides.llm_mode)) {
+  } else if (overrides.llm_mode && valid.has(overrides.llm_mode)) {
     process.stdout.write(`mode: ${overrides.llm_mode}  (source: ${OVERRIDES_PATH})\n`);
-  } else if (config.llm_mode && LLM_MODE_ENUM.has(config.llm_mode)) {
+  } else if (config.llm_mode && valid.has(config.llm_mode)) {
     process.stdout.write(`mode: ${config.llm_mode}  (source: ${MAP_PATH} — system default)\n`);
   } else {
     process.stdout.write('mode: best-cloud  (source: built-in default)\n');
@@ -237,8 +241,14 @@ function cmdModeRead(_args) {
  */
 function cmdModeWrite(args) {
   const mode = args[0];
-  if (!mode || !LLM_MODE_ENUM.has(mode)) {
-    die(`invalid mode '${mode}' — valid: ${[...LLM_MODE_ENUM].join(', ')}`);
+  // Accept built-in modes + custom_modes declared in either the system map or overrides.
+  let config = {}, overrides = {};
+  try { config    = JSON.parse(fs.readFileSync(MAP_PATH,       'utf8')); } catch {}
+  try { overrides = JSON.parse(fs.readFileSync(OVERRIDES_PATH, 'utf8')); } catch {}
+  const { validModes } = loadResolve();
+  const valid = validModes({ custom_modes: { ...(config.custom_modes || {}), ...(overrides.custom_modes || {}) } });
+  if (!mode || !valid.has(mode)) {
+    die(`invalid mode '${mode}' — valid: ${[...valid].join(', ')}`);
   }
   runEdit(JSON.stringify({ llm_mode: mode }));
   if (hasFlag(args, '--reload')) {
@@ -380,9 +390,10 @@ function cmdAgentList(_args) {
   const selected = readSelectedConfig();
   const config = selected.config;
   const resolve = loadResolve();
-  const { MODEL_PIN_PREFIX, resolveActiveTier, resolveLlmMode, resolveProfileModel } = resolve;
+  const { MODEL_PIN_PREFIX, resolveActiveTier, resolveLlmMode, resolveProfileModel, baseModeFor } = resolve;
   const tier = resolveActiveTier(config);
   const mode = resolveLlmMode(config);
+  const baseMode = baseModeFor(mode, config);
   const allProfiles = config.llm_profiles || {};
   const a2c = config.agent_to_capability || {};
 
@@ -406,7 +417,7 @@ function cmdAgentList(_args) {
     } else {
       capDisplay = capVal || '(none)';
       const entry = allProfiles[capVal];
-      const m = entry ? resolveProfileModel(entry, tier, mode) : null;
+      const m = entry ? resolveProfileModel(entry, tier, mode, baseMode) : null;
       modelDisplay = m || '(unresolved)';
     }
     rows.push({ agent, cap: capDisplay, model: modelDisplay, overridden: overriddenAgents.has(agent) });

@@ -14,6 +14,8 @@ const {
   resolveLlmMode,
   resolveActiveTier,
   resolveCapabilityAlias,
+  validModes,
+  baseModeFor,
   LLM_MODE_ENUM,
 } = require('../tools/model-map-resolve.js');
 
@@ -373,6 +375,57 @@ console.log('\n13. tools/c-thru-resolve follows config selection precedence');
     try { fs.rmSync(projectDir,  { recursive: true, force: true }); } catch {}
     try { fs.unlinkSync(overridePath); } catch {}
   }
+}
+
+// ── 12. Custom modes — validModes / baseModeFor / base-fallback resolution ────
+// A custom mode is a label mapping capabilities → models via a `base` built-in
+// mode plus per-capability overrides. Un-overridden capabilities resolve under
+// `base`; the 'deepseek-hybrid' shape is base best-cloud-oss + Claude overrides.
+console.log('\n12. Custom modes — base fallback + per-capability override');
+{
+  const cfg = {
+    custom_modes: {
+      'deepseek-hybrid': { base: 'best-cloud-oss', description: 'DeepSeek v4 + best OSS; Claude for high-stakes' },
+    },
+    llm_profiles: {
+      // un-overridden: inherits best-cloud-oss (DeepSeek)
+      coder: {
+        'best-cloud':     'claude-opus-4-8',
+        'best-cloud-oss': 'deepseek-v4-pro:cloud',
+      },
+      // overridden: explicit deepseek-hybrid key wins over the base
+      'planner-hard': {
+        'best-cloud':     'claude-opus-4-8',
+        'best-cloud-oss': 'deepseek-v4-pro:cloud',
+        'deepseek-hybrid': 'claude-opus-4-8',
+      },
+    },
+  };
+
+  // validModes = builtins ∪ declared custom modes
+  const valid = validModes(cfg);
+  assert(valid.has('deepseek-hybrid'), 'validModes includes the declared custom mode');
+  assert(valid.has('best-cloud'), 'validModes still includes built-in modes');
+  assert(!validModes({}).has('deepseek-hybrid'), 'validModes without config excludes custom modes');
+
+  // baseModeFor resolves the declared base; built-ins have no base
+  assert(baseModeFor('deepseek-hybrid', cfg) === 'best-cloud-oss', 'baseModeFor → declared base');
+  assert(baseModeFor('best-cloud', cfg) === null, 'baseModeFor(built-in) → null');
+
+  const base = baseModeFor('deepseek-hybrid', cfg);
+  // un-overridden capability falls back to base (best-cloud-oss → DeepSeek)
+  assert(resolveProfileModel(cfg.llm_profiles.coder, '64gb', 'deepseek-hybrid', base) === 'deepseek-v4-pro:cloud',
+    'un-overridden capability resolves under base mode → DeepSeek');
+  // overridden capability uses the explicit custom-mode key
+  assert(resolveProfileModel(cfg.llm_profiles['planner-hard'], '64gb', 'deepseek-hybrid', base) === 'claude-opus-4-8',
+    'overridden capability uses the explicit custom-mode model → Claude');
+  // base fallback chains to best-cloud when base entry is also absent
+  const partial = { 'best-cloud': 'claude-fallback' };
+  assert(resolveProfileModel(partial, '64gb', 'deepseek-hybrid', base) === 'claude-fallback',
+    'mode + base both absent → best-cloud fallback');
+  // omitting baseMode preserves original 3-arg semantics (no base hop)
+  assert(resolveProfileModel(cfg.llm_profiles.coder, '64gb', 'deepseek-hybrid') === 'claude-opus-4-8',
+    '3-arg form (no baseMode) falls straight to best-cloud — original semantics unchanged');
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────

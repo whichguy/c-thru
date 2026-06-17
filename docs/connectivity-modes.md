@@ -164,6 +164,65 @@ The override stacks on top of the system defaults. Reload with `c-thru reload` (
 
 ---
 
+## Custom modes (user-definable named modes)
+
+Beyond the built-in modes you can declare your own **custom modes** in
+`model-map.json` (or `model-map.overrides.json`). A custom mode is a *label that maps
+capabilities → models*: it names a **`base`** built-in mode plus optional per-capability
+overrides. Capabilities you don't override resolve under `base`; everything is selectable
+session-wide with `--mode <name>` (or `CLAUDE_LLM_MODE`).
+
+Declare the mode under `custom_modes`:
+
+```json
+"custom_modes": {
+  "deepseek-hybrid": {
+    "base": "best-cloud-oss",
+    "description": "DeepSeek v4 + best OSS; Claude for high-stakes"
+  }
+}
+```
+
+Override just the high-stakes capabilities by adding the custom-mode key to their
+`llm_profiles` entry (the key value is a model string or a tier-keyed object, exactly like
+a built-in mode slot):
+
+```json
+"llm_profiles": {
+  "planner-hard":      { "best-cloud-oss": "deepseek-v4-flash:cloud", "deepseek-hybrid": "claude-opus-4-8" },
+  "reviewer-security": { "best-cloud-oss": "deepseek-v4-flash:cloud", "deepseek-hybrid": "claude-opus-4-8" }
+}
+```
+
+Resolution precedence, per capability:
+`llm_profiles[cap][<custom mode>]` → `llm_profiles[cap][base]` → `llm_profiles[cap]["best-cloud"]`
+(tier applies within each).
+
+Rules enforced by the validator (`model-map-validate.js`):
+
+- **`base` is required** and must name a built-in mode (`best-cloud`, `best-cloud-oss`,
+  `best-local-oss`, `best-cloud-gov`, `best-local-gov`). Without it an OSS-style custom mode
+  would fall back to Anthropic for every un-overridden capability.
+- A custom mode **must not shadow** a built-in mode name or a legacy alias.
+- **Gov safety:** if `base` is a gov mode, an override that names a Chinese-origin model is
+  rejected — gov modes block those models and a custom mode can't smuggle one back in.
+
+Select and verify it:
+
+```sh
+c-thru --mode deepseek-hybrid -p "…"
+c-thru list                      # lists declared custom modes (name, base, description)
+curl http://127.0.0.1:9997/c-thru/status | jq '{mode, base_mode, custom_modes}'
+```
+
+Custom modes vs. the other named mechanisms:
+- **custom_modes** — a *mode* (label → many capability→model mappings, via `base` + overrides).
+- **the 5 built-ins** — the fixed modes a custom mode builds on.
+- **`routes`** — a flat label → a *single* model (e.g. `default`, `high-model`), unrelated to
+  per-capability mode resolution.
+
+---
+
 ## See also
 
 - [`tournament_2026-04-25.md`](./tournament_2026-04-25.md) — model rankings used to inform

@@ -45,10 +45,14 @@ cat > "$FIXTURE_CONFIG" <<'EOF'
     "local-model-a":  "ollama_local",
     "cloud-model-b":  "cloud_ep"
   },
+  "custom_modes": {
+    "hybrid-test": { "base": "best-local-oss", "description": "local base + one cloud override" }
+  },
   "llm_profiles": {
     "worker": {
       "best-cloud":     { "64gb": "cloud-model-b" },
-      "best-local-oss": { "64gb": "local-model-a" }
+      "best-local-oss": { "64gb": "local-model-a" },
+      "hybrid-test":    { "64gb": "cloud-model-b" }
     },
     "scout": {
       "best-cloud":     { "64gb": "local-model-a" },
@@ -268,6 +272,45 @@ echo "8. unknown --mode exits non-zero with clear error"
   check "exits non-zero" "1" "$exit_code"
   check_contains "error mentions the bad mode" "bogus-mode" "$stderr_out"
   check_contains "error lists valid modes" "best-cloud" "$stderr_out"
+}
+
+# ── 9: custom mode — JS explain ↔ bash resolve_profile_alias_model parity ────
+echo ""
+echo "9. custom mode (base + override): JS explain and bash jq resolve identically"
+{
+  # Mirror the exact jq pipeline in resolve_profile_alias_model() (tools/c-thru):
+  # custom_modes[$mode].base fallback, then best-cloud, then tier pick.
+  bash_resolve() {
+    local key="$1" mode="$2" p="$3"
+    jq -r --arg p "$p" --arg key "$key" --arg mode "$mode" '
+      ((.custom_modes // {})[$mode].base) as $base |
+      (.llm_profiles // {})[$key] as $cap |
+      if $cap == null then empty
+      else
+        (($cap[$mode] // (if $base != null then $cap[$base] else null end) // $cap["best-cloud"]) as $modeVal |
+        if $modeVal == null then empty
+        elif ($modeVal | type) == "string" then $modeVal
+        elif ($modeVal | type) == "object" then ($modeVal[$p] // empty)
+        else empty
+        end)
+      end
+    ' "$FIXTURE_CONFIG" 2>/dev/null
+  }
+
+  json="$(explain_all 64gb hybrid-test)"
+  # worker has an explicit hybrid-test override → cloud-model-b in both engines
+  worker_js="$(echo "$json" | jq -r '.[] | select(.capability=="worker") | .model')"
+  worker_bash="$(bash_resolve worker hybrid-test 64gb)"
+  check "JS: worker under custom mode uses explicit override" "cloud-model-b" "$worker_js"
+  check "bash: worker under custom mode uses explicit override" "cloud-model-b" "$worker_bash"
+  check "parity: worker JS == bash" "$worker_js" "$worker_bash"
+
+  # scout has no hybrid-test key → falls back to base best-local-oss → local-model-a
+  scout_js="$(echo "$json" | jq -r '.[] | select(.capability=="scout") | .model')"
+  scout_bash="$(bash_resolve scout hybrid-test 64gb)"
+  check "JS: scout falls back to base mode → local-model-a" "local-model-a" "$scout_js"
+  check "bash: scout falls back to base mode → local-model-a" "local-model-a" "$scout_bash"
+  check "parity: scout JS == bash" "$scout_js" "$scout_bash"
 }
 
 # ── Summary ──────────────────────────────────────────────────────────────────

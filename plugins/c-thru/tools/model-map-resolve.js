@@ -23,12 +23,32 @@ const LLM_MODE_ENUM = new Set([
 
 const DEFAULT_MODE = 'best-cloud';
 
-// Translate a requested mode (canonical or legacy vocabulary) to the canonical
-// enum. Mirrors the legacy branches in resolveLlmMode, but returns null for
-// anything unrecognized — callers that take explicit user input (e.g. the
+// validModes — the set of selectable mode names: the 5 built-ins (LLM_MODE_ENUM)
+// PLUS any user-declared custom modes (config.custom_modes keys). A custom mode is
+// a label that maps capabilities → models via a `base` built-in mode plus per-
+// capability llm_profiles overrides. Derived at runtime so LLM_MODE_ENUM stays the
+// authoritative builtin constant (c-thru-contract-check Check 11 compares it).
+function validModes(config) {
+  const custom = config && config.custom_modes && typeof config.custom_modes === 'object'
+    ? Object.keys(config.custom_modes) : [];
+  return new Set([...LLM_MODE_ENUM, ...custom]);
+}
+
+// baseModeFor — the built-in mode a (possibly custom) mode resolves under for
+// capabilities it doesn't explicitly override. Built-in modes are their own base.
+function baseModeFor(mode, config) {
+  const cm = config && config.custom_modes && config.custom_modes[mode];
+  if (cm && typeof cm === 'object' && typeof cm.base === 'string') return cm.base;
+  return null;
+}
+
+// Translate a requested mode (canonical, custom, or legacy vocabulary) to a
+// selectable mode name. Mirrors the legacy branches in resolveLlmMode, but returns
+// null for anything unrecognized — callers that take explicit user input (e.g. the
 // proxy's POST /c-thru/mode) must reject garbage rather than silently degrade.
-function normalizeLlmMode(mode) {
-  if (LLM_MODE_ENUM.has(mode)) return mode;
+// Pass `config` to accept user-declared custom modes; without it only built-ins resolve.
+function normalizeLlmMode(mode, config) {
+  if (validModes(config).has(mode)) return mode;
   return {
     offline: 'best-local-oss',
     disconnect: 'best-local-oss',
@@ -64,9 +84,13 @@ function detectConnectivity() {
 //   (b) a tier-keyed object — {16gb: "...", 32gb: "...", ...}
 // Null-return contract: when null is returned, the caller must surface a 503 error.
 // The caller is responsible for looking up llm_profiles[capability] and passing that entry.
-function resolveProfileModel(entry, tier, mode) {
+// `baseMode` (optional) is a custom mode's `base` built-in: a capability the custom
+// mode doesn't explicitly override resolves under `base`, then 'best-cloud'. Omitting
+// it preserves the original 3-arg semantics exactly (mode → 'best-cloud').
+function resolveProfileModel(entry, tier, mode, baseMode) {
   if (!entry) return null;
-  const modeValue = entry[mode];
+  let modeValue = entry[mode];
+  if (!modeValue && baseMode) modeValue = entry[baseMode]; // custom-mode base fallback
   if (!modeValue) {
     // Graceful fallback to best-cloud if the requested mode has no entry
     const fallback = entry['best-cloud'];
@@ -99,9 +123,10 @@ function resolveLocalFallback(entry, tier, activeMode) {
 // Resolve the active connectivity mode.
 // Precedence: CLAUDE_LLM_MODE → CLAUDE_CONNECTIVITY_MODE (legacy) → config.llm_mode → auto → DEFAULT_MODE
 function resolveLlmMode(config) {
+  const valid = validModes(config);
   const envMode = process.env.CLAUDE_LLM_MODE;
   if (envMode) {
-    if (!LLM_MODE_ENUM.has(envMode)) {
+    if (!valid.has(envMode)) {
       process.stderr.write(`model-map-resolve: unknown CLAUDE_LLM_MODE '${envMode}', falling back to ${DEFAULT_MODE}\n`);
     } else {
       return envMode;
@@ -118,7 +143,7 @@ function resolveLlmMode(config) {
 
   let configMode = DEFAULT_MODE;
   if (config && config.llm_mode) {
-    if (LLM_MODE_ENUM.has(config.llm_mode)) {
+    if (valid.has(config.llm_mode)) {
       configMode = config.llm_mode;
     } else if (config.llm_mode === 'connected') {
       configMode = DEFAULT_MODE;
@@ -329,6 +354,8 @@ module.exports = {
   resolveLocalFallback,
   resolveLlmMode,
   normalizeLlmMode,
+  validModes,
+  baseModeFor,
   resolveActiveTier,
   resolveCapabilityAlias,
   resolveTerminalTarget,

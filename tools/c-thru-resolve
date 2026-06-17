@@ -11,6 +11,7 @@ const {
   resolveActiveTier,
   resolveCapabilityAlias,
   resolveTerminalTarget,
+  baseModeFor,
 } = require('./model-map-resolve.js');
 
 let config;
@@ -46,7 +47,7 @@ if (!entry || typeof entry !== 'object') {
   process.exit(2);
 }
 
-const resolved = resolveProfileModel(entry, tier, mode);
+const resolved = resolveProfileModel(entry, tier, mode, baseModeFor(mode, config));
 if (typeof resolved !== 'string' || !resolved) {
   process.stderr.write('c-thru-resolve: resolveProfileModel returned empty for ' + JSON.stringify(capAlias) + '\n');
   process.exit(1);
