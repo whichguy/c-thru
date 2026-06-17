@@ -25,7 +25,7 @@ Only the profile graph is layered. `install.sh` seeds `model-map.system.json`, u
 }
 ```
 
-- **backends** — connection metadata (URL, auth strategy, kind). `kind` defaults to `anthropic`; use `ollama` for local/Ollama-compat providers. Add `@<backend-id>` suffix to model names in `model_routes` to route the same tag to two different backends.
+- **backends** — connection metadata (URL, auth strategy, kind). `kind` defaults to `anthropic`; use `ollama` for local/Ollama-compat providers. Add `@<backend-id>` suffix to model names in `model_routes` to route the same tag to two different backends. **Credential safety:** the proxy fronts Claude Code, so incoming requests carry the user's Anthropic OAuth/API key. For a non-localhost backend with no auth config (no `auth`/`auth_env`/`auth` object), the proxy now **strips** that incoming Anthropic credential rather than forwarding it to a third party — unless the backend declares `kind:"anthropic"` or opts in with `auth_passthrough: true`. Configure third-party backends with their own `auth_env`/`auth` so they authenticate correctly.
 - **model_routes** — flat map of concrete model name → backend ID. Supports `re:^pattern$` regex keys and `@<backend>` routing sigil suffix.
 - **routes** — named presets (flat string→string) resolved via `c-thru --route <name>`. `routes.default` is used when no explicit route or model flag is passed.
 - **llm_mode** — active model-selection mode for this config layer, one of the 5 built-ins (`best-cloud`, `best-cloud-oss`, `best-local-oss`, `best-cloud-gov`, `best-local-gov` — the `-gov` modes exclude Chinese-origin models) **or a declared custom mode**. Overridden by `CLAUDE_LLM_MODE` env. See `docs/connectivity-modes.md`.

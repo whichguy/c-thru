@@ -23,7 +23,17 @@ function sessionEffectivePath(projectPath) {
   // and the same project always gets the same temp file (avoids
   // accumulating one per session).
   const hash = crypto.createHash('md5').update(`${projectPath}:${profileDir}`).digest('hex').slice(0, 12);
-  return path.join(os.tmpdir(), `c-thru-effective-${hash}.json`);
+  // SECURITY: place the overlay under a per-user, 0700-mode subdirectory of
+  // $TMPDIR rather than directly in world-writable /tmp. The deterministic
+  // filename in shared /tmp let a local attacker pre-create a symlink at the
+  // path (to inject routing config or read it). A 0700 dir keyed by uid keeps
+  // it private. getuid is POSIX-only — guard for Windows (undefined).
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 'u';
+  const userDir = path.join(os.tmpdir(), `c-thru-${uid}`);
+  try {
+    fs.mkdirSync(userDir, { recursive: true, mode: 0o700 });
+  } catch {}
+  return path.join(userDir, `c-thru-effective-${hash}.json`);
 }
 
 function canonicalizeDir(dir) {

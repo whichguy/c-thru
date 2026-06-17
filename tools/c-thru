@@ -3502,11 +3502,20 @@ debug_print_final_claude_command() {
   local url="${ANTHROPIC_BASE_URL:-}"
   local tok="${ANTHROPIC_AUTH_TOKEN:-}"
   local quiet_env="CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CODE_COLOR=1"
+  # Mask secrets in the rendered prefix — never print the live OAuth token / API
+  # key to stderr. The real exec command (run_real_claude) still uses the raw
+  # values; only this debug *display* is masked. Style matches claude_router_debug_dump.
+  local tok_masked api_masked
+  if [[ -n "$tok" ]]; then tok_masked="<set:${#tok} chars>"; else tok_masked="<unset>"; fi
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then api_masked="<set:${#ANTHROPIC_API_KEY} chars>"; else api_masked="<unset>"; fi
   local prefix=""
   if [[ -n "$url" && -n "$tok" ]]; then
-    prefix="ANTHROPIC_BASE_URL=$url ANTHROPIC_AUTH_TOKEN=$tok $quiet_env "
+    prefix="ANTHROPIC_BASE_URL=$url ANTHROPIC_AUTH_TOKEN=$tok_masked $quiet_env "
   else
     prefix="$quiet_env "
+  fi
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    prefix="${prefix}ANTHROPIC_API_KEY=$api_masked "
   fi
 
   local rendered=""

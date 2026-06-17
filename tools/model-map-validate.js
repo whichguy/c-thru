@@ -704,7 +704,13 @@ function validateConfig(config, _errors, options) {
         const url = entry.url || '';
         if (url && !/localhost|127\.0\.0\.1/.test(url)) {
           if (!reachable || reachable.reachableEndpoints.has(id)) {
-            warn(`model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming auth will be forwarded verbatim`);
+            // With the C12 hardening the proxy STRIPS incoming Anthropic auth for an
+            // unknown, non-Anthropic host that has no auth config (unless kind:"anthropic"
+            // or auth_passthrough:true). So this endpoint will receive NO credentials.
+            const escapeHatch = entry.kind === 'anthropic' || entry.auth_passthrough === true;
+            warn(escapeHatch
+              ? `model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming Anthropic auth will be forwarded verbatim (kind:"anthropic"/auth_passthrough)`
+              : `model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming auth will be STRIPPED (no credentials sent); set auth_env/auth, or auth_passthrough:true to forward`);
           }
         }
       }

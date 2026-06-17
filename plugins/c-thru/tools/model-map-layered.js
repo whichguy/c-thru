@@ -185,12 +185,40 @@ function syncLayeredConfig(defaultsPath, globalOverridesPath, projectOverridesPa
 
   function writeIfChanged(filePath, content) {
     if (!filePath) return;
+    // SECURITY: refuse to follow a symlink at the target. A local attacker who
+    // pre-created the path as a symlink could otherwise redirect our write
+    // (injecting routing config elsewhere) or have us read attacker-controlled
+    // content. lstat does NOT follow the final symlink, so we detect it.
     try {
-      const current = fs.readFileSync(filePath, 'utf8');
-      if (current === content) return;
-    } catch {}
+      const lst = fs.lstatSync(filePath);
+      if (lst.isSymbolicLink()) {
+        fs.unlinkSync(filePath);  // drop the planted symlink; we own this path
+      } else {
+        // Existing regular file — skip the write when content is unchanged.
+        const current = fs.readFileSync(filePath, 'utf8');
+        if (current === content) return;
+      }
+    } catch {
+      // ENOENT (no file yet) or unreadable — fall through to fresh write.
+    }
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, content);
+    // Write atomically: create a fresh temp via O_CREAT|O_EXCL (flag 'wx', so a
+    // pre-planted temp symlink/file is refused), 0600 mode, then rename over the
+    // target. rename is atomic on the same filesystem and replaces any racing
+    // file without following a symlink at the destination name.
+    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    let fd;
+    try {
+      fd = fs.openSync(tmpPath, 'wx', 0o600);
+      fs.writeSync(fd, content);
+      fs.closeSync(fd);
+      fd = undefined;
+      fs.renameSync(tmpPath, filePath);
+    } catch (e) {
+      if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
+      try { fs.unlinkSync(tmpPath); } catch {}
+      throw e;
+    }
   }
 
   writeIfChanged(globalOverridesPath, `${JSON.stringify(globalOverrides, null, 2)}\n`);

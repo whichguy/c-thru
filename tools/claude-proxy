@@ -940,14 +940,50 @@ function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders, meta) {
       if (value) outgoingHeaders[header] = scheme ? `${scheme} ${value}` : value;
       setProfile('header_env');
     } else if (profile === 'passthrough' || profile === 'none') {
-      // Unknown host or local backend with no explicit auth. Forward incoming
-      // verbatim. (The Ollama-default Bearer ollama at the end may still claim
-      // the Authorization slot for canonical Ollama endpoints.)
-      if (incomingAuth && !outgoingHeaders['authorization']) {
-        outgoingHeaders['authorization'] = incomingAuth;
-      }
-      if (incomingKey && !outgoingHeaders['x-api-key']) {
-        outgoingHeaders['x-api-key'] = incomingKey;
+      // Unknown host or local backend with no explicit auth.
+      //
+      // SECURITY: the incoming authorization / x-api-key are the user's
+      // Anthropic subscription OAuth or API key (this proxy fronts Claude
+      // Code). Forwarding them verbatim to an arbitrary unknown host would leak
+      // those Anthropic credentials to a non-Anthropic backend. Only pass them
+      // through when the backend is genuinely Anthropic-family, OR when it
+      // explicitly opts in via `auth_passthrough: true`.
+      //
+      // `profile === 'none'` is restricted (by deriveAuthProfile) to
+      // localhost / 127.0.0.1 / ollama.ai, plus auth:"none" handled above — all
+      // local/test stubs where forwarding is intended, so it keeps passthrough.
+      // `profile === 'passthrough'` is the unknown-host catch-all: an unknown
+      // host is, by definition, not anthropic.com, so it now defaults to STRIP
+      // unless the backend explicitly declares itself Anthropic
+      // (kind:"anthropic") or explicitly opts into credential passthrough
+      // (auth_passthrough: true).
+      const isAnthropicKind  = backend.kind === 'anthropic';
+      const optedInPassthrough = backend.auth_passthrough === true;
+      const allowForward = profile === 'none'
+                        || isAnthropicKind
+                        || optedInPassthrough;
+
+      if (allowForward) {
+        if (incomingAuth && !outgoingHeaders['authorization']) {
+          outgoingHeaders['authorization'] = incomingAuth;
+        }
+        if (incomingKey && !outgoingHeaders['x-api-key']) {
+          outgoingHeaders['x-api-key'] = incomingKey;
+        }
+      } else {
+        // Strip incoming Anthropic auth — do not leak it to an unknown,
+        // non-Anthropic host.
+        delete outgoingHeaders['authorization'];
+        delete outgoingHeaders['Authorization'];
+        dropApiKey(outgoingHeaders);
+        if (incomingAuth || incomingKey) {
+          proxyLog('auth.strip_incoming_unknown_host', {
+            backend: backend.id || null,
+            host: backendHost(backend),
+            had_authorization: !!incomingAuth,
+            had_x_api_key: !!incomingKey,
+          });
+        }
       }
       setProfile(profile);
     }

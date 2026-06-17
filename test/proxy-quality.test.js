@@ -366,6 +366,79 @@ async function runAutoAuthTests() {
   console.log('     (skipped — KNOWN_HOSTS host-derivation requires DNS override; covered by manual verification)');
 }
 
+// ── Phase 6: Outbound auth leak prevention (C12) ────────────────────────────
+// An unknown-host, non-Anthropic backend with NO explicit auth config must NOT
+// receive the user's incoming Anthropic auth (authorization / x-api-key). The
+// proxy fronts Claude Code, so those headers carry the subscription OAuth /
+// Anthropic API key — forwarding them to an arbitrary host leaks credentials.
+//
+// applyOutboundAuth is private and the proxy file spawns a server on require,
+// and the live stub harness only binds 127.0.0.1 (which derives profile "none",
+// not the unknown-host "passthrough" path). So — like Phase 5.2 — we exercise
+// the gate by safely extracting the pure function + its host helpers.
+function loadApplyOutboundAuth() {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'claude-proxy'), 'utf8');
+  const extract = (name) => {
+    const start = src.indexOf('function ' + name);
+    if (start < 0) throw new Error('not found: ' + name);
+    let depth = 0;
+    for (let j = src.indexOf('{', start); j < src.length; j++) {
+      if (src[j] === '{') depth++;
+      else if (src[j] === '}' && --depth === 0) return src.slice(start, j + 1);
+    }
+    throw new Error('unbalanced braces: ' + name);
+  };
+  const khStart = src.indexOf('const KNOWN_HOSTS =');
+  const khEnd = src.indexOf('];', khStart) + 2;
+  const logs = [];
+  const code = [
+    src.slice(khStart, khEnd),
+    extract('backendHost'),
+    extract('deriveAuthProfile'),
+    'function proxyLog(ev, f) { __logs.push([ev, f]); }',
+    extract('applyOutboundAuth'),
+    'return applyOutboundAuth;',
+  ].join('\n');
+  const fn = new Function('__logs', code)(logs);
+  return { apply: fn, logs };
+}
+
+function runOutboundAuthLeakTests() {
+  console.log('\n--- Phase 6: Outbound auth leak prevention (unknown-host strip) ---');
+  const { apply, logs } = loadApplyOutboundAuth();
+  const incoming = () => ({ 'authorization': 'Bearer sk-ant-oat01-USER', 'x-api-key': 'sk-ant-api03-USER' });
+  const call = (backend) => {
+    logs.length = 0;
+    const out = {}, meta = {};
+    const ok = apply(backend, incoming(), out, meta);
+    return { ok, out, meta, log: logs.slice() };
+  };
+
+  console.log('6.1 Unknown host + format:gemini, no auth → STRIP incoming Anthropic auth');
+  let r = call({ id: 'g', url: 'https://gemini.example.com/v1', format: 'gemini' });
+  assertEq(r.out['authorization'], undefined, 'authorization stripped (not leaked to gemini host)');
+  assertEq(r.out['x-api-key'], undefined, 'x-api-key stripped (not leaked to gemini host)');
+  assert(r.log.some(([e]) => e === 'auth.strip_incoming_unknown_host'), 'strip event logged');
+
+  console.log('6.2 Unknown host, no shape hints, no auth → STRIP (unknown ≠ anthropic)');
+  r = call({ id: 'u', url: 'https://random-llm.example.org/api' });
+  assertEq(r.out['authorization'], undefined, 'authorization stripped on bare unknown host');
+  assertEq(r.out['x-api-key'], undefined, 'x-api-key stripped on bare unknown host');
+
+  console.log('6.3 Unknown host + kind:anthropic → FORWARD (genuine Anthropic family)');
+  r = call({ id: 'a', url: 'https://anthropic-compat.example.com', kind: 'anthropic' });
+  assertEq(r.out['authorization'], 'Bearer sk-ant-oat01-USER', 'incoming Bearer forwarded for kind:anthropic');
+
+  console.log('6.4 Unknown host + auth_passthrough:true → FORWARD (explicit opt-in)');
+  r = call({ id: 'p', url: 'https://gw.example.com', auth_passthrough: true });
+  assertEq(r.out['authorization'], 'Bearer sk-ant-oat01-USER', 'incoming Bearer forwarded on explicit opt-in');
+  assertEq(r.out['x-api-key'], 'sk-ant-api03-USER', 'incoming x-api-key forwarded on explicit opt-in');
+
+  console.log('6.5 localhost (derived "none") → FORWARD (local stub, intended)');
+  r = call({ id: 'l', url: 'http://127.0.0.1:5000' });
+  assertEq(r.out['authorization'], 'Bearer sk-ant-oat01-USER', 'incoming auth preserved on derived none');
+}
+
 async function main() {
   try {
     await runMappingTests();
@@ -373,6 +446,7 @@ async function main() {
     await runV1PassthroughTests();
     await runSubscriptionAuthTests();
     await runAutoAuthTests();
+    runOutboundAuthLeakTests();
   } catch (err) {
     console.error('Test Suite Failed:', err);
     process.exit(1);
