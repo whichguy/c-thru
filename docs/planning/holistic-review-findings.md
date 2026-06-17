@@ -16,6 +16,15 @@ IDs `C1..C48` match the audit; `votes=n/3` is skeptic agreement. Verify each pre
 
 All `make test-fast` green (the one full-run `proxy-gemini-translation` / `cli-e2e-flags` blips are the documented spawn flakes — pass standalone).
 
+**Surfaced items — now ALL fixed** (per `surfaced-fixes-plan.md`, decisions: fail-open-when-unconfigured/strict-when-present security posture; C35 Option A):
+- Batch B `66d9463` — C30 (delete dead reset; adjudicated), C1 (bash profile leak), C44 (terminal de-dup), C46 (explain gov parity).
+- Batch C `3c9c585` — C35 (tier-completeness validation, keep 503), C37 (routability warn).
+- Batch A `21897c7` — C19 (sentinel HMAC), C23 (control-token gate), C48 (gov-reload advisory). Stable per-user 0600 secret files; fail-open + warn when absent, strict when present.
+- Batch D `1198967` — C31a/C31c (cascade-tier cells), C43 (mid-cascade SIGHUP liveness).
+- Open follow-up noted: `proxy-runtime-fallback` Test 10 is order-dependent (fails standalone, passes in-suite) — handed to the test-coverage workflow.
+
+(Original surfacing rationale retained below for history.)
+
 **Surfaced for decision — NOT auto-fixed** (design-level / conflicting / tradeoff):
 - **C19** sentinel spoof — needs a design choice (HMAC/nonce per session, or honor the marker only as the first token of the first user message). Behavior-changing.
 - **C23** control-plane (`/c-thru/mode`, `/c-thru/reload`) unauthenticated on the shared loopback port — needs an auth/socket-permission design.
