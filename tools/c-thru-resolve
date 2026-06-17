@@ -12,6 +12,8 @@ const {
   resolveCapabilityAlias,
   resolveTerminalTarget,
   baseModeFor,
+  isGovMode,
+  isChineseOrigin,
 } = require('./model-map-resolve.js');
 
 let config;
@@ -51,6 +53,13 @@ const resolved = resolveProfileModel(entry, tier, mode, baseModeFor(mode, config
 if (typeof resolved !== 'string' || !resolved) {
   process.stderr.write('c-thru-resolve: resolveProfileModel returned empty for ' + JSON.stringify(capAlias) + '\n');
   process.exit(1);
+}
+// Gov filter parity with the proxy + c-thru-explain: a gov mode refuses a
+// Chinese-origin model rather than printing it (which would mislead callers into
+// thinking the proxy will serve it — the proxy now 502s).
+if (isGovMode(mode, config) && isChineseOrigin(resolved)) {
+  process.stderr.write(`c-thru-resolve: '${resolved}' is blocked in gov mode '${mode}' for capability ${JSON.stringify(capAlias)}\n`);
+  process.exit(3);
 }
 const target = resolveTerminalTarget(config, resolved);
 process.stdout.write((target ? target.providerModel : resolved) + '\n');

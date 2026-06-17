@@ -536,6 +536,31 @@ console.log('\nCustom modes — accept, base validation, shadow guard, gov safet
   }
 }
 
+// ── Gov-safety: Chinese-origin model on a built-in gov key is rejected (C6) ──
+console.log('\nGov-safety — Chinese-origin model on built-in gov key');
+{
+  const govCfg = (govVal) => ({
+    backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+    model_routes: { 'test-model': 'local', 'qwen3:32b': 'local', 'claude-opus-4-8': 'local' },
+    llm_profiles: { coder: { 'best-cloud': 'claude-opus-4-8', 'best-cloud-gov': govVal } },
+    llm_mode: 'best-cloud-gov',
+  });
+  // String form
+  let errs = validate(govCfg('qwen3:32b'));
+  assert(errs.some(e => /best-cloud-gov.*Chinese-origin.*qwen3:32b/.test(e)), 'Chinese string on best-cloud-gov → rejected');
+  // Tier-object form
+  errs = validate({
+    backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+    model_routes: { 'deepseek-v3': 'local', 'claude-opus-4-8': 'local' },
+    llm_profiles: { coder: { 'best-cloud': 'claude-opus-4-8', 'best-local-gov': { '64gb': 'deepseek-v3' } } },
+    llm_mode: 'best-local-gov',
+  });
+  assert(errs.some(e => /best-local-gov.*Chinese-origin.*deepseek-v3/.test(e)), 'Chinese in tier-object on best-local-gov → rejected');
+  // Clean gov key passes
+  errs = validate(govCfg('claude-opus-4-8'));
+  assert(!errs.some(e => /Chinese-origin/.test(e)), 'non-Chinese on gov key → no gov error');
+}
+
 // ── Summary ────────────────────────────────────────────────────────────────
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

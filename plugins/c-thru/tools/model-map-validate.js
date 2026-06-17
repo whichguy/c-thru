@@ -373,6 +373,20 @@ function validateCapabilityEntry(capabilityName, entry, report, options) {
       continue;
     }
     hasModeKey = true;
+    // Gov-safety (C6): a Chinese-origin model placed directly on a built-in gov key
+    // (best-cloud-gov / best-local-gov) is invalid — gov modes block those models. The
+    // custom_modes block only checks override keys; this covers the built-in gov keys
+    // for every capability uniformly. The runtime filter backstops this, but config-time
+    // rejection surfaces the mistake before deploy.
+    if (key === 'best-cloud-gov' || key === 'best-local-gov') {
+      const models = typeof value === 'string' ? [value]
+        : isObject(value) ? Object.values(value).filter((v) => typeof v === 'string') : [];
+      for (const m of models) {
+        if (isChineseOrigin(m)) {
+          report(`'llm_profiles.${capabilityName}.${key}' names Chinese-origin model '${m}' — blocked in gov modes`);
+        }
+      }
+    }
     // Value must be a non-empty string (same model for all tiers) or a tier-keyed object
     if (typeof value === 'string') {
       if (!value.trim()) report(`'llm_profiles.${capabilityName}.${key}' must be a non-empty string`);

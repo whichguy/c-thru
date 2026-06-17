@@ -91,8 +91,15 @@ function baseModeFor(mode, config) {
   const cm = config && config.custom_modes && config.custom_modes[mode];
   return cm && typeof cm.base === 'string' ? cm.base : null;
 }
+function isGovMode(mode, config) {
+  const GOV = new Set(['best-cloud-gov', 'best-local-gov']);
+  if (GOV.has(mode)) return true;
+  const b = baseModeFor(mode, config);
+  return b != null && GOV.has(b);
+}
+function isChineseOrigin(model) { return /(^|[/:])(qwen|deepseek|glm|kimi)($|[-_.:/0-9])/.test(String(model || '').toLowerCase()); }
 function resolveTerminalTarget(_config, _label) { return null; }
-module.exports = { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, validModes, baseModeFor, LLM_MODE_ENUM };
+module.exports = { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, validModes, baseModeFor, isGovMode, isChineseOrigin, LLM_MODE_ENUM };
 `;
   fs.writeFileSync(path.join(toolsDir, 'model-map-resolve.js'), resolveStub, 'utf8');
 

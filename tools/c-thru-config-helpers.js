@@ -145,7 +145,7 @@ function cmdResolve(args) {
 
   const selected = readSelectedConfig();
   const config = selected.config;
-  const { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, validModes, baseModeFor, MODEL_PIN_PREFIX } = loadResolve();
+  const { resolveLlmMode, resolveActiveTier, resolveCapabilityAlias, resolveProfileModel, resolveTerminalTarget, validModes, baseModeFor, isGovMode, isChineseOrigin, MODEL_PIN_PREFIX } = loadResolve();
 
   const mode     = resolveLlmMode(config);
   const tier     = resolveActiveTier(config);
@@ -190,6 +190,10 @@ function cmdResolve(args) {
 
   const resolved = resolveProfileModel(entry, tier, mode, baseModeFor(mode, config));
   if (!resolved) { die(`resolveProfileModel returned empty for ${JSON.stringify(capAlias)}`); }
+  // Gov filter parity with the proxy + c-thru-explain + c-thru-resolve.
+  if (isGovMode(mode, config) && isChineseOrigin(resolved)) {
+    die(`'${resolved}' is blocked in gov mode '${mode}' for capability ${JSON.stringify(capAlias)}`);
+  }
   const target = resolveTerminalTarget(config, resolved);
   const providerModel = target ? target.providerModel : resolved;
 
