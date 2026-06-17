@@ -45,6 +45,7 @@ assert_symlink() {
 }
 
 assert_symlink "c-thru"            "$REPO_DIR/tools/c-thru"
+assert_symlink "cthru"             "$REPO_DIR/tools/c-thru"   # convenience alias ≡ c-thru
 assert_symlink "c-thru-map-changed" "$REPO_DIR/tools/c-thru-map-changed.sh"
 assert_symlink "verify-lmstudio-ollama-compat" "$REPO_DIR/tools/verify-lmstudio-ollama-compat.sh"
 assert_symlink "c-thru-ollama-probe" "$REPO_DIR/tools/c-thru-ollama-probe.sh"

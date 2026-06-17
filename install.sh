@@ -101,6 +101,7 @@ link_tool() {
 echo ""
 echo "Tools:"
 link_tool c-thru c-thru
+link_tool c-thru cthru          # convenience alias — `cthru` ≡ `c-thru`
 link_tool c-thru claude-router
 link_tool claude-proxy claude-proxy
 if [ "$JQ_AVAILABLE" -eq 0 ]; then

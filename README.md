@@ -281,9 +281,11 @@ c-thru --route background --model gemma4:26b     # named route + explicit model
 
 ## Appendix B: CLI reference
 
+`cthru` is installed as a convenience alias for `c-thru` — the two are identical (`cthru -p …` ≡ `c-thru -p …`).
+
 | Subcommand | Effect |
 |---|---|
-| `c-thru list` | Active profile, routes, Ollama models |
+| `c-thru list` | Active profile, routes, custom modes, Ollama models |
 | `c-thru reload` | SIGHUP proxy, wait for `/ping`, print new tier |
 | `c-thru restart [--force]` | Stop + re-spawn proxy |
 | `c-thru explain --capability X --mode M [--tier T]` | Print resolution chain, no real request |
