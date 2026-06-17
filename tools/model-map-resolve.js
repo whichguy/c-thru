@@ -42,6 +42,18 @@ function baseModeFor(mode, config) {
   return null;
 }
 
+// isGovMode — true if `mode` is a built-in gov mode OR a custom mode whose `base`
+// is a gov mode. The runtime Chinese-origin filter (filterFor/resolveLocalFallback)
+// must engage for gov-BASED custom modes too — not just modes literally named
+// best-*-gov — or a gov-labelled custom mode would bypass the gov filter at request
+// time (validation alone is not a runtime backstop). Pass `config` to catch custom modes.
+const GOV_MODES = new Set(['best-cloud-gov', 'best-local-gov']);
+function isGovMode(mode, config) {
+  if (GOV_MODES.has(mode)) return true;
+  const base = baseModeFor(mode, config);
+  return base != null && GOV_MODES.has(base);
+}
+
 // Translate a requested mode (canonical, custom, or legacy vocabulary) to a
 // selectable mode name. Mirrors the legacy branches in resolveLlmMode, but returns
 // null for anything unrecognized — callers that take explicit user input (e.g. the
@@ -106,10 +118,10 @@ function resolveProfileModel(entry, tier, mode, baseMode) {
 // resolveLocalFallback — walks local modes to find any available local model for this entry.
 // Used by tryLocalTerminalFallback in claude-proxy (replaces disconnect_model lookup).
 // activeMode is passed so gov sessions only return non-Chinese-origin models.
-function resolveLocalFallback(entry, tier, activeMode) {
+// Pass `config` so a gov-BASED custom mode is treated as gov (via isGovMode).
+function resolveLocalFallback(entry, tier, activeMode, config) {
   if (!entry) return null;
-  const govModes = new Set(['best-cloud-gov', 'best-local-gov']);
-  const isGov = activeMode != null && govModes.has(activeMode);
+  const isGov = activeMode != null && isGovMode(activeMode, config);
   const localModes = isGov
     ? ['best-local-gov', 'best-cloud-gov', 'best-cloud']
     : ['best-local-oss', 'best-local-gov', 'best-cloud'];
@@ -272,16 +284,16 @@ function isOpenSource(model) {
 
 // filterFor — maps mode name to predicate. Returns null for non-filter modes.
 // Gov modes apply the Chinese-origin filter as a hard block.
-function filterFor(mode) {
-  if (mode === 'best-cloud-gov') return (m) => !isChineseOrigin(m);
-  if (mode === 'best-local-gov') return (m) => !isChineseOrigin(m);
+// `config` lets a gov-BASED custom mode engage the Chinese-origin filter (isGovMode).
+function filterFor(mode, config) {
+  if (isGovMode(mode, config)) return (m) => !isChineseOrigin(m);
   return null;
 }
 
 // applyModeFilter — for gov modes, walk primary + fallback chain, return first non-blocked model.
 // For non-gov modes, returns primary unchanged.
-function applyModeFilter(mode, primary, chain, modelRoutes, backends) {
-  const predicate = filterFor(mode);
+function applyModeFilter(mode, primary, chain, modelRoutes, backends, config) {
+  const predicate = filterFor(mode, config);
   if (!predicate) return primary;
   if (primary && predicate(primary, modelRoutes, backends)) return primary;
   for (const candidate of (chain || [])) {
@@ -363,6 +375,7 @@ module.exports = {
   DEFAULT_MODE,
   // Gov filter
   isChineseOrigin,
+  isGovMode,
   filterFor,
   applyModeFilter,
   // Cloud/local/provider predicates (retained for proxy use)

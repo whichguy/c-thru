@@ -6,7 +6,7 @@
 // Run: node test/model-map-filter.test.js
 
 const {
-  isClaude, isCloud, isOpenSource, filterFor, applyModeFilter,
+  isClaude, isCloud, isOpenSource, filterFor, applyModeFilter, isGovMode,
 } = require('../tools/model-map-resolve');
 
 const { assert, assertEq, summary } = require('./helpers');
@@ -199,6 +199,45 @@ assertEq(
   null,
   'null chain handled (Chinese primary → null)'
 );
+
+// ── Gov-based custom modes must engage the runtime Chinese-origin filter ──────
+// Regression: the gov filter keyed on the literal mode name, so a custom mode
+// whose `base` is a gov mode (e.g. "gov-hybrid") bypassed the runtime filter even
+// though validation blocked Chinese overrides. isGovMode resolves through `base`.
+console.log('\nGov-based custom modes — runtime filter engages via base');
+{
+  const cfg = { custom_modes: { 'gov-hybrid': { base: 'best-cloud-gov' } } };
+  const ossCfg = { custom_modes: { 'deepseek-hybrid': { base: 'best-cloud-oss' } } };
+
+  assertEq(isGovMode('best-cloud-gov'), true, 'built-in gov mode → gov');
+  assertEq(isGovMode('best-local-gov'), true, 'built-in local gov mode → gov');
+  assertEq(isGovMode('gov-hybrid', cfg), true, 'custom mode with gov base → gov');
+  assertEq(isGovMode('deepseek-hybrid', ossCfg), false, 'custom mode with non-gov base → not gov');
+  assertEq(isGovMode('best-cloud'), false, 'non-gov built-in → not gov');
+  assertEq(isGovMode('gov-hybrid'), false, 'gov-named custom mode without config → not detected (name alone is not gov)');
+
+  // filterFor: a gov-based custom mode yields a predicate ONLY when config is passed
+  assertEq(typeof filterFor('gov-hybrid', cfg), 'function', 'filterFor(gov-hybrid, cfg) → predicate');
+  assertEq(filterFor('gov-hybrid'), null, 'filterFor(gov-hybrid) without cfg → no predicate (would mis-serve)');
+
+  // applyModeFilter drops a Chinese-origin primary under a gov-based custom mode
+  assertEq(
+    applyModeFilter('gov-hybrid', 'qwen3.6:35b', ['claude-opus-4-6'], MODEL_ROUTES, BACKENDS, cfg),
+    'claude-opus-4-6',
+    'gov-based custom mode drops Chinese primary, falls to Claude in chain'
+  );
+  assertEq(
+    applyModeFilter('gov-hybrid', 'qwen3.6:35b', null, MODEL_ROUTES, BACKENDS, cfg),
+    null,
+    'gov-based custom mode with Chinese primary + no chain → null (blocked)'
+  );
+  // Non-gov custom mode does NOT filter
+  assertEq(
+    applyModeFilter('deepseek-hybrid', 'qwen3.6:35b', null, MODEL_ROUTES, BACKENDS, ossCfg),
+    'qwen3.6:35b',
+    'non-gov custom mode keeps the Chinese primary (no gov filter)'
+  );
+}
 
 const failed = summary();
 process.exit(failed ? 1 : 0);

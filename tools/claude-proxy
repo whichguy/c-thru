@@ -1511,7 +1511,7 @@ function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
   if (!capKey) return false;
   // New schema: llm_profiles[capability], use resolveLocalFallback to find a local model.
   // Pass activeMode so gov sessions skip Chinese-origin local fallbacks.
-  const termModel = resolveLocalFallback(CONFIG.llm_profiles?.[capKey], requestMeta.hwTier, requestMeta.activeMode);
+  const termModel = resolveLocalFallback(CONFIG.llm_profiles?.[capKey], requestMeta.hwTier, requestMeta.activeMode, CONFIG);
   if (!termModel) return false;
   const triedM = requestMeta._triedModels || new Set();
   if (triedM.has(termModel)) return false;
@@ -4818,7 +4818,7 @@ const server = http.createServer((req, res) => {
           const chainModels = capChain.map(c => (typeof c === 'string' ? c : c.model)).filter(Boolean);
           const filteredModel = applyModeFilter(
             activeMode, effectiveModel, chainModels,
-            CONFIG.model_routes || {}, CONFIG.endpoints || CONFIG.backends || {}
+            CONFIG.model_routes || {}, CONFIG.endpoints || CONFIG.backends || {}, CONFIG
           );
           if (filteredModel === null) {
             ctxLog(ctx, 'mode_filter.reject_all', { mode: activeMode, capability: capKey });

@@ -205,7 +205,22 @@ Rules enforced by the validator (`model-map-validate.js`):
   would fall back to Anthropic for every un-overridden capability.
 - A custom mode **must not shadow** a built-in mode name or a legacy alias.
 - **Gov safety:** if `base` is a gov mode, an override that names a Chinese-origin model is
-  rejected — gov modes block those models and a custom mode can't smuggle one back in.
+  rejected — gov modes block those models and a custom mode can't smuggle one back in. The
+  runtime Chinese-origin filter also engages for gov-*based* custom modes (it resolves through
+  `base`, not just the literal mode name), so this is enforced at request time too — not only
+  at validation.
+
+Two behaviors worth knowing (both intentional, consistent with built-in modes):
+
+- **Partial-tier overrides:** if a capability's custom-mode override (or its `base` entry) is a
+  tier-keyed object that is *present but missing the active hardware tier*, resolution returns
+  null (503) rather than silently falling through to `best-cloud`. Cover every tier you intend
+  to serve, or use a flat string value (same model for all tiers).
+- **Offline auto-detect:** the connectivity auto-detect that degrades plain `best-cloud` to
+  `best-local-oss` when offline does **not** fire for a custom mode (even one based on
+  `best-cloud`) — selecting a custom mode is an explicit choice, so it's kept as-is. Per-request
+  local fallback still applies on dispatch failure. Use `--mode best-local-oss` (or a
+  local-based custom mode) for offline work.
 
 Select and verify it:
 

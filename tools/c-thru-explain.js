@@ -20,7 +20,7 @@ const {
   validModes,
   applyModeFilter,
   pickBenchmarkBest,
-  isClaude, isCloud, isOpenSource, isChineseOrigin,
+  isClaude, isCloud, isOpenSource, isChineseOrigin, isGovMode,
   LLM_MODE_ENUM,
 } = require('./model-map-resolve.js');
 
@@ -122,14 +122,14 @@ if (args.all) {
 
   const epMap  = config.endpoints || config.backends || {};
   const LOCAL_RE = /localhost|127\.0\.0\.1|0\.0\.0\.0/;
-  const GOV    = new Set(['best-cloud-gov', 'best-local-gov']);
 
   const theBaseMode = baseModeFor(theMode, config);
   const results = [];
   for (const [cap, entry] of Object.entries(config.llm_profiles || {})) {
     const model = resolveProfileModel(entry, theTier, theMode, theBaseMode);
     if (!model) continue;
-    if (GOV.has(theMode) && isChineseOrigin(model)) continue;
+    // gov filter — engages for gov-built-in AND gov-based custom modes
+    if (isGovMode(theMode, config) && isChineseOrigin(model)) continue;
 
     // Strip @sigil
     const sig    = model.match(/^(.+)@([A-Za-z0-9_-]+)$/);
@@ -315,10 +315,9 @@ const slotPick = resolveProfileModel(entry, tier, mode, baseModeFor(mode, config
 const slotSource = explainSlotSource(entry, tier, mode);
 line('1. Slot pick', slotPick || '(null)', slotSource);
 
-// 2. Gov filter (best-cloud-gov and best-local-gov block Chinese-origin models)
-const GOV_MODES = new Set(['best-cloud-gov', 'best-local-gov']);
+// 2. Gov filter (gov modes — built-in or gov-based custom — block Chinese-origin models)
 let final = slotPick;
-if (GOV_MODES.has(mode) && slotPick) {
+if (isGovMode(mode, config) && slotPick) {
   const { isChineseOrigin } = require('./model-map-resolve.js');
   if (isChineseOrigin(slotPick)) {
     line('2. Gov filter', `BLOCKED: ${slotPick}`, 'Chinese-origin model blocked in gov mode');
