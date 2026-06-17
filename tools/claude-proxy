@@ -24,6 +24,7 @@ const {
   LLM_MODE_ENUM,
   applyModeFilter,
 } = require('./model-map-resolve.js');
+const { parseAgentSentinel } = require('./agent-sentinel.js');
 
 // CLI flag parsing — flags are aliases for env vars, set before any consumers
 // read them. Documented in CLAUDE.md ("Proxy CLI Flags"). Supported forms:
@@ -4764,17 +4765,10 @@ const server = http.createServer((req, res) => {
         //      then a fixed <=50-byte window read to extract the name.
         let sentinelAgent = null;
         {
-          let agentName = null;
-          const hdr = req.headers['x-c-thru-agent'];
-          if (typeof hdr === 'string' && /^[A-Za-z0-9_-]+$/.test(hdr)) {
-            agentName = hdr;                                   // tier 1: header
-          } else {
-            const i = bodyText.indexOf('[[c-thru-agent:');     // tier 2: locate (byte search)
-            if (i >= 0) {
-              const m = bodyText.slice(i, i + 50).match(/\[\[c-thru-agent:([A-Za-z0-9_-]+)\]\]/);  // read fixed window
-              if (m) agentName = m[1];
-            }
-          }
+          // parseAgentSentinel (tools/agent-sentinel.js) does the cheapest-first
+          // detection: header check, then one raw-body byte-scan + fixed-window read.
+          // Kept as a pure, hermetically-tested unit (test/proxy-sentinel-detection.test.js).
+          const agentName = parseAgentSentinel(bodyText, req.headers['x-c-thru-agent']);
           if (agentName) {
             if (resolveCapabilityAlias(agentName, CONFIG)) {
               ctxLog(ctx, 'sentinel_override', { agent: agentName, from_model: body.model });

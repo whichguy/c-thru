@@ -182,6 +182,8 @@ run_suite "agent-dispatch-graph (subagent_type targets resolve agent→capabilit
   node "$REPO_DIR/test/agent-dispatch-graph.test.js"
 run_suite "agent-description-quality (description discoverability lint)" \
   node "$REPO_DIR/test/agent-description-quality.test.js"
+run_suite "proxy-sentinel-detection (per-agent marker: header + byte-scan + window)" \
+  node "$REPO_DIR/test/proxy-sentinel-detection.test.js"
 run_suite "agent-offload-lib (delegation parser: parse-not-grep, call↔result join)" \
   node "$REPO_DIR/test/agent-offload-lib.test.js"
 run_suite "c-thru-agent-usage (per-agent transcript telemetry CLI)" \
