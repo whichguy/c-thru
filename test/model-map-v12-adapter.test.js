@@ -583,5 +583,65 @@ console.log('\n19. Validator rejects llm_capabilities.model referencing unknown 
   assert(pinErrs.length === 0, "llm_capabilities.model with model: prefix passes without cross-reference");
 }
 
+// ── Test 20 (C22): edit roundtrip on legacy config must NOT leak synthesized keys ─
+console.log('\n20. C22: editing a legacy-shape config does not leak synthesized v1.2 keys into overrides');
+{
+  const { execFileSync } = require('child_process');
+
+  // Legacy-shape: fallback_strategies present, tool_capability_to_profile absent.
+  // loadLayeredConfig (inside model-map-edit) runs maybeSynthesizeV12Keys, injecting
+  // `models` and `tool_capability_to_profile` in-memory only.
+  const legacyDefaults = {
+    llm_profiles: {
+      planner:    { ...MIN_CAPABILITY_ENTRY },
+      classifier: { ...MIN_CAPABILITY_ENTRY },
+    },
+    llm_capabilities: {
+      classify_intent: { model: 'classifier' },
+    },
+    fallback_strategies: {
+      'model-a': { event: { network_failure: ['model-b'], rate_limit: ['model-b'] } },
+    },
+    routes: { default: 'model-a' },
+    endpoints: {},
+    agent_to_capability: {},
+  };
+
+  // Sanity: synthesis fires for this shape (no tool_capability_to_profile in source).
+  assert(!legacyDefaults.tool_capability_to_profile, 'fixture is legacy-shape (no tool_capability_to_profile)');
+
+  // A small UNRELATED edit — the user does not touch models / tool_capability_to_profile.
+  const specJson = JSON.stringify({ routes: { custom: 'model-a' } });
+
+  const tmpDefaults  = path.join(os.tmpdir(), `c22-defaults-${process.pid}-${Date.now()}.json`);
+  const tmpOverrides = path.join(os.tmpdir(), `c22-overrides-${process.pid}-${Date.now()}.json`);
+  const tmpEffective = path.join(os.tmpdir(), `c22-effective-${process.pid}-${Date.now()}.json`);
+  try {
+    fs.writeFileSync(tmpDefaults, JSON.stringify(legacyDefaults));
+    fs.writeFileSync(tmpOverrides, '{}');
+
+    execFileSync(process.execPath, [
+      path.join(__dirname, '..', 'tools', 'model-map-edit.js'),
+      tmpDefaults, tmpOverrides, tmpEffective, specJson,
+    ], { stdio: 'pipe' });
+
+    const overrides = JSON.parse(fs.readFileSync(tmpOverrides, 'utf8'));
+    assert(!('models' in overrides), 'synthesized `models` did NOT leak into overrides JSON');
+    assert(!('tool_capability_to_profile' in overrides), 'synthesized `tool_capability_to_profile` did NOT leak into overrides JSON');
+
+    // The genuine user edit IS recorded.
+    assert(overrides.routes && overrides.routes.custom === 'model-a', 'genuine routes edit IS written to overrides');
+
+    // The effective file still carries the in-memory synthesized keys (synthesis stays usable downstream).
+    const effective = JSON.parse(fs.readFileSync(tmpEffective, 'utf8'));
+    assert(!!effective.tool_capability_to_profile, 'effective config still has synthesized tool_capability_to_profile');
+    assert(Array.isArray(effective.models), 'effective config still has synthesized models array');
+  } finally {
+    for (const f of [tmpDefaults, tmpOverrides, tmpEffective]) {
+      try { fs.unlinkSync(f); } catch {}
+    }
+  }
+}
+
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

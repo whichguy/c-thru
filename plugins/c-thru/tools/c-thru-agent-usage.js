@@ -27,16 +27,35 @@ const os = require('os');
 const path = require('path');
 const { extractDelegations, aggregateByAgent } = require('./agent-offload-lib.js');
 
+// Read the value for a value-taking flag, refusing to swallow the next flag.
+// Mirrors extractFlagValue in tools/c-thru-config-helpers.js: an undefined value
+// or one that startsWith('--') is not a real value — error out instead of
+// consuming the following flag (C47).
+function takeFlagValue(argv, i, flag) {
+  const val = argv[i + 1];
+  if (val === undefined || val.startsWith('--')) {
+    console.error(`${flag} requires a value`);
+    process.exit(2);
+  }
+  return val;
+}
+
 function parseArgs(argv) {
   const opts = { since: null, project: null, json: false, configDir: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') opts.json = true;
-    else if (a === '--since') opts.since = argv[++i];
-    else if (a === '--project') opts.project = argv[++i];
-    else if (a === '--config-dir') opts.configDir = argv[++i];
+    else if (a === '--since') { opts.since = takeFlagValue(argv, i, '--since'); i++; }
+    else if (a === '--project') { opts.project = takeFlagValue(argv, i, '--project'); i++; }
+    else if (a === '--config-dir') { opts.configDir = takeFlagValue(argv, i, '--config-dir'); i++; }
     else if (a === '-h' || a === '--help') opts.help = true;
     else { console.error(`unknown argument: ${a}`); process.exit(2); }
+  }
+  // --since must be an ISO date prefix (YYYY-MM-DD); reject anything else so a
+  // typo can't silently match nothing / everything.
+  if (opts.since !== null && !/^\d{4}-\d{2}-\d{2}/.test(opts.since)) {
+    console.error(`--since must be an ISO date (YYYY-MM-DD), got: ${opts.since}`);
+    process.exit(2);
   }
   return opts;
 }

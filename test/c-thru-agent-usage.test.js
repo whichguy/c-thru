@@ -97,6 +97,41 @@ try {
     const r = runJson(['--config-dir', path.join(tmp, 'does-not-exist')]);
     assert(Array.isArray(r.agents) && r.agents.length === 0, `empty agents array, no crash`);
   }
+
+  // ── 5. C47: `--since --json` errors, does NOT swallow the next flag ───────────
+  console.log('\n5. C47: value-flag parsing rejects a following flag as a value');
+  {
+    let threw = false;
+    let stderrMsg = '';
+    try {
+      // --since with --json next: the old parser set since='--json' and consumed --json.
+      execFileSync('node', [TOOL, '--config-dir', tmp, '--since', '--json'], { stdio: 'pipe', encoding: 'utf8' });
+    } catch (e) {
+      threw = e.status !== 0;
+      stderrMsg = (e.stderr || '').toString();
+    }
+    assert(threw, '`--since --json` exits non-zero (does not silently consume --json)');
+    assert(stderrMsg.includes('--since requires a value'), 'error names the missing --since value');
+  }
+
+  // ── 6. C47: a valid --since still works ──────────────────────────────────────
+  console.log('\n6. C47: valid --since date still parses and filters');
+  {
+    const r = runJson(['--config-dir', tmp, '--since', '2026-01-01']);
+    assert(r.totals.calls === 3, `valid --since 2026-01-01 keeps all 3 delegations (got ${r.totals.calls})`);
+
+    // A non-ISO --since value is rejected (not silently treated as a no-op).
+    let badThrew = false;
+    let badStderr = '';
+    try {
+      execFileSync('node', [TOOL, '--config-dir', tmp, '--since', 'yesterday'], { stdio: 'pipe', encoding: 'utf8' });
+    } catch (e) {
+      badThrew = e.status !== 0;
+      badStderr = (e.stderr || '').toString();
+    }
+    assert(badThrew, 'non-ISO --since value exits non-zero');
+    assert(badStderr.includes('ISO date'), 'error explains --since must be an ISO date');
+  }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

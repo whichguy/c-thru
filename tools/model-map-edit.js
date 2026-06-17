@@ -4,7 +4,24 @@
 const fs = require('fs');
 const path = require('path');
 const { validateConfig, isObject } = require('./model-map-validate.js');
-const { loadLayeredConfig, computeOverrideDiff } = require('./model-map-layered.js');
+const { loadLayeredConfig, computeOverrideDiff, mergeConfigLayers } = require('./model-map-layered.js');
+
+// The keys maybeSynthesizeV12Keys (model-map-layered.js) injects in-memory when a
+// config uses the legacy fallback_strategies shape. They are derived, never
+// user-authored — applyUpdates() has NO spec handler for either, so they cannot
+// be edited through this tool. They must stay in-memory only and never reach
+// model-map.overrides.json.
+const SYNTHESIZED_V12_KEYS = ['models', 'tool_capability_to_profile'];
+
+// True when loadLayeredConfig would have run the v1.2 synthesizer for this
+// pre-synthesis merged config — mirrors the exact trigger in
+// maybeSynthesizeV12Keys: fallback_strategies present AND
+// tool_capability_to_profile absent.
+function isLegacyShapeNeedingSynthesis(mergedPreSynthesis) {
+  return !!(mergedPreSynthesis
+    && mergedPreSynthesis.fallback_strategies
+    && !mergedPreSynthesis.tool_capability_to_profile);
+}
 
 function fail(message) {
   console.error(`model-map-edit: ${message}`);
@@ -254,9 +271,25 @@ function main() {
   }
 
   try {
-    const { defaults, effective } = loadLayeredConfig(defaultsPath, overridesPath);
+    const { defaults, globalOverrides, effective } = loadLayeredConfig(defaultsPath, overridesPath);
     const nextEffective = applyUpdates(effective, spec, defaults);
-    const nextOverrides = computeOverrideDiff(defaults, nextEffective) || {};
+
+    // C20: `effective` is post-synthesis (loadLayeredConfig runs maybeSynthesizeV12Keys),
+    // so when the source config is legacy-shape, nextEffective carries auto-synthesized
+    // `models` / `tool_capability_to_profile`. `defaults` is NOT synthesized, so diffing
+    // them straight would record those derived keys as user additions and leak them into
+    // model-map.overrides.json. Strip the auto-synthesized values (which the user cannot
+    // edit via this tool) from the diff input so only genuine edits are written. Detect
+    // synthesis by replicating its trigger on the pre-synthesis merged config.
+    let diffInput = nextEffective;
+    const mergedPreSynthesis = mergeConfigLayers(defaults, globalOverrides);
+    if (isLegacyShapeNeedingSynthesis(mergedPreSynthesis)) {
+      diffInput = { ...nextEffective };
+      for (const key of SYNTHESIZED_V12_KEYS) {
+        if (mergedPreSynthesis[key] === undefined) delete diffInput[key];
+      }
+    }
+    const nextOverrides = computeOverrideDiff(defaults, diffInput) || {};
     fs.mkdirSync(path.dirname(overridesPath), { recursive: true });
     fs.mkdirSync(path.dirname(effectivePath), { recursive: true });
     const overridesTmp = `${overridesPath}.tmp.${process.pid}`;
