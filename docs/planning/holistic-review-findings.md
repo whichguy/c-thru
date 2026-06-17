@@ -5,6 +5,28 @@ skeptics per finding, majority vote → completeness critic). 65 candidates → 
 agreed real after independently reading the code). Severity: **6 critical, 12 high, 19 medium, 11 low**.
 IDs `C1..C48` match the audit; `votes=n/3` is skeptic agreement. Verify each premise live before fixing.
 
+## Resolution status (2026-06-17)
+
+**Fixed + tested + committed** (6 commits on `audit/functionality-map-and-cleanup`):
+- Gov cluster — `63aa4c8` (runtime bypasses C3/C4/C5, patterns C2/C15/C33), `4daf72f` (validation C6, CLI parity C16/C36), prior `a1dccb0` (gov-based custom modes).
+- Security — `a854cd1` (C12 auth-leak, C28 token-in-debug-log, C8/C21 overlay hardening).
+- Gemini/proxy robustness — `bb449e1` (C9, C10, C11, C32, C45).
+- Launcher/install/hooks — `0cfd511` (C27, C38, C40, C41, C42, C24, C25, C29) **+ a NEW bug found via C25: `uninstall.sh` hook-scrub `jq` was a silent no-op** (operator precedence) — fixed.
+- JS tools — `d793985` (C20/C22 synthesis-leak, C47 arg-parse).
+
+All `make test-fast` green (the one full-run `proxy-gemini-translation` / `cli-e2e-flags` blips are the documented spawn flakes — pass standalone).
+
+**Surfaced for decision — NOT auto-fixed** (design-level / conflicting / tradeoff):
+- **C19** sentinel spoof — needs a design choice (HMAC/nonce per session, or honor the marker only as the first token of the first user message). Behavior-changing.
+- **C23** control-plane (`/c-thru/mode`, `/c-thru/reload`) unauthenticated on the shared loopback port — needs an auth/socket-permission design.
+- **C30** SIGHUP `_fallbackChain` reset — finder vs critic (G6) disagree on whether it's harmful; needs manual adjudication, not a blind edit.
+- **C1** bash `sync_layered_profile_model_map` project-into-profile leak — confirm the Node two-pass path already supersedes the bash call before changing routing behavior.
+- **C35** partial-tier → 503 (already deemed intended this session) — decide validate-tier-completeness vs fall-through.
+- **C48** reload dropping the active custom mode silently degrades gov→best-cloud — decide fail-closed-for-gov policy.
+- Minor/low deferred: **C37** (validate llm_profiles models vs model_routes — risks warning-noise on `:TODO`/sigil entries), **C44** (terminal-fallback logical-vs-concrete de-dup), **C46** (explain chain-fallback parity), **C31/C43** (extra fallback test gaps).
+
+---
+
 ## Headline: the gov (USGov Chinese-origin) filter is systemically incomplete
 
 `best-cloud-gov` / `best-local-gov` (and gov-*based* custom modes) are supposed to block Chinese-origin
