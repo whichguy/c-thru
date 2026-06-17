@@ -3,10 +3,22 @@
 
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
 const baseUrl = process.env.ANTHROPIC_BASE_URL || '';
+
+// C23 — per-user control token for mutating routes. Read the same 0600 file the
+// proxy reads (env override mirrors the proxy's CLAUDE_PROXY_CONTROL_TOKEN*).
+// Empty when absent → proxy fails open; no header sent.
+function controlToken() {
+  if (process.env.CLAUDE_PROXY_CONTROL_TOKEN) return process.env.CLAUDE_PROXY_CONTROL_TOKEN;
+  const claudeDir = process.env.CLAUDE_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  const tf = process.env.CLAUDE_PROXY_CONTROL_TOKEN_FILE || path.join(claudeDir, 'proxy.control-token');
+  try { return fs.readFileSync(tf, 'utf8').trim() || null; } catch { return null; }
+}
+const CONTROL_TOKEN = controlToken();
 if (!baseUrl) {
   console.error('c-thru-control: ANTHROPIC_BASE_URL not set — run from within a c-thru session or set CLAUDE_PROXY_PORT');
   process.exit(1);
@@ -18,13 +30,14 @@ const prompt = args.join(' ').toLowerCase();
 function request(method, urlPath, body = null) {
   return new Promise((resolve, reject) => {
     const url = new URL(`${baseUrl.replace(/\/$/, '')}${urlPath}`);
-    const options = {
-      method,
-      headers: body ? { 
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(JSON.stringify(body))
-      } : {}
-    };
+    const headers = body ? {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(JSON.stringify(body))
+    } : {};
+    // C23: stamp the control token on mutating routes (/c-thru/mode, /reload,
+    // /stats/clear). Harmless on GETs but only POSTs are gated; send for POST.
+    if (method === 'POST' && CONTROL_TOKEN) headers['X-C-Thru-Control'] = CONTROL_TOKEN;
+    const options = { method, headers };
     const req = http.request(url, options, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);

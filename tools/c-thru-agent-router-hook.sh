@@ -25,6 +25,33 @@ DEBUG_LOG="${C_THRU_AGENT_HOOK_LOG:-}"
 ROUTER_REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd 2>/dev/null || echo "")"
 MODEL_MAP="${CLAUDE_MODEL_MAP_PATH:-$ROUTER_REPO_ROOT/config/model-map.json}"
 
+# C19 anti-spoof: the per-user HMAC key the proxy and every session's hook share
+# (a stable 0600 file under ~/.claude, NOT a per-session env — a shared daemon
+# started by an earlier session must verify HMACs stamped by later sessions).
+# tools/c-thru generates it once at launch; we only READ it here.
+CLAUDE_DIR="${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
+AGENT_HMAC_FILE="${CLAUDE_PROXY_AGENT_HMAC_FILE:-$CLAUDE_DIR/agent-hmac.key}"
+
+# Compute the 16-hex HMAC tag for an agent name using the shared key.
+# Prints the tag on stdout, or empty string when the key is absent/unreadable
+# (fail-open: the proxy honors an unsigned marker when no key exists).
+agent_hmac_tag() {
+  local name="$1" key=""
+  [ -f "$AGENT_HMAC_FILE" ] || return 0
+  key="$(cat "$AGENT_HMAC_FILE" 2>/dev/null)" || return 0
+  [ -n "$key" ] || return 0
+  if command -v openssl >/dev/null 2>&1; then
+    printf '%s' "$name" | openssl dgst -sha256 -hmac "$key" 2>/dev/null \
+      | sed 's/^.*= //' | cut -c1-16
+  elif command -v node >/dev/null 2>&1; then
+    node -e '
+const crypto = require("crypto");
+const tag = crypto.createHmac("sha256", process.argv[1]).update(process.argv[2]).digest("hex").slice(0, 16);
+process.stdout.write(tag);
+' "$key" "$name" 2>/dev/null
+  fi
+}
+
 # --- Helpers ----------------------------------------------------------
 
 # Read a specific key from JSON using jq or node fallback
@@ -136,7 +163,16 @@ esac
 #      or out-of-band tag. Per-request + stateless, so concurrent agents don't race.
 #      See docs/planning/agent-delegation-findings.md.
 inject_model="${C_THRU_AGENT_FALLBACK_ALIAS:-sonnet}"
-sentinel="[[c-thru-agent:${lookup_key}]]"$'\n'
+# C19: stamp [[c-thru-agent:<name>:<hmac16>]] when the shared key exists so the
+# proxy can verify the marker came from a trusted hook (not forged in pasted/
+# fetched body text). When the key is absent the tag is empty → unsigned marker
+# [[c-thru-agent:<name>]] and the proxy fails open (honors it, warns once).
+hmac_tag="$(agent_hmac_tag "$lookup_key")"
+if [ -n "$hmac_tag" ]; then
+  sentinel="[[c-thru-agent:${lookup_key}:${hmac_tag}]]"$'\n'
+else
+  sentinel="[[c-thru-agent:${lookup_key}]]"$'\n'
+fi
 [ -n "$DEBUG_LOG" ] && printf '[%s] capability=%s OUTPUT model=%s sentinel=agent:%s (proxy routes per sentinel)\n' "$(date +%H:%M:%S)" "$capability" "$inject_model" "$lookup_key" >> "$DEBUG_LOG"
 
 if command -v jq >/dev/null 2>&1; then

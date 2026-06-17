@@ -25,6 +25,8 @@ const {
   LLM_MODE_ENUM,
   applyModeFilter,
   filterFor,
+  validModes,
+  isGovMode,
 } = require('./model-map-resolve.js');
 const { parseAgentSentinel } = require('./agent-sentinel.js');
 
@@ -307,6 +309,88 @@ const PROXY_LOG_MAX_SIZE = 10 * 1024 * 1024;
 const USAGE_STATS_FILE = process.env.CLAUDE_PROXY_USAGE_STATS_FILE || path.join(os.homedir(), '.claude', 'usage-stats.json');
 const PID_FILE = path.join(os.homedir(), '.claude', 'proxy.pid');
 const PROXY_STARTED_AT = nowIso();
+
+// ── Per-user shared secrets (C19 agent-HMAC + C23 control token) ───────────
+// The proxy is a SHARED daemon reused across parallel c-thru sessions, so both
+// secrets are STABLE PER-USER files (0600 under ~/.claude) that tools/c-thru
+// generates once at launch — NOT per-session env (a per-session key would make a
+// later session's HMAC fail against a proxy an earlier session started). The
+// proxy only READS them, once, at startup. Two distinct files for clarity.
+// Env overrides exist purely so the test harness can point at fixtures.
+const AGENT_HMAC_FILE = process.env.CLAUDE_PROXY_AGENT_HMAC_FILE || path.join(os.homedir(), '.claude', 'agent-hmac.key');
+const CONTROL_TOKEN_FILE = process.env.CLAUDE_PROXY_CONTROL_TOKEN_FILE || path.join(os.homedir(), '.claude', 'proxy.control-token');
+
+function readSecretFileOnce(filePath) {
+  try {
+    const v = fs.readFileSync(filePath, 'utf8').trim();
+    return v || null;
+  } catch { return null; }
+}
+
+// C19 — per-user HMAC key for agent-sentinel verification. Read once.
+// When null (file absent), the proxy FAILS OPEN: it honors unsigned markers but
+// emits a one-time warning. When present, a body marker is honored ONLY if its
+// tag verifies via timingSafeEqual against HMAC(name).
+const AGENT_HMAC_KEY = readSecretFileOnce(AGENT_HMAC_FILE);
+let _sentinelFailOpenWarned = false;
+
+function expectedAgentTag(name) {
+  // 16 hex chars = first 8 bytes of HMAC-SHA256(key, name). Mirrors the hook.
+  return crypto.createHmac('sha256', AGENT_HMAC_KEY).update(name).digest('hex').slice(0, 16);
+}
+
+function verifyAgentTag(name, tag) {
+  if (typeof tag !== 'string' || !tag) return false;
+  const expected = expectedAgentTag(name);
+  const a = Buffer.from(expected, 'utf8');
+  const b = Buffer.from(tag.toLowerCase(), 'utf8');
+  if (a.length !== b.length) return false;
+  try { return crypto.timingSafeEqual(a, b); } catch { return false; }
+}
+
+// C23 — per-user control token. Direct-value env override (CLAUDE_PROXY_CONTROL_TOKEN)
+// takes precedence over the file so the harness can spawn with a known token.
+// When null (no env, no file), mutating control routes FAIL OPEN with a one-time
+// warning; when present they require a matching X-C-Thru-Control header.
+const CONTROL_TOKEN = process.env.CLAUDE_PROXY_CONTROL_TOKEN || readSecretFileOnce(CONTROL_TOKEN_FILE);
+let _controlFailOpenWarned = false;
+
+// Gate a mutating control route. Returns true if the request may proceed.
+// Fail-open (no token configured) → true + one-time warning. Configured →
+// require header X-C-Thru-Control to match via timingSafeEqual, else 403.
+function controlAuthorized(req, res) {
+  if (!CONTROL_TOKEN) {
+    if (!_controlFailOpenWarned) {
+      _controlFailOpenWarned = true;
+      proxyLog('control.auth_disabled', {
+        message: 'WARN: control token absent (no CLAUDE_PROXY_CONTROL_TOKEN / ' + CONTROL_TOKEN_FILE +
+          ') — mutating control routes are UNAUTHENTICATED. Run tools/c-thru to generate one.',
+      });
+    }
+    return true;
+  }
+  const provided = req.headers['x-c-thru-control'];
+  const expected = Buffer.from(CONTROL_TOKEN, 'utf8');
+  let ok = false;
+  if (typeof provided === 'string' && provided.length > 0) {
+    const got = Buffer.from(provided, 'utf8');
+    if (got.length === expected.length) {
+      try { ok = crypto.timingSafeEqual(got, expected); } catch { ok = false; }
+    }
+  }
+  if (!ok) {
+    proxyLog('control.auth_rejected', { url: req.url, method: req.method, reason: provided ? 'mismatch' : 'missing' });
+    send(res, 403, { ok: false, error: 'forbidden: missing or invalid X-C-Thru-Control token' });
+    return false;
+  }
+  return true;
+}
+
+// C48 — when a reload drops the active CLAUDE_LLM_MODE (e.g. a custom gov mode
+// removed from config), resolveLlmMode silently degrades to best-cloud. Per the
+// fail-OPEN posture we keep serving, but make the degrade LOUD: this flag (set
+// in reloadConfigFromDisk) surfaces in GET /c-thru/status so operators see it.
+let MODE_DEGRADED = null;  // null = healthy; { was_mode, now, was_gov, detected_at } when degraded
 
 // In-memory ring of recently-finalized /v1/messages requests, served by
 // GET /c-thru/recent and the dashboard. Aggregates (usage-stats.json) can't
@@ -1256,6 +1340,24 @@ function sendAnthropicError(res, code, message) {
   });
 }
 
+// Rough proxy-side token estimate for /v1/messages/count_tokens against
+// backends that don't implement that endpoint (Ollama's /v1/messages adapter
+// 404s on it; Gemini maps it to :countTokens instead). Anthropic count_tokens
+// accepts system + messages + tools, so serialize those and apply the standard
+// ~4-chars/token heuristic. This is an approximation for context-management,
+// not an exact count — callers signal it via the x-c-thru-count-tokens: estimate
+// response header so operators aren't fooled into treating it as exact.
+function estimateInputTokens(body) {
+  const parts = [];
+  if (body && body.system != null) {
+    parts.push(typeof body.system === 'string' ? body.system : JSON.stringify(body.system));
+  }
+  if (Array.isArray(body && body.messages)) parts.push(JSON.stringify(body.messages));
+  if (Array.isArray(body && body.tools)) parts.push(JSON.stringify(body.tools));
+  const chars = parts.join('').length;
+  return Math.max(1, Math.ceil(chars / 4));
+}
+
 // Structured 501 for endpoints that this backend cannot serve. Matches the
 // Anthropic error envelope (`{type:"error", error:{type, message}}`) so SDKs
 // surface it through their normal error path instead of as opaque HTTP. See
@@ -1785,6 +1887,19 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   // Final-dispatch attribution for the recent-requests ring — fallback
   // re-dispatch re-enters here, so the last write is the pair that served.
   if (requestMeta) { requestMeta.servedBy = effectiveModel; requestMeta.backendId = backend.id; }
+
+  // Ollama's /v1/messages adapter does not implement /v1/messages/count_tokens
+  // (returns 404). Gemini maps it to :countTokens; Ollama has no equivalent, so
+  // short-circuit with a proxy-side heuristic estimate instead of forwarding.
+  // Gated on isLocalBackend (catches kind:"ollama" and localhost anthropic-format
+  // endpoints like ollama_cloud) so real Anthropic backends still forward natively.
+  if (typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens') && isLocalBackend(backend)) {
+    const estimate = estimateInputTokens(body);
+    ctxLog(ctx, 'count_tokens.estimated', { backend: backend.id, input_tokens: estimate });
+    res.setHeader('x-c-thru-count-tokens', 'estimate');
+    return send(res, 200, { input_tokens: estimate });
+  }
+
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
@@ -4371,6 +4486,39 @@ function maybeRegenerateMergedConfig() {
   } catch {}
 }
 
+// C48 — fail-OPEN advisory: a reload that removes the active custom (gov-based)
+// mode must not silently degrade to best-cloud. We compare the active
+// CLAUDE_LLM_MODE's validity under the outgoing vs incoming config. The env var
+// is the active mode set by POST /c-thru/mode (resolveLlmMode's top precedence).
+function detectOrphanedGovDegrade(prevConfig, nextConfig) {
+  const activeMode = process.env.CLAUDE_LLM_MODE;
+  if (!activeMode) return;  // no explicit env mode → nothing to orphan
+  const wasValid = validModes(prevConfig).has(activeMode);
+  const stillValid = validModes(nextConfig).has(activeMode);
+  if (wasValid && !stillValid) {
+    // Was the orphaned mode a gov (or gov-based) mode under the outgoing config?
+    const wasGov = isGovMode(activeMode, prevConfig);
+    MODE_DEGRADED = {
+      was_mode: activeMode,
+      now: 'best-cloud',          // resolveLlmMode's fallback for an unknown env mode
+      was_gov: wasGov,
+      detected_at: nowIso(),
+    };
+    proxyLog('mode.orphaned_gov_degrade', {
+      message: wasGov
+        ? `WARN: active gov mode '${activeMode}' was removed by config reload — DEGRADING to best-cloud. Gov egress restrictions are NO LONGER ENFORCED until a valid gov mode is restored.`
+        : `WARN: active mode '${activeMode}' was removed by config reload — degrading to best-cloud.`,
+      was_mode: activeMode,
+      now: 'best-cloud',
+      was_gov: wasGov,
+    });
+  } else if (stillValid && MODE_DEGRADED && MODE_DEGRADED.was_mode === activeMode) {
+    // The mode was restored by a later reload — clear the degraded flag.
+    proxyLog('mode.degrade_cleared', { mode: activeMode });
+    MODE_DEGRADED = null;
+  }
+}
+
 function reloadConfigFromDisk() {
   try {
     // Check if merged file is stale vs sources; re-merge if needed.
@@ -4380,6 +4528,12 @@ function reloadConfigFromDisk() {
     const nextConfig = interpolateEndpointUrls(JSON.parse(fs.readFileSync(resolved.path, 'utf8')));
     const nextMtime = Math.floor(fs.statSync(resolved.path).mtimeMs);
     nextConfig._version = ++CONFIG_VERSION;
+    // C48 — detect an active gov(-based) mode being orphaned by this reload.
+    // Compare the active CLAUDE_LLM_MODE's validity under the OUTGOING snapshot
+    // (prevConfig) vs the incoming one (nextConfig). If it was a valid gov mode
+    // before and is gone now, resolveLlmMode will silently degrade to best-cloud
+    // — make that LOUD (proxyLog advisory + status flag), but keep serving.
+    detectOrphanedGovDegrade(GLOBAL_CONFIG, nextConfig);
     GLOBAL_CONFIG = nextConfig;
     CONFIG_PATH = resolved.path;
     CONFIG_SOURCE = resolved.source;
@@ -4490,7 +4644,17 @@ const server = http.createServer((req, res) => {
         vertex_env_ok: !!(process.env.GOOGLE_CLOUD_REGION && process.env.GOOGLE_CLOUD_PROJECT),
       });
 
+      // Liveness probe (e.g. Bun/1.4.0 health checks) issues HEAD /. Answer 200
+      // with an empty body instead of falling through to unhandled_url 404 noise.
+      // Raw writeHead/end (not send()) — HEAD must not carry a body. Unauthenticated,
+      // like /ping, so probes get a fast answer.
+      if (req.method === 'HEAD' && req.url === '/') {
+        res.writeHead(200, { 'Content-Length': '0' });
+        return res.end();
+      }
+
       if (req.method === 'POST' && (req.url === '/c-thru/stats/clear' || req.url === '/c-thru/stats/clear/')) {
+        if (!controlAuthorized(req, res)) return;  // C23
         const clearedAt = new Date().toISOString();
         // Write the cleared file under the lock; the cleared_at stamp is how
         // other live instances learn to drop their pre-clear deltas (clear-wins
@@ -4592,6 +4756,10 @@ const server = http.createServer((req, res) => {
           })),
           // Global default-route resolution — ultimate last-resort target.
           default_route: CONFIG.routes && CONFIG.routes.default ? CONFIG.routes.default : null,
+          // C48 — fail-open degrade advisory. true when a reload orphaned the
+          // active (gov-based) mode and the proxy silently fell back to best-cloud.
+          mode_degraded: !!MODE_DEGRADED,
+          mode_degraded_detail: MODE_DEGRADED || null,
         });
       }
 
@@ -4611,6 +4779,7 @@ const server = http.createServer((req, res) => {
       }
 
       if (req.method === 'POST' && (req.url === '/c-thru/mode' || req.url === '/c-thru/mode/')) {
+        if (!controlAuthorized(req, res)) return;  // C23
         const buf = await readBody(req);
         let payload; try { payload = JSON.parse(buf.toString()); } catch (e) { return sendAnthropicError(res, 400, `invalid JSON body: ${e.message}`); }
         const requested = payload?.mode;
@@ -4630,6 +4799,7 @@ const server = http.createServer((req, res) => {
       }
 
       if (req.method === 'POST' && (req.url === '/c-thru/reload' || req.url === '/c-thru/reload/')) {
+        if (!controlAuthorized(req, res)) return;  // C23
         reloadConfigFromDisk();
         proxyLog('config-reload', { source: 'control-channel' });
         return send(res, 200, { ok: true, message: 'Reloaded' });
@@ -4885,14 +5055,47 @@ const server = http.createServer((req, res) => {
           // parseAgentSentinel (tools/agent-sentinel.js) does the cheapest-first
           // detection: header check, then one raw-body byte-scan + fixed-window read.
           // Kept as a pure, hermetically-tested unit (test/proxy-sentinel-detection.test.js).
-          const agentName = parseAgentSentinel(bodyText, req.headers['x-c-thru-agent']);
+          // Returns { name, tag, index } | null — tag is the optional HMAC stamp.
+          const parsed = parseAgentSentinel(bodyText, req.headers['x-c-thru-agent']);
+          const agentName = parsed && parsed.name;
           if (agentName) {
-            if (resolveCapabilityAlias(agentName, CONFIG)) {
-              ctxLog(ctx, 'sentinel_override', { agent: agentName, from_model: body.model });
-              body.model = agentName;  // resolveBackend resolves agent → capability → model
-              sentinelAgent = agentName;
-            } else {
-              ctxLog(ctx, 'sentinel_unresolved', { agent: agentName });
+            // C19 anti-spoof gate. The header path (x-c-thru-agent) is trusted as
+            // today (a deliberate out-of-band channel; empty in practice). For the
+            // BODY marker — which forgeable content (tool results, pasted text,
+            // fetched pages) can contain when C_THRU_PROXY_ALWAYS routes main-thread
+            // traffic — require an HMAC tag that verifies against the per-user key.
+            const fromHeader = parsed.tag === null && req.headers['x-c-thru-agent'] === agentName;
+            let trusted = fromHeader;
+            if (!fromHeader) {
+              if (AGENT_HMAC_KEY) {
+                // Key present → STRICT: honor only a marker whose tag verifies.
+                // Position pre-filter is cheap defense-in-depth but NOT trust on
+                // its own — the HMAC is the gate.
+                if (verifyAgentTag(agentName, parsed.tag)) {
+                  trusted = true;
+                } else {
+                  ctxLog(ctx, 'sentinel_rejected', { agent: agentName, reason: parsed.tag ? 'hmac_mismatch' : 'unsigned' });
+                }
+              } else {
+                // Key absent → FAIL OPEN: honor the marker as before, warn once.
+                trusted = true;
+                if (!_sentinelFailOpenWarned) {
+                  _sentinelFailOpenWarned = true;
+                  proxyLog('sentinel.auth_disabled', {
+                    message: 'WARN: agent-hmac key absent (' + AGENT_HMAC_FILE +
+                      ') — agent-sentinel markers are UNVERIFIED and spoofable. Run tools/c-thru to generate one.',
+                  });
+                }
+              }
+            }
+            if (trusted) {
+              if (resolveCapabilityAlias(agentName, CONFIG)) {
+                ctxLog(ctx, 'sentinel_override', { agent: agentName, from_model: body.model, signed: !!parsed.tag });
+                body.model = agentName;  // resolveBackend resolves agent → capability → model
+                sentinelAgent = agentName;
+              } else {
+                ctxLog(ctx, 'sentinel_unresolved', { agent: agentName });
+              }
             }
           }
         }

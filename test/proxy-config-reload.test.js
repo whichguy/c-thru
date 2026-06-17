@@ -241,6 +241,59 @@ async function main() {
         assertLogContains(stderr.get(), /reload failed|invalid|parse/i, 'stderr contains reload-failure message for invalid newly-selected override');
       });
     }
+
+    console.log('\n7. C48 — reload dropping the active gov-based custom mode: LOUD advisory, keep serving');
+    {
+      // Config WITH a gov-based custom mode "secure-gov" (base best-cloud-gov).
+      const withGov = Object.assign(mkConfig(stub.port, 'gov-before'), {
+        custom_modes: { 'secure-gov': { base: 'best-cloud-gov', description: 'gov custom' } },
+      });
+      // Config that DROPS the custom mode (no custom_modes) → "secure-gov" orphaned.
+      const withoutGov = mkConfig(stub.port, 'gov-after');
+
+      const configPath = path.join(tmpRoot, 'c48-gov-config.json');
+      const logPath = path.join(tmpRoot, 'c48-proxy.log');
+      fs.writeFileSync(configPath, JSON.stringify(withGov));
+
+      await withProxy({
+        configPath, profile: '16gb',
+        // Active mode is the gov-based custom mode (POST /c-thru/mode would set
+        // this env at runtime; the harness sets it at launch equivalently).
+        env: { CLAUDE_LLM_MODE: 'secure-gov', CLAUDE_PROXY_LOG_FILE: logPath },
+      }, async ({ port }) => {
+        // Healthy first: status reports the gov mode, not degraded.
+        const before = await httpJson(port, 'GET', '/c-thru/status');
+        assert(before.status === 200, 'C48: /c-thru/status 200 before reload');
+        assert(before.json.mode === 'secure-gov', `C48: active mode is secure-gov before reload (got ${before.json.mode})`);
+        assert(before.json.mode_degraded === false, 'C48: not degraded before reload');
+
+        // Drop the custom mode via an fs.watch reload.
+        fs.writeFileSync(configPath, JSON.stringify(withoutGov));
+        await sleep(300);
+
+        // Still serving (fail-open): /ping + /v1/messages both 200.
+        const ping = await httpJson(port, 'GET', '/ping');
+        assert(ping.status === 200, 'C48: /ping still 200 after orphaning reload (fail-open)');
+        const msg = await httpJson(port, 'POST', '/v1/messages', MSG);
+        assert(msg.status === 200, `C48: /v1/messages still served after orphaning reload (got ${msg.status})`);
+
+        // Status surfaces the degrade flag + detail.
+        const after = await httpJson(port, 'GET', '/c-thru/status');
+        assert(after.status === 200, 'C48: /c-thru/status 200 after reload');
+        assert(after.json.mode_degraded === true, 'C48: /c-thru/status reports mode_degraded: true');
+        assert(after.json.mode_degraded_detail
+          && after.json.mode_degraded_detail.was_mode === 'secure-gov'
+          && after.json.mode_degraded_detail.was_gov === true
+          && after.json.mode_degraded_detail.now === 'best-cloud',
+          'C48: mode_degraded_detail names was_mode=secure-gov, was_gov=true, now=best-cloud');
+
+        // Prominent advisory logged.
+        let logText = '';
+        try { logText = fs.readFileSync(logPath, 'utf8'); } catch {}
+        assert(/mode\.orphaned_gov_degrade/.test(logText) && /NO LONGER ENFORCED/.test(logText),
+          'C48: prominent advisory (mode.orphaned_gov_degrade / gov NO LONGER ENFORCED) is logged');
+      });
+    }
   } finally {
     try { if (stub) await stub.close(); } catch {}
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
