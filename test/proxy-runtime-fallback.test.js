@@ -329,14 +329,17 @@ async function main() {
           assertEq(B.requests.length, 1, 'first req: B tried 1x');
           assertEq(C.requests.length, 1, 'first req: C served 1x');
 
-          // Second request: B should be in cooldown, walked-around.
-          // Counts after: A=2, B=1 (NOT 2 — skipped), C=2.
+          // Second request: BOTH A and B failed (500) on req1, so BOTH are in
+          // cooldown (transient + have fallback_to). The proxy cooldown-skips A on
+          // the main path (jumps straight to the cascade) and skips B in the walk,
+          // descending to C. So A is NOT re-dispatched.
+          // Counts after: A=1 (cooldown-skipped), B=1 (skipped), C=2.
           const r2 = await httpJson(port, 'POST', '/v1/messages', {
             model: 'A-model', stream: false,
             messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
           });
           assertEq(r2.status, 200, 'second request: chain still serves (200)');
-          assertEq(A.requests.length, 2, 'second req: A tried 1x more (still in chain)');
+          assertEq(A.requests.length, 1, 'second req: A cooldown-skipped (also 500 w/ fallback → marked), not re-dispatched');
           assertEq(B.requests.length, 1, 'second req: B SKIPPED via cooldown (still 1, not 2)');
           assertEq(C.requests.length, 2, 'second req: C served 1x more');
         });
@@ -1148,7 +1151,12 @@ async function main() {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
-  summary();
+  // Gate the exit code on the failed count (mirrors every sibling fallback suite).
+  // Previously this called summary() and discarded the result, so a failed
+  // assertion still exited 0 — run-all.sh keys on exit code, so the whole
+  // fallback dimension was painted green regardless of assertion failures.
+  const failed = summary();
+  process.exit(failed > 0 ? 1 : 0);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
