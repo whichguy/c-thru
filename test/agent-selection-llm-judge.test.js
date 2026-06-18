@@ -30,10 +30,14 @@
 //   - ambiguous task (ambiguous:true, expect:[]): correct only if pick=='none'/
 //     empty; any specialist pick is a miss.
 //
-// Two BUCKETS (each gated on its own threshold):
+// Two BUCKETS:
 //   - DECISIVE = every task with a definite expectation — normal expect[] AND
-//     inline_ok tasks. These must be picked decisively; the hard gate lives here.
-//   - DECLINE  = ambiguous:true tasks. These must be declined; a looser floor.
+//     inline_ok tasks. These must be picked decisively; the HARD GATE lives here.
+//   - DECLINE  = ambiguous:true tasks. ADVISORY only in this tier (reported, never
+//     gates): the isolated judge can't see the main-thread system prompt that makes
+//     the cost-aware "too trivial to delegate" call, and it's a tiny/noisy bucket
+//     (swings 1/3<->2/3 run-to-run on the same model). The faithful decline gate is
+//     Tier 2b (agent-offload-coverage, real sessions with the real system prompt).
 //   per-bucket accuracy = (its correct outcomes) / (its task count).
 //
 // Gating (matches the repo's live-suite convention — see
@@ -42,10 +46,11 @@
 //   - SKIP cleanly if ANTHROPIC_API_KEY is unset. The no-key path STILL runs a
 //     DRY self-test (stubbed judge, no network) that exercises the bucketed
 //     scoring/threshold logic, then exits on summary().
-//   - When enabled it runs for real and ASSERTS BOTH thresholds (gates CI):
+//   - When enabled it runs for real and gates CI on the DECISIVE threshold ONLY:
 //     fail if decisive < DECISIVE_THRESHOLD (default 0.95, env
-//     C_THRU_SELECTION_DECISIVE_THRESHOLD) OR decline < DECLINE_THRESHOLD
-//     (default 0.60, env C_THRU_SELECTION_DECLINE_THRESHOLD).
+//     C_THRU_SELECTION_DECISIVE_THRESHOLD). DECLINE is reported against
+//     DECLINE_THRESHOLD (default 0.60, env C_THRU_SELECTION_DECLINE_THRESHOLD)
+//     but is ADVISORY — it never fails the suite (gated in Tier 2b instead).
 //   - Escape hatch: C_THRU_SELECTION_ADVISORY=1 downgrades ALL failures to
 //     advisory (print both scorecards, exit 0) — for local runs that don't gate.
 //
@@ -163,16 +168,7 @@ function parsePick(raw) {
 }
 
 // ── Live judge call (direct HTTPS to api.anthropic.com, like judge-canary) ─────
-function callAnthropic(apiKey, model, systemText, userText) {
-  const body = JSON.stringify({
-    model,
-    max_tokens: 20,
-    system: systemText,
-    // Low temperature for determinism. (haiku-4-5 accepts temperature; if a
-    // future judge model rejects it, drop this field — adaptive default is fine.)
-    temperature: 0,
-    messages: [{ role: 'user', content: userText }],
-  });
+function postAnthropic(apiKey, body) {
   const opts = {
     hostname: 'api.anthropic.com',
     path: '/v1/messages',
@@ -202,6 +198,30 @@ function callAnthropic(apiKey, model, systemText, userText) {
     req.write(body);
     req.end();
   });
+}
+
+function selectorBody(model, systemText, userText, withTemperature) {
+  const payload = {
+    model,
+    max_tokens: 20,
+    system: systemText,
+    messages: [{ role: 'user', content: userText }],
+  };
+  // Low temperature aids determinism, but newer models (e.g. claude-opus-4-8)
+  // DEPRECATE the field and 400 on it. Send it by default; callAnthropic retries
+  // without it when the API rejects it — keeps the judge portable across model gens.
+  if (withTemperature) payload.temperature = 0;
+  return JSON.stringify(payload);
+}
+
+// Sends temperature:0 for determinism, then transparently retries WITHOUT it if
+// the model deprecates the field (400 mentioning "temperature").
+async function callAnthropic(apiKey, model, systemText, userText) {
+  let r = await postAnthropic(apiKey, selectorBody(model, systemText, userText, true));
+  if (r.status === 400 && /temperature/i.test(r.bodyText || '')) {
+    r = await postAnthropic(apiKey, selectorBody(model, systemText, userText, false));
+  }
+  return r;
 }
 
 // One judge call → bare pick string. Small retry on transient errors
@@ -503,17 +523,32 @@ async function selfTest() {
   assert(missed.decisive.score < 1.0 && missed.decisive.score < perfect.decisive.score,
     `self-test: a specialist miss drops DECISIVE below perfect ` +
     `(${missed.decisive.score.toFixed(4)} < 1.0, miss on ${victim.id})`);
-  // Gate semantics: fail iff decisive < threshold OR decline < threshold. With a
-  // perfect-required decisive bar, the specialist-miss run must FAIL the gate
-  // while the perfect run PASSES it.
-  const gateFails = (card, decT, decLineT) => card.decisive.score < decT || card.decline.score < decLineT;
-  assert(gateFails(missed, 1.0, DECLINE_THRESHOLD) === true,
-    `self-test: specialist-miss run FAILS the gate at a perfect-required decisive bar (decisive ${missed.decisive.score.toFixed(4)} < 1.0)`);
-  assert(gateFails(perfect, 1.0, DECLINE_THRESHOLD) === false,
-    `self-test: perfect run PASSES the gate even at a perfect-required decisive bar`);
+  // Gate semantics (this tier): DECISIVE-only. A specialist miss FAILS the gate; a
+  // perfect run PASSES; DECLINE is ADVISORY and never affects the verdict.
+  const gateFails = (card, decT) => card.decisive.score < decT;
+  assert(gateFails(missed, 1.0) === true,
+    `self-test: specialist-miss run FAILS the DECISIVE gate (decisive ${missed.decisive.score.toFixed(4)} < 1.0)`);
+  assert(gateFails(perfect, 1.0) === false,
+    `self-test: perfect run PASSES the DECISIVE gate`);
   assert(missed.decline.score >= DECLINE_THRESHOLD,
     `self-test: DECLINE unaffected by the specialist miss ` +
     `(${missed.decline.score.toFixed(4)} >= ${DECLINE_THRESHOLD})`);
+
+  // DECLINE is advisory: a run that is DECISIVE-perfect but declines NOTHING (picks a
+  // specialist for every ambiguous task -> decline ~ 0) must STILL pass the gate.
+  const declineFail = await runJudge({
+    apiKey: 'stub', model: 'stub',
+    callFn: stubCall((task) => {
+      if (task.ambiguous === true) return 'coder';            // never declines -> decline miss
+      return (task.expect && task.expect[0]) || 'none';
+    }),
+  });
+  assert(declineFail.decisive.score >= 1.0,
+    `self-test: decline-fail scenario keeps DECISIVE perfect (${declineFail.decisive.score.toFixed(4)})`);
+  assert(declineFail.decline.score < DECLINE_THRESHOLD,
+    `self-test: decline-fail scenario drops DECLINE below threshold (${declineFail.decline.score.toFixed(4)} < ${DECLINE_THRESHOLD})`);
+  assert(gateFails(declineFail, 1.0) === false,
+    `self-test: DECLINE is advisory — a decline miss does NOT fail the DECISIVE gate`);
 }
 
 // ── Main (live path) ───────────────────────────────────────────────────────────
@@ -552,22 +587,27 @@ async function main() {
   const decisiveOk = card.decisive.score >= DECISIVE_THRESHOLD;
   const declineOk  = card.decline.score  >= DECLINE_THRESHOLD;
 
+  // DECLINE is ADVISORY in this tier (always reported, never gates). The isolated
+  // judge sees only descriptions — not Claude Code's main-thread system prompt that
+  // makes the cost-aware "too trivial to delegate" call — so whether to answer inline
+  // isn't faithfully measurable here, and the bucket is tiny/noisy. Discriminability
+  // (DECISIVE) IS faithful here and stays the hard gate; real decline behaviour is
+  // gated in Tier 2b (agent-offload-coverage).
+  console.log(`  DECLINE (advisory) ${card.decline.score.toFixed(4)} (>=${DECLINE_THRESHOLD}? ${declineOk}; ` +
+    `${card.decline.correct}/${card.decline.total}, ${card.decline.misses.length} miss(es)) — not gating; faithful decline gate is Tier 2b`);
+
   if (ADVISORY) {
-    // Advisory mode never gates: record both bucket verdicts for visibility, exit 0.
+    // Fully advisory (local default): record the DECISIVE verdict too, exit 0.
     assert(true,
-      `advisory mode — decisive ${card.decisive.score.toFixed(4)} (>=${DECISIVE_THRESHOLD}? ${decisiveOk}), ` +
-      `decline ${card.decline.score.toFixed(4)} (>=${DECLINE_THRESHOLD}? ${declineOk}) — not gating`);
+      `advisory mode — decisive ${card.decisive.score.toFixed(4)} (>=${DECISIVE_THRESHOLD}? ${decisiveOk}) — not gating`);
     summary();
     process.exit(0);
   }
 
-  // Gate: fail if EITHER bucket is below its threshold.
+  // Gate: DECISIVE only — descriptions MUST let the model pick the right specialist.
   assert(decisiveOk,
     `DECISIVE accuracy ${card.decisive.score.toFixed(4)} >= ${DECISIVE_THRESHOLD} ` +
     `(${card.decisive.correct}/${card.decisive.total}; ${card.decisive.misses.length} miss(es))`);
-  assert(declineOk,
-    `DECLINE accuracy ${card.decline.score.toFixed(4)} >= ${DECLINE_THRESHOLD} ` +
-    `(${card.decline.correct}/${card.decline.total}; ${card.decline.misses.length} miss(es))`);
 
   const failed = summary();
   process.exit(failed ? 1 : 0);
