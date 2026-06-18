@@ -194,6 +194,8 @@ run_suite "proxy-sentinel-detection (per-agent marker: header + byte-scan + wind
   node "$REPO_DIR/test/proxy-sentinel-detection.test.js"
 run_suite "proxy-control-auth (control-token gate on mutating routes)" \
   node "$REPO_DIR/test/proxy-control-auth.test.js"
+run_suite "proxy-auth-strip-e2e (C12: incoming Anthropic auth stripped to unknown host)" \
+  node "$REPO_DIR/test/proxy-auth-strip-e2e.test.js"
 run_suite "proxy-agent-sentinel-e2e (live proxy: signed/unsigned/forged marker, fail-open, by_agent)" \
   node "$REPO_DIR/test/proxy-agent-sentinel-e2e.test.js"
 run_suite "agent-offload-lib (delegation parser: parse-not-grep, call↔result join)" \
@@ -288,6 +290,8 @@ run_suite "proxy-mode-multi-backend (multi-backend mode routing)" \
   node "$REPO_DIR/test/proxy-mode-multi-backend.test.js"
 run_suite "proxy-mode-overrides (mode override precedence)" \
   node "$REPO_DIR/test/proxy-mode-overrides.test.js"
+run_suite "proxy-custom-mode-routing (custom_modes positive routing + gov-based filter)" \
+  node "$REPO_DIR/test/proxy-custom-mode-routing.test.js"
 run_suite "proxy-mode-ranking (mode-aware quality ranking)" \
   node "$REPO_DIR/test/proxy-mode-ranking.test.js"
 run_suite "proxy-probe-llm (/v1/probe-llm endpoint)" \

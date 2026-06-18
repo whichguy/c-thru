@@ -13,7 +13,8 @@ const path = require('path');
 
 const {
   assert, assertEq, summary,
-  writeConfig, withProxy, httpJson, stubBackend, ollamaStubBackend,
+  writeConfig, withProxy, httpJson, httpStream,
+  stubBackend, ollamaStubBackend, streamingStubBackend,
 } = require('./helpers');
 
 console.log('proxy runtime upstream fallback tests\n');
@@ -47,6 +48,35 @@ function buildConfig(cloudPort, ollamaPort, opts = {}) {
 const HEALTHY_OLLAMA_NDJSON = [
   { message: { content: 'fallback-served' } },
   { done: true, done_reason: 'stop', prompt_eval_count: 2, eval_count: 1 },
+];
+
+// Minimal-but-coherent Anthropic SSE the fallback streaming backend serves.
+// The text delta carries a sentinel so the client can prove the bytes came
+// from the FALLBACK, not the failed primary.
+const FALLBACK_STREAM = [
+  { event: 'message_start', data: {
+      type: 'message_start',
+      message: {
+        id: 'msg_fb_stream', type: 'message', role: 'assistant',
+        content: [], model: 'fallback-stream-model', stop_reason: null,
+        usage: { input_tokens: 3, output_tokens: 0 },
+      },
+  }},
+  { event: 'content_block_start', data: {
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'text', text: '' },
+  }},
+  { event: 'content_block_delta', data: {
+      type: 'content_block_delta', index: 0,
+      delta: { type: 'text_delta', text: 'stream-fallback-served' },
+  }},
+  { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 }},
+  { event: 'message_delta', data: {
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: 4 },
+  }},
+  { event: 'message_stop', data: { type: 'message_stop' } },
 ];
 
 async function main() {
@@ -1144,6 +1174,162 @@ async function main() {
         });
       } finally {
         await fallback.close().catch(() => {});
+      }
+    }
+
+    // ── Test P1-STREAM: stream:true, primary fails pre-headers → fallback STREAMS ─
+    // GAP: every prior fallback assertion uses stream:false. Claude Code's default
+    // IS streaming, and the proxy has SEPARATE dispatch/error handling for the SSE
+    // path (forwardAnthropic only fails over while !res.headersSent — once the
+    // first SSE byte is flushed the cascade is impossible). This case proves the
+    // pre-first-byte cascade still produces a COHERENT stream from the fallback
+    // (not a hang, not a raw error after headersSent). Two sub-cases:
+    //   (a) primary 503 pre-headers → fallback serves SSE
+    //   (b) primary connection-refused (port closed) → fallback serves SSE
+    console.log('\nP1-STREAM. stream:true + primary fails pre-first-byte → fallback serves a coherent stream');
+    {
+      // Helper: build a config whose primary anthropic backend falls back to a
+      // streaming anthropic backend. Routed through a capability so the request
+      // model is a plain logical model name.
+      const buildStreamCfg = (primaryPort, fallbackPort) => ({
+        backends: {
+          stream_primary:  { kind: 'anthropic', url: `http://127.0.0.1:${primaryPort}`, fallback_to: 'stream-fallback-target' },
+          stream_fallback: { kind: 'anthropic', url: `http://127.0.0.1:${fallbackPort}` },
+        },
+        model_routes: {
+          'stream-primary-model':   'stream_primary',
+          'stream-fallback-target': 'stream_fallback',
+        },
+        llm_profiles: {
+          '128gb': {
+            workhorse: { connected_model: 'stream-primary-model', disconnect_model: 'stream-primary-model' },
+          },
+        },
+      });
+      const assertCoherentStream = (r, label) => {
+        assertEq(r.status, 200, `${label}: fallback stream returned 200`);
+        const types = r.events.map(e => e.event);
+        assertEq(types[0], 'message_start', `${label}: first SSE event = message_start`);
+        assertEq(types[types.length - 1], 'message_stop', `${label}: last SSE event = message_stop (clean close, no hang)`);
+        const text = r.events
+          .filter(e => e.event === 'content_block_delta')
+          .map(e => e.data?.delta?.text || '').join('');
+        assert(text.includes('stream-fallback-served'),
+          `${label}: streamed bytes came from the FALLBACK, not the failed primary (got: ${JSON.stringify(text)})`);
+      };
+
+      // (a) primary 503 pre-headers → fallback streams
+      {
+        const primary  = await stubBackend({ failWith: 503 });
+        const fallback = await streamingStubBackend(FALLBACK_STREAM);
+        try {
+          const configPath = writeConfig(tmpDir, buildStreamCfg(primary.port, fallback.port));
+          await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+            const r = await httpStream(port, 'POST', '/v1/messages', {
+              model: 'stream-primary-model', stream: true,
+              messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+            }, {}, 10000);
+            assertCoherentStream(r, 'stream/503');
+            assertEq(primary.requests.length, 1, 'stream/503: primary tried once (503 pre-headers)');
+            assertEq(fallback.requests.length, 1, 'stream/503: streaming fallback served once');
+            assertEq(fallback.lastRequest()?.body?.stream, true,
+              'stream/503: fallback received stream:true (flag preserved across the cascade)');
+          });
+        } finally {
+          await primary.close().catch(() => {});
+          await fallback.close().catch(() => {});
+        }
+      }
+
+      // (b) primary connection-refused (port closed) → fallback streams.
+      // This is the strict "fails BEFORE the first byte" form: the proxy never
+      // even gets an HTTP response from the primary, so the cascade fires from
+      // the up.on('error') handler rather than the non-2xx handler.
+      {
+        const sham = await stubBackend({});
+        const closedPort = sham.port;
+        await sham.close();
+        const fallback = await streamingStubBackend(FALLBACK_STREAM);
+        try {
+          const configPath = writeConfig(tmpDir, buildStreamCfg(closedPort, fallback.port));
+          await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
+            const r = await httpStream(port, 'POST', '/v1/messages', {
+              model: 'stream-primary-model', stream: true,
+              messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+            }, {}, 10000);
+            assertCoherentStream(r, 'stream/conn-refused');
+            assertEq(fallback.requests.length, 1, 'stream/conn-refused: streaming fallback served once');
+          });
+        } finally {
+          await fallback.close().catch(() => {});
+        }
+      }
+    }
+
+    // ── Test P1-GOV: gov filter applied AT CASCADE time (not just pre-dispatch) ──
+    // GAP: the gov Chinese-origin block was only ever tested on the PRIMARY
+    // selection (proxy-mode-filters.test.js). It was never tested that when a
+    // primary FAILS and the proxy WALKS the fallback chain, the cascade SKIPS a
+    // Chinese-origin node (fallback.skip_mode_filter) and serves the compliant
+    // one. This exercises the modeAllows()/filterFor() guard inside
+    // tryFallbackOrFail's per-backend fallback_to walk.
+    //
+    // Chain: compliant_primary (non-Chinese, 5xx) → blocked (qwen3 = Chinese)
+    //        → compliant_fallback (non-Chinese, serves). Under best-cloud-gov the
+    // walk must skip the qwen3 node entirely (never hit its stub) and serve the
+    // compliant fallback.
+    console.log('\nP1-GOV. cascade walk under best-cloud-gov SKIPS a Chinese-origin node and serves the compliant one');
+    {
+      const primary  = await stubBackend({ failWith: 503 });       // non-Chinese primary, fails
+      const blocked  = await stubBackend();                         // Chinese-origin (qwen3) — must NEVER be hit
+      const compliant = await stubBackend({
+        responseBody: {
+          id: 'msg_gov_fb', type: 'message', role: 'assistant',
+          content: [{ type: 'text', text: 'served-by-compliant-fallback' }],
+          model: 'claude-sonnet-gov', stop_reason: 'end_turn', stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      });
+      try {
+        // Per-backend fallback_to walk: primary → qwen3 (blocked) → claude (compliant).
+        // The qwen3 node itself declares fallback_to so the walk DESCENDS past it
+        // (skip_mode_filter path that continues, mirroring a cooldown skip).
+        const cfg = {
+          backends: {
+            primary_be:   { kind: 'anthropic', url: `http://127.0.0.1:${primary.port}`,   fallback_to: 'qwen3-blocked' },
+            qwen3_be:     { kind: 'anthropic', url: `http://127.0.0.1:${blocked.port}`,    fallback_to: 'claude-compliant' },
+            compliant_be: { kind: 'anthropic', url: `http://127.0.0.1:${compliant.port}` },
+          },
+          model_routes: {
+            'claude-sonnet-primary': 'primary_be',   // non-Chinese name → allowed
+            'qwen3-blocked':         'qwen3_be',      // Chinese family token → blocked in gov
+            'claude-compliant':      'compliant_be',  // non-Chinese name → allowed
+          },
+          llm_profiles: {
+            gov_cap: {
+              'best-cloud-gov': { '128gb': 'claude-sonnet-primary' },
+            },
+          },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '128gb', mode: 'best-cloud-gov' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'gov_cap', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          }, {}, 8000);
+          assertEq(r.status, 200, 'gov cascade served the compliant fallback (200)');
+          const text = (r.json?.content || []).map(b => b.text).join('');
+          assert(text.includes('served-by-compliant-fallback'),
+            `gov cascade served the compliant node, not the Chinese one (got: ${text})`);
+          assertEq(primary.requests.length, 1, 'gov: non-Chinese primary tried once');
+          assertEq(blocked.requests.length, 0,
+            'gov: Chinese-origin (qwen3) node SKIPPED in the cascade walk — never dispatched');
+          assertEq(compliant.requests.length, 1, 'gov: compliant fallback served once');
+        });
+      } finally {
+        await primary.close().catch(() => {});
+        await blocked.close().catch(() => {});
+        await compliant.close().catch(() => {});
       }
     }
 

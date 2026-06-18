@@ -23,6 +23,9 @@ const {
   canonicalizeDir,
   canonicalizeFile,
 } = require('../tools/model-map-config.js');
+// syncLayeredConfig exercises the (nested, non-exported) writeIfChanged temp-file
+// guard directly — used by the temp-file-safety case below.
+const { syncLayeredConfig } = require('../tools/model-map-layered.js');
 
 let passed = 0;
 let failed = 0;
@@ -211,6 +214,108 @@ try {
     } finally {
       try { fs.unlinkSync(tmpFile); } catch {}
     }
+  }
+
+  // ── Test 7: Pass-2 POSITIVE — project overlay carries the project key, the ──
+  //   shared profile does NOT (the C1 anti-pollution guarantee), and the overlay
+  //   lands in the deterministic per-uid 0700 dir from sessionEffectivePath.
+  // Tests 1–4 only assert the NEGATIVE half (source != 'project-overlay', no
+  // pollution) under syncProfile:false — Pass 2 was dead-to-tests. This drives
+  // the real selection path (syncProfile:true) end-to-end.
+  console.log('\n7. Pass-2: project overlay holds the project key; shared profile stays clean (C1)');
+  {
+    const profileDir = tmpDir();
+    const projectDir = tmpDir();  // completely separate temp directory
+    // Marker that exists ONLY in the project tier. If the shared profile ever
+    // contains it, project config has leaked into the global config (the C1 bug).
+    const PROJECT_KEY = '_c_thru_overlay_project_marker';
+
+    // Project config: .claude/model-map.json with the project-only marker key.
+    fs.mkdirSync(path.join(projectDir, '.claude'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, '.claude', 'model-map.json'),
+      JSON.stringify({ [PROJECT_KEY]: true }),
+    );
+
+    // Launch cwd is inside the project (NOT the profile dir).
+    const cwdInsideProject = path.join(projectDir, 'subdir');
+    fs.mkdirSync(cwdInsideProject, { recursive: true });
+
+    withEnv({
+      CLAUDE_PROFILE_DIR: profileDir,
+      CLAUDE_MODEL_MAP_PATH: undefined,        // no env override → exercise the overlay branch
+      CLAUDE_MODEL_MAP_LAUNCH_CWD: cwdInsideProject,
+    }, () => {
+      // syncProfile:true runs maybeSyncLayeredProfileModelMap: Pass 1 writes the
+      // shared profile (system+global only), Pass 2 writes the per-uid overlay
+      // (system+global+project).
+      const result = resolveSelectedConfigPath({ syncProfile: true });
+      assert(result !== null, 'resolveSelectedConfigPath returns a result');
+      if (result) {
+        assertEq(result.source, 'project-overlay', 'source is "project-overlay" (Pass 2 selected)');
+
+        // The overlay file MUST contain the project-only key.
+        const overlay = JSON.parse(fs.readFileSync(result.path, 'utf8'));
+        assertEq(overlay[PROJECT_KEY], true, 'overlay file contains the PROJECT key');
+
+        // The shared profile (~/.claude/model-map.json) must NOT — C1 guarantee.
+        const profileMapPath = path.join(profileDir, 'model-map.json');
+        const profileMap = JSON.parse(fs.readFileSync(profileMapPath, 'utf8'));
+        assert(!Object.prototype.hasOwnProperty.call(profileMap, PROJECT_KEY),
+          'shared profile does NOT contain the project key (no pollution)');
+
+        // The overlay path is the deterministic per-uid 0700 dir keyed by uid,
+        // matching sessionEffectivePath's layout: $TMPDIR/c-thru-<uid>/...
+        // (compare via realpath since resolveSelectedConfigPath canonicalizes).
+        const uid = typeof process.getuid === 'function' ? process.getuid() : 'u';
+        const expectedUserDir = path.join(os.tmpdir(), `c-thru-${uid}`);
+        const stat = fs.statSync(expectedUserDir);
+        assertEq(stat.mode & 0o777, 0o700, 'per-uid overlay dir is mode 0700');
+        assertEq(
+          fs.realpathSync(path.dirname(result.path)),
+          fs.realpathSync(expectedUserDir),
+          'overlay lives in the deterministic per-uid dir (sessionEffectivePath layout)',
+        );
+      }
+    });
+  }
+
+  // ── Test 8: temp-file safety — writeIfChanged refuses to follow a symlink ──
+  //   planted at the effective-output path (the C8/C21 guard), so the victim
+  //   the symlink points at is never overwritten. writeIfChanged is nested in
+  //   syncLayeredConfig (not exported), so we exercise it via syncLayeredConfig.
+  console.log('\n8. temp-file safety: writeIfChanged refuses a pre-planted symlink at the write target');
+  {
+    const root = tmpDir();
+    const defaultsPath = path.resolve(__dirname, '..', 'config', 'model-map.json');
+    const globalPath = path.join(root, 'overrides.json');
+    fs.writeFileSync(globalPath, '{}');
+    const projectPath = path.join(root, 'project.json');
+    fs.writeFileSync(projectPath, JSON.stringify({ _c_thru_overlay_symlink_marker: true }));
+
+    // The victim the planted symlink points at — must survive untouched.
+    const victimPath = path.join(root, 'victim.txt');
+    const VICTIM_CONTENT = 'DO_NOT_OVERWRITE_VIA_SYMLINK';
+    fs.writeFileSync(victimPath, VICTIM_CONTENT);
+
+    // Plant a symlink at the effective-output target before the write.
+    const effectivePath = path.join(root, 'effective.json');
+    fs.symlinkSync(victimPath, effectivePath);
+
+    // syncLayeredConfig → writeIfChanged(effectivePath, ...). The guard lstat's
+    // the target, sees a symlink, unlinks it, then atomically writes a fresh
+    // regular file — never following the link to the victim.
+    syncLayeredConfig(defaultsPath, globalPath, projectPath, effectivePath);
+
+    const lst = fs.lstatSync(effectivePath);
+    assert(!lst.isSymbolicLink(), 'planted symlink was dropped, not followed');
+    assert(lst.isFile(), 'effective target is now a regular file');
+    assertEq(fs.readFileSync(victimPath, 'utf8'), VICTIM_CONTENT,
+      'victim file the symlink pointed at is NOT overwritten');
+    // And the real write landed: effective got the merged project marker.
+    const effObj = JSON.parse(fs.readFileSync(effectivePath, 'utf8'));
+    assertEq(effObj._c_thru_overlay_symlink_marker, true,
+      'fresh effective file contains the merged project marker');
   }
 
 } finally {

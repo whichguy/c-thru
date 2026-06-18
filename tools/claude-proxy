@@ -900,6 +900,22 @@ function backendHost(backend) {
 }
 
 function deriveAuthProfile(backend) {
+  // TEST-ONLY override (inert in production): the integration harness binds every
+  // stub on 127.0.0.1, which KNOWN_HOSTS maps to profile 'none' (always-forward),
+  // so a spawned proxy can never structurally reach the unknown-host 'passthrough'
+  // (auth-STRIP) branch in applyOutboundAuth. When — and ONLY when — the env var
+  // CLAUDE_PROXY_TEST_UNKNOWN_HOST_BACKENDS is set, the listed backend ids
+  // (comma-separated) are forced to the unknown-host classification (return null),
+  // exactly as a genuine non-KNOWN_HOSTS host would derive. The env var is set
+  // NOWHERE in any real launch/config path, so this short-circuit is a no-op
+  // outside tests. The env is read inline (not a module-scope const) so the
+  // string-extraction harness in test/proxy-quality.test.js can eval this
+  // function standalone. See test/proxy-auth-strip-e2e.test.js (C12 coverage).
+  const _testUnknown = process.env.CLAUDE_PROXY_TEST_UNKNOWN_HOST_BACKENDS;
+  if (_testUnknown && backend && backend.id &&
+      _testUnknown.split(',').map(s => s.trim()).includes(backend.id)) {
+    return null;
+  }
   const host = backendHost(backend);
   if (!host) return null;
   for (const entry of KNOWN_HOSTS) if (entry.match.test(host)) return entry;
