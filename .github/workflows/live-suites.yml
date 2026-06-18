@@ -107,6 +107,20 @@ jobs:
           GOOGLE_CLOUD_TOKEN: ${{ secrets.GOOGLE_CLOUD_TOKEN }}
           GOOGLE_CLOUD_PROJECT: ${{ secrets.GOOGLE_CLOUD_PROJECT }}
           GOOGLE_CLOUD_REGION: ${{ secrets.GOOGLE_CLOUD_REGION }}
+          # Agent-SELECTION live coverage gates. `make test-live-all` already prefixes
+          # these (kept in sync there), but we also export them at the job level so the
+          # workflow self-documents which selection suites the nightly run exercises:
+          #   C_THRU_LIVE_SELECTION — the LLM-judge selection test
+          #                           (test/agent-selection-llm-judge.test.js)
+          #   C_THRU_OFFLOAD        — the real-session offload scorecard
+          #                           (test/agent-offload-coverage.js); self-skips with no
+          #                           `claude` binary, so it's green-but-skipping on a stock
+          #                           runner and only runs on a self-hosted runner with claude
+          #   C_THRU_OFFLOAD_GATE   — promote the scorecard from advisory to threshold-gated
+          #                           (CI=true already does this; explicit here for clarity)
+          C_THRU_LIVE_SELECTION: "1"
+          C_THRU_OFFLOAD: "1"
+          C_THRU_OFFLOAD_GATE: "1"
           # install.sh's PATH edit is skipped above; belt-and-suspenders for any
           # transitive call that might otherwise try to touch the shell rc.
           C_THRU_INSTALL_NO_PATH: "1"

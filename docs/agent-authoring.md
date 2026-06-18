@@ -72,6 +72,34 @@ Copy the shape of these three:
   > to a plan. Use for "implement", "write the code for", "add this function", "edit this file".
   > Requires a plan from planner or clear unambiguous intent. Routes to Sonnet cloud…
 
+## Descriptions are validated for SELECTION, not just form
+
+The four rules above check that a description is *well-formed*. A separate set of tests checks
+that it is *discriminable* — i.e. that the description actually causes the right agent to be
+picked for a realistic task, and crucially that it does **not** poach tasks meant for a
+neighbour. All three tiers are driven by one shared labeled corpus,
+`test/fixtures/agent-selection-corpus.json` (entries: `{id, prompt, expect:[primary, …acceptable],
+note, ambiguous?}`; `ambiguous:true` entries carry `expect:[]` and assert that *no* specialist is
+selected):
+
+| Tier | Test | Cadence | What it checks |
+|---|---|---|---|
+| 1 — hermetic discriminability lint | `test/agent-selection-discriminability.test.js` | every run (fail-closed) | Each corpus task's wording lines up with its expected agent and is separable from the others — purely offline, no API calls |
+| 2a — LLM-judge | `test/agent-selection-llm-judge.test.js` | nightly CI (`C_THRU_LIVE_SELECTION`) | An LLM judge, given only the injected descriptions + a task, picks the expected agent (or `none` for ambiguous tasks) |
+| 2b — real-session offload scorecard | `test/agent-offload-coverage.js` | nightly CI (`C_THRU_OFFLOAD` + threshold gate) | Drives real `claude -p` sessions and checks Claude actually delegates to the right subagent from the description alone; ambiguous tasks must stay inline. Advisory locally; threshold-gated on CI |
+
+The corpus is deliberately **non-circular**: prompts are phrased the way a real user would, *not*
+by reusing the quoted example phrases from `agents/*.md` descriptions — otherwise Tier 1 and the
+judge degrade into circular keyword matching. (Vision/PDF/long-context tasks are exercised by
+Tiers 1 and 2a only; the real-session run skips them because the scratch harness can't furnish a
+genuine image, PDF, or oversized file.)
+
+**Adding a new agent therefore means adding ~3–4 corpus tasks for it** in
+`test/fixtures/agent-selection-corpus.json`: natural-language prompts (not copies of your
+description's examples) whose `expect[0]` is the new agent, plus genuinely-acceptable neighbours
+in the rest of `expect`. Without them, the new agent is "never selected" in the scorecard and the
+selection tiers can't tell whether its description actually works.
+
 ## Don't touch the rest of the frontmatter
 
 `name`, `model`, and `tier_budget` are validated by `tools/c-thru-contract-check.sh` and the

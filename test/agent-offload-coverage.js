@@ -21,15 +21,37 @@
 // Output is a scorecard + a NEVER-SELECTED list (agents no natural prompt reached =
 // effectively dead descriptions — the actionable feedback for description tuning).
 //
-// ADVISORY: LLM selection is non-deterministic, so this NEVER fails the suite (always
-// exits 0). Treat it as signal. Authoritative agent gates are the hermetic
-// agent-dispatch-graph + agent-router-hook + agent-description-quality suites.
+// CORPUS: driven by the SHARED labeled corpus test/fixtures/agent-selection-corpus.json
+// (the same file the Tier 1 hermetic discriminability lint and the Tier 2a LLM-judge
+// consume). It is a strict superset of the legacy test/fixtures/offload-prompts.json,
+// which is now unreferenced (left in place for history; safe to delete). Each entry is
+// {id, prompt, expect:[primary,...acceptable], note, ambiguous?}; ambiguous:true entries
+// carry expect:[] and the WIN condition is no-offload (or an acceptable pick) — answering
+// an ambiguous task inline is CORRECT, not a miss.
+//
+// SCORING:
+//   exact            — delegated to the primary expected agent
+//   acceptable       — delegated to a listed alternate
+//   ambiguous-correct— ambiguous task answered inline (no offload) — a WIN
+//   unexpected       — delegated to an agent not in the expected set
+//   no-offload       — non-ambiguous task answered inline (informative miss)
+//
+// MODE — by default ADVISORY (always exit 0): LLM selection is non-deterministic, so a
+// local run is signal, not a gate. On CI (process.env.CI) or with C_THRU_OFFLOAD_GATE=1
+// it becomes THRESHOLD-GATED: it computes accuracy = (exact+acceptable+ambiguous-correct)
+// / scored and exits non-zero if accuracy < THRESHOLD (0.70 — real sessions are noisy,
+// so the bar is deliberately permissive) OR if any expect-primary agent is NEVER selected
+// across the whole run (a primary that no natural prompt ever reaches = a dead/ambiguous
+// description, which is the actionable failure). Authoritative hermetic agent gates remain
+// the agent-dispatch-graph + agent-router-hook + agent-description-quality suites.
 //
 // GATES (else SKIP cleanly): C_THRU_OFFLOAD=1, a usable `claude` binary, tools/c-thru.
 //
-// Run: C_THRU_OFFLOAD=1 node test/agent-offload-coverage.js
+// Run: C_THRU_OFFLOAD=1 node test/agent-offload-coverage.js          (advisory)
+//      C_THRU_OFFLOAD=1 C_THRU_OFFLOAD_GATE=1 node test/agent-offload-coverage.js  (gated)
 //   CLAUDE_BIN=...                 path to the claude binary (else PATH)
 //   C_THRU_OFFLOAD_TIMEOUT=<secs>  per-prompt timeout (default 180)
+//   C_THRU_OFFLOAD_ONLY=<id,...>   run just those fixture ids (debug/cheap smoke)
 
 const fs = require('fs');
 const os = require('os');
@@ -39,8 +61,26 @@ const { extractDelegations } = require('../tools/agent-offload-lib.js');
 
 const REPO = path.resolve(__dirname, '..');
 const C_THRU = path.join(REPO, 'tools', 'c-thru');
-const FIXTURES = path.join(REPO, 'test', 'fixtures', 'offload-prompts.json');
+// Shared labeled corpus (Tier 1 lint + Tier 2a judge + Tier 2b here). Strict superset of
+// the legacy test/fixtures/offload-prompts.json (now unreferenced — kept for history).
+const FIXTURES = path.join(REPO, 'test', 'fixtures', 'agent-selection-corpus.json');
 const AGENTS_DIR = path.join(REPO, 'agents');
+
+// Tasks whose inputs the scratch harness cannot realistically furnish: vision needs a real
+// image, pdf needs a real PDF, long-context needs genuinely oversized files. Synthesizing
+// stand-ins would only test how Claude handles a fake — not real selection — so we skip them
+// in the real-session run. Their selection IS still gated, by Tier 1 (hermetic
+// discriminability lint) and Tier 2a (LLM-judge), which feed off the same corpus.
+const SKIP_IDS = new Set([
+  'vision-screenshot', 'vision-diagram',   // need a real image
+  'pdf-table', 'pdf-multicol',             // need a real PDF
+  'longctx-needle', 'longctx-bigdoc',      // need genuinely huge files
+]);
+
+// CI / explicit gate flips advisory → threshold-gated (see header).
+const GATED = process.env.CI === 'true' || process.env.CI === '1' || process.env.C_THRU_OFFLOAD_GATE === '1';
+// Real sessions are noisy and LLM selection is non-deterministic; keep the bar permissive.
+const THRESHOLD = parseFloat(process.env.C_THRU_OFFLOAD_THRESHOLD || '0.70');
 
 function skip(msg) { console.log(`SKIP  agent-offload-coverage: ${msg}`); process.exit(0); }
 
@@ -59,11 +99,17 @@ if (!fs.existsSync(C_THRU)) skip('tools/c-thru not found');
 const TIMEOUT_S = parseInt(process.env.C_THRU_OFFLOAD_TIMEOUT || '180', 10);
 const roster = fs.readdirSync(AGENTS_DIR).filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, '')).sort();
 let fixtures = JSON.parse(fs.readFileSync(FIXTURES, 'utf8')).prompts;
-// C_THRU_OFFLOAD_ONLY=<id[,id...]> runs just those fixtures (debugging / cheap smoke).
+const skippedIds = fixtures.filter((f) => SKIP_IDS.has(f.id)).map((f) => f.id);
+fixtures = fixtures.filter((f) => !SKIP_IDS.has(f.id));
+// C_THRU_OFFLOAD_ONLY=<id[,id...]> runs just those fixtures (debugging / cheap smoke);
+// overrides the skip-list so a single skipped id can still be probed by hand.
 if (process.env.C_THRU_OFFLOAD_ONLY) {
   const want = new Set(process.env.C_THRU_OFFLOAD_ONLY.split(',').map((s) => s.trim()));
-  fixtures = fixtures.filter((f) => want.has(f.id));
+  fixtures = JSON.parse(fs.readFileSync(FIXTURES, 'utf8')).prompts.filter((f) => want.has(f.id));
 }
+
+// ambiguous:true entries (and any with an empty expect[]) want NO specialist selected.
+function isAmbiguous(f) { return f.ambiguous === true || !Array.isArray(f.expect) || f.expect.length === 0; }
 
 // ── Scratch files referenced by the prompts ───────────────────────────────────
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-offload-'));
@@ -121,6 +167,14 @@ function runPrompt(prompt) {
 }
 
 function score(fixture, picked) {
+  if (isAmbiguous(fixture)) {
+    // No specialist is the correct answer. Answering inline (no offload) is the WIN; an
+    // acceptable explicit pick (if any are listed) is tolerated; any other pick is wrong.
+    if (picked.length === 0) return { kind: 'ambiguous-correct', agent: null };
+    const ok = picked.find((a) => (fixture.expect || []).includes(a));
+    if (ok) return { kind: 'acceptable', agent: ok };
+    return { kind: 'unexpected', agent: picked[0] };
+  }
   if (picked.length === 0) return { kind: 'no-offload', agent: null };
   if (picked.includes(fixture.expect[0])) return { kind: 'exact', agent: fixture.expect[0] };
   const alt = picked.find((a) => fixture.expect.includes(a));
@@ -129,10 +183,13 @@ function score(fixture, picked) {
 }
 
 // ── Drive all fixtures ─────────────────────────────────────────────────────────
-console.log(`agent-offload-coverage: ${fixtures.length} natural prompts, ${TIMEOUT_S}s each (advisory)\n`);
+const modeLabel = GATED ? `GATED (threshold ${THRESHOLD})` : 'advisory';
+const skipNote = skippedIds.length ? `, ${skippedIds.length} skipped (vision/pdf/long-context — see Tier 1/2a)` : '';
+console.log(`agent-offload-coverage: ${fixtures.length} natural prompts, ${TIMEOUT_S}s each — ${modeLabel}${skipNote}\n`);
+if (skippedIds.length) console.log(`  skipped ids: ${skippedIds.join(', ')}\n`);
 const selectedCount = Object.create(null);
 let injectedAgents = null;
-const tally = { exact: 0, acceptable: 0, unexpected: 0, 'no-offload': 0, errored: 0 };
+const tally = { exact: 0, acceptable: 0, 'ambiguous-correct': 0, unexpected: 0, 'no-offload': 0, errored: 0 };
 
 try {
   for (const f of fixtures) {
@@ -146,16 +203,18 @@ try {
 
     if (r.resultEvent && r.resultEvent.is_error && picked.length === 0) {
       tally.errored++;
-      console.log(`  ${'ERROR'.padEnd(11)} ${f.id.padEnd(20)} session error${r.timedOut ? ' (timeout)' : ''} — ${r.stderrTail || 'see stderr'}`);
+      console.log(`  ${'ERROR'.padEnd(17)} ${f.id.padEnd(24)} session error${r.timedOut ? ' (timeout)' : ''} — ${r.stderrTail || 'see stderr'}`);
       continue;
     }
     const s = score(f, picked);
     tally[s.kind]++;
+    const expectStr = (f.expect && f.expect.length) ? f.expect.join('|') : 'none (ambiguous)';
     const detail = s.kind === 'exact' ? s.agent
-      : s.kind === 'acceptable' ? `${s.agent} (alt; primary=${f.expect[0]})`
-      : s.kind === 'unexpected' ? `${s.agent} (expected ${f.expect.join('|')})`
-      : `expected ${f.expect.join('|')}`;
-    console.log(`  ${s.kind.toUpperCase().padEnd(11)} ${f.id.padEnd(20)} ${detail}`);
+      : s.kind === 'acceptable' ? `${s.agent} (alt; expected ${expectStr})`
+      : s.kind === 'ambiguous-correct' ? 'answered inline (no specialist — correct)'
+      : s.kind === 'unexpected' ? `${s.agent} (expected ${expectStr})`
+      : `expected ${expectStr}`;
+    console.log(`  ${s.kind.toUpperCase().padEnd(17)} ${f.id.padEnd(24)} ${detail}`);
   }
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
@@ -163,7 +222,7 @@ try {
 
 // ── Scorecard ──────────────────────────────────────────────────────────────────
 console.log('\n── scorecard ──');
-console.log(`  exact ${tally.exact}  acceptable ${tally.acceptable}  unexpected ${tally.unexpected}  no-offload ${tally['no-offload']}  errored ${tally.errored}`);
+console.log(`  exact ${tally.exact}  acceptable ${tally.acceptable}  ambiguous-correct ${tally['ambiguous-correct']}  unexpected ${tally.unexpected}  no-offload ${tally['no-offload']}  errored ${tally.errored}`);
 
 // init event `agents[]` elements may be names (strings) or objects — handle both.
 function agentName(x) { return typeof x === 'string' ? x : (x && (x.name || x.type || x.agentType)) || null; }
@@ -191,5 +250,36 @@ const neverSelected = roster.filter((a) => !selectedCount[a]);
 console.log(`\n  never selected by any prompt (${neverSelected.length}/${roster.length}) — candidates for description tuning or more fixtures:`);
 console.log(`    ${neverSelected.join(', ') || '(none)'}`);
 
-console.log('\n(advisory — never fails the suite; authoritative gates: agent-dispatch-graph, agent-router-hook, agent-description-quality)');
+// ── Accuracy + (CI) threshold gate ──────────────────────────────────────────────
+// Denominator excludes session errors (infra noise, not a selection signal).
+const scored = tally.exact + tally.acceptable + tally['ambiguous-correct'] + tally.unexpected + tally['no-offload'];
+const correct = tally.exact + tally.acceptable + tally['ambiguous-correct'];
+const accuracy = scored ? correct / scored : 0;
+console.log(`\n  accuracy: ${correct}/${scored} = ${(accuracy * 100).toFixed(1)}%  (threshold ${(THRESHOLD * 100).toFixed(0)}% when gated)`);
+
+// expect-primaries that NO natural prompt in this run ever reached = dead/ambiguous
+// descriptions. Only count primaries among the fixtures we actually ran (skip-list aside).
+const expectedPrimaries = [...new Set(
+  fixtures.filter((f) => !isAmbiguous(f)).map((f) => f.expect[0]),
+)].sort();
+const primariesNeverPicked = expectedPrimaries.filter((a) => !selectedCount[a]);
+if (primariesNeverPicked.length) {
+  console.log(`\n  WARN expect-primary agents never selected (${primariesNeverPicked.length}): ${primariesNeverPicked.join(', ')}`);
+}
+
+if (!GATED) {
+  console.log('\n(advisory — never fails the suite; authoritative gates: agent-dispatch-graph, agent-router-hook, agent-description-quality)');
+  process.exit(0);
+}
+
+// CI / C_THRU_OFFLOAD_GATE=1: turn the scorecard into a gate.
+const failures = [];
+if (scored === 0) failures.push('no fixtures scored (all errored?) — cannot assess selection');
+if (scored > 0 && accuracy < THRESHOLD) failures.push(`accuracy ${(accuracy * 100).toFixed(1)}% < threshold ${(THRESHOLD * 100).toFixed(0)}%`);
+if (primariesNeverPicked.length) failures.push(`expect-primary never selected: ${primariesNeverPicked.join(', ')}`);
+if (failures.length) {
+  console.log(`\nFAIL  agent-offload-coverage (gated):\n  - ${failures.join('\n  - ')}`);
+  process.exit(1);
+}
+console.log('\nPASS  agent-offload-coverage (gated): accuracy and primary-coverage thresholds met');
 process.exit(0);

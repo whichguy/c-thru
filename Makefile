@@ -28,6 +28,8 @@ test-live-all:
 	C_THRU_HIERARCHY_TESTS=1 \
 	C_THRU_E2E=1 \
 	C_THRU_OFFLOAD=1 \
+	C_THRU_OFFLOAD_GATE=1 \
+	C_THRU_LIVE_SELECTION=1 \
 	bash test/run-all.sh
 
 # Run baseline syntax and schema checks only (fast, no proxy spawn needed)

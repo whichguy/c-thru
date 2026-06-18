@@ -221,6 +221,8 @@ run_suite "agent-dispatch-graph (subagent_type targets resolve agent→capabilit
   node "$REPO_DIR/test/agent-dispatch-graph.test.js"
 run_suite "agent-description-quality (description discoverability lint)" \
   node "$REPO_DIR/test/agent-description-quality.test.js"
+run_suite "agent-selection-discriminability (descriptions discriminable per the selection corpus)" \
+  node "$REPO_DIR/test/agent-selection-discriminability.test.js"
 run_suite "proxy-sentinel-detection (per-agent marker: header + byte-scan + window + HMAC)" \
   node "$REPO_DIR/test/proxy-sentinel-detection.test.js"
 run_suite "proxy-control-auth (control-token gate on mutating routes)" \
@@ -384,6 +386,15 @@ if [[ "${C_THRU_LIVE_ANTHROPIC:-0}" == "1" ]]; then
 else
   skip_suite "anthropic-api-coverage-live (set C_THRU_LIVE_ANTHROPIC=1 + ANTHROPIC_API_KEY to enable)"
   skip_suite "judge-canary (set C_THRU_LIVE_ANTHROPIC=1 + ANTHROPIC_API_KEY to enable)"
+fi
+
+if [[ "${C_THRU_LIVE_SELECTION:-0}" == "1" ]]; then
+  echo ""
+  echo "Live agent-selection judge (C_THRU_LIVE_SELECTION=1):"
+  run_suite "agent-selection-llm-judge (descriptions → right subagent, LLM judge, threshold-gated)" \
+    node "$REPO_DIR/test/agent-selection-llm-judge.test.js"
+else
+  skip_suite "agent-selection-llm-judge (set C_THRU_LIVE_SELECTION=1 + ANTHROPIC_API_KEY to enable)"
 fi
 
 # Proxy-required agent tests: each needs a running proxy (and for live/judge
