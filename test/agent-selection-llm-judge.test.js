@@ -20,24 +20,41 @@
 //   3. Score the pick against the labeled corpus and assert an aggregate
 //      threshold — this is the gate the nightly CI runs.
 //
-// Scoring (per test/fixtures/agent-selection-corpus.json):
-//   - non-ambiguous task: exact if pick==expect[0]; acceptable if pick∈expect[];
-//     else miss.
-//   - ambiguous task (expect:[]): correct if pick=='none'/empty; else miss.
-//   aggregate = (exact + acceptable + ambiguous-correct) / total.
+// Scoring (per test/fixtures/agent-selection-corpus.json — THREE label modes):
+//   - normal expect:[...] task: exact if pick==expect[0]; acceptable if
+//     pick∈expect[]; else miss.
+//   - inline_ok task (NON-EMPTY expect:[...] of generalist-tier agents +
+//     inline_ok:true): correct if pick∈expect[] (exact/acceptable) OR pick is
+//     'none'/empty (declining / answering inline is ALSO fine — outcome
+//     'inline-correct'); picking any agent NOT in expect[] is a miss.
+//   - ambiguous task (ambiguous:true, expect:[]): correct only if pick=='none'/
+//     empty; any specialist pick is a miss.
+//
+// Two BUCKETS (each gated on its own threshold):
+//   - DECISIVE = every task with a definite expectation — normal expect[] AND
+//     inline_ok tasks. These must be picked decisively; the hard gate lives here.
+//   - DECLINE  = ambiguous:true tasks. These must be declined; a looser floor.
+//   per-bucket accuracy = (its correct outcomes) / (its task count).
 //
 // Gating (matches the repo's live-suite convention — see
 // anthropic-api-coverage-live.test.js / judge-canary.test.js):
 //   - SKIP cleanly (print SKIP, exit 0) unless C_THRU_LIVE_SELECTION=1.
-//   - SKIP cleanly if ANTHROPIC_API_KEY is unset.
-//   - When enabled it runs for real and ASSERTS the threshold (gates CI).
-//   - Escape hatch: C_THRU_SELECTION_ADVISORY=1 downgrades failures to advisory
-//     (print the scorecard, exit 0) — for local runs that don't want to gate.
+//   - SKIP cleanly if ANTHROPIC_API_KEY is unset. The no-key path STILL runs a
+//     DRY self-test (stubbed judge, no network) that exercises the bucketed
+//     scoring/threshold logic, then exits on summary().
+//   - When enabled it runs for real and ASSERTS BOTH thresholds (gates CI):
+//     fail if decisive < DECISIVE_THRESHOLD (default 0.95, env
+//     C_THRU_SELECTION_DECISIVE_THRESHOLD) OR decline < DECLINE_THRESHOLD
+//     (default 0.60, env C_THRU_SELECTION_DECLINE_THRESHOLD).
+//   - Escape hatch: C_THRU_SELECTION_ADVISORY=1 downgrades ALL failures to
+//     advisory (print both scorecards, exit 0) — for local runs that don't gate.
 //
 // Run live:
 //   C_THRU_LIVE_SELECTION=1 ANTHROPIC_API_KEY=... node test/agent-selection-llm-judge.test.js
 // Advisory (don't gate):
 //   C_THRU_LIVE_SELECTION=1 C_THRU_SELECTION_ADVISORY=1 ANTHROPIC_API_KEY=... node test/agent-selection-llm-judge.test.js
+// Dry self-test (no key, no network — exercises bucketed scoring):
+//   node test/agent-selection-llm-judge.test.js
 
 const fs    = require('fs');
 const path  = require('path');
@@ -54,13 +71,19 @@ const CORPUS_PATH = path.join(REPO, 'test', 'fixtures', 'agent-selection-corpus.
 // the haiku tier). Allow override via env for re-baselining.
 const JUDGE_MODEL = process.env.C_THRU_SELECTION_MODEL || 'claude-haiku-4-5';
 
-// Threshold the live run asserts. Start at 0.90. The real fleet has a few
-// genuinely-fuzzy neighbour tasks (e.g. docs vs writer, debugger-* tiers, the
-// ambiguous "tradeoffs" prompt that a generalist could plausibly take) where a
-// miss is not a description bug, so a defensible at-or-just-below floor is used.
-// If the observed live score lands below this, the failing item list printed by
-// the scorecard documents exactly which neighbours drove it.
-const THRESHOLD = Number(process.env.C_THRU_SELECTION_THRESHOLD || '0.90');
+// Per-bucket thresholds the live run asserts.
+//
+// DECISIVE (every task with a definite expectation — normal expect[] AND
+// inline_ok tasks) is the hard gate: the live judge demo got 36/36 specialist
+// tasks right and an inline_ok task is satisfied by EITHER its generalist pick
+// OR declining, so a high floor is defensible. Hard-gate at 0.95.
+//
+// DECLINE (ambiguous:true tasks) is genuinely fuzzy — a model may reasonably
+// reach for a near-neighbour specialist on a borderline conversational prompt —
+// so its floor is looser (0.60). The per-bucket miss list printed by each
+// scorecard documents exactly which tasks drove a shortfall.
+const DECISIVE_THRESHOLD = Number(process.env.C_THRU_SELECTION_DECISIVE_THRESHOLD || '0.95');
+const DECLINE_THRESHOLD  = Number(process.env.C_THRU_SELECTION_DECLINE_THRESHOLD  || '0.60');
 
 // Placeholder substitutions — neutral nouns for the hermetic/judge loaders
 // (the real-session harness swaps in real scratch paths instead). See the
@@ -233,30 +256,61 @@ async function mapWithConcurrency(items, limit, fn) {
 }
 
 // ── Scoring ────────────────────────────────────────────────────────────────────
+// Bucket a task: DECLINE = ambiguous:true (decline-only). DECISIVE = everything
+// with a definite expectation, including inline_ok tasks (which have a NON-EMPTY
+// expect[]). The bucket keys on ambiguous:true, NEVER on an empty expect — an
+// inline_ok task carries a non-empty expect and belongs in DECISIVE.
+function taskBucket(task) {
+  return task.ambiguous === true ? 'decline' : 'decisive';
+}
+
 // Classify one (task, pick) → outcome record. Pure — exercised by the self-test.
 function scoreTask(task, pick) {
-  const ambiguous = task.ambiguous === true || (Array.isArray(task.expect) && task.expect.length === 0);
-  if (ambiguous) {
-    const correct = pick === 'none' || pick === '';
-    return { id: task.id, ambiguous: true, pick, outcome: correct ? 'ambiguous-correct' : 'miss' };
+  const declined = pick === 'none' || pick === '';
+  if (task.ambiguous === true) {
+    // Decline-only: only 'none'/empty is correct.
+    return { id: task.id, bucket: 'decline', pick, outcome: declined ? 'ambiguous-correct' : 'miss' };
   }
   const expect = task.expect || [];
-  if (pick === expect[0]) return { id: task.id, ambiguous: false, pick, expect, outcome: 'exact' };
-  if (expect.includes(pick)) return { id: task.id, ambiguous: false, pick, expect, outcome: 'acceptable' };
-  return { id: task.id, ambiguous: false, pick, expect, outcome: 'miss' };
+  const inline_ok = task.inline_ok === true;
+  if (pick === expect[0]) return { id: task.id, bucket: 'decisive', pick, expect, inline_ok, outcome: 'exact' };
+  if (expect.includes(pick)) return { id: task.id, bucket: 'decisive', pick, expect, inline_ok, outcome: 'acceptable' };
+  // inline_ok: a pick in expect[] is correct (handled above) AND declining /
+  // answering inline ('none'/empty) is ALSO correct; any OTHER pick is a miss.
+  if (inline_ok && declined) {
+    return { id: task.id, bucket: 'decisive', pick, expect, inline_ok, outcome: 'inline-correct' };
+  }
+  return { id: task.id, bucket: 'decisive', pick, expect, inline_ok, outcome: 'miss' };
 }
 
 function isCorrect(outcome) {
-  return outcome === 'exact' || outcome === 'acceptable' || outcome === 'ambiguous-correct';
+  return outcome === 'exact' || outcome === 'acceptable' ||
+    outcome === 'inline-correct' || outcome === 'ambiguous-correct';
+}
+
+// Summarize one bucket's records into { total, correct, score, byOutcome, misses }.
+function bucketStats(records) {
+  const total = records.length;
+  let correct = 0;
+  const byOutcome = {};
+  const misses = [];
+  for (const rec of records) {
+    byOutcome[rec.outcome] = (byOutcome[rec.outcome] || 0) + 1;
+    if (isCorrect(rec.outcome)) correct++;
+    else misses.push(rec);
+  }
+  return { total, correct, score: total ? correct / total : 0, byOutcome, misses };
 }
 
 // Aggregate the per-task records into a scorecard. Pure — exercised by the
-// self-test. Returns { total, correct, score, byOutcome, misses, perAgent,
-// neverSelected }.
+// self-test. Splits into TWO buckets (decisive / decline), each with its own
+// accuracy, plus the overall per-agent / never-selected info.
+// Returns { total, correct, score, byOutcome, misses, perAgent, neverSelected,
+//           decisive:{...}, decline:{...} }.
 function aggregate(records, agentNames) {
   const total = records.length;
   let correct = 0;
-  const byOutcome = { exact: 0, acceptable: 0, 'ambiguous-correct': 0, miss: 0 };
+  const byOutcome = { exact: 0, acceptable: 0, 'inline-correct': 0, 'ambiguous-correct': 0, miss: 0 };
   const misses = [];
   const selectedCount = {};
   for (const name of agentNames) selectedCount[name] = 0;
@@ -270,12 +324,18 @@ function aggregate(records, agentNames) {
     }
   }
 
-  // Per-agent: for each agent that is the PRIMARY (expect[0]) of any
-  // non-ambiguous task, how often was it picked exactly?
+  // Per-bucket accuracy. DECISIVE = definite-expectation tasks (normal + inline_ok);
+  // DECLINE = ambiguous:true tasks.
+  const decisive = bucketStats(records.filter(r => r.bucket === 'decisive'));
+  const decline  = bucketStats(records.filter(r => r.bucket === 'decline'));
+
+  // Per-agent: for each agent that is the PRIMARY (expect[0]) of any decisive
+  // task, how often was it picked exactly?
   const perAgent = {};
   for (const rec of records) {
-    if (rec.ambiguous) continue;
-    const primary = rec.expect[0];
+    if (rec.bucket !== 'decisive') continue;
+    const primary = (rec.expect || [])[0];
+    if (!primary) continue;
     if (!perAgent[primary]) perAgent[primary] = { primaryTasks: 0, exact: 0, acceptableElsewhere: 0 };
     perAgent[primary].primaryTasks++;
     if (rec.outcome === 'exact') perAgent[primary].exact++;
@@ -293,27 +353,49 @@ function aggregate(records, agentNames) {
     selectedCount,
     perAgent,
     neverSelected,
+    decisive,
+    decline,
   };
 }
 
 // ── Scorecard printing ─────────────────────────────────────────────────────────
-function printScorecard(card) {
+// Print one bucket scorecard (decisive or decline) with its own miss list.
+function printBucket(label, bucket, threshold) {
+  const b = bucket.byOutcome;
+  console.log(`\n── ${label} scorecard ${'─'.repeat(Math.max(0, 44 - label.length))}`);
+  console.log(`  tasks:              ${bucket.total}`);
+  console.log(`  exact:              ${b.exact || 0}`);
+  console.log(`  acceptable:         ${b.acceptable || 0}`);
+  console.log(`  inline-correct:     ${b['inline-correct'] || 0}`);
+  console.log(`  ambiguous-correct:  ${b['ambiguous-correct'] || 0}`);
+  console.log(`  miss:               ${b.miss || 0}`);
+  console.log(`  accuracy:           ${bucket.score.toFixed(4)} (${bucket.correct}/${bucket.total})` +
+    (threshold != null ? `  threshold >= ${threshold}` : ''));
+  if (bucket.misses.length) {
+    console.log('  misses:');
+    for (const m of bucket.misses) {
+      const want = m.bucket === 'decline'
+        ? "'none'"
+        : (m.expect && m.expect.length ? `[${m.expect.join(', ')}]${m.inline_ok ? ' or none' : ''}` : "'none'");
+      console.log(`    ${m.id}: picked ${JSON.stringify(m.pick)} — expected ${want}`);
+    }
+  }
+}
+
+function printScorecard(card, decisiveThreshold, declineThreshold) {
   const b = card.byOutcome;
-  console.log('\n── Scorecard ───────────────────────────────────────────────');
+  console.log('\n── Scorecard (overall) ─────────────────────────────────────');
   console.log(`  total tasks:        ${card.total}`);
   console.log(`  exact:              ${b.exact || 0}`);
   console.log(`  acceptable:         ${b.acceptable || 0}`);
+  console.log(`  inline-correct:     ${b['inline-correct'] || 0}`);
   console.log(`  ambiguous-correct:  ${b['ambiguous-correct'] || 0}`);
   console.log(`  miss:               ${b.miss || 0}`);
   console.log(`  aggregate score:    ${card.score.toFixed(4)} (${card.correct}/${card.total})`);
 
-  if (card.misses.length) {
-    console.log('\n── Misses ──────────────────────────────────────────────────');
-    for (const m of card.misses) {
-      const want = m.ambiguous ? "'none'" : `[${(m.expect || []).join(', ')}]`;
-      console.log(`  ${m.id}: picked ${JSON.stringify(m.pick)} — expected ${want}`);
-    }
-  }
+  // Per-bucket scorecards — these carry the gating thresholds.
+  printBucket('DECISIVE (definite expectation: normal + inline_ok)', card.decisive, decisiveThreshold);
+  printBucket('DECLINE (ambiguous:true — decline is the win)', card.decline, declineThreshold);
 
   console.log('\n── Per-agent (primary-task hit rate) ───────────────────────');
   const agents = Object.keys(card.perAgent).sort();
@@ -348,6 +430,92 @@ async function runJudge({ apiKey, model, callFn }) {
   return aggregate(records, agentNames);
 }
 
+// ── DRY self-test (no network, no key) ───────────────────────────────────────────
+// Verifies the bucketed scoring + per-bucket threshold logic end-to-end against
+// the REAL corpus, driving runJudge with a stubbed callFn. Two scenarios:
+//   (1) a PERFECT judge (always returns each task's correct answer) → BOTH
+//       buckets score 1.0 and clear their thresholds.
+//   (2) a judge that MISSES one specialist task (returns 'none' for a normal
+//       expect[] task — which is NOT inline_ok, so 'none' is a miss) → the
+//       DECISIVE bucket drops below its threshold while DECLINE stays perfect.
+// This keeps the no-key run meaningful and pins the inline_ok / bucket rules.
+function stubCall(answerFor) {
+  // callFn signature: (apiKey, model, systemText, userText, task) → { status, json }
+  return async (_apiKey, _model, _systemText, _userText, task) => {
+    const text = answerFor(task);
+    return { status: 200, json: { content: [{ type: 'text', text }] } };
+  };
+}
+
+async function selfTest() {
+  console.log('── DRY self-test (stubbed judge, real corpus) ───────────────');
+
+  // (1) Perfect judge: pick expect[0] for decisive tasks (an expect pick is
+  //     always correct, incl. inline_ok), 'none' for ambiguous decline tasks.
+  const perfect = await runJudge({
+    apiKey: 'stub', model: 'stub',
+    callFn: stubCall((task) => {
+      if (task.ambiguous === true) return 'none';
+      return (task.expect && task.expect[0]) || 'none';
+    }),
+  });
+  assert(perfect.decisive.score >= DECISIVE_THRESHOLD,
+    `self-test: perfect judge clears DECISIVE threshold ` +
+    `(${perfect.decisive.score.toFixed(4)} >= ${DECISIVE_THRESHOLD}, ${perfect.decisive.correct}/${perfect.decisive.total})`);
+  assert(perfect.decline.score >= DECLINE_THRESHOLD,
+    `self-test: perfect judge clears DECLINE threshold ` +
+    `(${perfect.decline.score.toFixed(4)} >= ${DECLINE_THRESHOLD}, ${perfect.decline.correct}/${perfect.decline.total})`);
+
+  // Inline_ok sanity: declining an inline_ok task is ALSO correct. Score the
+  // inline_ok corpus with a judge that ALWAYS declines → those tasks must land
+  // 'inline-correct' (decisive bucket stays correct for them).
+  const inlineTasks = loadCorpus().filter(t => t.inline_ok === true);
+  assert(inlineTasks.length >= 1, `self-test: corpus has at least one inline_ok task (${inlineTasks.length})`);
+  for (const t of inlineTasks) {
+    const declineRec = scoreTask(t, 'none');
+    const pickRec    = scoreTask(t, t.expect[0]);
+    assert(declineRec.bucket === 'decisive' && declineRec.outcome === 'inline-correct',
+      `self-test: inline_ok ${t.id} — declining ('none') is inline-correct in DECISIVE`);
+    assert(pickRec.outcome === 'exact',
+      `self-test: inline_ok ${t.id} — picking expect[0] (${t.expect[0]}) is exact`);
+    const wrongRec = scoreTask(t, 'reviewer-security');
+    assert(wrongRec.outcome === 'miss',
+      `self-test: inline_ok ${t.id} — a non-expect pick (reviewer-security) is a miss`);
+  }
+
+  // (2) Specialist-miss judge: behave like the perfect judge EXCEPT decline one
+  //     normal (non-inline_ok) decisive task — that 'none' is a real miss, so
+  //     DECISIVE drops below a perfect score while DECLINE stays perfect. We gate
+  //     against a 1.0 threshold here (independent of the live default and of
+  //     corpus size: ANY single decisive miss must trip the gate), which is the
+  //     property the live gate relies on — a specialist miss CANNOT pass a
+  //     perfect-required bar.
+  const victim = loadCorpus().find(t => t.ambiguous !== true && t.inline_ok !== true);
+  assert(!!victim, `self-test: corpus has a normal (non-inline_ok) decisive task to miss (${victim && victim.id})`);
+  const missed = await runJudge({
+    apiKey: 'stub', model: 'stub',
+    callFn: stubCall((task) => {
+      if (task.id === victim.id) return 'none'; // wrong: a specialist task answered inline
+      if (task.ambiguous === true) return 'none';
+      return (task.expect && task.expect[0]) || 'none';
+    }),
+  });
+  assert(missed.decisive.score < 1.0 && missed.decisive.score < perfect.decisive.score,
+    `self-test: a specialist miss drops DECISIVE below perfect ` +
+    `(${missed.decisive.score.toFixed(4)} < 1.0, miss on ${victim.id})`);
+  // Gate semantics: fail iff decisive < threshold OR decline < threshold. With a
+  // perfect-required decisive bar, the specialist-miss run must FAIL the gate
+  // while the perfect run PASSES it.
+  const gateFails = (card, decT, decLineT) => card.decisive.score < decT || card.decline.score < decLineT;
+  assert(gateFails(missed, 1.0, DECLINE_THRESHOLD) === true,
+    `self-test: specialist-miss run FAILS the gate at a perfect-required decisive bar (decisive ${missed.decisive.score.toFixed(4)} < 1.0)`);
+  assert(gateFails(perfect, 1.0, DECLINE_THRESHOLD) === false,
+    `self-test: perfect run PASSES the gate even at a perfect-required decisive bar`);
+  assert(missed.decline.score >= DECLINE_THRESHOLD,
+    `self-test: DECLINE unaffected by the specialist miss ` +
+    `(${missed.decline.score.toFixed(4)} >= ${DECLINE_THRESHOLD})`);
+}
+
 // ── Main (live path) ───────────────────────────────────────────────────────────
 async function main() {
   console.log('agent-selection-llm-judge: do descriptions alone let a model pick the right subagent?\n');
@@ -356,16 +524,20 @@ async function main() {
   const ADVISORY = process.env.C_THRU_SELECTION_ADVISORY === '1';
   const KEY      = process.env.ANTHROPIC_API_KEY;
 
-  if (!LIVE) {
-    console.log('SKIP: agent-selection LLM-judge requires C_THRU_LIVE_SELECTION=1 (live cloud test)');
-    process.exit(0);
-  }
-  if (!KEY) {
-    console.log('SKIP: ANTHROPIC_API_KEY not set — the selection judge needs real cloud access');
-    process.exit(0);
+  if (!LIVE || !KEY) {
+    // No live cloud run. Don't just skip silently — run the DRY self-test so the
+    // bucketed scoring/threshold logic is verified offline on every plain run,
+    // and the suite's exit stays gated on summary() (exit-code-gating meta-lint).
+    console.log(LIVE
+      ? 'SKIP live judge: ANTHROPIC_API_KEY not set — running DRY self-test instead (no network)\n'
+      : 'SKIP live judge: requires C_THRU_LIVE_SELECTION=1 — running DRY self-test instead (no network)\n');
+    await selfTest();
+    const failed = summary();
+    process.exit(failed ? 1 : 0);
   }
 
-  console.log(`judge model: ${JUDGE_MODEL}   threshold: ${THRESHOLD}   advisory: ${ADVISORY ? 'yes' : 'no'}\n`);
+  console.log(`judge model: ${JUDGE_MODEL}   decisive>=${DECISIVE_THRESHOLD}  decline>=${DECLINE_THRESHOLD}   ` +
+    `advisory: ${ADVISORY ? 'yes' : 'no'}\n`);
 
   let card;
   try {
@@ -375,18 +547,27 @@ async function main() {
     process.exit(1);
   }
 
-  printScorecard(card);
+  printScorecard(card, DECISIVE_THRESHOLD, DECLINE_THRESHOLD);
+
+  const decisiveOk = card.decisive.score >= DECISIVE_THRESHOLD;
+  const declineOk  = card.decline.score  >= DECLINE_THRESHOLD;
 
   if (ADVISORY) {
-    // Advisory mode never gates: record the result for visibility, exit 0.
-    assert(true, `advisory mode — score ${card.score.toFixed(4)} (>=${THRESHOLD} would gate; not gating)`);
+    // Advisory mode never gates: record both bucket verdicts for visibility, exit 0.
+    assert(true,
+      `advisory mode — decisive ${card.decisive.score.toFixed(4)} (>=${DECISIVE_THRESHOLD}? ${decisiveOk}), ` +
+      `decline ${card.decline.score.toFixed(4)} (>=${DECLINE_THRESHOLD}? ${declineOk}) — not gating`);
     summary();
     process.exit(0);
   }
 
-  assert(card.score >= THRESHOLD,
-    `aggregate selection score ${card.score.toFixed(4)} >= ${THRESHOLD} ` +
-    `(${card.correct}/${card.total} correct; ${card.misses.length} miss(es))`);
+  // Gate: fail if EITHER bucket is below its threshold.
+  assert(decisiveOk,
+    `DECISIVE accuracy ${card.decisive.score.toFixed(4)} >= ${DECISIVE_THRESHOLD} ` +
+    `(${card.decisive.correct}/${card.decisive.total}; ${card.decisive.misses.length} miss(es))`);
+  assert(declineOk,
+    `DECLINE accuracy ${card.decline.score.toFixed(4)} >= ${DECLINE_THRESHOLD} ` +
+    `(${card.decline.correct}/${card.decline.total}; ${card.decline.misses.length} miss(es))`);
 
   const failed = summary();
   process.exit(failed ? 1 : 0);
@@ -403,11 +584,15 @@ module.exports = {
   buildSelectorPrompt,
   parsePick,
   scoreTask,
+  taskBucket,
+  bucketStats,
   aggregate,
   isCorrect,
   runJudge,
+  selfTest,
   SYSTEM_INSTRUCTION,
-  THRESHOLD,
+  DECISIVE_THRESHOLD,
+  DECLINE_THRESHOLD,
 };
 
 if (require.main === module) {

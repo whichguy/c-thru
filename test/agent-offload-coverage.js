@@ -25,9 +25,12 @@
 // (the same file the Tier 1 hermetic discriminability lint and the Tier 2a LLM-judge
 // consume). It is a strict superset of the legacy test/fixtures/offload-prompts.json,
 // which is now unreferenced (left in place for history; safe to delete). Each entry is
-// {id, prompt, expect:[primary,...acceptable], note, ambiguous?}; ambiguous:true entries
-// carry expect:[] and the WIN condition is no-offload (or an acceptable pick) — answering
-// an ambiguous task inline is CORRECT, not a miss.
+// {id, prompt, expect:[primary,...acceptable], note, ambiguous?, inline_ok?}. THREE modes:
+//   - normal expect:[...]   — delegating to an expect agent is the win; no-offload is a miss.
+//   - ambiguous:true        — carries expect:[]; the WIN is no-offload (decline-only).
+//   - inline_ok:true        — carries a NON-EMPTY generalist-tier expect[]; BOTH delegating
+//                             to an expect agent AND answering inline (no-offload) are wins;
+//                             any non-expect delegation is unexpected.
 //
 // SCORING:
 //   exact            — delegated to the primary expected agent
@@ -110,6 +113,10 @@ if (process.env.C_THRU_OFFLOAD_ONLY) {
 
 // ambiguous:true entries (and any with an empty expect[]) want NO specialist selected.
 function isAmbiguous(f) { return f.ambiguous === true || !Array.isArray(f.expect) || f.expect.length === 0; }
+// inline_ok entries have a NON-EMPTY generalist-tier expect[]: delegating to an
+// expect agent is a WIN, AND answering inline (no offload) is ALSO a WIN; any
+// other delegation is unexpected. Distinct from ambiguous:true (decline-only).
+function isInlineOk(f) { return f.inline_ok === true && Array.isArray(f.expect) && f.expect.length > 0; }
 
 // ── Scratch files referenced by the prompts ───────────────────────────────────
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-offload-'));
@@ -173,6 +180,15 @@ function score(fixture, picked) {
     if (picked.length === 0) return { kind: 'ambiguous-correct', agent: null };
     const ok = picked.find((a) => (fixture.expect || []).includes(a));
     if (ok) return { kind: 'acceptable', agent: ok };
+    return { kind: 'unexpected', agent: picked[0] };
+  }
+  if (isInlineOk(fixture)) {
+    // BOTH outcomes are wins: delegating to an expect agent (exact/acceptable) OR
+    // answering inline (no offload). Any non-expect delegation is unexpected.
+    if (picked.length === 0) return { kind: 'ambiguous-correct', agent: null }; // inline answer — a WIN
+    if (picked.includes(fixture.expect[0])) return { kind: 'exact', agent: fixture.expect[0] };
+    const altI = picked.find((a) => fixture.expect.includes(a));
+    if (altI) return { kind: 'acceptable', agent: altI };
     return { kind: 'unexpected', agent: picked[0] };
   }
   if (picked.length === 0) return { kind: 'no-offload', agent: null };
@@ -258,9 +274,11 @@ const accuracy = scored ? correct / scored : 0;
 console.log(`\n  accuracy: ${correct}/${scored} = ${(accuracy * 100).toFixed(1)}%  (threshold ${(THRESHOLD * 100).toFixed(0)}% when gated)`);
 
 // expect-primaries that NO natural prompt in this run ever reached = dead/ambiguous
-// descriptions. Only count primaries among the fixtures we actually ran (skip-list aside).
+// descriptions. Only count primaries among the fixtures we actually ran (skip-list aside),
+// and EXCLUDE inline_ok primaries: for those, answering inline is an accepted win, so a
+// generalist-tier agent never being delegated to is NOT evidence of a dead description.
 const expectedPrimaries = [...new Set(
-  fixtures.filter((f) => !isAmbiguous(f)).map((f) => f.expect[0]),
+  fixtures.filter((f) => !isAmbiguous(f) && !isInlineOk(f)).map((f) => f.expect[0]),
 )].sort();
 const primariesNeverPicked = expectedPrimaries.filter((a) => !selectedCount[a]);
 if (primariesNeverPicked.length) {

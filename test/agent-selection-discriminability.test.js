@@ -196,21 +196,35 @@ const CORPUS_BLIND_SPOTS = new Map([
   ['explore-locate',
     'intended explore at rank ~6 (0.034 vs top 0.074); "validates its inputs" pulls code-reviewer/tester/' +
     'reviewer-security; the read-only-recon intent is semantic, not lexical.'],
+  ['amb-trivial-q',
+    'inline_ok task (decisive, not ambiguous): intended fast-generalist/generalist BOTH score 0.000 — the ' +
+    'NON-CIRCULARITY prompt ("what does the acronym TTL stand for") shares zero content tokens with the ' +
+    'generalist-tier descriptions ("quick / one-line / TL;DR") after stopword strip, so top-3 is ' +
+    'explore/long-context/fast-scout at ~0.04 and the intended agents tie at rank 11/12. The "quick factual ' +
+    'one-liner → fast-generalist" mapping is semantic intent the lexical proxy cannot see; an LLM judge can ' +
+    '(Tier 2a). fast-generalist still wins tester-edge, so check (C) is unaffected.'],
 ]);
-// Hard cap: the blind-spot list must not silently grow. Today it holds 2.
-const CORPUS_BLIND_SPOT_MAX = 2;
+// Hard cap: the blind-spot list must not silently grow. Raised 2→3 on 2026-06
+// when amb-trivial-q was relabeled from ambiguous to inline_ok (decisive): it
+// became subject to check (B), and its intended generalist-tier agents are a
+// genuine lexical blind spot (see the entry above) — NOT a threshold loosening.
+const CORPUS_BLIND_SPOT_MAX = 3;
 //
 // (D) Ambiguous floor. ambiguous:true tasks (expect:[]) must look like a WEAK
 //     match to everything — no agent should score above this absolute floor.
-//     Baselined: the strongest ambiguous match today is amb-tradeoffs →
-//     generalist at ~0.167 (which is itself the "no-specialist / generalist-or-
-//     inline" intent the note describes); every other ambiguous top is <= 0.053.
-//     Floor set above 0.167 with headroom; it bites if a specialist description
-//     drifts into claiming conversational/trivial prompts.
+//     This applies ONLY to genuine decline tasks (ambiguous:true). inline_ok
+//     tasks are DECISIVE (non-empty generalist-tier expect[]) and are explicitly
+//     EXCLUDED — amb-tradeoffs → generalist at ~0.167 is the CORRECT pick, not a
+//     floor violation, which is exactly why it was relabeled out of ambiguous.
+//     Baselined (2026-06, after the relabel): the strongest remaining ambiguous
+//     match is amb-greeting → debugger-investigate at ~0.056; every ambiguous
+//     top is now <= 0.056. Floor kept at 0.20 with generous headroom; it bites
+//     if a specialist description drifts into claiming conversational prompts.
 const AMBIGUOUS_FLOOR = 0.20;
 
 console.log(`agent-selection-discriminability: ${agents.length} agents, ` +
-  `${corpus.length} corpus prompts (${corpus.filter(c => c.ambiguous).length} ambiguous)\n`);
+  `${corpus.length} corpus prompts (${corpus.filter(c => c.ambiguous === true).length} ambiguous, ` +
+  `${corpus.filter(c => c.inline_ok === true).length} inline_ok→decisive)\n`);
 
 // ════════════════════════════════════════════════════════════════════════════
 // (A) PAIRWISE OVERLAP
@@ -279,7 +293,12 @@ for (const p of pairs) {
 // ════════════════════════════════════════════════════════════════════════════
 console.log('\n── (B) Corpus top-match (intended agent is the closest lexical match) ──\n');
 
-const nonAmbiguous = corpus.filter(t => !t.ambiguous);
+// "non-ambiguous" = DECISIVE tasks: every task with a definite expectation. This
+// keys on ambiguous:true, NOT on an empty expect[] — an inline_ok task carries a
+// NON-EMPTY generalist-tier expect[] and is decisive, so it IS subject to (B)/(C).
+// Only genuine ambiguous:true (expect:[]) decline tasks are excluded here and
+// handled by the (D) ambiguous floor below.
+const nonAmbiguous = corpus.filter(t => t.ambiguous !== true);
 const winnersByTask = {};       // taskId -> rank0 agent name (for check C)
 const observedBlindSpots = [];
 let strictTop1 = 0, top2 = 0;
@@ -364,7 +383,10 @@ for (const primary of [...primaries].sort()) {
 // ════════════════════════════════════════════════════════════════════════════
 console.log('\n── (D) Ambiguous floor (no specialist matches a non-task prompt strongly) ──\n');
 
-const ambiguous = corpus.filter(t => t.ambiguous);
+// Keys on ambiguous:true (NOT empty expect) — inline_ok entries are decisive and
+// must NOT be subject to the ambiguous floor (their generalist pick is correct,
+// e.g. amb-tradeoffs → generalist at ~0.167, which would otherwise trip the floor).
+const ambiguous = corpus.filter(t => t.ambiguous === true);
 let maxAmb = 0, maxAmbId = null, maxAmbAgent = null;
 for (const task of ambiguous) {
   const ranked = rankQuery(subst(task.prompt));
