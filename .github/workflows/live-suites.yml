@@ -1,0 +1,128 @@
+# =============================================================================
+# Live / opt-in test suites — scheduled CI cadence
+# =============================================================================
+#
+# WHY THIS EXISTS
+# ---------------
+# Almost every suite in this repo is hermetic: it stands up a stub backend and
+# asserts against a recorded wire shape. That is fast and deterministic, but the
+# stubs go stale the moment a real upstream (api.anthropic.com, the Gemini /
+# Vertex APIs, a live Ollama-backed agent run) changes its request/response
+# shape, its streaming framing, or its model-selection behavior. Nothing in the
+# normal `make test` run touches those real endpoints, so wire-shape drift and
+# real agent-selection regressions are INVISIBLE until a user hits them.
+#
+# The live/opt-in suites are the only non-hermetic coverage we have. They
+# self-skip behind env gates (so they never slow down or flake the default
+# suite), which historically meant they "rarely ran cleanly" — i.e. almost
+# never ran at all. This workflow gives them a dependable cadence so drift and
+# real selection failures get caught on a schedule instead of in production.
+#
+# CADENCE
+# -------
+# NIGHTLY (not weekly). The whole point is early drift detection; a weekly
+# window can let an upstream shape change sit undetected for ~6 days. Live API
+# calls here are a handful of small canary requests, so nightly cost is trivial
+# relative to the value of catching drift within ~24h. Also runnable on demand
+# via workflow_dispatch.
+#
+# GREEN-BUT-SKIPPING UNTIL SECRETS ARE SET
+# ----------------------------------------
+# Each gated suite self-skips when its API key / creds are absent (see the
+# `*_API_KEY` / `GOOGLE_CLOUD_*` checks inside test/run-all.sh and the live
+# test files). The gate ENV VARS below are always exported, but the secrets are
+# only present once a maintainer configures them — so until then this workflow
+# runs green while skipping every live suite. That is intentional: the cron job
+# is wired up first, secrets are added later, and the moment they land the live
+# coverage starts running with zero further changes.
+#
+# HOW TO ENABLE THE LIVE COVERAGE (add these repo secrets)
+# --------------------------------------------------------
+#   Settings → Secrets and variables → Actions → New repository secret
+#     ANTHROPIC_API_KEY     — enables anthropic-api-coverage-live, judge-canary,
+#                             and the Anthropic half of cross-provider-parity
+#     GOOGLE_API_KEY        — enables proxy-gemini-live-{shapes,thinking,e2e}
+#                             and the Gemini half of cross-provider-parity
+#     GOOGLE_CLOUD_TOKEN    — enables proxy-gemini-live-vertex (Vertex AI)
+#     GOOGLE_CLOUD_PROJECT  — Vertex project id   (required with the token)
+#     GOOGLE_CLOUD_REGION   — Vertex region       (required with the token)
+#
+#   The agent-offload / behavioral / hierarchy / e2e suites additionally need a
+#   real `claude` binary and/or a local Ollama on the runner; on a stock GitHub
+#   runner those are absent, so they self-skip (advisory). They are still gated
+#   on here so that a self-hosted runner with those tools present picks them up
+#   for free.
+# =============================================================================
+
+name: live-suites
+
+on:
+  schedule:
+    # 07:13 UTC daily (~00:13 PT). Off the top of the hour to avoid the
+    # cron-stampede GitHub schedules at :00.
+    - cron: "13 7 * * *"
+  workflow_dispatch: {}
+
+# Never let two scheduled runs (or a manual run on top of a scheduled one) pile
+# up against the live endpoints; a slow live call shouldn't double-spend or race.
+concurrency:
+  group: live-suites
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: live suites (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux is the primary CI surface and the cheap one. macOS is included
+        # because run-all.sh's mkdir-lock / stat fallbacks are macOS-specific
+        # code paths worth exercising; drop the macos-latest entry if cost is a
+        # concern (macOS runner minutes bill at a higher multiplier).
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # No ./install.sh: it symlinks tools into ~/.claude and edits the shell rc
+      # PATH, none of which the test runner needs — run-all.sh invokes every
+      # tool through absolute $REPO_DIR/tools/... paths. The suites only need
+      # node + the checked-out repo, so we skip install entirely.
+
+      - name: Run live / opt-in suites
+        env:
+          # Pin TMPDIR so run-all.sh's FAIL_LOG_DIR (${TMPDIR:-/tmp}/c-thru-runall-<pid>)
+          # lands in a known, collectable place on both Linux and macOS runners.
+          TMPDIR: ${{ runner.temp }}
+          # API keys / creds — sourced from repo secrets. Absent secrets expand
+          # to empty strings, which makes the gated suites self-skip (see header).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CLOUD_TOKEN: ${{ secrets.GOOGLE_CLOUD_TOKEN }}
+          GOOGLE_CLOUD_PROJECT: ${{ secrets.GOOGLE_CLOUD_PROJECT }}
+          GOOGLE_CLOUD_REGION: ${{ secrets.GOOGLE_CLOUD_REGION }}
+          # install.sh's PATH edit is skipped above; belt-and-suspenders for any
+          # transitive call that might otherwise try to touch the shell rc.
+          C_THRU_INSTALL_NO_PATH: "1"
+        run: make test-live-all
+
+      - name: Upload failing-suite logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-all-fail-logs-${{ matrix.os }}
+          # run-all.sh persists each failing suite's output under
+          # $TMPDIR/c-thru-runall-<pid>/<slug>.log (FAIL_LOG_DIR). We pinned
+          # TMPDIR=runner.temp in the run step above, so collect from there;
+          # /tmp is kept as a fallback in case a child process overrode TMPDIR.
+          path: |
+            ${{ runner.temp }}/c-thru-runall-*/**
+            /tmp/c-thru-runall-*/**
+          if-no-files-found: ignore
+          retention-days: 14

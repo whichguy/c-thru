@@ -1,4 +1,4 @@
-.PHONY: test test-fast test-live check lint docs regen
+.PHONY: test test-fast test-live test-live-all check lint docs regen
 
 # Run the full test suite (including slow smoke tests)
 test:
@@ -11,6 +11,24 @@ test-fast:
 # Opt-in live verification against api.anthropic.com (requires ANTHROPIC_API_KEY)
 test-live:
 	C_THRU_LIVE_ANTHROPIC=1 node test/anthropic-api-coverage-live.test.js
+
+# Single entrypoint for ALL live / opt-in suites — the same command the scheduled
+# CI workflow (.github/workflows/live-suites.yml) runs and a human runs locally.
+# Exports every live/opt-in gate read by test/run-all.sh, then runs the FULL suite
+# (not --fast) so the live blocks register. Each gated suite self-skips when its
+# API key / creds are absent, so this stays green-but-skipping until secrets are
+# present. Gate names are kept in sync with the `if [[ "${...:-0}" == "1" ]]`
+# branches in test/run-all.sh.
+test-live-all:
+	C_THRU_LIVE_ANTHROPIC=1 \
+	C_THRU_LIVE_GEMINI=1 \
+	C_THRU_LIVE_PARITY=1 \
+	C_THRU_BEHAVIORAL_TESTS=1 \
+	C_THRU_LIVE_AGENT_TESTS=1 \
+	C_THRU_HIERARCHY_TESTS=1 \
+	C_THRU_E2E=1 \
+	C_THRU_OFFLOAD=1 \
+	bash test/run-all.sh
 
 # Run baseline syntax and schema checks only (fast, no proxy spawn needed)
 check:
