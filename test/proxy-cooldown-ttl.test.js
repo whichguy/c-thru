@@ -16,6 +16,7 @@ const {
 
 const fs   = require('fs');
 const os   = require('os');
+const http = require('http');
 const path = require('path');
 
 console.log('proxy cooldown TTL tests\n');
@@ -24,6 +25,45 @@ const HEALTHY_NDJSON = [
   { message: { content: 'served' } },
   { done: true, done_reason: 'stop', prompt_eval_count: 1, eval_count: 1 },
 ];
+
+// A togglable Anthropic stub: returns 500 while .failNext is true, else 200.
+// Each request is recorded in .requests. Flip .failNext between requests to
+// drive the fail→cooldown→recover→clear-on-success sequence deterministically.
+function togglableBackend(opts = {}) {
+  const requests = [];
+  const state = { failNext: opts.failFirst !== false };
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      let body = null;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+      requests.push({ method: req.method, path: req.url, headers: req.headers, body });
+      if (state.failNext) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'forced 500' } }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'msg_toggle', type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'ok' }],
+        model: body ? body.model : 'stub', stop_reason: 'end_turn', stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }));
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        server, port: server.address().port, requests, state,
+        setFailNext: (v) => { state.failNext = v; },
+        close: () => new Promise(r => server.close(r)),
+      });
+    });
+    server.on('error', reject);
+  });
+}
 
 async function main() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-cooldown-'));
@@ -218,6 +258,85 @@ async function main() {
       } finally {
         await A.close().catch(() => {});
         await C.close().catch(() => {});
+      }
+    }
+
+    // ── Test 5: cooldown clears on a later SUCCESS (clearBackendCooldown) ─────
+    // A (fails-once-then-succeeds) → fallback B (always serves).
+    //   req1: A fails 500 → cooldown set on A → B serves.          A=1, B=1
+    //   req2 (immediate, within TTL): A in cooldown → SKIPPED → B.  A=1, B=2  ← cooldown OBSERVABLE
+    //   (wait out the short TTL so A re-enters the chain)
+    //   req3: A now serves 200 → clearBackendCooldown(A) fires.     A=2, B=2  served by A
+    //   req4 (immediate): A NOT in cooldown → A hit DIRECTLY.       A=3, B=2  served by A
+    // The clear-on-success contract is what makes the cooldown map empty for A
+    // (asserted via /c-thru/status) so subsequent requests dispatch straight to A.
+    console.log('\n5. Cooldown CLEARS on a later success; A is then dispatched to directly');
+    {
+      const A = await togglableBackend({ failFirst: true });
+      const B = await ollamaStubBackend(HEALTHY_NDJSON);
+      try {
+        const cfg = {
+          backends: {
+            A_be: { kind: 'anthropic', url: `http://127.0.0.1:${A.port}`, fallback_to: 'B-target' },
+            B_be: { kind: 'ollama',    url: `http://127.0.0.1:${B.port}` },
+          },
+          model_routes: { 'A-model': 'A_be', 'B-target': 'B_be' },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({
+          configPath, profile: '128gb', mode: 'best-cloud',
+          env: { CLAUDE_PROXY_FAILED_BACKEND_TTL_MS: '500' },
+        }, async ({ port }) => {
+          const reqBody = {
+            model: 'A-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 10,
+          };
+
+          // req1: A fails → cooldown set → B serves.
+          const r1 = await httpJson(port, 'POST', '/v1/messages', reqBody);
+          assertEq(r1.status, 200, 'req1: 200 via B (A failed)');
+          assertEq(A.requests.length, 1, 'req1: A tried once (failed)');
+          assertEq(B.requests.length, 1, 'req1: B served');
+
+          // Cooldown is observable in /c-thru/status while still within TTL.
+          const st1 = await httpJson(port, 'GET', '/c-thru/status', null, {}, 3000);
+          assert(st1.json.cooldown_backends.some(c => c.backend === 'A_be'),
+            'A_be is in cooldown_backends after req1 failure');
+
+          // req2 (immediate): A in cooldown → SKIPPED → B again. Proves the
+          // cooldown is actually skipping A in the cascade.
+          const r2 = await httpJson(port, 'POST', '/v1/messages', reqBody);
+          assertEq(r2.status, 200, 'req2: 200 via B (A skipped)');
+          assertEq(A.requests.length, 1, 'req2: A SKIPPED (cooldown observable)');
+          assertEq(B.requests.length, 2, 'req2: B served again');
+
+          // A will now succeed when it next gets a request.
+          A.setFailNext(false);
+          // Wait out the cooldown TTL so A re-enters the chain.
+          await new Promise(r => setTimeout(r, 650));
+
+          // req3: A re-eligible, succeeds → clearBackendCooldown(A_be).
+          const r3 = await httpJson(port, 'POST', '/v1/messages', reqBody);
+          assertEq(r3.status, 200, 'req3: 200 via A (recovered)');
+          assertEq(A.requests.length, 2, 'req3: A RE-TRIED after TTL and succeeded');
+          assertEq(B.requests.length, 2, 'req3: B NOT hit (A served)');
+          assertEq(r3.headers['x-c-thru-served-by'], 'A-model', 'req3: served-by reports A-model');
+
+          // The success must have CLEARED A's cooldown entry entirely.
+          const st2 = await httpJson(port, 'GET', '/c-thru/status', null, {}, 3000);
+          assert(!st2.json.cooldown_backends.some(c => c.backend === 'A_be'),
+            'A_be cooldown CLEARED on success (absent from cooldown_backends)');
+
+          // req4 (immediate): A is not in cooldown → dispatched DIRECTLY to A.
+          const r4 = await httpJson(port, 'POST', '/v1/messages', reqBody);
+          assertEq(r4.status, 200, 'req4: 200 via A (direct dispatch)');
+          assertEq(A.requests.length, 3, 'req4: A hit directly (cooldown was cleared)');
+          assertEq(B.requests.length, 2, 'req4: B still not hit since recovery');
+          assertEq(r4.headers['x-c-thru-served-by'], 'A-model', 'req4: served-by reports A-model');
+        });
+      } finally {
+        await A.close().catch(() => {});
+        await B.close().catch(() => {});
       }
     }
 

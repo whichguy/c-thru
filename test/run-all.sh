@@ -168,6 +168,10 @@ run_suite "session-start-seeding (first-run seed + settings registration)" \
   bash "$REPO_DIR/test/session-start-seeding.test.sh"
 run_suite "launcher-secret-gen-proxy-enforcement (C19/C23 secret-gen → live proxy enforces)" \
   bash "$REPO_DIR/test/launcher-secret-gen-proxy-enforcement.test.sh"
+run_suite "cross-session-secret-stability (HMAC key stable across sessions → A-signed marker verifies in B)" \
+  bash "$REPO_DIR/test/cross-session-secret-stability.test.sh"
+run_suite "proxy-reuse-lock (explicit-port cross-session reuse: 2nd attach, no duplicate spawn)" \
+  bash "$REPO_DIR/test/proxy-reuse-lock.test.sh"
 run_suite "benchmarks-update (durable stamp vs shadow pid + SIGHUP)" \
   bash "$REPO_DIR/test/benchmarks-update.test.sh"
 
@@ -201,6 +205,8 @@ run_suite "proxy-content-length-scrub" \
   node "$REPO_DIR/test/proxy-content-length-scrub.test.js"
 run_suite "proxy-cooldown-ttl" \
   node "$REPO_DIR/test/proxy-cooldown-ttl.test.js"
+run_suite "proxy-cross-provider-concurrent (3 providers fired concurrently: routing + no auth bleed)" \
+  node "$REPO_DIR/test/proxy-cross-provider-concurrent.test.js"
 run_suite "model-map-config-project-overlay" \
   node "$REPO_DIR/test/model-map-config-project-overlay.test.js"
 run_suite "proxy-runtime-fallback (fallback chains, cycle detection)" \
