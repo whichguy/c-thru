@@ -1115,6 +1115,14 @@ log_llm_profile_selection() {
     ' "$CONFIG" 2>/dev/null)"
     IFS=$'\t' read -r _dm_resolved _dm_endpoint <<< "$_dm_record"
     if [[ -z "$_dm_resolved" ]]; then _dm_resolved="$_dm_requested"; _dm_endpoint="?"; fi
+    # Not in model_routes → the proxy passes the model through to local Ollama
+    # (resolveBackend's __ollama_fallback__ in claude-proxy), exactly as the
+    # capability rows' _sl_endpoint default does. Show that real destination instead
+    # of a bare "?" — "?" misleads users into thinking a valid Ollama tag like
+    # glm-5.2:cloud won't route (it does; fleet-warming flags a genuinely-missing tag).
+    if [[ "$_dm_endpoint" == "?" ]]; then
+      if [[ "$_dm_resolved" == claude-* ]]; then _dm_endpoint="anthropic"; else _dm_endpoint="ollama_local"; fi
+    fi
     printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %-22s ${GRAY}→${NC} %-38s ${GRAY}[%s]${NC}\n" \
       "default" "$_dm_requested" "$_dm_resolved" "$_dm_endpoint" >&2
   fi
