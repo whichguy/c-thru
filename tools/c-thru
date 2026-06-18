@@ -469,6 +469,7 @@ cmd_help() {
   echo -e "${BOLD}Flags${NC} ${GRAY}(stripped before forwarding to claude):${NC}"
   echo "  --route <name>            use a named route from model-map.json"
   echo "  --model <model>           override model for this invocation"
+  echo "  --print-routing           print the resolved routing table and exit (dry run; no session)"
   echo "  --local-only              synonym for --mode best-local-oss"
   echo "  --offline                 synonym for --mode best-local-oss"
   echo "  --best-cloud              synonym for --mode best-cloud"
@@ -4291,6 +4292,7 @@ fi
 ORIG_ARGS=("$@")
 explicit_model=""
 route_name=""
+print_routing_only=""
 i=0
 n=${#ORIG_ARGS[@]}
 while [[ $i -lt $n ]]; do
@@ -4313,6 +4315,7 @@ while [[ $i -lt $n ]]; do
     --smallest)                export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
     --offline)                 export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
+    --print-routing | --dry-run)  print_routing_only=1; i=$((i + 1)) ;;
     --thinking | --thinking=*)  export C_THRU_THINKING=1; i=$((i + 1)) ;;
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;
     --no-update)        export C_THRU_NO_UPDATE=1; i=$((i + 1)) ;;
@@ -4431,6 +4434,10 @@ if [[ -f "$CONFIG" ]]; then
 fi
 EFFECTIVE_MODEL="$(resolve_profile_alias_model "$EFFECTIVE_MODEL")" || exit 1
 log_llm_profile_selection "$EFFECTIVE_MODEL"
+if [[ -n "$print_routing_only" ]]; then
+  printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %s\n" "dry-run" "--print-routing — routing shown above; proxy/session NOT started" >&2
+  exit 0
+fi
 validate_ollama_cloud_auth_for_launch "$EFFECTIVE_MODEL" || exit 1
 
 REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
