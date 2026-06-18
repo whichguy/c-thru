@@ -349,6 +349,8 @@ run_suite "proxy-gemini-routing (Gemini routing + picker aliases)" \
   node "$REPO_DIR/test/proxy-gemini-routing.test.js"
 run_suite "proxy-gemini-translation (Anthropic→Gemini translation)" \
   node "$REPO_DIR/test/proxy-gemini-translation.test.js"
+run_suite "proxy-gemini-timeout (C32: hang-on-headers → timeout listener fires)" \
+  node "$REPO_DIR/test/proxy-gemini-timeout.test.js"
 
 run_suite "proxy-ollama-passthrough (Ollama /v1/messages passthrough + tool block preservation)" \
   node "$REPO_DIR/test/proxy-ollama-passthrough.test.js"

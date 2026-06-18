@@ -112,6 +112,10 @@ const DEFAULT_OLLAMA_URL = process.env.OLLAMA_URL || process.env.OLLAMA_BASE_URL
 // OLLAMA_KEEP_ALIVE: how long Ollama should keep the model resident in
 //   VRAM after each request (forwarded as the `keep_alive` field).
 const OLLAMA_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_TIMEOUT_MS', 300000);
+// Gemini upstream socket timeout (chat + Files API). Overridable like every other
+// upstream timeout so a hermetic test can drive the C32 'timeout'→destroy path
+// without a 60s stall (see test/proxy-gemini-timeout.test.js).
+const GEMINI_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_GEMINI_TIMEOUT_MS', 60000);
 const STREAM_STALL_HARDFAIL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_STALL_MS', 300000);
 const STREAM_WALL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_WALL_MS', 2100000);
 const SSE_PING_INTERVAL_MS = numberFromEnv('CLAUDE_PROXY_PING_INTERVAL_MS', 15000);
@@ -2715,7 +2719,7 @@ function geminiHttpRequest(backend, method, urlPath, body, extraHeaders) {
       path: targetUrl.pathname + targetUrl.search,
       method,
       headers,
-      timeout: 60000,
+      timeout: GEMINI_UPSTREAM_TIMEOUT_MS,
     };
     const req = lib.request(opts, (resp) => {
       const chunks = [];
@@ -3175,7 +3179,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
     path: targetUrl.pathname + targetUrl.search,
     method: 'POST',
     headers: headers,
-    timeout: 60000,
+    timeout: GEMINI_UPSTREAM_TIMEOUT_MS,
   };
 
   const messageId = 'msg_gemini_' + crypto.randomBytes(12).toString('hex');
