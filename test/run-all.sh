@@ -143,6 +143,8 @@ else
 fi
 run_suite "session-start-seeding (first-run seed + settings registration)" \
   bash "$REPO_DIR/test/session-start-seeding.test.sh"
+run_suite "launcher-secret-gen-proxy-enforcement (C19/C23 secret-gen → live proxy enforces)" \
+  bash "$REPO_DIR/test/launcher-secret-gen-proxy-enforcement.test.sh"
 run_suite "benchmarks-update (durable stamp vs shadow pid + SIGHUP)" \
   bash "$REPO_DIR/test/benchmarks-update.test.sh"
 
@@ -192,6 +194,8 @@ run_suite "proxy-sentinel-detection (per-agent marker: header + byte-scan + wind
   node "$REPO_DIR/test/proxy-sentinel-detection.test.js"
 run_suite "proxy-control-auth (control-token gate on mutating routes)" \
   node "$REPO_DIR/test/proxy-control-auth.test.js"
+run_suite "proxy-agent-sentinel-e2e (live proxy: signed/unsigned/forged marker, fail-open, by_agent)" \
+  node "$REPO_DIR/test/proxy-agent-sentinel-e2e.test.js"
 run_suite "agent-offload-lib (delegation parser: parse-not-grep, call↔result join)" \
   node "$REPO_DIR/test/agent-offload-lib.test.js"
 run_suite "c-thru-agent-usage (per-agent transcript telemetry CLI)" \
