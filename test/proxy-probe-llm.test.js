@@ -148,7 +148,12 @@ async function main() {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
-  summary();
+  // Gate the exit code on the failed count. A bare summary() discards the count,
+  // so a failed assertion still exits 0 and run-all.sh (which keys on exit code)
+  // paints the suite green — the proxy-runtime-fallback P0. Enforced by
+  // test/exit-code-gating.test.js.
+  const failed = summary();
+  process.exit(failed > 0 ? 1 : 0);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

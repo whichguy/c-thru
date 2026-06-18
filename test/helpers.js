@@ -43,7 +43,15 @@ function skip(message) {
   _skipped++;
 }
 
+// Set once summary() has run: the suite's pass/fail verdict is now COMMITTED.
+// The unhandledRejection guard reads this so a late stray rejection (e.g. a
+// post-teardown timer firing during the exit window) can't FLIP an
+// already-computed exit code — a green suite must not silently turn red, and a
+// red suite must not be masked. See the handler at the bottom of this file.
+let _resultComputed = false;
+
 function summary() {
+  _resultComputed = true;
   const total = _passed + _failed;
   const skipNote = _skipped ? ` (${_skipped} skipped)` : '';
   console.log(`\n${_passed}/${total} passed${skipNote}${_failed ? ` — ${_failed} FAILED` : ''}`);
@@ -393,18 +401,29 @@ async function withProxy(opts, fn) {
     fnError = e;
   } finally {
     try { child.kill('SIGTERM'); } catch {}
-    await Promise.race([
-      exitPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('withProxy: child did not exit within 3s')), 3000)),
-    ]).catch(() => {
+    // raceWithTimeout: like Promise.race([p, timeout]) but CLEARS the timer once
+    // the race settles. A bare `Promise.race([p, new Promise(r=>setTimeout(r,ms))])`
+    // leaks the timer when p wins (the happy path): it keeps the test event loop
+    // alive and — for the rejecting variant below — its late reject() becomes an
+    // unhandledRejection that the global guard turns into process.exit(1), racing
+    // the suite's real summary()-gated exit. Tracking + clearing the timer makes
+    // teardown leave no pending timer behind summary().
+    const raceWithTimeout = (p, ms, onTimeout) => new Promise((resolve, reject) => {
+      const t = setTimeout(() => { onTimeout ? onTimeout(resolve, reject) : resolve(); }, ms);
+      p.then(
+        v => { clearTimeout(t); resolve(v); },
+        e => { clearTimeout(t); reject(e); },
+      );
+    });
+    await raceWithTimeout(
+      exitPromise, 3000,
+      (_resolve, reject) => reject(new Error('withProxy: child did not exit within 3s')),
+    ).catch(() => {
       try { child.kill('SIGKILL'); } catch {}
     });
     // Second bounded wait: SIGKILL should be near-instant, but cap at 1s to
     // prevent an indefinite hang if the kernel delays signal delivery.
-    await Promise.race([
-      exitPromise,
-      new Promise(resolve => setTimeout(resolve, 1000)),
-    ]);
+    await raceWithTimeout(exitPromise, 1000);
     try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
   }
   if (fnError) throw fnError;
@@ -867,8 +886,22 @@ function stripBehavioralContract(contractText) {
 }
 
 // ── Global rejection guard ─────────────────────────────────────────────────
-
+//
+// A genuine unhandledRejection BEFORE the suite computes its verdict is a real
+// failure — fail loud (exit 1) so a swallowed async error can't pass silently.
+//
+// But once summary() has run the verdict is COMMITTED and the suite is about to
+// call its own `process.exit(failed > 0 ? 1 : 0)`. A stray late rejection in
+// that window (e.g. a teardown timer or an aborted in-flight socket settling
+// after the result) must NOT call process.exit(1): doing so would FLIP a green
+// suite to red (false failure) and races the suite's authoritative gated exit.
+// After the result is computed we therefore log the late rejection prominently
+// (so it's never invisible) but leave the suite's own exit code intact.
 process.on('unhandledRejection', err => {
+  if (_resultComputed) {
+    console.error('unhandledRejection AFTER summary() (verdict already committed; not flipping exit code):', err);
+    return;
+  }
   console.error('unhandledRejection:', err);
   process.exit(1);
 });

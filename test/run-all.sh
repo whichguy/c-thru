@@ -65,6 +65,29 @@ if [[ $FAST -eq 0 ]]; then
   acquire_lock
 fi
 
+# ── Proxy-spawn serialization (assessed, intentionally NOT forced) ──────────────
+# An assessment recommended running the ~54 proxy-spawn suites (those invoking
+# withProxy/spawnProxy) SERIALLY even in --fast, so waitForPing ECONNRESET timer
+# races can't make green/red untrustworthy. We assessed this and did NOT add a
+# parallel-then-serial split, because:
+#   1. run-all.sh ALREADY runs every suite strictly sequentially — run_suite uses
+#      a blocking `out=$("$@" 2>&1)` command substitution; there is no `&` / `wait`
+#      / job-control anywhere. So within one run-all invocation the spawn suites
+#      are already serialized; there is nothing to "make serial."
+#   2. The only concurrency is ACROSS run-all invocations, and that is already
+#      gated: full runs hold the exclusive mkdir-lock above; --fast runs skip it
+#      precisely because their suites bind random free ports (getFreePort) and are
+#      port-isolated, so two --fast runs don't contend on a fixed port.
+#   3. The waitForPing ECONNRESET flake the assessment cites is load-dependent
+#      (a busy machine slows first-bind), not a same-process concurrency race —
+#      helpers.js waitForPing already fast-retries ECONNRESET/ECONNREFUSED, and the
+#      per-suite teardown timers are now cleared (no stray timers leak across the
+#      sequential boundary). Forcing a parallel batch for the NON-spawn suites to
+#      preserve wall-clock would INTRODUCE the very concurrency this guards against
+#      and add real complexity for no correctness gain.
+# If a future change adds intra-run parallelism (e.g. a `&`+`wait` fan-out for the
+# non-spawn unit suites), the spawn suites MUST stay in a sequential group here.
+
 # Failing-suite output is also persisted here (lazily created on first failure)
 # so a flake in a long full run stays diagnosable after the terminal scrolls.
 # Green runs create nothing.
@@ -150,6 +173,8 @@ run_suite "benchmarks-update (durable stamp vs shadow pid + SIGHUP)" \
 
 echo ""
 echo "Node tests:"
+run_suite "exit-code-gating (every Node suite ties exit code to its failure count)" \
+  node "$REPO_DIR/test/exit-code-gating.test.js"
 run_suite "helpers (self-test: waitForPing ECONNRESET retry, stub routing, spawnCapture)" \
   node "$REPO_DIR/test/helpers.test.js"
 run_suite "hooks-declaration-parity (ephemeral c-thru ↔ plugin hooks.json drift)" \
