@@ -49,7 +49,7 @@ catch-all even when a Gemini backend is present).
 |---|---|---|---|---|---|
 | `/v1/messages` (non-stream) | POST | ✅ | ✅ | ✅ | 🚫 |
 | `/v1/messages` (stream) | POST | ✅ | ✅ | ✅ | 🚫 |
-| `/v1/messages/count_tokens` | POST | ✅ (passthrough) | ✅ (`:countTokens`) | ➖ | 🚫 |
+| `/v1/messages/count_tokens` | POST | ✅ (passthrough) | ✅ (`:countTokens`) | ✅ (proxy-side estimate) | 🚫 |
 | `/v1/messages/batches` | POST | ⚠️ catch-all → Anthropic | ➖ no native batch API | ➖ | 🚫 |
 | `/v1/messages/batches` (list) | GET | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
 | `/v1/messages/batches/{id}` | GET | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |

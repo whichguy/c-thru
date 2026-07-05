@@ -37,6 +37,7 @@ the actual hardware or an explicit override.
 | `x-c-thru-resolved-via` | Capability-driven request (e.g. agent uses `model: planner`) | JSON: `{"capability":"planner","profile":"planner","served_by":"...","tier":"64gb","mode":"connected","local_terminal_appended":false}` | Yes |
 | `x-c-thru-fallback-from` | Primary route failed and fallback chain matched | Original requested model name (e.g. `gemini-pro-latest` when fallback resolved to a local model) | Yes |
 | `x-c-thru-deprecated-model` | Resolved model is in built-in deprecation list or `deprecated_models` config | Migration advice string (e.g. `use gemini-pro-latest (gemini-1.5-* deprecated 2025-09)`) | Yes |
+| `x-c-thru-count-tokens` | `/v1/messages/count_tokens` short-circuited by proxy (Ollama backends) | `estimate` — proxy-side heuristic, not an exact count | No |
 
 ## Cache & deduplication
 
