@@ -158,6 +158,10 @@ function resolveActiveTier(config) {
 // alias name  → identity                                 (e.g. coder → coder)
 // unknown     → null                                     (passthrough, not a profile alias)
 function resolveCapabilityAlias(model, config) {
+  if (typeof model === 'string' && model.startsWith('advisor:')) {
+    const pinnedModel = model.slice('advisor:'.length);
+    if (pinnedModel.trim()) return MODEL_PIN_PREFIX + pinnedModel;
+  }
   const a2c = config && config.agent_to_capability;
   if (a2c && Object.prototype.hasOwnProperty.call(a2c, model)) return a2c[model];
   // New schema: llm_profiles is capability-outer (not tier-outer).

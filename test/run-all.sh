@@ -129,11 +129,15 @@ run_suite "agent-router-hook (subagent_type → capability model rewrite)" \
   bash "$REPO_DIR/test/agent-router-hook.test.js"
 run_suite "strict-models (C_THRU_STRICT_MODELS=1 enforcement)" \
   bash "$REPO_DIR/test/strict-models.test.sh"
-if command -v jq >/dev/null 2>&1; then
-  run_suite "self-update-divergence (diverged/stale-WIP advisories)" \
-    bash "$REPO_DIR/test/self-update-divergence.test.sh"
+if [ "${C_THRU_DESTRUCTIVE_TESTS:-}" = "1" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    run_suite "self-update-divergence (diverged/stale-WIP advisories)" \
+      bash "$REPO_DIR/test/self-update-divergence.test.sh"
+  else
+    skip_suite "self-update-divergence (jq not installed)"
+  fi
 else
-  skip_suite "self-update-divergence (jq not installed)"
+  skip_suite "self-update-divergence (git-mutating fixture; opt-in via C_THRU_DESTRUCTIVE_TESTS=1)"
 fi
 run_suite "session-start-seeding (first-run seed + settings registration)" \
   bash "$REPO_DIR/test/session-start-seeding.test.sh"

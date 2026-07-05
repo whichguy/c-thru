@@ -16,8 +16,11 @@
 //      then a fixed-width window read (agent names are short) to extract the name.
 
 const SENTINEL_PREFIX = '[[c-thru-agent:';
-const SENTINEL_RE = /\[\[c-thru-agent:([A-Za-z0-9_-]+)\]\]/;
-const NAME_RE = /^[A-Za-z0-9_-]+$/;
+// Agent names are normally simple identifiers, but advisor:<model-id> pins need
+// common model-id punctuation: :cloud suffixes, dotted names, provider/name
+// namespaces, and @backend sigils. Keep this narrower than arbitrary text.
+const SENTINEL_RE = /\[\[c-thru-agent:([A-Za-z0-9_.:/@-]+)\]\]/;
+const NAME_RE = /^[A-Za-z0-9_.:/@-]+$/;
 const READ_WINDOW = 50; // bytes read after locating the prefix; bounds the extract
 
 // parseAgentSentinel(bodyText, headerValue) -> agentName | null

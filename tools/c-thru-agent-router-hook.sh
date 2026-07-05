@@ -57,6 +57,13 @@ process.stdin.on('end',()=>{
 resolve_capability() {
   local key="$1"
   [ -n "$key" ] || return 0
+  if [[ "$key" == advisor:* ]]; then
+    local pinned_model="${key#advisor:}"
+    if [[ "$pinned_model" == *[![:space:]]* ]]; then
+      echo 'advisor-pin'
+      return 0
+    fi
+  fi
   if [ ! -f "$MODEL_MAP" ]; then
     [ -n "$DEBUG_LOG" ] && printf '[%s] model_map NOT FOUND at %s\n' "$(date +%H:%M:%S)" "$MODEL_MAP" >> "$DEBUG_LOG"
     return 0

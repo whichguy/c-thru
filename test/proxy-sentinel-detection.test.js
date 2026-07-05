@@ -36,6 +36,9 @@ assert(parseAgentSentinel(body({ model: 'x', system: hugeSystem, messages: [
 assert(parseAgentSentinel('prefix text [[c-thru-agent:docs]] suffix', undefined) === 'docs',
   'plain-string body with marker → docs');
 
+assert(parseAgentSentinel(body({ model: 'sonnet', messages: [{ role: 'user', content: '[[c-thru-agent:advisor:deepseek-v4-pro:cloud]]\nhi' }] }), undefined) === 'advisor:deepseek-v4-pro:cloud',
+  'advisor marker with colon model id → advisor:deepseek-v4-pro:cloud');
+
 // ── no marker ────────────────────────────────────────────────────────────────────
 assert(parseAgentSentinel(body({ model: 'claude-sonnet-4-6', system: hugeSystem, messages: [{ role: 'user', content: 'a normal prompt with no marker' }] }), undefined) === null,
   'no marker (main thread) → null');
