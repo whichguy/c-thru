@@ -445,6 +445,7 @@ cmd_help() {
   echo -e "${BOLD}Usage:${NC}"
   echo "  c-thru [--route <name>] [--model <name>] [--local-only] [--best-cloud] [claude args...]"
   echo "  c-thru <subcommand> [options]"
+  echo -e "  ${GRAY}Native Claude Code subcommands (agents, mcp, auth, ...) pass through to claude.${NC}"
   echo ""
   echo -e "${BOLD}Subcommands${NC} ${GRAY}(operate on c-thru itself):${NC}"
   echo -e "  ${GRAY}Lifecycle:${NC}"
@@ -714,6 +715,28 @@ cmd_check_deps() {
   return "$any_required_missing"
 }
 
+# Walk PATH for an executable `claude` that is not this script (real vendor binary).
+find_real_claude() {
+  local cand_real first_hit=""
+  local -a P_ENTRIES
+  IFS=':' read -ra P_ENTRIES <<< "${PATH:-}"
+  for dir in "${P_ENTRIES[@]}"; do
+    [[ -z "$dir" ]] && continue
+    local cand="$dir/claude"
+    if [[ -x "$cand" ]]; then
+      cand_real="$(readlink -f "$cand" 2>/dev/null || echo "$cand")"
+      [[ "$cand_real" == "$CTHRU_SELF_REAL" ]] && continue
+      first_hit="$cand"
+      break
+    fi
+  done
+  if [[ -z "$first_hit" ]]; then
+    echo "c-thru: real claude binary not found in PATH (after $CTHRU_SELF_REAL)" >&2
+    exit 127
+  fi
+  printf '%s' "$first_hit"
+}
+
 # Early dispatch: handle --help and check-deps before config-sync / validation
 # so they work even when model-map.json is absent, corrupt, or fails validation.
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || "${1:-}" == "help" ]]; then
@@ -722,6 +745,17 @@ fi
 if [[ "${1:-}" == "check-deps" ]]; then
   cmd_check_deps "$@"; exit $?
 fi
+# Native Claude Code subcommands must reach the real binary untouched — the
+# proxy/banner/session-injection path (build_forwarded_args) appends
+# --append-system-prompt/--settings/--agents, which are invalid for
+# subcommands and make commander error out. Keep this list in sync with
+# `claude --help` → Commands.
+case "${1:-}" in
+  agents|auth|auto-mode|doctor|gateway|install|mcp|plugin|plugins|project|setup-token|ultrareview|update|upgrade)
+    REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
+    exec "$REAL_CLAUDE" "$@"
+    ;;
+esac
 if [[ "${1:-}" == "/c-thru-control" ]]; then
   shift
   # We need the config resolved to start the proxy
@@ -1551,28 +1585,6 @@ resolve_routes_graph() {
   done
 
   printf '%s' "$cur"
-}
-
-# Walk PATH for an executable `claude` that is not this script (real vendor binary).
-find_real_claude() {
-  local cand_real first_hit=""
-  local -a P_ENTRIES
-  IFS=':' read -ra P_ENTRIES <<< "${PATH:-}"
-  for dir in "${P_ENTRIES[@]}"; do
-    [[ -z "$dir" ]] && continue
-    local cand="$dir/claude"
-    if [[ -x "$cand" ]]; then
-      cand_real="$(readlink -f "$cand" 2>/dev/null || echo "$cand")"
-      [[ "$cand_real" == "$CTHRU_SELF_REAL" ]] && continue
-      first_hit="$cand"
-      break
-    fi
-  done
-  if [[ -z "$first_hit" ]]; then
-    echo "c-thru: real claude binary not found in PATH (after $CTHRU_SELF_REAL)" >&2
-    exit 127
-  fi
-  printf '%s' "$first_hit"
 }
 
 # Block until claude-proxy answers /ping on port (reuse or cold-start from another process).
