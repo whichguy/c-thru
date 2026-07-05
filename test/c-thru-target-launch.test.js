@@ -32,26 +32,30 @@ node -e 'console.log(JSON.stringify({args: process.argv.slice(1), anthropic_base
   fs.chmodSync(stubPath, 0o755);
 }
 
-function runCthru({ modelArg, extraEnv = {}, ...config }) {
+function runCthru({ modelArg, args, extraEnv = {}, ...config }) {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-launch-'));
   const homeDir = path.join(tmpRoot, 'home');
+  const claudeDir = path.join(homeDir, '.claude');
   const fakeBin = path.join(tmpRoot, 'bin');
-  fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true });
+  fs.mkdirSync(claudeDir, { recursive: true });
   fs.mkdirSync(fakeBin, { recursive: true });
-  fs.symlinkSync(path.join(__dirname, '..', 'tools'), path.join(homeDir, '.claude', 'tools'));
+  fs.symlinkSync(path.join(__dirname, '..', 'tools'), path.join(claudeDir, 'tools'));
   makeStubClaude(fakeBin);
 
   const configPath = path.join(tmpRoot, 'model-map.json');
   fs.writeFileSync(configPath, JSON.stringify(config), 'utf8');
 
-  const result = spawnSync(CTHRU, ['--model', modelArg], {
+  const cthruArgs = args || ['--model', modelArg];
+  const result = spawnSync(CTHRU, cthruArgs, {
     encoding: 'utf8',
     env: {
       ...process.env,
       HOME: homeDir,
+      CLAUDE_DIR: claudeDir,
+      CLAUDE_CONFIG_DIR: claudeDir,
       PATH: `${fakeBin}:${process.env.PATH}`,
       CLAUDE_MODEL_MAP_PATH: configPath,
-      CLAUDE_ROUTER_NO_UPDATE: '1',
+      C_THRU_NO_UPDATE: '1',
       C_THRU_SKIP_PREPULL: '1',
       CLAUDE_PROXY_STARTUP_PROBE: '0',
       CLAUDE_PROXY_SKIP_OLLAMA_WARMUP: '1',
@@ -66,6 +70,10 @@ function runCthru({ modelArg, extraEnv = {}, ...config }) {
 
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
   return { code: result.status, stdout: result.stdout || '', stderr: result.stderr || '', json: parsed };
+}
+
+function proxyBindDenied(result) {
+  return result.code !== 0 && /(?:claude-proxy failed to bind: EPERM|listen EPERM)/.test(result.stderr || '');
 }
 
 async function main() {
@@ -93,7 +101,9 @@ async function main() {
     assert(result.json?.anthropic_base_url === 'https://anthropic.example',
       `legacy anthropic autodetect wins over targets.default, direct mode (got ${JSON.stringify(result.json?.anthropic_base_url)})`);
     assert((result.json?.args || []).some(arg => arg === '--model=claude-sonnet-4-6' || arg === 'claude-sonnet-4-6'),
-      `forwarded args preserve unmatched model label (got ${JSON.stringify(result.json?.args)})`);
+      'forwarded args preserve unmatched model label');
+    assert((result.json?.args || []).includes('--append-system-prompt'),
+      'normal launch still receives injected session flags');
   }
 
   console.log('\n2. Explicit target ids stay proxy-owned end-to-end');
@@ -109,11 +119,45 @@ async function main() {
         'explicit-target': { backend: 'anthropic', model: 'provider-model' },
       },
     });
-    assert(result.code === 0, `launcher exits 0 for explicit target id (got ${result.code})`);
-    assert(typeof result.json?.anthropic_base_url === 'string' && /^http:\/\/127\.0\.0\.1:\d+$/.test(result.json.anthropic_base_url),
-      `explicit target uses proxy mediation instead of direct provider URL (got ${JSON.stringify(result.json?.anthropic_base_url)})`);
-    assert((result.json?.args || []).some(arg => arg === '--model=explicit-target' || arg === 'explicit-target'),
-      `forwarded args preserve explicit target label (got ${JSON.stringify(result.json?.args)})`);
+    if (proxyBindDenied(result)) {
+      console.log('  SKIP  explicit target proxy mediation (sandbox denied loopback bind)');
+    } else {
+      assert(result.code === 0, `launcher exits 0 for explicit target id (got ${result.code})`);
+      assert(typeof result.json?.anthropic_base_url === 'string' && /^http:\/\/127\.0\.0\.1:\d+$/.test(result.json.anthropic_base_url),
+        `explicit target uses proxy mediation instead of direct provider URL (got ${JSON.stringify(result.json?.anthropic_base_url)})`);
+      assert((result.json?.args || []).some(arg => arg === '--model=explicit-target' || arg === 'explicit-target'),
+        'forwarded args preserve explicit target label');
+    }
+  }
+
+  console.log('\n3. Native Claude Code subcommands pass through untouched');
+  {
+    const result = runCthru({
+      args: ['agents', '--help'],
+      backends: {},
+      targets: {},
+    });
+    const args = result.json?.args || [];
+    assert(result.code === 0, `agents passthrough exits 0 (got ${result.code})`);
+    assert(JSON.stringify(args) === JSON.stringify(['agents', '--help']),
+      `agents passthrough preserves argv exactly (got ${JSON.stringify(args)})`);
+    assert(!args.some(arg => ['--append-system-prompt', '--settings', '--agents', '--model', '--dangerously-skip-permissions'].includes(arg) || /^--model=/.test(arg)),
+      `agents passthrough has no session-injected flags (got ${JSON.stringify(args)})`);
+  }
+
+  console.log('\n4. Additional native subcommands pass through untouched');
+  {
+    const result = runCthru({
+      args: ['mcp', 'list'],
+      backends: {},
+      targets: {},
+    });
+    const args = result.json?.args || [];
+    assert(result.code === 0, `mcp passthrough exits 0 (got ${result.code})`);
+    assert(JSON.stringify(args) === JSON.stringify(['mcp', 'list']),
+      `mcp passthrough preserves argv exactly (got ${JSON.stringify(args)})`);
+    assert(!args.some(arg => ['--append-system-prompt', '--settings', '--agents', '--model', '--dangerously-skip-permissions'].includes(arg) || /^--model=/.test(arg)),
+      `mcp passthrough has no session-injected flags (got ${JSON.stringify(args)})`);
   }
 
   console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);

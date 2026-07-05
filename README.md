@@ -289,6 +289,7 @@ c-thru --route background --model gemma4:26b     # named route + explicit model
 | `c-thru explain --capability X --mode M [--tier T]` | Print resolution chain, no real request |
 | `c-thru stats` / `c-thru stats clear` | Per-agent/model usage stats |
 | `c-thru check-deps [--fix]` | Audit system dependencies |
+| Native Claude Code subcommands (`agents`, `auth`, `auto-mode`, `doctor`, `gateway`, `install`, `mcp`/`plugin`/`plugins`, `project`, `setup-token`, `ultrareview`, `update`/`upgrade`) | Pass through untouched to the real `claude` binary |
 
 | Flag | Sets env | Effect |
 |---|---|---|
