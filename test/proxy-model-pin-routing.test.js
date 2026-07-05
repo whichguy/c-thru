@@ -107,11 +107,48 @@ async function main() {
       stub.close();
     }
 
-    // ── 3. Genuine cycle in agent_to_capability IS detected ──────────────
+    // ── 3. advisor:<model-id> sentinel routes through runtime model pin ───
+    console.log('\n3. advisor:<model-id> sentinel routes through runtime model pin');
+    {
+      const stub = await stubBackend();
+      const config = {
+        endpoints: {
+          stub: { url: `http://127.0.0.1:${stub.port}`, format: 'anthropic', auth: 'none' },
+        },
+        model_routes: {
+          'deepseek-v4-pro:cloud': 'stub',
+        },
+        agent_to_capability: {},
+      };
+
+      const configPath = writeConfig(tmpDir, config);
+
+      await withProxy(
+        { configPath, profile: '128gb' },
+        async ({ port }) => {
+          const body = Object.assign(
+            { model: 'sonnet' },
+            MSG_BODY,
+            { messages: [{ role: 'user', content: '[[c-thru-agent:advisor:deepseek-v4-pro:cloud]]\nhi' }] }
+          );
+          const res = await httpJson(port, 'POST', '/v1/messages', body);
+          assertEq(res.status, 200, 'advisor runtime pin request returns 200');
+          const req = stub.lastRequest();
+          assert(
+            req && req.model_used === 'deepseek-v4-pro:cloud',
+            `advisor runtime pin → deepseek-v4-pro:cloud (got ${req && req.model_used})`
+          );
+        }
+      );
+
+      stub.close();
+    }
+
+    // ── 4. Genuine cycle in agent_to_capability IS detected ──────────────
     //      agent-a → model:node-x, node-x → model:agent-a
     //      Both keys must be in agent_to_capability so the recursive
     //      resolveBackend call re-enters the model: pin path.
-    console.log('\n3. Genuine cycle in agent_to_capability is detected');
+    console.log('\n4. Genuine cycle in agent_to_capability is detected');
     {
       const stub = await stubBackend();
       const config = {
@@ -151,8 +188,8 @@ async function main() {
       stub.close();
     }
 
-    // ── 4. model: prefix with empty model name returns 400 ──────────────
-    console.log('\n4. model: prefix with empty model name returns clean error');
+    // ── 5. model: prefix with empty model name returns 400 ──────────────
+    console.log('\n5. model: prefix with empty model name returns clean error');
     {
       const stub = await stubBackend();
       const config = {
@@ -182,8 +219,8 @@ async function main() {
       stub.close();
     }
 
-    // ── 5. Multiple agents pinned to same model all resolve ─────────────
-    console.log('\n5. Multiple independent model: pins all resolve correctly');
+    // ── 6. Multiple agents pinned to same model all resolve ─────────────
+    console.log('\n6. Multiple independent model: pins all resolve correctly');
     {
       const stub = await stubBackend();
       const config = {
@@ -221,9 +258,9 @@ async function main() {
       stub.close();
     }
 
-    // ── 6. model: pin in route chain resolves correctly ────────────────
+    // ── 7. model: pin in route chain resolves correctly ────────────────
     //      Tests the seen set is clean per top-level resolveBackend call.
-    console.log('\n6. Seen set does not persist across independent resolutions');
+    console.log('\n7. Seen set does not persist across independent resolutions');
     {
       const stub = await stubBackend();
       const config = {
