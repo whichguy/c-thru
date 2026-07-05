@@ -3560,6 +3560,7 @@ run_real_claude() {
 build_forwarded_args() {
   local desired_model="$1"
   local -a forwarded=()
+  local -a inject=()
   local i=0
   local saw_model=0
   local saw_skip_permissions=0
@@ -3648,19 +3649,20 @@ build_forwarded_args() {
 c-thru proxy control plane: http://127.0.0.1:${PROXY_PORT} — see SessionStart context for endpoints"
     fi
     if [[ "${C_THRU_THINKING:-0}" == "1" ]]; then
-      forwarded+=("--append-system-prompt" "$info_summary")
+      inject+=("--append-system-prompt" "$info_summary")
     else
-      forwarded+=("--append-system-prompt" "/no_thinking $info_summary")
+      inject+=("--append-system-prompt" "/no_thinking $info_summary")
     fi
   fi
 
   # ── Per-Process Ephemeral Injection ──────────────────────────────────────
   if [[ -n "$EPHEMERAL_SETTINGS_JSON" ]]; then
-    forwarded+=("--settings" "$EPHEMERAL_SETTINGS_JSON")
+    inject+=("--settings" "$EPHEMERAL_SETTINGS_JSON")
   fi
   if [[ -n "$EPHEMERAL_AGENTS_JSON" && "$EPHEMERAL_AGENTS_JSON" != "{}" ]]; then
-    forwarded+=("--agents" "$EPHEMERAL_AGENTS_JSON")
+    inject+=("--agents" "$EPHEMERAL_AGENTS_JSON")
   fi
+  forwarded=( "${inject[@]}" "${forwarded[@]}" )
   printf '%s\0' "${forwarded[@]}"
 }
 

@@ -381,6 +381,42 @@ console.log('\n18. (C1/C2) ollama-backed run: ephemeral --settings shape + syste
     `pointer line matches the canonical one-line form (got ${JSON.stringify(pointerLines[0])})`);
   assert(!promptLines.some(l => /GET \/c-thru\//.test(l)),
     'no endpoint enumeration (GET /c-thru/...) leaked in-band (drift guard)');
+
+  // Injected claude options must stay before the first positional/subcommand.
+  const positionalRun = runCthru(['--model=claude-sonnet-4-6', 'agents']);
+  assert(positionalRun.code === 0,
+    `positional run exits 0 (got ${positionalRun.code}, stderr: ${positionalRun.stderr.slice(0, 200)})`);
+  const positionalArgs = positionalRun.json?.args || [];
+  const positionalIndex = positionalArgs.indexOf('agents');
+  assert(positionalIndex >= 0, `positional 'agents' forwarded (got ${JSON.stringify(positionalArgs)})`);
+  for (const flag of ['--append-system-prompt', '--settings', '--agents']) {
+    const flagIndex = positionalArgs.indexOf(flag);
+    if (flagIndex >= 0) {
+      assert(flagIndex < positionalIndex,
+        `${flag} appears before positional 'agents' (got ${JSON.stringify(positionalArgs)})`);
+    }
+  }
+
+  const promptText = 'cthru-ordering-regression-prompt-7c6f';
+  const promptRun = runCthru(['-p', promptText]);
+  assert(promptRun.code === 0,
+    `-p prompt run exits 0 (got ${promptRun.code}, stderr: ${promptRun.stderr.slice(0, 200)})`);
+  const promptArgs = promptRun.json?.args || [];
+  const promptFlagIndex = promptArgs.indexOf('-p');
+  const promptValueIndex = promptArgs.indexOf(promptText);
+  assert(promptFlagIndex >= 0 && promptValueIndex === promptFlagIndex + 1,
+    `-p prompt value remains adjacent to -p (got ${JSON.stringify(promptArgs)})`);
+
+  const explicitModel = 'claude-sonnet-4-6';
+  const modelPromptText = 'cthru-ordering-regression-model-prompt-25b4';
+  const modelPromptRun = runCthru(['--model', explicitModel, '-p', modelPromptText]);
+  assert(modelPromptRun.code === 0,
+    `two-word --model prompt run exits 0 (got ${modelPromptRun.code}, stderr: ${modelPromptRun.stderr.slice(0, 200)})`);
+  const modelPromptArgs = modelPromptRun.json?.args || [];
+  const modelFlagIndex = modelPromptArgs.indexOf('--model');
+  const modelValueIndex = modelPromptArgs.indexOf(explicitModel);
+  assert(modelFlagIndex >= 0 && modelValueIndex === modelFlagIndex + 1,
+    `two-word --model value remains adjacent, with no injected option between flag and value (got ${JSON.stringify(modelPromptArgs)})`);
 }
 
 // ── Test 19: inbound OLLAMA_URL is honored (precedence regression) ─────────
