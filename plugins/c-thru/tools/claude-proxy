@@ -1360,6 +1360,24 @@ function sendAnthropicError(res, code, message) {
   });
 }
 
+// Rough proxy-side token estimate for /v1/messages/count_tokens against
+// backends that don't implement that endpoint (Ollama's /v1/messages adapter
+// 404s on it; Gemini maps it to :countTokens instead). Anthropic count_tokens
+// accepts system + messages + tools, so serialize those and apply the standard
+// ~4-chars/token heuristic. This is an approximation for context-management,
+// not an exact count — callers signal it via the x-c-thru-count-tokens: estimate
+// response header so operators aren't fooled into treating it as exact.
+function estimateInputTokens(body) {
+  const parts = [];
+  if (body && body.system != null) {
+    parts.push(typeof body.system === 'string' ? body.system : JSON.stringify(body.system));
+  }
+  if (Array.isArray(body && body.messages)) parts.push(JSON.stringify(body.messages));
+  if (Array.isArray(body && body.tools)) parts.push(JSON.stringify(body.tools));
+  const chars = parts.join('').length;
+  return Math.max(1, Math.ceil(chars / 4));
+}
+
 // Structured 501 for endpoints that this backend cannot serve. Matches the
 // Anthropic error envelope (`{type:"error", error:{type, message}}`) so SDKs
 // surface it through their normal error path instead of as opaque HTTP. See
@@ -1889,6 +1907,19 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   // Final-dispatch attribution for the recent-requests ring — fallback
   // re-dispatch re-enters here, so the last write is the pair that served.
   if (requestMeta) { requestMeta.servedBy = effectiveModel; requestMeta.backendId = backend.id; }
+
+  // Ollama's /v1/messages adapter does not implement /v1/messages/count_tokens
+  // (returns 404). Gemini maps it to :countTokens; Ollama has no equivalent, so
+  // short-circuit with a proxy-side heuristic estimate instead of forwarding.
+  // Gated on isLocalBackend (catches kind:"ollama" and localhost anthropic-format
+  // endpoints like ollama_cloud) so real Anthropic backends still forward natively.
+  if (typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens') && isLocalBackend(backend)) {
+    const estimate = estimateInputTokens(body);
+    ctxLog(ctx, 'count_tokens.estimated', { backend: backend.id, input_tokens: estimate });
+    res.setHeader('x-c-thru-count-tokens', 'estimate');
+    return send(res, 200, { input_tokens: estimate });
+  }
+
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
@@ -4632,6 +4663,15 @@ const server = http.createServer((req, res) => {
         gemini_cache: { ...GEMINI_CACHE_STATS, entries: GEMINI_CACHE_MAP.size },
         vertex_env_ok: !!(process.env.GOOGLE_CLOUD_REGION && process.env.GOOGLE_CLOUD_PROJECT),
       });
+
+      // Liveness probe (e.g. Bun/1.4.0 health checks) issues HEAD /. Answer 200
+      // with an empty body instead of falling through to unhandled_url 404 noise.
+      // Raw writeHead/end (not send()) — HEAD must not carry a body. Unauthenticated,
+      // like /ping, so probes get a fast answer.
+      if (req.method === 'HEAD' && req.url === '/') {
+        res.writeHead(200, { 'Content-Length': '0' });
+        return res.end();
+      }
 
       if (req.method === 'POST' && (req.url === '/c-thru/stats/clear' || req.url === '/c-thru/stats/clear/')) {
         if (!controlAuthorized(req, res)) return;  // C23
