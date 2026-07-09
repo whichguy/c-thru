@@ -848,6 +848,27 @@ function getModelExtraParams(model) {
   return null;
 }
 
+const SAMPLING_UNSUPPORTED_MODEL_PATTERNS = [
+  /^claude-fable-/,
+  /^claude-mythos-/,
+  /^claude-opus-4-7/,
+  /^claude-opus-4-8/,
+  /^claude-sonnet-5(?:$|[^.\d])/,
+];
+
+function modelRejectsSamplingParams(model) {
+  if (typeof model !== 'string' || !model) return false;
+  if (SAMPLING_UNSUPPORTED_MODEL_PATTERNS.some(re => re.test(model))) return true;
+
+  const configured = CONFIG.sampling_unsupported_models;
+  if (!Array.isArray(configured)) return false;
+  // User entries are simple string guards: an entry blocks the exact model and
+  // any future model name with that string as a prefix. Invalid entries are ignored.
+  return configured.some(prefix =>
+    typeof prefix === 'string' && prefix && (model === prefix || model.startsWith(prefix))
+  );
+}
+
 // Shallow-clone body and inject capability sampling defaults + model extra params.
 // Caller-supplied values always win (we only fill gaps). top_k and model extras
 // are only injected for local backends — cloud Anthropic rejects unknown fields.
@@ -855,10 +876,11 @@ function injectSamplingDefaults(body, effectiveModel, capability, backend) {
   if (!body) return body;
   const capDefaults = (CONFIG.capability_sampling_defaults || {})[capability];
   const modelExtras = isLocalBackend(backend) ? getModelExtraParams(effectiveModel) : null;
-  if (!capDefaults && !modelExtras) return body;
+  const injectCapDefaults = capDefaults && !modelRejectsSamplingParams(effectiveModel);
+  if (!injectCapDefaults && !modelExtras) return body;
 
   const out = Object.assign({}, body);
-  if (capDefaults) {
+  if (injectCapDefaults) {
     if (out.temperature == null && capDefaults.temperature != null) out.temperature = capDefaults.temperature;
     if (out.top_p == null && capDefaults.top_p != null) out.top_p = capDefaults.top_p;
     if (isLocalBackend(backend) && out.top_k == null && capDefaults.top_k != null) out.top_k = capDefaults.top_k;

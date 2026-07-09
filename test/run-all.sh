@@ -257,6 +257,8 @@ run_suite "proxy-cli-flags (parseCliFlags edge cases)" \
   node "$REPO_DIR/test/proxy-cli-flags.test.js"
 run_suite "proxy-usage-stats (debounce, SIGTERM flush, multi-instance merge)" \
   node "$REPO_DIR/test/proxy-usage-stats.test.js"
+run_suite "proxy-sampling-param-guard (sampling defaults guard)" \
+  node "$REPO_DIR/test/proxy-sampling-param-guard.test.js"
 run_suite "proxy-recent-requests (ring buffer + /c-thru/recent)" \
   node "$REPO_DIR/test/proxy-recent-requests.test.js"
 run_suite "proxy-dashboard (/c-thru/dashboard + discovery header)" \

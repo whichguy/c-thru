@@ -887,7 +887,8 @@ tab_field_decode() {
 
 # ARCH: detect_total_memory_gb — RAM detection for hw-tier selection.
 #   Override: CLAUDE_LLM_MEMORY_GB (must be a positive integer, else error).
-#   Auto: sysctl hw.memsize (macOS) → /proc/meminfo (Linux) → returns 1 on failure.
+#   Auto: sysctl hw.memsize (macOS) → /proc/meminfo (Linux) → Node os.totalmem()
+#   → returns 1 on failure.
 #   Tier thresholds: <24→16gb, <40→32gb, <56→48gb, <96→64gb, ≥96→128gb.
 detect_total_memory_gb() {
   if [[ -n "${CLAUDE_LLM_MEMORY_GB:-}" ]]; then
@@ -905,6 +906,9 @@ detect_total_memory_gb() {
   fi
   if [[ -z "$bytes" && -r /proc/meminfo ]]; then
     bytes="$(( $(awk '/MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || echo 0) * 1024 ))"
+  fi
+  if [[ -z "$bytes" ]] && command -v node >/dev/null 2>&1; then
+    bytes="$(node -e 'process.stdout.write(String(require("os").totalmem()))' 2>/dev/null || true)"
   fi
   if [[ -z "$bytes" || ! "$bytes" =~ ^[0-9]+$ || "$bytes" -le 0 ]]; then
     return 1
@@ -1513,6 +1517,88 @@ lookup_model_pattern_value() {
   )
 
   return 0
+}
+
+lookup_model_pattern_json_value() {
+  local section="$1" model="$2"
+  [[ ! -f "$CONFIG" ]] && return 0
+
+  local key value
+  while IFS=$'\t' read -r key value; do
+    looks_like_model_pattern_key "$key" || continue
+    if model_pattern_matches "$key" "$model"; then
+      printf '%s' "$value"
+      return 0
+    fi
+  done < <(
+    jq -r --arg s "$section" '
+      .[$s] // {} |
+      to_entries[] |
+      [.key, (.value | @json)] |
+      @tsv
+    ' "$CONFIG" 2>/dev/null
+  )
+
+  return 0
+}
+
+resolve_model_route_json_value() {
+  local model="$1" route_json="$2" llm_mode="$3"
+  [[ -f "$CONFIG" && -n "$model" && -n "$route_json" ]] || return 1
+
+  jq -r --arg model "$model" --argjson route "$route_json" --arg mode "$llm_mode" '
+    (.endpoints // .backends // {}) as $backends |
+    (.model_routes // {}) as $routes |
+
+    def route_entry($name):
+      if $routes | has($name) then $routes[$name]
+      else
+        (
+          $routes | to_entries |
+          map(
+            select(.key | startswith("re:")) |
+            .key[3:] as $pattern |
+            select(try ($name | test($pattern)) catch false) |
+            .value
+          ) |
+          .[0] // empty
+        )
+      end;
+
+    def sigil($value):
+      try ($value | capture("^(?<base>.+)@(?<backend>[A-Za-z0-9_-]+)$")) catch null;
+
+    def pick_mode_target($target):
+      $target[$mode] // $target.connected // $target.default // ($target | to_entries | map(.value) | .[0]);
+
+    def resolve_target($effective_model; $target; $depth):
+      if $depth > 8 then
+        empty
+      elif ($target | type) == "object" and (($target.endpoint // null) | type) == "string" then
+        [$target.endpoint, (($target.name // $effective_model) | tostring)] | @tsv
+      else
+        (if ($target | type) == "object" then pick_mode_target($target) else $target end) as $picked |
+        if (($picked | type) != "string") or ($picked == "") then
+          empty
+        elif $backends[$picked] != null then
+          [$picked, $effective_model] | @tsv
+        else
+          (sigil($picked)) as $sig |
+          if $sig != null and $sig.base != "" and $backends[$sig.backend] != null then
+            [$sig.backend, $sig.base] | @tsv
+          else
+            (route_entry($picked)) as $nested |
+            if $nested != null then
+              resolve_target($picked; $nested; ($depth + 1))
+            else
+              empty
+            end
+          end
+        end
+      end;
+
+    resolve_target($model; $route; 0)
+  ' "$CONFIG" 2>/dev/null
 }
 
 resolve_target_backend_for_model() {
@@ -4566,6 +4652,8 @@ TARGET_BACKEND_DATA=""
 TARGET_BACKEND_ID=""
 TARGET_PROVIDER_MODEL=""
 TARGET_FORCE_PROXY=0
+ROUTE_BACKEND_DATA=""
+ROUTE_JSON_VALUE=""
 
 if [[ -n "$MODEL" && -f "$CONFIG" ]]; then
   TARGET_BACKEND_DATA="$(resolve_target_backend_for_model "$EFFECTIVE_MODEL" || true)"
@@ -4602,20 +4690,16 @@ if [[ -n "$TARGET_BACKEND_ID" ]]; then
     apply_resolved_backend "$BACKEND" "$TARGET_PROVIDER_MODEL" "$BACKEND_ID"
   fi
 
-elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE_MODEL" '
-  .model_routes[$m] as $r |
-  if $r == null then empty
-  elif ($r | type) == "object" then ($r.endpoint // empty)
-  else $r
-  end
-' "$CONFIG" 2>/dev/null) && [[ -n "$BACKEND_ID" ]]; then
+elif [[ -n "$MODEL" && -f "$CONFIG" ]] && \
+     ROUTE_JSON_VALUE="$(jq -c --arg m "$EFFECTIVE_MODEL" '
+       if (.model_routes // {}) | has($m) then .model_routes[$m] else empty end
+     ' "$CONFIG" 2>/dev/null)" && \
+     ROUTE_BACKEND_DATA="$(resolve_model_route_json_value "$EFFECTIVE_MODEL" "$ROUTE_JSON_VALUE" "$(resolve_llm_mode)" || true)" && \
+     [[ -n "$ROUTE_BACKEND_DATA" ]]; then
   # 1b) model_routes exact match → endpoints/backends lookup
-  # v2 alias object form: update EFFECTIVE_MODEL to the canonical name
-  _ALIAS_MODEL=$(jq -r --arg m "$EFFECTIVE_MODEL" '
-    .model_routes[$m] as $r |
-    if ($r | type) == "object" and $r.name then $r.name else $m end
-  ' "$CONFIG" 2>/dev/null)
-  [[ -n "$_ALIAS_MODEL" ]] && EFFECTIVE_MODEL="$_ALIAS_MODEL"
+  BACKEND_ID="${ROUTE_BACKEND_DATA%%$'\t'*}"
+  EFFECTIVE_MODEL="${ROUTE_BACKEND_DATA#*$'\t'}"
+  EFFECTIVE_MODEL="${EFFECTIVE_MODEL%%$'\t'*}"
   BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
@@ -4623,7 +4707,13 @@ elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID=$(jq -r --arg m "$EFFECTIVE
   fi
   apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
 
-elif [[ -n "$MODEL" && -f "$CONFIG" ]] && BACKEND_ID="$(lookup_model_pattern_value "model_routes" "$EFFECTIVE_MODEL")" && [[ -n "$BACKEND_ID" ]]; then
+elif [[ -n "$MODEL" && -f "$CONFIG" ]] && \
+     ROUTE_JSON_VALUE="$(lookup_model_pattern_json_value "model_routes" "$EFFECTIVE_MODEL")" && \
+     ROUTE_BACKEND_DATA="$(resolve_model_route_json_value "$EFFECTIVE_MODEL" "$ROUTE_JSON_VALUE" "$(resolve_llm_mode)" || true)" && \
+     [[ -n "$ROUTE_BACKEND_DATA" ]]; then
+  BACKEND_ID="${ROUTE_BACKEND_DATA%%$'\t'*}"
+  EFFECTIVE_MODEL="${ROUTE_BACKEND_DATA#*$'\t'}"
+  EFFECTIVE_MODEL="${EFFECTIVE_MODEL%%$'\t'*}"
   BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
   if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
