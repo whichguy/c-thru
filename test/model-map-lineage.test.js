@@ -35,14 +35,14 @@ const MODES = [...LLM_MODE_ENUM];
 // ─────────────────────────────────────────────────────────────────────────────
 const SNAPSHOT = {
   "planner": {
-    "best-cloud": { "16gb": "claude-opus-4-8", "32gb": "claude-opus-4-8", "48gb": "claude-opus-4-8", "64gb": "claude-sonnet-4-6", "128gb": "claude-sonnet-4-6" },
+    "best-cloud": { "16gb": "claude-fable-5", "32gb": "claude-fable-5", "48gb": "claude-fable-5", "64gb": "claude-fable-5", "128gb": "claude-fable-5" },
     "best-cloud-oss": { "16gb": "deepseek-v4-pro:cloud", "32gb": "deepseek-v4-pro:cloud", "48gb": "deepseek-v4-pro:cloud", "64gb": "qwen3.6:35b", "128gb": "deepseek-v4-flash:cloud" },
     "best-local-oss": { "16gb": "phi4-reasoning:plus", "32gb": "qwen3.6:27b", "48gb": "qwen3.6:27b", "64gb": "qwen3.6:35b", "128gb": "qwen3.6:35b-a3b-q8_0" },
     "best-cloud-gov": { "16gb": "claude-opus-4-8", "32gb": "claude-opus-4-8", "48gb": "claude-opus-4-8", "64gb": "claude-opus-4-8", "128gb": "gpt-oss-120b:TODO" },
     "best-local-gov": { "16gb": "phi4-reasoning:plus", "32gb": "phi4-reasoning:plus", "48gb": "gpt-oss-20b:TODO", "64gb": "gpt-oss-120b:TODO", "128gb": "gpt-oss-120b:TODO" },
   },
   "planner-hard": {
-    "best-cloud": { "16gb": "claude-opus-4-8", "32gb": "claude-opus-4-8", "48gb": "claude-opus-4-8", "64gb": "claude-opus-4-8", "128gb": "claude-opus-4-8" },
+    "best-cloud": { "16gb": "claude-fable-5", "32gb": "claude-fable-5", "48gb": "claude-fable-5", "64gb": "claude-fable-5", "128gb": "claude-fable-5" },
     "best-cloud-oss": { "16gb": "deepseek-v4-flash:cloud", "32gb": "deepseek-v4-flash:cloud", "48gb": "deepseek-v4-flash:cloud", "64gb": "deepseek-v4-flash:cloud", "128gb": "deepseek-v4-flash:cloud" },
     "best-local-oss": { "16gb": "phi4-reasoning:plus", "32gb": "qwen3.6:27b", "48gb": "qwen3.6:27b", "64gb": "qwen3.6:35b", "128gb": "qwen3.6:35b-a3b-q8_0" },
     "best-cloud-gov": { "16gb": "claude-opus-4-8", "32gb": "claude-opus-4-8", "48gb": "claude-opus-4-8", "64gb": "claude-opus-4-8", "128gb": "claude-opus-4-8" },

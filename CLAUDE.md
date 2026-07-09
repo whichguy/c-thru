@@ -295,8 +295,8 @@ The agent fleet uses a flat identity mapping: each agent's `model` frontmatter f
 
 | Agent / Capability | Role | Tier budget |
 |---|---|---|
-| `planner` | High-stakes planning; Opus cloud, 27B local at 64+ GB | 999999 |
-| `planner-hard` | Hardest planning; always Opus / Kimi K2.6 | 999999 |
+| `planner` | High-stakes planning; Fable cloud, 27B local at 64+ GB | 999999 |
+| `planner-hard` | Hardest planning; always Fable / Kimi K2.6 | 999999 |
 | `explore` | Fast read-only exploration; Phi/Qwen small | 10000 |
 | `coder` | Primary coding; Sonnet/Devstral/QwenCoder | 50000 |
 | `coder-fallback` | Backup coder from different training distribution | 10000 |

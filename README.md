@@ -197,8 +197,8 @@ The full mapping, all the way through the implementation: **agent → capability
 | `long-context` | `long-context` | `claude-sonnet-4-6` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `pdf` | `pdf` | `claude-sonnet-4-6` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |
 | `plan-scheduler` &nbsp;⚠ | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
-| `planner` | `planner` | `claude-sonnet-4-6` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
-| `planner-hard` | `planner-hard` | `claude-opus-4-8` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
+| `planner` | `planner` | `claude-fable-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
+| `planner-hard` | `planner-hard` | `claude-fable-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
 | `reviewer-plan` &nbsp;⚠ | `code-reviewer` | `claude-sonnet-4-6` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
 | `reviewer-security` | `reviewer-security` | `claude-opus-4-8` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
 | `tester` | `tester` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `ollama_local` |

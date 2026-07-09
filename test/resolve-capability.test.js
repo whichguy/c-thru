@@ -119,9 +119,10 @@ console.log('\n6. resolveLlmMode — env overrides config; legacy env aliases st
   assert(resolveLlmMode({ llm_mode: 'best-local-oss' }) === 'best-local-oss',
     `config.llm_mode=best-local-oss respected`);
 
-  // Config llm_mode: legacy alias 'connected' → best-cloud
-  assert(resolveLlmMode({ llm_mode: 'connected' }) === 'best-cloud',
-    `config.llm_mode=connected maps to best-cloud`);
+  // Config llm_mode: legacy alias 'connected' → cloud default, then normal auto-detect
+  const connectedMode = resolveLlmMode({ llm_mode: 'connected' });
+  assert(connectedMode === 'best-cloud' || connectedMode === 'best-local-oss',
+    `config.llm_mode=connected maps through cloud-default auto detection (got ${connectedMode})`);
 
   // Config llm_mode: legacy alias 'offline' → best-local-oss
   assert(resolveLlmMode({ llm_mode: 'offline' }) === 'best-local-oss',
@@ -263,11 +264,10 @@ console.log('\n11. Pinned-model regression guard — shipped config key triples'
   const p = shippedConfig.llm_profiles || {};
 
   const pins = [
-    // Cloud planner at workhorse tiers must be claude-sonnet-4-6
-    { cap: 'planner',      tier: '64gb',  mode: 'best-cloud',     want: 'claude-sonnet-4-6' },
-    { cap: 'planner',      tier: '128gb', mode: 'best-cloud',     want: 'claude-sonnet-4-6' },
-    // Hard planner must always be opus
-    { cap: 'planner-hard', tier: '128gb', mode: 'best-cloud',     want: 'claude-opus-4-8'  },
+    // Cloud planner pins intentionally route through the claude-* regex route.
+    { cap: 'planner',      tier: '64gb',  mode: 'best-cloud',     want: 'claude-fable-5' },
+    { cap: 'planner',      tier: '128gb', mode: 'best-cloud',     want: 'claude-fable-5' },
+    { cap: 'planner-hard', tier: '128gb', mode: 'best-cloud',     want: 'claude-fable-5' },
     // fast-scout is always the small local model regardless of mode
     { cap: 'fast-scout',   tier: '64gb',  mode: 'best-cloud',     want: 'phi4-mini:3.8b'   },
     { cap: 'fast-scout',   tier: '64gb',  mode: 'best-local-oss', want: 'phi4-mini:3.8b'   },

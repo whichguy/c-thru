@@ -57,7 +57,7 @@ Copy the shape of these three:
 
   > MUST BE USED for all planning, architecture, and design tasks. Produces detailed
   > implementation plans before any code is written. Use for "plan how to", "design the
-  > architecture of", "what's the approach for", "break down this feature". Routes to Opus cloud…
+  > architecture of", "what's the approach for", "break down this feature". Routes to Fable cloud…
 
 - **`reviewer-security`** — `MUST BE USED for <enumerated scope>` (the mandate+scope pattern; no
   quoted examples needed).

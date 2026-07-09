@@ -183,11 +183,11 @@ console.log('\n13. CLAUDE_LLM_PROFILE env var selects tier when --tier omitted')
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const arr = JSON.parse(r.stdout);
   assert(Array.isArray(arr) && arr.length > 0, 'produces output via env var tier');
-  // planner/best-cloud/64gb = claude-sonnet-4-6
+  // planner/best-cloud/64gb = claude-fable-5
   const planner = arr.find(e => e.capability === 'planner');
   assert(planner !== undefined, 'planner entry present');
-  assertEq(planner.model, 'claude-sonnet-4-6',
-    'planner resolves to claude-sonnet-4-6 at 64gb/best-cloud');
+  assertEq(planner.model, 'claude-fable-5',
+    'planner resolves to claude-fable-5 at 64gb/best-cloud');
 }
 
 // ── 14: --all --format json — ollama flag logic ───────────────────────────

@@ -42,7 +42,7 @@
     }
   },
   "llm_active_profile": "auto",
-  "llm_mode": "best-cloud-oss",
+  "llm_mode": "best-cloud",
   "custom_modes": {
     "deepseek-hybrid": {
       "base": "best-cloud-oss",
@@ -51,13 +51,7 @@
   },
   "llm_profiles": {
     "planner": {
-      "best-cloud": {
-        "16gb": "claude-opus-4-8",
-        "32gb": "claude-opus-4-8",
-        "48gb": "claude-opus-4-8",
-        "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-sonnet-4-6"
-      },
+      "best-cloud": "claude-fable-5",
       "best-cloud-oss": {
         "16gb": "kimi-k2.7-code:cloud",
         "32gb": "kimi-k2.7-code:cloud",
@@ -90,7 +84,7 @@
       "fallback_to": "planner-hard"
     },
     "planner-hard": {
-      "best-cloud": "claude-opus-4-8",
+      "best-cloud": "claude-fable-5",
       "best-cloud-oss": {
         "16gb": "kimi-k2.7-code:cloud",
         "32gb": "kimi-k2.7-code:cloud",
