@@ -22,6 +22,9 @@ const {
   baseModeFor,
   resolveActiveTier,
   resolveCapabilityAlias,
+  matchModelRoute,
+  pickModeTarget,
+  parseBackendSigil,
   LLM_MODE_ENUM,
   applyModeFilter,
   filterFor,
@@ -1161,7 +1164,7 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
   //             when connected, -> "qwen3.6@ollama_local" when offline).
   const resolveRouteTarget = (target, routingKey) => {
     if (target && typeof target === 'object' && !Array.isArray(target)) {
-      target = target[mode] || target.connected || target.default || Object.values(target)[0];
+      target = pickModeTarget(target, mode);
       if (!target) return { error: `model_routes['${model}'] has no target for mode '${mode}' or 'connected' fallback`, status: 400 };
     }
     if (typeof target !== 'string' || !target) {
@@ -1191,36 +1194,31 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
     }
   }
 
-  let id = modelRoutes[model];
-  if (id !== undefined) {
+  const routeMatch = matchModelRoute(modelRoutes, model, {
+    onBadPattern: (pattern, e) => console.error(`c-thru: invalid regex in model_routes key '${pattern}': ${e.message}`),
+  });
+  if (routeMatch) {
+    const id = routeMatch.target;
     // v2 alias object form: { endpoint: "...", name: "..." }
-    if (id && typeof id === 'object' && typeof id.endpoint === 'string') {
+    if (routeMatch.matchType === 'direct' && id && typeof id === 'object' && typeof id.endpoint === 'string') {
       const raw = endpointsOrBackends[id.endpoint];
       if (!raw) return { error: `model_routes['${model}'].endpoint references unknown endpoint '${id.endpoint}'`, status: 400 };
       chain.push(`alias(${model}->${id.endpoint}/${id.name})`);
       return { backend: normalizeBackend(id.endpoint, raw), effectiveModel: id.name, terminalLabel: id.name, routingKey: model, chain };
     }
-    return resolveRouteTarget(id, model);
+    return resolveRouteTarget(id, routeMatch.key);
   }
 
-  for (const [pattern, target] of Object.entries(modelRoutes)) {
-    if (!pattern.startsWith('re:')) continue;
-    try {
-      if (new RegExp(pattern.slice(3)).test(model)) return resolveRouteTarget(target, pattern);
-    } catch (e) { console.error(`c-thru: invalid regex in model_routes key '${pattern}': ${e.message}`); }
-  }
-
-  const sigilMatch = model.match(BACKEND_SIGIL_RE);
   // C45: BACKEND_SIGIL_RE's `.*` base lets bare "@anthropic" match with an
   // empty baseModel, which would forward effectiveModel:'' upstream. Require a
   // non-empty base; otherwise fall through to normal resolution (mirrors the
   // `model:` pin's empty-guard above).
-  if (sigilMatch && sigilMatch[1].trim()) {
-    const [, baseModel, backendId] = sigilMatch;
-    const raw = endpointsOrBackends[backendId];
+  const sigil = parseBackendSigil(model);
+  if (sigil) {
+    const raw = endpointsOrBackends[sigil.backendId];
     if (raw) {
-      chain.push(`sigil(${baseModel}@${backendId})`);
-      return { backend: normalizeBackend(backendId, raw), effectiveModel: baseModel, terminalLabel: baseModel, routingKey: backendId, chain };
+      chain.push(`sigil(${sigil.base}@${sigil.backendId})`);
+      return { backend: normalizeBackend(sigil.backendId, raw), effectiveModel: sigil.base, terminalLabel: sigil.base, routingKey: sigil.backendId, chain };
     }
   }
 

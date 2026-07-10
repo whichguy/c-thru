@@ -260,6 +260,112 @@ function resolveTerminalTarget(config, terminalLabel) {
   };
 }
 
+function matchModelRoute(routes, model, opts = {}) {
+  const routeMap = routes && typeof routes === 'object' ? routes : {};
+  if (Object.prototype.hasOwnProperty.call(routeMap, model)) {
+    return { key: model, target: routeMap[model], matchType: 'direct' };
+  }
+  for (const [key, target] of Object.entries(routeMap)) {
+    if (typeof key !== 'string' || !key.startsWith('re:')) continue;
+    try {
+      if (new RegExp(key.slice(3)).test(model)) return { key, target, matchType: 'regex' };
+    } catch (err) {
+      if (opts && typeof opts.onBadPattern === 'function') opts.onBadPattern(key, err);
+    }
+  }
+  return null;
+}
+
+function pickModeTarget(target, mode) {
+  if (target && typeof target === 'object' && !Array.isArray(target) &&
+      !Object.prototype.hasOwnProperty.call(target, 'endpoint')) {
+    return target[mode] || target.connected || target.default || Object.values(target)[0];
+  }
+  return target;
+}
+
+const BACKEND_SIGIL_RE = /^(.*)@([a-zA-Z0-9_-]+)$/;
+
+function parseBackendSigil(name) {
+  if (typeof name !== 'string') return null;
+  const match = name.match(BACKEND_SIGIL_RE);
+  if (!match || !match[1].trim()) return null;
+  return { base: match[1], backendId: match[2] };
+}
+
+function routeTargetRepr(target) {
+  if (typeof target === 'string') return target;
+  try { return JSON.stringify(target); } catch { return String(target); }
+}
+
+function resolveRouteTarget(target, model, { routes, endpoints, mode, maxDepth = 8, steps } = {}) {
+  const routeMap = routes && typeof routes === 'object' ? routes : {};
+  const endpointsMap = endpoints && typeof endpoints === 'object' ? endpoints : {};
+  const stepList = steps || [];
+  const seen = new Set();
+
+  function walk(currentTarget, currentModel, depthLeft) {
+    if (seen.has(currentModel) || depthLeft <= 0) {
+      stepList.push({ kind: 'depth-guard', from: currentModel, to: null });
+      return null;
+    }
+    seen.add(currentModel);
+
+    if (currentTarget && typeof currentTarget === 'object' && !Array.isArray(currentTarget) &&
+        typeof currentTarget.endpoint === 'string') {
+      stepList.push({
+        kind: 'alias',
+        from: currentModel,
+        to: { endpointId: currentTarget.endpoint, servedBy: typeof currentTarget.name === 'string' ? currentTarget.name : currentModel },
+      });
+      return {
+        endpointId: currentTarget.endpoint,
+        servedBy: typeof currentTarget.name === 'string' ? currentTarget.name : currentModel,
+        steps: stepList,
+      };
+    }
+
+    const picked = pickModeTarget(currentTarget, mode);
+    if (picked !== currentTarget) {
+      stepList.push({ kind: 'mode-pick', from: routeTargetRepr(currentTarget), to: routeTargetRepr(picked) });
+    }
+    currentTarget = picked;
+
+    if (typeof currentTarget !== 'string' || !currentTarget) return null;
+    if (endpointsMap[currentTarget]) {
+      return { endpointId: currentTarget, servedBy: currentModel, steps: stepList };
+    }
+
+    const sigil = parseBackendSigil(currentTarget);
+    if (sigil && endpointsMap[sigil.backendId]) {
+      stepList.push({ kind: 'sigil', from: currentTarget, to: sigil });
+      return { endpointId: sigil.backendId, servedBy: sigil.base, steps: stepList };
+    }
+
+    const nested = matchModelRoute(routeMap, currentTarget);
+    if (!nested) return null;
+    stepList.push({ kind: 'nested', from: currentTarget, to: routeTargetRepr(nested.target) });
+    return walk(nested.target, currentTarget, depthLeft - 1);
+  }
+
+  return walk(target, model, maxDepth);
+}
+
+function resolveModelRoute(model, { routes, endpoints, mode } = {}) {
+  const steps = [];
+  const match = matchModelRoute(routes, model);
+  if (!match) return null;
+  steps.push({ kind: 'route', from: model, to: routeTargetRepr(match.target) });
+  const resolved = resolveRouteTarget(match.target, model, { routes, endpoints, mode, steps });
+  return resolved ? {
+    endpointId: resolved.endpointId,
+    servedBy: resolved.servedBy,
+    matchedKey: match.key,
+    matchType: match.matchType,
+    steps,
+  } : null;
+}
+
 // ── Provider-filter predicates ──────────────────────────────────────────────
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
@@ -390,6 +496,11 @@ module.exports = {
   resolveActiveTier,
   resolveCapabilityAlias,
   resolveTerminalTarget,
+  matchModelRoute,
+  pickModeTarget,
+  parseBackendSigil,
+  resolveRouteTarget,
+  resolveModelRoute,
   LLM_MODE_ENUM,
   DEFAULT_MODE,
   // Gov filter

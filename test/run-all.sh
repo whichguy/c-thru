@@ -142,6 +142,8 @@ run_suite "contract-check-guards-bite (10/11/14/15 fail-loud guards bite on muta
   bash "$REPO_DIR/test/contract-check-guards-bite.test.sh"
 run_suite "c-thru-explain-bash (bash integration: _explain_all_json cache + TSV contracts)" \
   bash "$REPO_DIR/test/c-thru-explain-bash.test.sh"
+run_suite "model-route-parity (bash jq resolver ≡ shared JS resolver)" \
+  bash "$REPO_DIR/test/model-route-parity.test.sh"
 run_suite "c-thru-bootstrap-auth-env (bootstrap auth env helper)" \
   bash "$REPO_DIR/test/c-thru-bootstrap-auth-env.test.sh"
 run_suite "c-thru-lib (env/discovery resolvers: port ladder, profile-dir shadow split, ollama url)" \

@@ -16,6 +16,7 @@ const os   = require('os');
 const {
   resolveProfileModel,
   resolveCapabilityAlias,
+  resolveModelRoute,
   baseModeFor,
   validModes,
   applyModeFilter,
@@ -89,54 +90,6 @@ if (!configPath) {
 }
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
-function findModelRoute(routes, model, allowRegex = true) {
-  if (Object.prototype.hasOwnProperty.call(routes, model)) {
-    return { key: model, target: routes[model], matchType: 'direct' };
-  }
-  if (!allowRegex) return null;
-  for (const [key, target] of Object.entries(routes)) {
-    if (typeof key !== 'string' || !key.startsWith('re:')) continue;
-    try {
-      if (new RegExp(key.slice(3)).test(model)) return { key, target, matchType: 'regex' };
-    } catch {}
-  }
-  return null;
-}
-
-function resolveRouteTarget(target, model, routes, endpointsMap, mode, seen = new Set()) {
-  if (seen.has(model) || seen.size >= 8) return null;
-  seen.add(model);
-
-  if (target && typeof target === 'object' && !Array.isArray(target)) {
-    if (typeof target.endpoint === 'string') {
-      return {
-        endpointId: target.endpoint,
-        servedBy: typeof target.name === 'string' ? target.name : model,
-      };
-    }
-    target = target[mode] || target.connected || target.default || Object.values(target)[0];
-  }
-
-  if (typeof target !== 'string' || !target) return null;
-  if (endpointsMap[target]) return { endpointId: target, servedBy: model };
-
-  const sigil = target.match(/^(.+)@([A-Za-z0-9_-]+)$/);
-  if (sigil && sigil[1].trim() && endpointsMap[sigil[2]]) {
-    return { endpointId: sigil[2], servedBy: sigil[1] };
-  }
-
-  const nested = findModelRoute(routes, target, true);
-  if (!nested) return null;
-  return resolveRouteTarget(nested.target, target, routes, endpointsMap, mode, seen);
-}
-
-function resolveModelRoute(model, routes, endpointsMap, mode) {
-  const match = findModelRoute(routes, model, true);
-  if (!match) return null;
-  const resolved = resolveRouteTarget(match.target, model, routes, endpointsMap, mode);
-  return resolved ? { ...resolved, matchedKey: match.key, matchType: match.matchType } : null;
-}
-
 // benchmark.json is optional (only needed for ranking modes)
 let benchmark = null;
 try {
@@ -199,7 +152,7 @@ if (args.all) {
     // Backend lookup via model_routes
     let epId = sigilEp;
     if (!epId) {
-      const resolvedRoute = resolveModelRoute(base, config.model_routes || {}, epMap, theMode);
+      const resolvedRoute = resolveModelRoute(base, { routes: config.model_routes || {}, endpoints: epMap, mode: theMode });
       epId = resolvedRoute?.endpointId ?? null;
     }
 
@@ -266,7 +219,11 @@ if (modelName && !capability && !agent) {
   let matchedKey = null;
   let matchType = null;
 
-  const routeResolution = resolveModelRoute(working, routes, endpointsMap, args.mode || process.env.CLAUDE_LLM_MODE || 'best-cloud');
+  const routeResolution = resolveModelRoute(working, {
+    routes,
+    endpoints: endpointsMap,
+    mode: args.mode || process.env.CLAUDE_LLM_MODE || 'best-cloud',
+  });
   if (routeResolution) {
     endpoint = routeResolution.endpointId;
     nameSwap = routeResolution.servedBy || working;
@@ -393,7 +350,11 @@ line('served_by', final || '(null)',
                            : 'concrete model the proxy will forward to')
         : 'concrete model the proxy will forward to');
 const endpointsMap = config.endpoints || config.backends || {};
-const routeResolution = final ? resolveModelRoute(final, config.model_routes || {}, endpointsMap, mode) : null;
+const routeResolution = final ? resolveModelRoute(final, {
+  routes: config.model_routes || {},
+  endpoints: endpointsMap,
+  mode,
+}) : null;
 let realBackendId = routeResolution?.endpointId;
 let backend = realBackendId ? endpointsMap[realBackendId] : null;
 if (realBackendId) line('backend_id', realBackendId);
