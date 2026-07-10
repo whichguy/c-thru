@@ -15,10 +15,12 @@ acting — the CLI surface moves.
 
 **Flags** (built in `build_forwarded_args`, `tools/c-thru`):
 - `--model <resolved>` — concrete model from the capability/mode/tier resolution.
-- `--dangerously-skip-permissions` — prepended unless already present.
 - `--append-system-prompt <info>` — routing summary + proxy control-plane URL (optionally `/no_thinking`).
 - `--settings <json>` — **inline JSON string, never written to disk**: `mcpServers` (llm-capabilities) + `hooks` (SessionStart, PreCompact, PreToolUse agent-router, …).
 - `--agents <json>` — inline ephemeral agent definitions.
+
+**Pass-through only** (not injected):
+- `--dangerously-skip-permissions` — forwarded only when the user explicitly passes it; no longer auto-prepended.
 
 **Env** (exported into the `claude` process):
 - `ANTHROPIC_BASE_URL` → the proxy; `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` (proxied placeholder).

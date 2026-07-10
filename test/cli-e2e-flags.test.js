@@ -455,5 +455,133 @@ console.log('\n20. launch leaves durable ~/.claude/settings.json byte-identical 
   }
 }
 
+// ── Test 21 (F1): --dangerously-skip-permissions is opt-in ──────────────────
+// c-thru no longer auto-prepends it; it is forwarded only when the user passes
+// it, and de-duplicated if passed multiple times. Default posture = prompts on.
+console.log('\n21. (F1) --dangerously-skip-permissions is opt-in (absent by default, deduped when passed)');
+{
+  // 21a: absent by default
+  const r0 = runCthru(['--model', 'claude-sonnet-4-6']);
+  assert(r0.code === 0, `21a exit 0 (got ${r0.code}, stderr: ${r0.stderr.slice(0, 200)})`);
+  const a0 = r0.json?.args || [];
+  const cnt0 = a0.filter(a => a === '--dangerously-skip-permissions').length;
+  assert(cnt0 === 0, `21a flag absent by default (got ${cnt0} in ${JSON.stringify(a0)})`);
+
+  // 21b: present exactly once when passed once
+  const r1 = runCthru(['--dangerously-skip-permissions', '--model', 'claude-sonnet-4-6']);
+  assert(r1.code === 0, `21b exit 0 (got ${r1.code})`);
+  const a1 = r1.json?.args || [];
+  const cnt1 = a1.filter(a => a === '--dangerously-skip-permissions').length;
+  assert(cnt1 === 1, `21b flag present exactly once when passed once (got ${cnt1} in ${JSON.stringify(a1)})`);
+
+  // 21c: deduped when passed multiple times
+  const r2 = runCthru(['--dangerously-skip-permissions', '--dangerously-skip-permissions', '--dangerously-skip-permissions', '--model', 'claude-sonnet-4-6']);
+  assert(r2.code === 0, `21c exit 0 (got ${r2.code})`);
+  const a2 = r2.json?.args || [];
+  const cnt2 = a2.filter(a => a === '--dangerously-skip-permissions').length;
+  assert(cnt2 === 1, `21c flag deduped to exactly one when passed thrice (got ${cnt2} in ${JSON.stringify(a2)})`);
+}
+
+// ── Test 22 (F2): transparent (no-model) path injects --settings/--agents/--append-system-prompt ──
+// The no-model path used to forward raw ORIG_ARGS, dropping the ephemeral
+// settings/agents/system-prompt despite building them. Now it routes through
+// build_forwarded_args like the routed path. Config has NO default route so
+// MODEL stays empty and the transparent path is taken; ollama backend forces a
+// proxy spawn so PROXY_PORT is set and the in-band pointer is appended.
+console.log('\n22. (F2) transparent no-model path forwards --settings/--agents/--append-system-prompt');
+{
+  const r = runCthru(['-p', 'hello'], {
+    backends: { ollama: { kind: 'ollama', url: 'http://127.0.0.1:11434' } },
+    routes: {},  // no default → MODEL empty → transparent path
+    model_routes: { 'qwen3:1.7b': 'ollama' },
+  });
+  assert(r.code === 0, `exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
+  assert(r.json !== null, `stub claude received args (stdout: ${r.stdout.slice(0, 200)})`);
+  const args = r.json?.args || [];
+  assert(args.includes('--settings'),
+    `--settings forwarded on transparent path (got ${JSON.stringify(args.slice(0, 12))}…)`);
+  assert(args.includes('--append-system-prompt'),
+    `--append-system-prompt forwarded on transparent path (got ${JSON.stringify(args.slice(0, 12))}…)`);
+  // --agents is forwarded when the agents dir yields a non-empty map (it does —
+  // the repo ships agents/*.md and setup_ephemeral_session reads them).
+  assert(args.includes('--agents'),
+    `--agents forwarded on transparent path (got ${JSON.stringify(args.slice(0, 12))}…)`);
+  // The user's -p and prompt text still pass through.
+  assert(args.includes('-p'), `user -p flag passes through (got ${JSON.stringify(args)})`);
+  assert(args.includes('hello'), `user prompt text passes through (got ${JSON.stringify(args)})`);
+}
+
+// ── Test 23 (F2.1): --print-routing on the transparent path is a dry-run ───
+// With no model/default-route, --print-routing must NOT launch a session or
+// spawn a proxy; it prints a dry-run line and exits 0. The stub claude must
+// not be invoked (no JSON on stdout).
+console.log('\n23. (F2.1) --print-routing (no model) is a dry-run — no launch, no stub call');
+{
+  const r = runCthru(['--print-routing'], {
+    backends: { ollama: { kind: 'ollama', url: 'http://127.0.0.1:11434' } },
+    routes: {},  // no default → transparent path
+    model_routes: { 'qwen3:1.7b': 'ollama' },
+  });
+  assert(r.code === 0, `exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
+  assert(r.json === null,
+    `stub claude NOT invoked (no JSON on stdout; got: ${r.stdout.slice(0, 120)})`);
+  assert(/dry-run|proxy\/session NOT started/.test(r.stderr),
+    `stderr carries the dry-run notice (got stderr: ${r.stderr.slice(0, 200)})`);
+}
+
+// ── Test 24 (F4): bare value-taking c-thru flags don't swallow a following flag ──
+// --model/--route/--mode/--profile/--memory-gb, when given with no explicit
+// value (immediately followed by another flag), must NOT consume that flag as
+// their value. Before the fix, `c-thru --model --print hello` would swallow
+// `--print` as the model name; now --model is treated as valueless and falls
+// back to routes.default, while --print and the prompt text pass through.
+console.log('\n24. (F4) bare --model/--route/--mode/--profile don\'t swallow a following flag');
+{
+  // 24a: --model --print hello → --model treated as valueless (falls back to
+  // routes.default, which build_forwarded_args re-injects), --print/hello pass
+  // through untouched rather than "--print" being swallowed as the model name.
+  const r0 = runCthru(['--model', '--print', 'hello']);
+  assert(r0.code === 0, `24a exit 0 (got ${r0.code}, stderr: ${r0.stderr.slice(0, 200)})`);
+  const a0 = r0.json?.args || [];
+  assert(a0.includes('--print'), `24a --print not swallowed as model value (got ${JSON.stringify(a0)})`);
+  assert(a0.includes('hello'), `24a prompt text passes through (got ${JSON.stringify(a0)})`);
+  assert(a0.includes('claude-sonnet-4-6'),
+    `24a falls back to routes.default model, not '--print' (got ${JSON.stringify(a0)})`);
+
+  // 24b: --route --print hello → falls back to routes.default, --print/hello pass through
+  const r1 = runCthru(['--route', '--print', 'hello']);
+  assert(r1.code === 0, `24b exit 0 (got ${r1.code}, stderr: ${r1.stderr.slice(0, 200)})`);
+  const a1 = r1.json?.args || [];
+  assert(a1.includes('--print'), `24b --print not swallowed as route value (got ${JSON.stringify(a1)})`);
+  assert(a1.includes('hello'), `24b prompt text passes through (got ${JSON.stringify(a1)})`);
+
+  // 24c: --mode --print hello → --mode requires a value and errors out (guard
+  // treats --print as flag-like, so no value follows); asserts it does NOT
+  // silently set CLAUDE_LLM_MODE=--print.
+  const r2 = runCthru(['--mode', '--print', 'hello', '--model', 'claude-sonnet-4-6']);
+  assert(r2.code !== 0, `24c --mode with no value (flag-like next token) errors out (got exit ${r2.code})`);
+  assert(!/CLAUDE_LLM_MODE=--print/.test(r2.stderr || ''),
+    `24c CLAUDE_LLM_MODE never set to '--print' (got stderr: ${r2.stderr.slice(0, 200)})`);
+
+  // 24d: --profile --print hello → same guard, same error-out contract
+  const r3 = runCthru(['--profile', '--print', 'hello', '--model', 'claude-sonnet-4-6']);
+  assert(r3.code !== 0, `24d --profile with no value (flag-like next token) errors out (got exit ${r3.code})`);
+
+  // 24e: --memory-gb --print hello → silently valueless (matches original
+  // no-value behavior), --print/hello pass through untouched.
+  const r4 = runCthru(['--memory-gb', '--print', 'hello', '--model', 'claude-sonnet-4-6']);
+  assert(r4.code === 0, `24e exit 0 (got ${r4.code}, stderr: ${r4.stderr.slice(0, 200)})`);
+  const a4 = r4.json?.args || [];
+  assert(a4.includes('--print'), `24e --print not swallowed as memory-gb value (got ${JSON.stringify(a4)})`);
+  assert(r4.json?.claude_llm_memory_gb === null,
+    `24e CLAUDE_LLM_MEMORY_GB not set (got ${JSON.stringify(r4.json?.claude_llm_memory_gb)})`);
+
+  // 24f (regression guard): legitimate values still work normally.
+  const r5 = runCthru(['--model', 'claude-opus-4-6', '--memory-gb', '64']);
+  assert(r5.code === 0, `24f exit 0 (got ${r5.code}, stderr: ${r5.stderr.slice(0, 200)})`);
+  assert(r5.json?.claude_llm_memory_gb === '64',
+    `24f legitimate --memory-gb 64 still works (got ${JSON.stringify(r5.json?.claude_llm_memory_gb)})`);
+}
+
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -2,14 +2,15 @@
 'use strict';
 // Drift guard: the c-thru hook set is declared in TWO places that must agree —
 //   1. plugins/c-thru/hooks/hooks.json   (plugin-install mode; real JSON)
-//   2. the ephemeral settings heredoc in tools/c-thru (CLI launch mode;
-//      templated bash — "command": "$session_cmd" — so NOT valid JSON)
+//   2. the node -e script inside write_ephemeral_settings() in tools/c-thru
+//      (CLI launch mode; real JS executed with sentinel argv, producing real
+//      JSON via JSON.stringify)
 // Before this guard they had diverged: a dead PostCompact (vs the live
 // PreCompact), proxy-health 3-vs-5, classify 5-vs-8, map-changed */Write|Edit.
 // hooks.json was read by no test.
 //
 // This guard extracts {event, script-basename, matcher, timeout} from BOTH —
-// structurally/regex for the templated ephemeral block, JSON.parse for
+// by executing the real node -e script for the ephemeral side, JSON.parse for
 // hooks.json — and asserts agreement for the SHARED hook set. CLI-only hooks
 // (the agent-router across its PreToolUse matchers, the EnterPlanMode planner
 // hint, the MCP server) are allowlisted as intentionally ephemeral-only.
@@ -23,6 +24,7 @@
 const { assert, assertEq, summary } = require('./helpers');
 const fs   = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const REPO = path.join(__dirname, '..');
 const CTHRU_PATH = path.join(REPO, 'tools', 'c-thru');
@@ -35,64 +37,66 @@ const CLI_ONLY = new Set([
   'c-thru-enter-plan-hook',   // PreToolUse EnterPlanMode — advisory /c-thru-plan hint
 ]);
 
-// Known Claude Code hook event names (so the regex anchors only on real events).
-const EVENT_NAMES = [
-  'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse',
-  'PreCompact', 'PostCompact', 'Stop', 'SubagentStop', 'Notification',
-];
-
 const norm = b => b.replace(/\.sh$/, '');
 
-// ── Extract from the templated ephemeral heredoc in tools/c-thru ─────────────
+// ── Extract from the real node -e script in write_ephemeral_settings() ──────
+// write_ephemeral_settings() builds EPHEMERAL_SETTINGS_JSON via `node -e`
+// (JSON.stringify), taking resolved tool paths as argv (see tools/c-thru).
+// Rather than regex against templated bash, we extract the actual JS source,
+// execute it with sentinel argv (one distinct sentinel per positional arg,
+// each carrying its own basename so the reverse-lookup below is unambiguous),
+// and parse the REAL JSON it emits — a stronger check than pattern-matching
+// source text, since a real syntax/logic error in the script would also fail.
 function extractEphemeral(src) {
-  // 1. var → script-basename map, from the find_tool_path assignments.
+  // 1. var → script-basename map, from the find_tool_path assignments (still
+  //    used to resolve which sentinel corresponds to which hook script).
   const varMap = {};
   for (const m of src.matchAll(/(\w+)="\$\(find_tool_path ([\w.-]+)\)"/g)) {
     varMap[m[1]] = m[2];
   }
 
-  // 2. isolate the EPHEMERAL_SETTINGS_JSON heredoc body (built inline, passed via --settings).
-  const here = src.match(/EPHEMERAL_SETTINGS_JSON=\$\(cat <<EOF\n([\s\S]*?)\nEOF\b/);
-  if (!here) throw new Error('could not locate the EPHEMERAL_SETTINGS_JSON heredoc in tools/c-thru');
-  const block = here[1];
+  // 2. Extract the node -e script body and its trailing argv variable list.
+  const scriptMatch = src.match(/EPHEMERAL_SETTINGS_JSON=\$\(node -e '\n([\s\S]*?)\n  ' ((?:"\$\w+" ?)+)\)/);
+  if (!scriptMatch) throw new Error('could not locate the EPHEMERAL_SETTINGS_JSON node -e script in tools/c-thru');
+  const jsBody = scriptMatch[1];
+  const argVarNames = [...scriptMatch[2].matchAll(/\$(\w+)/g)].map(m => m[1]);
 
-  // 3. token scan: event starts, matchers, and command+timeout objects, by index.
-  const eventRe   = new RegExp(`"(${EVENT_NAMES.join('|')})":\\s*\\[`, 'g');
-  const matcherRe = /"matcher":\s*"((?:[^"\\]|\\.)*)"/g;
-  // A single flat hook object ([^{}] forbids nested braces) carrying a
-  // templated $var command and a timeout.
-  const cmdRe     = /\{[^{}]*?"command":\s*"\$(\w+)"[^{}]*?"timeout":\s*(\d+)[^{}]*?\}/g;
+  // 3. Build sentinel argv: one visibly-distinct fake path per positional arg,
+  //    embedding the shell var name so we can map back to a hook basename via
+  //    varMap (e.g. "session_cmd" → SENTINEL__session_cmd).
+  const sentinelArgs = argVarNames.map(name => `SENTINEL__${name}`);
 
-  const events   = [...block.matchAll(eventRe)].map(m => ({ index: m.index, event: m[1] }));
-  const matchers = [...block.matchAll(matcherRe)].map(m => ({ index: m.index, matcher: m[1] }));
-  const commands = [...block.matchAll(cmdRe)].map(m => ({
-    index: m.index, varName: m[1], timeout: Number(m[2]),
-    // async/asyncRewake live in the same flat hook object (m[0]); absent → false.
-    async:       /"async"\s*:\s*true/.test(m[0]),
-    asyncRewake: /"asyncRewake"\s*:\s*true/.test(m[0]),
-  }));
+  // 4. Execute the real script with sentinel argv and parse its real JSON output.
+  const result = spawnSync(process.execPath, ['-e', jsBody, '--', ...sentinelArgs], { encoding: 'utf8' });
+  if (result.status !== 0 || !result.stdout) {
+    throw new Error(`ephemeral node -e script failed: ${result.stderr || result.error}`);
+  }
+  const settings = JSON.parse(result.stdout);
 
-  const lastBefore = (arr, idx, lowerBound = -1) => {
-    let best = null;
-    for (const t of arr) if (t.index < idx && t.index > lowerBound) best = t; // arr is in source order
-    return best;
-  };
+  // Reverse map: sentinel command string → shell var name → hook basename.
+  const sentinelToVar = {};
+  for (const name of argVarNames) sentinelToVar[`SENTINEL__${name}`] = name;
 
   const tuples = [];
-  for (const c of commands) {
-    const ev = lastBefore(events, c.index);
-    if (!ev) throw new Error(`ephemeral: command $${c.varName} has no enclosing event`);
-    const mt = lastBefore(matchers, c.index, ev.index); // bounded so a prior event's matcher can't bleed in
-    const basename = varMap[c.varName];
-    if (!basename) throw new Error(`ephemeral: $${c.varName} not resolved by any find_tool_path assignment`);
-    tuples.push({
-      event: ev.event,
-      matcher: mt ? mt.matcher : '(absent)',
-      basename: norm(basename),
-      timeout: c.timeout,
-      async: c.async,
-      asyncRewake: c.asyncRewake,
-    });
+  for (const [event, entries] of Object.entries(settings.hooks || {})) {
+    for (const entry of entries) {
+      const matcher = ('matcher' in entry) ? entry.matcher : '(absent)';
+      for (const h of (entry.hooks || [])) {
+        if (typeof h.command !== 'string') continue;
+        const varName = sentinelToVar[h.command];
+        if (!varName) throw new Error(`ephemeral: command sentinel '${h.command}' not in argv var list`);
+        const basename = varMap[varName];
+        if (!basename) throw new Error(`ephemeral: $${varName} not resolved by any find_tool_path assignment`);
+        tuples.push({
+          event,
+          matcher,
+          basename: norm(basename),
+          timeout: h.timeout,
+          async: h.async === true,
+          asyncRewake: h.asyncRewake === true,
+        });
+      }
+    }
   }
   return tuples;
 }

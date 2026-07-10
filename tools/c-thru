@@ -415,31 +415,41 @@ write_ephemeral_settings() {
   # curl --max-time 3, only when OLLAMA_URL/OLLAMA_BASE_URL is set) + sub-second
   # local checks (pollution/git/ollama-list). Collapsing the old /ping+/hooks
   # double-curl into one shaved ~2s off the worst case. Typical wall-time << 1s.
-  EPHEMERAL_SETTINGS_JSON=$(cat <<EOF
-{
-  "mcpServers": {
-    "llm-capabilities": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["$mcp_js"]
-    }
-  },
-  "hooks": {
-    "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "$session_cmd", "timeout": 5}]}],
-    "PreCompact": [{"matcher": "*", "hooks": [{"type": "command", "command": "$postcompact_cmd", "timeout": 10}]}],
-    "UserPromptSubmit": [
-      {"matcher": "*", "hooks": [{"type": "command", "command": "$health_cmd", "timeout": 5, "async": true, "asyncRewake": true}]},
-      {"matcher": "*", "hooks": [{"type": "command", "command": "$classify_cmd", "timeout": 8, "async": true}]}
-    ],
-    "PostToolUse": [{"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "$map_changed_cmd", "timeout": 5}]}],
-    "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebSearch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "WebFetch", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Monitor", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "Plan", "hooks": [{"type": "command", "command": "$agent_router_cmd", "timeout": 3}]}, {"matcher": "EnterPlanMode", "hooks": [{"type": "command", "command": "$planner_hint_cmd", "timeout": 3}]}]
-  },
-  "permissions": {
-    "allow": ["mcp__llm-capabilities__*"]
+  # Built via node -e + JSON.stringify (mirrors the EPHEMERAL_AGENTS_JSON
+  # construction above) rather than a heredoc with raw path interpolation —
+  # a `"` or `\` in a resolved tool path can no longer produce malformed JSON.
+  # Paths are passed as argv so node handles all escaping.
+  EPHEMERAL_SETTINGS_JSON=$(node -e '
+    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, agentRouterCmd, plannerHintCmd] = process.argv.slice(1);
+    const cmdHook = (command, timeout, extra = {}) => ({ type: "command", command, timeout, ...extra });
+    const settings = {
+      mcpServers: {
+        "llm-capabilities": { type: "stdio", command: "node", args: [mcpJs] },
+      },
+      hooks: {
+        SessionStart: [{ matcher: "*", hooks: [cmdHook(sessionCmd, 5)] }],
+        PreCompact: [{ matcher: "*", hooks: [cmdHook(postcompactCmd, 10)] }],
+        UserPromptSubmit: [
+          { matcher: "*", hooks: [cmdHook(healthCmd, 5, { async: true, asyncRewake: true })] },
+          { matcher: "*", hooks: [cmdHook(classifyCmd, 8, { async: true })] },
+        ],
+        PostToolUse: [{ matcher: "Write|Edit", hooks: [cmdHook(mapChangedCmd, 5)] }],
+        PreToolUse: [
+          { matcher: "Agent", hooks: [cmdHook(agentRouterCmd, 3)] },
+          { matcher: "WebSearch", hooks: [cmdHook(agentRouterCmd, 3)] },
+          { matcher: "WebFetch", hooks: [cmdHook(agentRouterCmd, 3)] },
+          { matcher: "Monitor", hooks: [cmdHook(agentRouterCmd, 3)] },
+          { matcher: "Plan", hooks: [cmdHook(agentRouterCmd, 3)] },
+          { matcher: "EnterPlanMode", hooks: [cmdHook(plannerHintCmd, 3)] },
+        ],
+      },
+      permissions: { allow: ["mcp__llm-capabilities__*"] },
+    };
+    process.stdout.write(JSON.stringify(settings));
+  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$agent_router_cmd" "$planner_hint_cmd") || {
+    echo "c-thru: failed to build ephemeral settings JSON" >&2
+    exit 1
   }
-}
-EOF
-)
 }
 
 
@@ -2254,33 +2264,62 @@ ensure_proxy_running() {
   else
     local explicit_log=""
     explicit_log="$(proxy_log_final_path "$port")"
-    local temp_log=""
     if [[ -n "$explicit_log" ]]; then
       ensure_proxy_log_parent_dir "$explicit_log"
-      CLAUDE_PROXY_PORT="$port" C_THRU_DEBUG="${C_THRU_DEBUG:-}" \
-      CLAUDE_MODEL_MAP_PATH="$CONFIG" OLLAMA_NUM_PARALLEL="$OLLAMA_NUM_PARALLEL" \
-        node "$proxy_js" >>"$explicit_log" 2>&1 &
       PROXY_LOG_PATH="$explicit_log"
     else
-      temp_log="$(proxy_ephemeral_stderr_path "${$}.$port.$RANDOM")"
-      ensure_proxy_log_parent_dir "$temp_log"
+      PROXY_LOG_PATH=""
+    fi
+    # Unified with the dynamic-port path (below): spawn, then block on the
+    # FIFO READY handshake rather than polling /ping. mkfifo failure fails
+    # loud here (no silent fallback to ping-poll) so a broken FIFO doesn't
+    # masquerade as a slow-starting proxy.
+    local startup_tag temp_log ready_pipe ready_line ready_timeout
+    startup_tag="${$}.$port.$RANDOM"
+    temp_log="$(proxy_ephemeral_stderr_path "$startup_tag")"
+    ensure_proxy_log_parent_dir "$temp_log"
+    ready_timeout="${CLAUDE_PROXY_READY_TIMEOUT_SECONDS:-45}"
+    ready_pipe="$CLAUDE_PROFILE_DIR/proxy.ready.$startup_tag.pipe"
+    rm -f "$ready_pipe"
+    if ! mkfifo "$ready_pipe"; then
+      echo "c-thru: failed to create readiness FIFO at $ready_pipe — cannot spawn claude-proxy" >&2
+      if [[ -n "$lock_dir" ]]; then
+        rmdir "$lock_dir" 2>/dev/null || true
+      elif [[ -n "$lock_fd" ]]; then
+        eval "exec ${lock_fd}>&-"
+      fi
+      return 1
+    fi
+    if [[ -n "$explicit_log" ]]; then
       CLAUDE_PROXY_PORT="$port" C_THRU_DEBUG="${C_THRU_DEBUG:-}" \
       CLAUDE_MODEL_MAP_PATH="$CONFIG" OLLAMA_NUM_PARALLEL="$OLLAMA_NUM_PARALLEL" \
-        node "$proxy_js" >/dev/null 2>"$temp_log" &
-      PROXY_LOG_PATH=""
+        "$proxy_js" >"$ready_pipe" 2>>"$explicit_log" &
+    else
+      CLAUDE_PROXY_PORT="$port" C_THRU_DEBUG="${C_THRU_DEBUG:-}" \
+      CLAUDE_MODEL_MAP_PATH="$CONFIG" OLLAMA_NUM_PARALLEL="$OLLAMA_NUM_PARALLEL" \
+        "$proxy_js" >"$ready_pipe" 2>"$temp_log" &
     fi
     PROXY_STARTED_PID="$!"
     arm_proxy_cleanup
-    if ! wait_proxy_ping_ready "$port" 50; then
+    if ! IFS= read -r -t "$ready_timeout" ready_line <"$ready_pipe"; then
       start_ec=1
-      echo "c-thru: timed out waiting for claude-proxy to answer /ping on :$port" >&2
-      if [[ -n "$explicit_log" && -s "$explicit_log" ]]; then
-        echo "c-thru: last proxy log lines from $explicit_log:" >&2
-        tail -n 10 "$explicit_log" | sed 's/^/  /' >&2
-      elif [[ -n "$temp_log" && -s "$temp_log" ]]; then
-        echo "c-thru: last proxy log lines from $temp_log:" >&2
-        tail -n 10 "$temp_log" | sed 's/^/  /' >&2
-      fi
+      diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$port" "${explicit_log:-$temp_log}" \
+        "timed out waiting for claude-proxy readiness line on :$port (after ${ready_timeout}s)"
+    elif [[ "$ready_line" =~ ^READY_FAILED\ (.+)$ ]]; then
+      start_ec=1
+      diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$port" "${explicit_log:-$temp_log}" \
+        "claude-proxy failed to bind :$port: ${BASH_REMATCH[1]}"
+    elif [[ ! "$ready_line" =~ ^READY\ ([0-9]+)$ ]]; then
+      start_ec=1
+      diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$port" "${explicit_log:-$temp_log}" \
+        "malformed claude-proxy readiness line '$ready_line' on :$port"
+    elif ! wait_proxy_ping_ready "$port" 50; then
+      start_ec=1
+      diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$port" "${explicit_log:-$temp_log}" \
+        "claude-proxy did not answer /ping on :$port"
+    fi
+    rm -f "$ready_pipe"
+    if [[ "$start_ec" -eq 1 ]]; then
       # A7: only signal if the PID still belongs to our spawned node proxy.
       if pid_looks_like_proxy "$PROXY_STARTED_PID"; then
         kill "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
@@ -3741,10 +3780,51 @@ run_real_claude() {
   return "$ec"
 }
 
+# ARCH: cthru_flag_width — single source of truth for how many argv tokens a
+#   c-thru value-taking flag consumes, given the flag name and the token that
+#   follows it (if any). Both the Phase-1 pre-parse loop (below) and
+#   build_forwarded_args() call this so the two stages can never disagree
+#   about where a flag's value boundary lies — the exact drift this
+#   refactor eliminates. Returns via stdout: "0" (flag takes a value but none
+#   follows — treat as valueless), "1" (bare/valueless flag, or value-taking
+#   flag with no legitimate value to consume), or "2" (flag + one value token
+#   consumed). Encodes two peek rules:
+#     - --model/--route/--mode/--profile/--memory-gb: consume the next token
+#       as the value only if it doesn't look like a flag (doesn't start with
+#       '-') — otherwise a following flag (e.g. --print) would be swallowed.
+#     - --proxy-debug/--router-debug: optional numeric value; consume the
+#       next token only if it matches ^[12]$.
+#   Equals-form flags (--model=x) and flags with no value at all
+#   (--bypass-proxy, --debug, ...) don't call this — they're single tokens.
+cthru_flag_width() {
+  local flag="$1" next="$2" has_next="$3"
+  case "$flag" in
+    --model | --route | --mode | --profile | --memory-gb)
+      if [[ "$has_next" == "1" && "$next" != -* ]]; then
+        printf '2'
+      else
+        printf '1'
+      fi
+      ;;
+    --proxy-debug | --router-debug)
+      if [[ "$has_next" == "1" && "$next" =~ ^[12]$ ]]; then
+        printf '2'
+      else
+        printf '1'
+      fi
+      ;;
+    *)
+      printf '1'
+      ;;
+  esac
+}
+
 # ARCH: build_forwarded_args — strips c-thru-private flags (--route, --mode, --profile,
 #   --memory-gb, --bypass-proxy, etc.) from ORIG_ARGS before passing to the real claude
 #   binary; re-injects --model with the resolved concrete model name. This is the ONLY
 #   place where the c-thru flag vocabulary is erased — do not strip flags elsewhere.
+#   c-thru no longer auto-enables --dangerously-skip-permissions; it is forwarded
+#   only when the user passes it explicitly.
 build_forwarded_args() {
   local desired_model="$1"
   local -a forwarded=()
@@ -3752,12 +3832,21 @@ build_forwarded_args() {
   local i=0
   local saw_model=0
   local saw_skip_permissions=0
+  local _w=""
 
   while [[ $i -lt ${#ORIG_ARGS[@]} ]]; do
     local arg="${ORIG_ARGS[i]}"
     case "$arg" in
       --route)
-        i=$((i + 2))
+        # Width decided by the shared cthru_flag_width helper (see its
+        # definition above build_forwarded_args) so this stage can never
+        # disagree with the pre-parse loop about --route's value boundary.
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        i=$((i + _w))
         continue
         ;;
       --route=*)
@@ -3765,7 +3854,12 @@ build_forwarded_args() {
         continue
         ;;
       --mode | --profile | --memory-gb)
-        i=$((i + 2))
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        i=$((i + _w))
         continue
         ;;
       --mode=* | --profile=* | --memory-gb=* | --proxy-debug=* | --router-debug=* | --thinking=*)
@@ -3779,12 +3873,21 @@ build_forwarded_args() {
         continue
         ;;
       --proxy-debug | --router-debug)
-        # Optional numeric arg — peek next; if 1|2, consume both, else just the flag
-        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} && "${ORIG_ARGS[i+1]}" =~ ^[12]$ ]]; then
-          i=$((i + 2))
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
         else
-          i=$((i + 1))
+          _w="$(cthru_flag_width "$arg" "" 0)"
         fi
+        i=$((i + _w))
+        continue
+        ;;
+      --print-routing | --dry-run)
+        # c-thru-only dry-run flag; never reaches the real claude binary.
+        # The routed path short-circuits before launch; the transparent path
+        # does the same (see the print_routing_only guard below). Stripping
+        # here is defense-in-depth so the canonical forwarded argv never
+        # contains c-thru-private flags.
+        i=$((i + 1))
         continue
         ;;
       --model)
@@ -3792,7 +3895,12 @@ build_forwarded_args() {
           forwarded+=("--model" "$desired_model")
           saw_model=1
         fi
-        i=$((i + 2))
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        i=$((i + _w))
         continue
         ;;
       --model=*)
@@ -3804,8 +3912,10 @@ build_forwarded_args() {
         continue
         ;;
       --dangerously-skip-permissions)
-        forwarded+=("$arg")
-        saw_skip_permissions=1
+        if [[ "$saw_skip_permissions" -eq 0 ]]; then
+          forwarded+=("$arg")
+          saw_skip_permissions=1
+        fi
         i=$((i + 1))
         continue
         ;;
@@ -3816,9 +3926,6 @@ build_forwarded_args() {
     esac
   done
 
-  if [[ "$saw_skip_permissions" -eq 0 ]]; then
-    forwarded=("--dangerously-skip-permissions" "${forwarded[@]}")
-  fi
   if [[ -n "$desired_model" && "$saw_model" -eq 0 ]]; then
     forwarded=("--model=$desired_model" "${forwarded[@]}")
   fi
@@ -4385,13 +4492,26 @@ while [[ $i -lt $n ]]; do
   a="${ORIG_ARGS[i]}"
   case "$a" in
     --route=*)          route_name="${a#--route=}"; i=$((i + 1)) ;;
-    --route)            if [[ $((i+1)) -lt $n ]]; then route_name="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
+    --route)
+      # Width decided by the shared cthru_flag_width helper (defined above
+      # build_forwarded_args) so this stage can never disagree with the
+      # strip stage about --route's value boundary.
+      if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
+      [[ "$_w" == "2" ]] && route_name="${ORIG_ARGS[i+1]}"
+      i=$((i + _w)) ;;
     --model=*)          explicit_model="${a#--model=}"; i=$((i + 1)) ;;
-    --model)            if [[ $((i+1)) -lt $n ]]; then explicit_model="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else i=$((i + 1)); fi ;;
+    --model)
+      if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
+      [[ "$_w" == "2" ]] && explicit_model="${ORIG_ARGS[i+1]}"
+      i=$((i + _w)) ;;
     --mode=*)           export CLAUDE_LLM_MODE="${a#--mode=}"; i=$((i + 1)) ;;
-    --mode)             if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_MODE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else echo "c-thru: --mode requires a value" >&2; exit 1; fi ;;
+    --mode)
+      if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
+      if [[ "$_w" == "2" ]]; then export CLAUDE_LLM_MODE="${ORIG_ARGS[i+1]}"; i=$((i + _w)); else echo "c-thru: --mode requires a value" >&2; exit 1; fi ;;
     --profile=*)        export CLAUDE_LLM_PROFILE="${a#--profile=}"; i=$((i + 1)) ;;
-    --profile)          if [[ $((i+1)) -lt $n ]]; then export CLAUDE_LLM_PROFILE="${ORIG_ARGS[i+1]}"; i=$((i + 2)); else echo "c-thru: --profile requires a tier name" >&2; exit 1; fi ;;
+    --profile)
+      if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
+      if [[ "$_w" == "2" ]]; then export CLAUDE_LLM_PROFILE="${ORIG_ARGS[i+1]}"; i=$((i + _w)); else echo "c-thru: --profile requires a tier name" >&2; exit 1; fi ;;
     --local-only)              export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
     --best-cloud)              export CLAUDE_LLM_MODE="best-cloud"; i=$((i + 1)) ;;
     --best-opensource-cloud)   export CLAUDE_LLM_MODE="best-cloud-oss"; i=$((i + 1)) ;;
@@ -4409,20 +4529,14 @@ while [[ $i -lt $n ]]; do
     --debug)            export C_THRU_DEBUG=1; export CLAUDE_PROXY_DEBUG=1; i=$((i + 1)) ;;
     --proxy-debug=*)    export CLAUDE_PROXY_DEBUG="${a#--proxy-debug=}"; i=$((i + 1)) ;;
     --proxy-debug)
-      if [[ $((i + 1)) -lt $n && "${ORIG_ARGS[i+1]}" =~ ^[12]$ ]]; then
-        export CLAUDE_PROXY_DEBUG="${ORIG_ARGS[i+1]}"; i=$((i + 2))
-      else
-        export CLAUDE_PROXY_DEBUG=1; i=$((i + 1))
-      fi
-      ;;
+      if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
+      [[ "$_w" == "2" ]] && export CLAUDE_PROXY_DEBUG="${ORIG_ARGS[i+1]}" || export CLAUDE_PROXY_DEBUG=1
+      i=$((i + _w)) ;;
     --router-debug=*)   export C_THRU_DEBUG="${a#--router-debug=}"; i=$((i + 1)) ;;
     --router-debug)
-      if [[ $((i + 1)) -lt $n && "${ORIG_ARGS[i+1]}" =~ ^[12]$ ]]; then
-        export C_THRU_DEBUG="${ORIG_ARGS[i+1]}"; i=$((i + 2))
-      else
-        export C_THRU_DEBUG=1; i=$((i + 1))
-      fi
-      ;;
+      if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
+      [[ "$_w" == "2" ]] && export C_THRU_DEBUG="${ORIG_ARGS[i+1]}" || export C_THRU_DEBUG=1
+      i=$((i + _w)) ;;
     --memory-gb=*)
       _mgb="${a#--memory-gb=}"
       if ! [[ "$_mgb" =~ ^[0-9]+$ ]] || (( _mgb <= 0 )); then
@@ -4430,13 +4544,15 @@ while [[ $i -lt $n ]]; do
       fi
       export CLAUDE_LLM_MEMORY_GB="$_mgb"; i=$((i + 1)) ;;
     --memory-gb)
-      if [[ $((i+1)) -lt $n ]]; then
+      if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
+      if [[ "$_w" == "2" ]]; then
         _mgb="${ORIG_ARGS[i+1]}"
         if ! [[ "$_mgb" =~ ^[0-9]+$ ]] || (( _mgb <= 0 )); then
           echo "c-thru: --memory-gb requires a positive integer (got '${_mgb}')" >&2; exit 1
         fi
-        export CLAUDE_LLM_MEMORY_GB="$_mgb"; i=$((i + 2))
-      else i=$((i + 1)); fi ;;
+        export CLAUDE_LLM_MEMORY_GB="$_mgb"
+      fi
+      i=$((i + _w)) ;;
     *) i=$((i + 1)) ;;
   esac
 done
@@ -4495,6 +4611,13 @@ if [[ -z "$MODEL" ]]; then
     run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
     exit $?
   fi
+  # --print-routing dry-run on the transparent path: exit before spawning the
+  # proxy or building settings, so the "proxy/session NOT started" message is
+  # truthful. Mirrors the routed-path dry-run guard below.
+  if [[ -n "$print_routing_only" ]]; then
+    printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %s\n" "dry-run" "--print-routing — routing shown above; proxy/session NOT started" >&2
+    exit 0
+  fi
   ensure_proxy_http_base || exit 1
   write_ephemeral_settings
   export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
@@ -4507,7 +4630,18 @@ if [[ -z "$MODEL" ]]; then
   ensure_proxy_client_api_key
   claude_router_debug_dump transparent
   apply_background_model_overrides "${MODEL:-}"
-  run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
+  # Route through build_forwarded_args so the transparent (no-model) path also
+  # receives --settings/--agents/--append-system-prompt (hooks, llm-capabilities
+  # MCP, fleet awareness, agents) — same injection as the routed path. desired
+  # model is empty here (no model resolved), which build_forwarded_args handles
+  # (skips --model injection). The bypass sub-path above stays raw (talks to
+  # api.anthropic.com directly, reads keychain itself). This is a behavior
+  # change: the no-model path now gets the full c-thru session dressings.
+  FINAL_ARGS=()
+  while IFS= read -r -d '' arg; do
+    FINAL_ARGS+=("$arg")
+  done < <(build_forwarded_args "${MODEL:-}")
+  run_real_claude "$REAL_CLAUDE" "${FINAL_ARGS[@]}"
   exit $?
 fi
 

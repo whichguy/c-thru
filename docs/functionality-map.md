@@ -53,7 +53,7 @@ proxy if needed, and `exec`s the real `claude` binary. Detail: README Appendix B
 flags (`--model`, `--settings`, `--agents`, `--append-system-prompt`), in-memory — and **avoid
 file-based** mechanisms. This section is the conformance audit of that principle.
 
-**Verdict: the design conforms.** Of 13 injection points, **12 are inline/ephemeral-env/CLI or unavoidable
+**Verdict: the design conforms.** Of 12 injection points plus 1 explicit pass-through, **11 are inline/ephemeral-env/CLI or unavoidable
 runtime IPC; 1 is necessary directory-level isolation; 0 are avoidable file writes** (the lone avoidable
 one, #10, was converted to an inline `--settings` JSON string).
 
@@ -65,7 +65,7 @@ one, #10, was converted to an inline `--settings` JSON string).
 | 4 | Arbitrary backend `env` JSON keys | `export -- k=v` loop | INLINE | `:4363` | necessary |
 | 5 | `CLAUDE_CODE_*` feature/colour flags | `exec env VAR=…` | INLINE | `:3532` | necessary |
 | 6 | Model selection | `--model=<m>` CLI arg | INLINE | `:3640` | necessary |
-| 7 | `--dangerously-skip-permissions` | CLI arg | INLINE | `:3637` | necessary |
+| 7 | `--dangerously-skip-permissions` (user-supplied only; not injected) | CLI arg passthrough | PASSTHROUGH | `:3709` | not an injection |
 | 8 | System-info + proxy URL + `/no_thinking` | `--append-system-prompt` CLI arg | INLINE | `:3658` | necessary |
 | 9 | `CLAUDE_MODEL_MAP_PATH` → proxy | `env VAR=… claude-proxy` at spawn | INLINE (passes a path, writes nothing) | `:1854` | necessary |
 | 10 | Per-session settings (hooks/mcp/permissions) | JSON built in-memory → `--settings <json>` CLI arg | INLINE arg | build `:410`, flag `:3659` | necessary (converted from a temp-file write) |
