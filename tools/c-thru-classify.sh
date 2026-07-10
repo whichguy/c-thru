@@ -49,8 +49,18 @@ fi
 
 [ -n "$prompt" ] || exit 0
 
-# Call /hooks/context with the prompt — 3s timeout, silent on failure
-response=$(printf '{"prompt":%s}' "$(printf '%s' "$prompt" | python3 -c "import sys,json;print(json.dumps(sys.stdin.read()))" 2>/dev/null || printf '""')" | \
+# Call /hooks/context with the prompt — 3s timeout, silent on failure.
+# JSON-escape via jq -Rs (or node JSON.stringify fallback) — same encoder used
+# below for the response side, no python3 dependency.
+if command -v jq >/dev/null 2>&1; then
+    prompt_json=$(printf '%s' "$prompt" | jq -Rs .)
+elif command -v node >/dev/null 2>&1; then
+    prompt_json=$(node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(d)));" <<< "$prompt")
+else
+    prompt_json='""'
+fi
+
+response=$(printf '{"prompt":%s}' "$prompt_json" | \
     curl -sf --max-time 3 -X POST \
         -H 'Content-Type: application/json' \
         --data-binary @- \

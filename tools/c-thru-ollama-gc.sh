@@ -68,7 +68,8 @@ subcmd_record() {
 }
 
 # --- sweep: GC unreferenced c-thru-pulled models ---
-# Referenced set = union of connected_model + disconnect_model across ALL llm_profiles tiers.
+# Referenced set = union of every model string reachable under llm_profiles[capability][mode]
+# (flat or tier-keyed), across all candidate model-map files.
 # Defensive guard: if llm_profiles non-empty but referenced set is empty → abort (parse regression).
 # Skipped entirely when C_THRU_GC_DISABLE=1.
 _sweep_state_update() {
@@ -93,21 +94,39 @@ subcmd_sweep() {
   [ "${1:-}" = "--dry-run" ] && dry_run=1
   [ "${C_THRU_GC_DISABLE:-0}" = "1" ] && return 0
   [ -f "$STATE_FILE" ] || return 0
-  [ -f "$MODEL_MAP_FILE" ] || {
+
+  # Referenced-set inputs: the durable profile graph ($MODEL_MAP_FILE) is
+  # always included, PLUS whichever session-scoped config would actually be
+  # selected for the current invocation (explicit CLAUDE_MODEL_MAP_PATH
+  # override, or a project-local .claude/model-map.json at CWD). Per
+  # CLAUDE.md's "model-map selection and layering", a project-local graph is
+  # selected by precedence and traversed on its own — it is NOT merged into
+  # the profile graph — so a model referenced only there would otherwise look
+  # orphaned to sweep even while still in active use.
+  local -a map_files=()
+  [ -f "$MODEL_MAP_FILE" ] && map_files+=("$MODEL_MAP_FILE")
+  if [ -n "${CLAUDE_MODEL_MAP_PATH:-}" ] && [ -f "${CLAUDE_MODEL_MAP_PATH:-}" ]; then
+    map_files+=("$CLAUDE_MODEL_MAP_PATH")
+  fi
+  local _project_map="${PWD:-.}/.claude/model-map.json"
+  [ -f "$_project_map" ] && map_files+=("$_project_map")
+
+  if [ ${#map_files[@]} -eq 0 ]; then
     echo "c-thru-ollama-gc: model-map not found at $MODEL_MAP_FILE — skipping sweep" >&2
     return 0
-  }
+  fi
 
-  # Step 1: compute referenced set from model-map (strips JSON5 // comments before parse)
+  # Step 1: compute referenced set as the UNION across all candidate model-map
+  # files (strips JSON5 // comments before parse). An unreadable/unparseable
+  # SECONDARY source (override/project) is warned and skipped rather than
+  # aborting the whole sweep; the primary profile source aborts as before if
+  # it's the only one and it fails.
   local ref_json rc=0
-  ref_json=$(node - "$MODEL_MAP_FILE" <<'REFEOF'
+  ref_json=$(node - "${map_files[@]}" <<'REFEOF'
 'use strict';
 const fs = require('fs');
-let raw;
-try { raw = fs.readFileSync(process.argv[2], 'utf8'); } catch (e) {
-  process.stderr.write('c-thru-ollama-gc: cannot read model-map: ' + e.message + '\n');
-  process.exit(1);
-}
+const files = process.argv.slice(2);
+
 // String-aware JSON5 comment stripper — avoids clobbering // inside string literals
 function stripJsonComments(s) {
   let out = '', i = 0;
@@ -131,22 +150,49 @@ function stripJsonComments(s) {
   }
   return out;
 }
-raw = stripJsonComments(raw);
-let map;
-try { map = JSON.parse(raw); } catch (e) {
-  process.stderr.write('c-thru-ollama-gc: failed to parse model-map: ' + e.message + '\n');
+
+const ref = new Set();
+let hasProfiles = false;
+let anyParsed = false;
+
+for (const f of files) {
+  let raw;
+  try { raw = fs.readFileSync(f, 'utf8'); } catch (e) {
+    process.stderr.write('c-thru-ollama-gc: cannot read model-map ' + f + ': ' + e.message + '\n');
+    continue;
+  }
+  let map;
+  try { map = JSON.parse(stripJsonComments(raw)); } catch (e) {
+    process.stderr.write('c-thru-ollama-gc: failed to parse model-map ' + f + ': ' + e.message + '\n');
+    continue;
+  }
+  anyParsed = true;
+  // Current schema is capability-outer: llm_profiles[capability][mode-or-custom-mode]
+  // is either a flat model string (applies to every tier) or a tier-keyed object
+  // ({"16gb": "model", ...}). Sibling `on_failure`/`fallback_to` keys are metadata,
+  // not model references (fallback_to names another CAPABILITY, not a model).
+  const profiles = map.llm_profiles || {};
+  if (Object.keys(profiles).length > 0) hasProfiles = true;
+  for (const capEntry of Object.values(profiles)) {
+    if (!capEntry || typeof capEntry !== 'object') continue;
+    for (const [modeKey, modeValue] of Object.entries(capEntry)) {
+      if (modeKey === 'on_failure' || modeKey === 'fallback_to') continue;
+      if (typeof modeValue === 'string') {
+        ref.add(modeValue);
+      } else if (modeValue && typeof modeValue === 'object') {
+        for (const tierModel of Object.values(modeValue)) {
+          if (typeof tierModel === 'string') ref.add(tierModel);
+        }
+      }
+    }
+  }
+}
+
+if (!anyParsed) {
+  process.stderr.write('c-thru-ollama-gc: no model-map file could be read/parsed — aborting sweep\n');
   process.exit(1);
 }
-const profiles = map.llm_profiles || {};
-const hasProfiles = Object.keys(profiles).length > 0;
-const ref = new Set();
-for (const tier of Object.values(profiles))
-  for (const p of Object.values(tier || {}))
-    if (p && typeof p === 'object') {
-      if (p.connected_model) ref.add(p.connected_model);
-      if (p.disconnect_model) ref.add(p.disconnect_model);
-    }
-// Defensive guard: non-empty profiles but empty result means parse failure
+// Defensive guard: non-empty profiles (in any file) but empty union means parse regression
 if (hasProfiles && ref.size === 0) {
   process.stderr.write('c-thru-ollama-gc: ABORT — llm_profiles is non-empty but referenced set is empty (parse regression?)\n');
   process.exit(2);
@@ -209,10 +255,13 @@ CANDEOF
         # Tag already gone — remove orphan from state file regardless
         echo "c-thru-ollama-gc: $m not found in ollama (removing orphan from state)" >&2
       fi
+      # Only untrack once we've actually acted (removed, or confirmed already
+      # gone) — never on the [skipped] preview branch below, or the model
+      # stays installed but silently drops off c-thru's GC state.
+      processed+=("$m")
     else
       echo "c-thru-ollama-gc: [skipped] would remove $m (set C_THRU_OLLAMA_ALLOW_RM=1 to enable)" >&2
     fi
-    processed+=("$m")
   done <<< "$candidates"
 
   # Step 5: batch-remove processed models from state file under lock
@@ -251,13 +300,19 @@ LISTEOF
   fi
 
   local removed=0
+  local -a purged=()
   while IFS= read -r m; do
     [ -z "$m" ] && continue
     if [ "${C_THRU_OLLAMA_ALLOW_RM:-0}" = "1" ]; then
       if ollama rm "$m" >/dev/null 2>&1; then
         echo "c-thru-ollama-gc: purged $m" >&2
         removed=$((removed+1))
+        purged+=("$m")
       else
+        # Cannot distinguish "not found locally" from "ollama unreachable" at
+        # the per-model level (same ambiguity subcmd_sweep's Step 3 guards
+        # against) — leave it tracked rather than risk untracking a model
+        # that's still installed.
         echo "c-thru-ollama-gc: warning — failed to purge $m (may not exist locally)" >&2
       fi
     else
@@ -265,18 +320,12 @@ LISTEOF
     fi
   done <<< "$models"
 
-  # Clear installed map
-  node - "$STATE_FILE" <<'CLEAREOF' || true
-'use strict';
-const fs = require('fs');
-let s = { version: 1, installed: {} };
-try {
-  const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-  if (p && typeof p === 'object') s = p;
-} catch {}
-s.installed = {};
-fs.writeFileSync(process.argv[2], JSON.stringify(s, null, 2) + '\n');
-CLEAREOF
+  # Only untrack models actually removed above. When C_THRU_OLLAMA_ALLOW_RM is
+  # unset (the default/preview run), `purged` stays empty and the state file
+  # is left untouched — it must keep accurately reflecting what's installed.
+  if [ ${#purged[@]} -gt 0 ]; then
+    _with_lock _sweep_state_update "${purged[@]}"
+  fi
 
   echo "c-thru-ollama-gc: purge complete ($removed model(s) removed)" >&2
 }

@@ -262,7 +262,13 @@ function maybeSyncLayeredProfileModelMap() {
   const effectivePath = path.join(claudeDir, 'model-map.json');
   const syncTool = path.join(__dirname, 'model-map-sync.js');
   if (!fs.existsSync(syncTool)) return;
-  const result = require('child_process').spawnSync(process.execPath, [syncTool, defaultsPath, overridesPath, effectivePath, effectivePath], {
+  // Project-path arg is "" (never effectivePath) — this profile-level sync is
+  // system+global only, mirroring tools/c-thru's sync_layered_profile_model_map
+  // and model-map-config.js's Pass 1. Passing effectivePath here would re-ingest
+  // the previously-computed effective config as a "project override" layer,
+  // permanently shadowing future shipped-defaults changes to any key it already
+  // contains.
+  const result = require('child_process').spawnSync(process.execPath, [syncTool, defaultsPath, overridesPath, '', effectivePath], {
     encoding: 'utf8',
     timeout: 5000,
   });

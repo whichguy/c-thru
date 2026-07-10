@@ -136,6 +136,8 @@ run_suite "uninstall-smoke (symlink removal C24, hook scrub, overrides preserved
   bash "$REPO_DIR/test/uninstall-smoke.test.sh"
 run_suite "ollama-probe (health-check script)" \
   bash "$REPO_DIR/test/ollama-probe.test.sh"
+run_suite "c-thru-ollama-gc (sweep/purge state-tracking invariants)" \
+  bash "$REPO_DIR/test/c-thru-ollama-gc.test.sh"
 run_suite "c-thru-contract-check (agent/skill contracts)" \
   bash "$REPO_DIR/test/c-thru-contract-check.test.sh"
 run_suite "contract-check-guards-bite (10/11/14/15 fail-loud guards bite on mutation)" \
@@ -205,6 +207,10 @@ run_suite "proxy-forward-ollama-midstream-error" \
   node "$REPO_DIR/test/proxy-forward-ollama-midstream-error.test.js"
 run_suite "proxy-client-disconnect-cleanup" \
   node "$REPO_DIR/test/proxy-client-disconnect-cleanup.test.js"
+run_suite "proxy-anthropic-disconnect-cleanup (F2: forwardAnthropic tears down upstream on client disconnect)" \
+  node "$REPO_DIR/test/proxy-anthropic-disconnect-cleanup.test.js"
+run_suite "proxy-anthropic-timeout (F1: forwardAnthropic upstream timeout → cascade/502, not a hang)" \
+  node "$REPO_DIR/test/proxy-anthropic-timeout.test.js"
 run_suite "proxy-content-length-scrub" \
   node "$REPO_DIR/test/proxy-content-length-scrub.test.js"
 run_suite "proxy-cooldown-ttl" \
@@ -231,6 +237,8 @@ run_suite "proxy-sentinel-detection (per-agent marker: header + byte-scan + wind
   node "$REPO_DIR/test/proxy-sentinel-detection.test.js"
 run_suite "proxy-control-auth (control-token gate on mutating routes)" \
   node "$REPO_DIR/test/proxy-control-auth.test.js"
+run_suite "c-thru-control-skill-modes (SKILL.md mode vocabulary matches runtime enum)" \
+  node "$REPO_DIR/test/c-thru-control-skill-modes.test.js"
 run_suite "proxy-auth-strip-e2e (C12: incoming Anthropic auth stripped to unknown host)" \
   node "$REPO_DIR/test/proxy-auth-strip-e2e.test.js"
 run_suite "proxy-agent-sentinel-e2e (live proxy: signed/unsigned/forged marker, fail-open, by_agent)" \
@@ -263,6 +271,8 @@ run_suite "proxy-cli-flags (parseCliFlags edge cases)" \
   node "$REPO_DIR/test/proxy-cli-flags.test.js"
 run_suite "proxy-usage-stats (debounce, SIGTERM flush, multi-instance merge)" \
   node "$REPO_DIR/test/proxy-usage-stats.test.js"
+run_suite "proxy-usage-large-stream (F4: message_delta recovered past the 256KB head-cap)" \
+  node "$REPO_DIR/test/proxy-usage-large-stream.test.js"
 run_suite "proxy-sampling-param-guard (sampling defaults guard)" \
   node "$REPO_DIR/test/proxy-sampling-param-guard.test.js"
 run_suite "proxy-recent-requests (ring buffer + /c-thru/recent)" \

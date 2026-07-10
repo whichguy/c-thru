@@ -5,10 +5,13 @@ set -euo pipefail
 
 REPO_ROOT="${ROUTER_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 UPDATE_LOG="$REPO_ROOT/.c-thru-update.log"
-UPDATE_INTERVAL="${CLAUDE_ROUTER_UPDATE_INTERVAL:-3600}"
+# C_THRU_* is canonical; CLAUDE_ROUTER_* is a deprecated fallback (tools/c-thru's
+# alias shim warns and translates old→new, but only for vars it knows about — this
+# script must accept both directly since it can also run standalone).
+UPDATE_INTERVAL="${C_THRU_UPDATE_INTERVAL:-${CLAUDE_ROUTER_UPDATE_INTERVAL:-3600}}"
 
 # Opt-out checks (fast path — checked before entering any subshell)
-[[ "${CLAUDE_ROUTER_NO_UPDATE:-}" == "1" ]] && exit 0
+[[ "${C_THRU_NO_UPDATE:-${CLAUDE_ROUTER_NO_UPDATE:-}}" == "1" ]] && exit 0
 [[ -f "$REPO_ROOT/config/.no-self-update" ]] && exit 0
 
 # Read self_update field from merged overrides (written by /map-model update off)
@@ -60,9 +63,9 @@ _old_sha="$(git rev-parse HEAD 2>/dev/null || true)"
 _pull_pid=$!
 
 # Foreground grace — kill the fetch subshell if still running after the window.
-# Default 1s keeps launch snappy; tests raise it (CLAUDE_ROUTER_UPDATE_GRACE=10)
+# Default 1s keeps launch snappy; tests raise it (C_THRU_UPDATE_GRACE=10)
 # so a loaded machine can't TERM the subshell before it writes its advisory.
-_grace="${CLAUDE_ROUTER_UPDATE_GRACE:-1}"
+_grace="${C_THRU_UPDATE_GRACE:-${CLAUDE_ROUTER_UPDATE_GRACE:-1}}"
 ( sleep "$_grace"; kill -0 "$_pull_pid" 2>/dev/null && kill -TERM "$_pull_pid" 2>/dev/null ) 2>/dev/null &
 _grace_pid=$!
 

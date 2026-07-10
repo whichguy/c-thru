@@ -50,7 +50,7 @@ console.log(JSON.stringify({
   claude_proxy_journal:  process.env.CLAUDE_PROXY_JOURNAL  || null,
   claude_proxy_debug:    process.env.CLAUDE_PROXY_DEBUG    || null,
   claude_router_debug:   process.env.C_THRU_DEBUG          || null,
-  claude_router_no_update: process.env.CLAUDE_ROUTER_NO_UPDATE || null,
+  c_thru_no_update: process.env.C_THRU_NO_UPDATE || null,
 }));
 ' -- "$@"
 `;
@@ -101,7 +101,7 @@ function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
       HOME: homeDir,
       PATH: `${fakeBin}:${process.env.PATH}`,
       CLAUDE_MODEL_MAP_PATH: configPath,
-      CLAUDE_ROUTER_NO_UPDATE: '1',
+      C_THRU_NO_UPDATE: '1',
       C_THRU_SKIP_PREPULL: '1',
       C_THRU_SKIP_PREFLIGHT: '1',
       CLAUDE_PROXY_STARTUP_PROBE: '0',
@@ -243,13 +243,13 @@ console.log('\n10. --journal → CLAUDE_PROXY_JOURNAL=1, stripped from args');
 }
 
 // ── Test 11: --no-update ──────────────────────────────────────────────────
-console.log('\n11. --no-update → CLAUDE_ROUTER_NO_UPDATE=1, stripped');
+console.log('\n11. --no-update → C_THRU_NO_UPDATE=1, stripped');
 {
   const r = runCthru(['--no-update', '--model', 'claude-sonnet-4-6']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.includes('--no-update'), `--no-update stripped`);
-  assert(r.json?.claude_router_no_update === '1', `CLAUDE_ROUTER_NO_UPDATE=1`);
+  assert(r.json?.c_thru_no_update === '1', `C_THRU_NO_UPDATE=1`);
 }
 
 // ── Test 12: --proxy-debug 2 ──────────────────────────────────────────────
@@ -309,7 +309,7 @@ console.log('\n17. multiple flags combined');
   assert(r.code === 0, `exit 0`);
   assert(r.json?.claude_proxy_journal === '1', 'journal env');
   assert(r.json?.claude_proxy_debug === '1', 'proxy-debug env');
-  assert(r.json?.claude_router_no_update === '1', 'no-update env');
+  assert(r.json?.c_thru_no_update === '1', 'no-update env');
   const args = r.json?.args || [];
   for (const f of ['--journal', '--proxy-debug', '--no-update']) {
     assert(!args.includes(f), `${f} stripped`);

@@ -209,6 +209,11 @@ Proceed to Phase 4 with initial READY_ITEMS[] and commit_message.
 
 ## Phase 4 — Wave loop
 
+Dispatches `READY_ITEMS` directly to `coder` below — it does **not** invoke the
+`plan-scheduler` agent / `/schedule-plan-tasks` skill. `plan-scheduler` is a separate,
+standalone helper for manual "schedule these tasks" requests outside this loop; it is not
+part of this wave lifecycle.
+
 ```
 loop:
   # Driver creates clean wave directory

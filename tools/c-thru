@@ -4391,13 +4391,20 @@ cmd_restart() {
   ready_pipe="$CLAUDE_PROFILE_DIR/proxy.restart.${startup_tag}.pipe"
   rm -f "$ready_pipe"
 
+  # Tracks the timeout actually in effect on whichever wait path below executes,
+  # so the final failure message doesn't hardcode a value from the other path.
+  local ready_wait_desc=""
+
   if [[ -n "${CLAUDE_PROXY_PORT:-}" ]]; then
     # Explicit port: proxy writes no READY line; poll directly.
     "$proxy_js" >/dev/null 2>"$temp_log" &
     local new_pid="$!"
     disown "$new_pid" 2>/dev/null || true
     local new_port="$CLAUDE_PROXY_PORT"
-    if wait_proxy_ping_ready "$new_port" 50; then
+    # wait_proxy_ping_ready polls every 0.1s, so a max of 50 polls is ~5s.
+    local explicit_port_max_polls=50
+    ready_wait_desc="5s"
+    if wait_proxy_ping_ready "$new_port" "$explicit_port_max_polls"; then
       local ping_json new_tier=""
       ping_json="$(proxy_ping_json "$new_port")"
       if command -v jq >/dev/null 2>&1; then
@@ -4419,6 +4426,7 @@ cmd_restart() {
     local new_pid="$!"
     disown "$new_pid" 2>/dev/null || true
     local ready_timeout="${CLAUDE_PROXY_READY_TIMEOUT_SECONDS:-45}"
+    ready_wait_desc="${ready_timeout}s"
     if IFS= read -r -t "$ready_timeout" ready_line <"$ready_pipe" && [[ "$ready_line" =~ ^READY\ ([0-9]+)$ ]]; then
       rm -f "$ready_pipe"
       local new_port="${BASH_REMATCH[1]}"
@@ -4433,7 +4441,7 @@ cmd_restart() {
     rm -f "$ready_pipe"
   fi
 
-  echo "c-thru restart: proxy did not become ready within 5s" >&2
+  echo "c-thru restart: proxy did not become ready within ${ready_wait_desc:-the expected timeout}" >&2
   if [[ -s "$temp_log" ]]; then
     tail -5 "$temp_log" | sed 's/^/  /' >&2
   fi
@@ -4473,8 +4481,13 @@ if [[ "${1:-}" == "stats" && "${2:-}" == "clear" ]]; then
   if [[ -z "$result" ]]; then
     echo "c-thru: proxy did not respond" >&2; exit 1
   fi
-  if ! printf '%s\n' "$result" | jq .; then
-    echo "c-thru: proxy responded but with non-JSON body: $result" >&2; exit 1
+  if command -v jq >/dev/null 2>&1; then
+    if ! printf '%s\n' "$result" | jq .; then
+      echo "c-thru: proxy responded but with non-JSON body: $result" >&2; exit 1
+    fi
+  else
+    echo "c-thru: jq not found — printing raw response" >&2
+    printf '%s\n' "$result"
   fi
   exit 0
 fi

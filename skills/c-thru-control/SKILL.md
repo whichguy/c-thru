@@ -17,7 +17,7 @@ You can use natural language prompts to control the proxy. The skill interprets 
 **Usage:** `/c-thru-control <intent prompt>`
 
 - `/c-thru-control how are we running?` (Status check)
-- `/c-thru-control go offline` (Switch to local-only)
+- `/c-thru-control go offline` (Switch to `best-local-oss`, fully local)
 - `/c-thru-control switch to connected and save` (Persistent mode switch)
 - `/c-thru-control refresh the config` (Reload from disk)
 
@@ -40,7 +40,9 @@ For the AI agent's situational awareness, here is the mapping from logical inten
 | **Reload Config** | `POST` | `/c-thru/reload` | N/A |
 
 ### Valid Modes:
-`connected`, `offline`, `local-only`, `semi-offload`, `cloud-judge-only`, `cloud-thinking`, `local-review`, `cloud-best-quality`, `local-best-quality`, `cloud-only`, `claude-only`, `opensource-only`, `fastest-possible`, `smallest-possible`, `best-opensource`, `best-opensource-cloud`
+5 canonical modes: `best-cloud`, `best-cloud-oss`, `best-local-oss`, `best-cloud-gov`, `best-local-gov`.
+
+Legacy aliases also accepted: `connected` (→ `best-cloud`), `offline`/`disconnect` (→ `best-local-oss`). Any name outside this set — including `local-only`, `semi-offload`, `cloud-judge-only`, `fastest-possible`, and other names from c-thru's earlier 15-mode design — gets rejected with HTTP 400 by `POST /c-thru/mode`, unless it's been declared as a `custom_modes` key in `model-map.json`.
 
 ---
 

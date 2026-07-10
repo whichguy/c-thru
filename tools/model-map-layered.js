@@ -223,9 +223,32 @@ function syncLayeredConfig(defaultsPath, globalOverridesPath, projectOverridesPa
 
   writeIfChanged(globalOverridesPath, `${JSON.stringify(globalOverrides, null, 2)}\n`);
   writeIfChanged(projectOverridesPath, `${JSON.stringify(projectOverrides, null, 2)}\n`);
-  writeIfChanged(effectivePath, `${JSON.stringify(effective, null, 2)}\n`);
 
-  return { defaults, globalOverrides, projectOverrides, effective };
+  // NOTE: the two writes above plus the one below are each individually atomic
+  // (writeIfChanged uses temp-file + rename) but are not a single cross-file
+  // transaction — a kill between them can leave `effective` stale relative to
+  // overrides that are already durable on disk. We can't get true atomicity
+  // across three separate inodes from POSIX rename alone, so instead we bound
+  // the damage: re-read the override files fresh from disk (rather than reuse
+  // the pre-write in-memory snapshot) and derive `effective` from that, so the
+  // final write always reflects whatever the overrides files actually contain
+  // at this instant, not what we assumed before writing them. Any residual
+  // staleness window (killed after this recompute but before the effective
+  // write lands) self-heals on the very next sync run, since `effective` is
+  // always a pure function of (defaults, on-disk overrides) recomputed fresh
+  // from disk — it is never diffed against its own prior output.
+  const persistedGlobalOverrides = globalOverridesPath ? readJsonOrEmpty(globalOverridesPath) : globalOverrides;
+  const persistedProjectOverrides = projectOverridesPath ? readJsonOrEmpty(projectOverridesPath) : projectOverrides;
+  const effectiveToWrite = mergeConfigLayers(defaults, persistedGlobalOverrides, persistedProjectOverrides);
+  validateConfig(effectiveToWrite);
+  writeIfChanged(effectivePath, `${JSON.stringify(effectiveToWrite, null, 2)}\n`);
+
+  return {
+    defaults,
+    globalOverrides: persistedGlobalOverrides,
+    projectOverrides: persistedProjectOverrides,
+    effective: effectiveToWrite,
+  };
 }
 
 module.exports = {

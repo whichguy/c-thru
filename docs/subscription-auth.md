@@ -74,8 +74,11 @@ when no valid auth was found.
 ### AI Studio free tier
 
 `GOOGLE_API_KEY` from [Google AI Studio](https://aistudio.google.com/) is **free** up to generous
-per-model daily limits (e.g. Gemini 2.5 Flash: 1,500 requests/day, 1M tokens/day as of 2025).
-This is what the `gemini_ai` endpoint uses.
+per-model daily limits on Gemini 3 Flash (the current default free-tier model). Google no longer
+publishes a single static number for this — limits vary by account, usage tier, and region and can
+change over time — so check your project's live limits at
+[aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit) rather than trusting a
+hardcoded figure here. This is what the `gemini_ai` endpoint uses.
 
 ```sh
 export GOOGLE_API_KEY="AIza..."   # from aistudio.google.com/apikey

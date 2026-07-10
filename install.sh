@@ -306,9 +306,12 @@ SHIPPED_MAP="$REPO_DIR/config/model-map.json"
 
 if [ ! -f "$OVR_MAP" ]; then echo '{}' > "$OVR_MAP"; fi
 if [ -f "$SHIPPED_MAP" ] && command -v node >/dev/null 2>&1; then
-    node "$TOOLS_SRC/model-map-sync.js" "$SHIPPED_MAP" "$OVR_MAP" "$USER_MAP.tmp" "$USER_MAP" 2>/dev/null || true
+    # Project-path arg is intentionally "" — this profile-level sync is
+    # system+global only (mirrors tools/c-thru's sync_layered_profile_model_map
+    # and model-map-config.js's Pass 1); model-map-sync.js writes $USER_MAP
+    # atomically itself, so no separate .tmp + mv staging is needed here.
+    node "$TOOLS_SRC/model-map-sync.js" "$SHIPPED_MAP" "$OVR_MAP" "" "$USER_MAP" 2>/dev/null || true
     cp "$SHIPPED_MAP" "$SYS_MAP"
-    [ -f "$USER_MAP.tmp" ] && mv "$USER_MAP.tmp" "$USER_MAP"
     echo -e "  ${GREEN}✅ model-map.json updated${NC}"
 fi
 

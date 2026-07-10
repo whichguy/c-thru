@@ -141,7 +141,7 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(cd "$(dirnam
 node "$REPO_ROOT/tools/c-thru-config-helpers.js" mode-read
 ```
 
-### Write — validate `<mode>` is one of the five valid values, then:
+### Write — validate `<mode>` is one of the 5 built-in modes, or a declared `custom_modes` key, then:
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(cd "$(dirname "$0")/.." && pwd)")
@@ -229,23 +229,19 @@ Binds a specific model name to a named backend in `model_routes`. Any request us
 exact model string will be forwarded to `<backend>` regardless of the route graph.
 
 Extract `<MODEL>`, `<BACKEND>`, and optional `--reload` from `$ARGUMENTS`. Both `<MODEL>` and `<BACKEND>` are required.
+Delegate entirely to `c-thru-config-helpers.js`:
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-SPEC=$(node -e "process.stdout.write(JSON.stringify({model_routes: {[process.argv[1]]: process.argv[2]}}))" -- "<MODEL>" "<BACKEND>")
-node "$CLAUDE_DIR/tools/model-map-edit" \
-  "$CLAUDE_DIR/model-map.system.json" \
-  "$CLAUDE_DIR/model-map.overrides.json" \
-  "$CLAUDE_DIR/model-map.json" \
-  "$SPEC"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" \
+  route "<MODEL>" "<BACKEND>" ${RELOAD_FLAG}
 ```
 
-On success:
-- If `--reload` is absent: print `bound <MODEL> → backend '<BACKEND>'` and `run '/c-thru-config reload' to apply to running proxy`
-- If `--reload` is present: print `bound <MODEL> → backend '<BACKEND>'` then run:
-  ```bash
-  ~/.claude/tools/c-thru reload || echo "proxy not running — config saved, will apply on next spawn"
-  ```
+Substitute `${RELOAD_FLAG}` with `--reload` when present in `$ARGUMENTS`, otherwise empty.
+
+On success the helper prints:
+- `bound <MODEL> → backend '<BACKEND>'`
+- If `--reload` absent: also prints `run '/c-thru-config reload' to apply to running proxy`
+- If `--reload` present: calls `c-thru reload` immediately after writing
 
 To remove a binding, delete the key directly from `~/.claude/model-map.overrides.json`
 (setting it to an empty string will be rejected by model-map-edit — use `null` in a raw
@@ -267,34 +263,22 @@ directly.
 
 Extract `<NAME>`, `<URL>`, optional `--kind <KIND>`, optional `--auth-env <VAR>`, and
 optional `--reload` from `$ARGUMENTS`. `<NAME>` and `<URL>` are required.
+Delegate entirely to `c-thru-config-helpers.js`:
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
-SPEC=$(node -e "
-'use strict';
-const name = process.argv[1], url = process.argv[2];
-const kind = process.argv[3] || 'ollama';
-const authEnv = process.argv[4] || null;
-const entry = { url, kind };
-if (authEnv) entry.auth_env = authEnv;
-process.stdout.write(JSON.stringify({ backends: { [name]: entry } }));
-" -- "<NAME>" "<URL>" "<KIND_OR_EMPTY>" "<AUTH_ENV_OR_EMPTY>")
-node "$CLAUDE_DIR/tools/model-map-edit" \
-  "$CLAUDE_DIR/model-map.system.json" \
-  "$CLAUDE_DIR/model-map.overrides.json" \
-  "$CLAUDE_DIR/model-map.json" \
-  "$SPEC"
+node "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" \
+  backend "<NAME>" "<URL>" ${KIND_FLAG} ${AUTH_ENV_FLAG} ${RELOAD_FLAG}
 ```
 
-Substitute `<KIND_OR_EMPTY>` with the `--kind` value (or empty string to use default `ollama`),
-and `<AUTH_ENV_OR_EMPTY>` with the `--auth-env` value (or empty string to omit).
+Substitute `${KIND_FLAG}` with `--kind <KIND>` when `--kind` is present in `$ARGUMENTS`, otherwise
+empty (helper defaults to `ollama`). Substitute `${AUTH_ENV_FLAG}` with `--auth-env <VAR>` when
+`--auth-env` is present, otherwise empty. Substitute `${RELOAD_FLAG}` with `--reload` when present,
+otherwise empty.
 
-On success:
-- If `--reload` is absent: print `backend '<NAME>' set  (url: <URL>, kind: <KIND>)` and `run '/c-thru-config reload' to apply to running proxy`
-- If `--reload` is present: print `backend '<NAME>' set  (url: <URL>, kind: <KIND>)` then run:
-  ```bash
-  ~/.claude/tools/c-thru reload || echo "proxy not running — config saved, will apply on next spawn"
-  ```
+On success the helper prints:
+- `backend '<NAME>' set  (url: <URL>, kind: <KIND>)`
+- If `--reload` absent: also prints `run '/c-thru-config reload' to apply to running proxy`
+- If `--reload` present: calls `c-thru reload` immediately after writing
 
 ---
 
@@ -710,8 +694,8 @@ fi
 
 echo "planning hint hook:  $hook_registered"
 echo "planner_hint pref:   $hint_pref"
-if [ "${CLAUDE_ROUTER_PLANNER_HINT:-1}" = "0" ]; then
-  echo "effective:           suppressed  (CLAUDE_ROUTER_PLANNER_HINT=0 env — hook runs but exits silently)"
+if [ "${C_THRU_PLANNER_HINT:-${CLAUDE_ROUTER_PLANNER_HINT:-1}}" = "0" ]; then
+  echo "effective:           suppressed  (C_THRU_PLANNER_HINT=0 env — hook runs but exits silently)"
 elif [ "$hook_registered" = "yes" ] && [ "$hint_pref" != "false" ]; then
   echo "effective:           on"
 elif [ "$hint_pref" = "false" ]; then

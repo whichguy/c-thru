@@ -295,6 +295,8 @@ c-thru --route background --model gemma4:26b     # named route + explicit model
 
 | Flag | Sets env | Effect |
 |---|---|---|
+| `--route <name>` | — | Use a named route from `model-map.json` |
+| `--model <name>` | — | Override model for this invocation |
 | `--mode <m>` | `CLAUDE_LLM_MODE` | Routing mode |
 | `--profile <t>` | `CLAUDE_LLM_PROFILE` | Force hardware tier |
 | `--memory-gb <n>` | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection |
@@ -303,6 +305,11 @@ c-thru --route background --model gemma4:26b     # named route + explicit model
 | `--proxy-debug [N]` | `CLAUDE_PROXY_DEBUG=N` | Proxy verbose logs |
 | `--router-debug [N]` | `C_THRU_DEBUG=N` | Router verbose logs |
 | `--no-update` | `C_THRU_NO_UPDATE=1` | Skip git self-update |
+
+**Flag precedence**, when combined on one invocation:
+1. `--model <name>` forces a concrete model for this invocation, overriding `--route` if both are passed.
+2. `--route <name>` resolves to a model via `model-map.json`, used when `--model` is absent.
+3. `--mode <m>` and `--profile <t>` are orthogonal — they select the hardware-tier slot the *proxy* uses to resolve capability-based routing (agents, fallbacks), independent of any explicit `--model`/`--route` pin.
 
 Full env-var reference: [`docs/env-vars.md`](docs/env-vars.md). Runtime control details: [`CLAUDE.md`](CLAUDE.md).
 

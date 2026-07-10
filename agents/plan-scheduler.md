@@ -12,10 +12,13 @@ The **plan-scheduler** dispatches READY_ITEMS from the current plan wave to work
 
 ## When to Invoke
 
-- After planner produces a `READY_ITEMS` list and before wave execution
-- From the c-thru-plan orchestrator at the start of each wave
-- "schedule these plan items"
-- "dispatch the ready items"
+- As a standalone helper, invoked directly (not automatically called by `/c-thru-plan`'s own
+  wave loop — that loop dispatches `READY_ITEMS` straight to `coder` itself). Use this agent
+  when you explicitly want the `/schedule-plan-tasks` dispatch mechanism instead:
+  - "schedule these plan items"
+  - "dispatch the ready items"
+  - After `planner` produces a `READY_ITEMS` list and before wave execution, if you want
+    `TaskCreate`-based dispatch rather than direct `coder` invocation
 
 ## When NOT to Invoke
 

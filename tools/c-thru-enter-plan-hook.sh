@@ -5,8 +5,10 @@
 # Consume stdin (hook payload) to avoid SIGPIPE.
 cat > /dev/null
 
-# Opt-out via env variable.
-if [ "${CLAUDE_ROUTER_PLANNER_HINT:-1}" = "0" ]; then
+# Opt-out via env variable. C_THRU_PLANNER_HINT is the documented name (see
+# CLAUDE.md's Runtime Control table); CLAUDE_ROUTER_PLANNER_HINT is kept as a
+# deprecated fallback for anyone who set the old name.
+if [ "${C_THRU_PLANNER_HINT:-${CLAUDE_ROUTER_PLANNER_HINT:-1}}" = "0" ]; then
     exit 0
 fi
 

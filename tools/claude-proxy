@@ -119,6 +119,15 @@ const OLLAMA_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_TIMEOUT_MS
 // upstream timeout so a hermetic test can drive the C32 'timeout'→destroy path
 // without a 60s stall (see test/proxy-gemini-timeout.test.js).
 const GEMINI_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_GEMINI_TIMEOUT_MS', 60000);
+// Anthropic-shape upstream socket timeout. forwardAnthropic is the dispatch
+// target for real Anthropic, OpenRouter, AND default/modern local-Ollama
+// /v1/messages passthrough — none of those previously had any timeout at all,
+// so a backend that accepted the TCP connection but never responded hung the
+// client request forever with none of the fallback/cooldown machinery ever
+// triggering. Idle-inactivity semantics (like OLLAMA_UPSTREAM_TIMEOUT_MS):
+// rearms on socket activity, so it never cuts off a legitimate long
+// generation that is still streaming bytes.
+const ANTHROPIC_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_ANTHROPIC_TIMEOUT_MS', 300000);
 const STREAM_STALL_HARDFAIL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_STALL_MS', 300000);
 const STREAM_WALL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_WALL_MS', 2100000);
 const SSE_PING_INTERVAL_MS = numberFromEnv('CLAUDE_PROXY_PING_INTERVAL_MS', 15000);
@@ -499,11 +508,18 @@ function atomicWriteUsage(obj) {
 // callers include the SIGTERM flush. Best-effort by design: on budget
 // exhaustion the caller proceeds unlocked, shrinking the residual race from
 // lifetime-clobber to at most one <=5s delta in a sub-millisecond window.
+// CAUTION: sleepSyncMs uses Atomics.wait, which blocks Node's entire
+// single-threaded event loop (not just this flush) — new connections, active
+// SSE ping/stall timers, and streaming writes all freeze for the duration.
+// The retry budget below is kept deliberately small so worst-case contention
+// (two proxy instances, or a /c-thru/stats/clear request racing a debounced
+// flush) can only stall the whole process briefly, not for the full 200ms a
+// larger budget would allow.
 const USAGE_LOCK_DIR = `${USAGE_STATS_FILE}.lock`;
 function sleepSyncMs(ms) {
   try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch {}
 }
-function acquireUsageLock(budgetMs = 200) {
+function acquireUsageLock(budgetMs = 50) {
   const deadline = Date.now() + budgetMs;
   try { fs.mkdirSync(path.dirname(USAGE_LOCK_DIR), { recursive: true }); } catch {}
   for (;;) {
@@ -615,7 +631,7 @@ function flushUsageCore() {
     const snapshot = usageDelta;
     if (snapshot.last_recorded === null) return;  // nothing recorded since last flush
     usageDelta = emptyUsage();
-    const locked = acquireUsageLock(200);
+    const locked = acquireUsageLock(50);
     try {
       const disk = readUsageFileFresh();
       const toMerge = reconcileClearIfNeeded(disk) ? emptyUsage() : snapshot;
@@ -984,17 +1000,27 @@ function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders, meta) {
   }
   function setProfile(p) { if (meta) meta.authDerivedProfile = p; }
 
-  // Layer 1a: explicit auth:"none" — passthrough incoming headers verbatim. The
-  // intent is "don't inject anything from config." Ollama-default Bearer-ollama
-  // injection at the end still takes the Authorization slot if it's empty.
-  // (Historical behavior — preserved so existing configs that rely on x-api-key
-  // passthrough on local Ollama keep working.)
+  // Layer 1a: explicit auth:"none". Documented contract (CLAUDE.md) is "strip
+  // all auth" — but for genuinely local/test backends (loopback, kind:"ollama")
+  // the historical behavior is passthrough, so existing configs that rely on
+  // x-api-key passthrough on local Ollama keep working. Gate on isLocalBackend
+  // so that guarantee only applies to backends that are actually local: an
+  // endpoint pointed at a real remote host with auth:"none" must not silently
+  // forward the client's real Anthropic subscription OAuth token / API key to
+  // it. Ollama-default Bearer-ollama injection at the end still takes the
+  // Authorization slot if it's empty.
   if (backend.auth === 'none') {
-    if (incomingAuth && !outgoingHeaders['authorization']) {
-      outgoingHeaders['authorization'] = incomingAuth;
-    }
-    if (incomingKey && !outgoingHeaders['x-api-key']) {
-      outgoingHeaders['x-api-key'] = incomingKey;
+    if (isLocalBackend(backend)) {
+      if (incomingAuth && !outgoingHeaders['authorization']) {
+        outgoingHeaders['authorization'] = incomingAuth;
+      }
+      if (incomingKey && !outgoingHeaders['x-api-key']) {
+        outgoingHeaders['x-api-key'] = incomingKey;
+      }
+    } else {
+      delete outgoingHeaders['authorization'];
+      delete outgoingHeaders['Authorization'];
+      dropApiKey(outgoingHeaders);
     }
     setProfile('none');
     // fall through to Ollama-default at end
@@ -1965,7 +1991,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     port: targetUrl.port || (isHttps ? 443 : 80),
     path: forwardedPath,
     method: req.method,
-    headers
+    headers,
+    timeout: ANTHROPIC_UPSTREAM_TIMEOUT_MS,
   };
   ctxDebug(ctx, 'anthropic.request.path', { backend: backend.id, target: `${targetUrl.origin}${forwardedPath}` });
   const backendStartedAt = Date.now();
@@ -2029,11 +2056,22 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     const usageBuf = [];
     let usageBytes = 0;
     const USAGE_BUF_CAP = 256 * 1024;
+    // message_delta (usage.output_tokens) is always the LAST frame Anthropic
+    // emits, after all content — so once a stream's total bytes exceed
+    // USAGE_BUF_CAP, the head-capped usageBuf above never contains it and
+    // outputTokens silently stays 0 for a fully-successful response. Keep an
+    // independent rolling tail window (small: a single message_delta frame is
+    // one short line of JSON) so it's always available regardless of total
+    // stream length, without growing the head-cap memory bound.
+    const TAIL_BUF_CAP = 32 * 1024;
+    let tailBuf = Buffer.alloc(0);
     upRes.on('data', chunk => {
       if (usageBytes < USAGE_BUF_CAP) {
         usageBuf.push(chunk);
         usageBytes += chunk.length;
       }
+      tailBuf = Buffer.concat([tailBuf, chunk]);
+      if (tailBuf.length > TAIL_BUF_CAP) tailBuf = tailBuf.subarray(tailBuf.length - TAIL_BUF_CAP);
     });
     upRes.on('end', () => {
       if (upRes.statusCode !== 200) return;
@@ -2052,9 +2090,13 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
           if (startFrame) {
             try { inputTokens = JSON.parse(startFrame[1]).message?.usage?.input_tokens || 0; } catch {}
           }
-          const deltaFrame = txt.match(/event:\s*message_delta\s*\n\s*data:\s*({[^\n]+})/);
-          if (deltaFrame) {
-            try { outputTokens = JSON.parse(deltaFrame[1]).usage?.output_tokens || 0; } catch {}
+          // Try the head-capped buffer first (unchanged behavior for streams
+          // that fit within USAGE_BUF_CAP); fall back to the tail window when
+          // the frame was truncated away because the stream ran long.
+          const deltaMatch = txt.match(/event:\s*message_delta\s*\n\s*data:\s*({[^\n]+})/)
+            || tailBuf.toString('utf8').match(/event:\s*message_delta\s*\n\s*data:\s*({[^\n]+})/);
+          if (deltaMatch) {
+            try { outputTokens = JSON.parse(deltaMatch[1]).usage?.output_tokens || 0; } catch {}
           }
         } else {
           const obj = JSON.parse(txt);
@@ -2102,6 +2144,12 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     socket.on('connect', () => ctxDebug(ctx, 'upstream.socket.connected', { backend: backend.id }));
     socket.on('close', hadError => ctxDebug(ctx, 'upstream.socket.closed', { backend: backend.id, had_error: hadError }));
   });
+  // options.timeout arms socket.setTimeout but does NOT destroy the socket on
+  // its own (identical C32 fix already applied to forwardGemini) — without a
+  // 'timeout' listener a wedged backend never aborts. Destroying here funnels
+  // into the up.on('error') handler below, which already runs
+  // markBackendFailed + tryFallbackOrFail (cascade or 502, never a silent hang).
+  up.on('timeout', () => up.destroy(new Error(`anthropic upstream timeout after ${ANTHROPIC_UPSTREAM_TIMEOUT_MS}ms`)));
   up.on('error', async e => {
     ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'anthropic', error: e.message });
     // Connection-error path — no HTTP status to read. classifyFailure
@@ -2117,6 +2165,20 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       sendAnthropicError(res, 502, `backend anthropic at ${targetUrl.origin} error: ${e.message}`);
     }
   });
+  // Client-disconnect cancellation, mirroring forwardGemini's cancelUpstream
+  // and setupOllamaStream's res.on('close') teardown: when the Claude Code
+  // client closes mid-flight (Ctrl-C, network drop) we must tear down the
+  // upstream request so it stops streaming/billing tokens no client will
+  // read. Guarded so the normal completion path (up already ended/destroyed)
+  // never double-fires.
+  let upstreamCancelled = false;
+  const cancelUpstream = () => {
+    if (upstreamCancelled) return;
+    upstreamCancelled = true;
+    try { if (!up.destroyed) up.destroy(new Error('client disconnected mid-stream')); } catch {}
+  };
+  req.on('close', cancelUpstream);
+  res.on('close', cancelUpstream);
   const outBody = injectSamplingDefaults(body, effectiveModel, requestMeta.capability, backend);
   if (outBody) up.write(JSON.stringify(outBody));
   up.end();
@@ -4627,7 +4689,7 @@ function armConfigWatcher(configPath) {
     });
     configWatchHandle = configPath;
   } catch (e) {
-    proxyLog('warn', 'configWatcherFailed', { path: configPath, err: String(e) });
+    proxyLog('configWatcherFailed', { path: configPath, err: String(e) });
   }
 }
 
@@ -4699,7 +4761,7 @@ const server = http.createServer((req, res) => {
         // Write the cleared file under the lock; the cleared_at stamp is how
         // other live instances learn to drop their pre-clear deltas (clear-wins
         // check in flushUsageCore / the status view).
-        const locked = acquireUsageLock(200);
+        const locked = acquireUsageLock(50);
         try {
           atomicWriteUsage(Object.assign(emptyUsage(), { cleared_at: clearedAt }));
         } catch (e) {
@@ -5166,8 +5228,11 @@ const server = http.createServer((req, res) => {
           );
           if (filteredModel === null) {
             ctxLog(ctx, 'mode_filter.reject_all', { mode: activeMode, capability: capKey });
+            const suggestion = isGovMode(activeMode, CONFIG)
+              ? `Suggestion: add a ${activeMode}-compliant model to fallback_chains['${hwTier}']['${capKey}'] in model-map.json — relaxing the mode would break compliance.`
+              : `Suggestion: try a less restrictive --mode (e.g. best-cloud) or add a compliant model to fallback_chains['${hwTier}']['${capKey}'].`;
             return sendAnthropicError(res, 502,
-              `No ${activeMode} model available for capability '${capKey}': all candidates rejected by mode filter`);
+              `No ${activeMode} model available for capability '${capKey}': all candidates rejected by mode filter. ${suggestion}`);
           }
           if (filteredModel !== effectiveModel) {
             const swapped = resolveBackend(filteredModel, CONFIG, hwTier, activeMode);
@@ -5186,8 +5251,11 @@ const server = http.createServer((req, res) => {
         const modeFilterPred = filterFor(activeMode, CONFIG);
         if (modeFilterPred && !modeFilterPred(effectiveModel, CONFIG.model_routes || {}, CONFIG.endpoints || CONFIG.backends || {})) {
           ctxLog(ctx, 'mode_filter.reject_primary', { mode: activeMode, capability: capKey, model: effectiveModel });
+          const suggestion = isGovMode(activeMode, CONFIG)
+            ? `Suggestion: configure a ${activeMode}-compliant model for '${capKey || effectiveModel}' in llm_profiles or fallback_chains — relaxing the mode would break compliance.`
+            : `Suggestion: try --mode best-cloud (unblocks all models) or configure a ${activeMode}-compliant fallback for '${capKey || effectiveModel}' in llm_profiles.`;
           return sendAnthropicError(res, 502,
-            `No ${activeMode}-compliant model for '${capKey || effectiveModel}': '${effectiveModel}' is blocked by the ${activeMode} filter and no compliant fallback is configured`);
+            `No ${activeMode}-compliant model for '${capKey || effectiveModel}': '${effectiveModel}' is blocked by the ${activeMode} filter and no compliant fallback is configured. ${suggestion}`);
         }
 
         const { tierForGb } = require('./hw-profile.js');
@@ -5346,5 +5414,5 @@ process.on('uncaughtException', err => {
 });
 
 process.on('unhandledRejection', (reason) => {
-  proxyLog('error', 'unhandledRejection', { reason: String(reason) });
+  proxyLog('unhandledRejection', { reason: String(reason) });
 });

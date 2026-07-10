@@ -78,8 +78,14 @@ function applyLlmProfilesUpdates(config, llmProfiles) {
         fail(`llm_profiles['${cap}']['${k}'] must be a string, tier-keyed object, or null`);
       }
       if (isObject(v)) {
-        for (const tier of Object.keys(v)) {
+        for (const [tier, tierValue] of Object.entries(v)) {
           if (!HARDWARE_TIERS.has(tier)) fail(`llm_profiles['${cap}']['${k}']['${tier}'] is not a valid hardware tier; valid: ${[...HARDWARE_TIERS].join(', ')}`);
+          // null is valid here — it means "delete this tier" (mirrors the
+          // mode-level null-delete semantics below); anything else must be a
+          // non-empty string.
+          if (tierValue !== null && (typeof tierValue !== 'string' || !tierValue.trim())) {
+            fail(`llm_profiles['${cap}']['${k}']['${tier}'] must be a non-empty string or null (to delete)`);
+          }
         }
       }
     }
@@ -91,8 +97,20 @@ function applyLlmProfilesUpdates(config, llmProfiles) {
       for (const [k, v] of Object.entries(entry)) {
         if (v === null) { delete merged[k]; continue; }
         if (k === 'on_failure' || k === 'fallback_to') { merged[k] = v; continue; }
-        if (isObject(v) && isObject(merged[k])) {
-          merged[k] = Object.assign({}, merged[k], v);
+        if (isObject(v)) {
+          // Tier-object merge: a `null` tier value means "delete this tier"
+          // (mirroring the mode-level null-delete handling above), not a
+          // literal null to be stored — otherwise it would only be caught
+          // later by validateConfig's generic "must be a non-empty string"
+          // error, which is confusing given the tier-merge doc comment above
+          // promises single-tier updates without clobbering others.
+          const base = isObject(merged[k]) ? merged[k] : {};
+          const mergedTiers = Object.assign({}, base);
+          for (const [tier, tierValue] of Object.entries(v)) {
+            if (tierValue === null) { delete mergedTiers[tier]; continue; }
+            mergedTiers[tier] = tierValue;
+          }
+          merged[k] = mergedTiers;
         } else {
           merged[k] = v;
         }

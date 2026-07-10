@@ -30,7 +30,7 @@ block (self-loops are continuation, `↑` marks an escalation to a harder tier).
 | `code-reviewer` | `code-reviewer` | Correctness/style/coverage review after `coder` | `coder` (fix), `reviewer-security` ↑ |
 | `reviewer-security` | `reviewer-security` | Security review (authz, crypto, injection); hard-fail | `coder` (fix) |
 | `reviewer-plan` ⚠ | `code-reviewer` | Plan-document review (APPROVED / NEEDS_REVISION) | `planner` (revise) |
-| `plan-scheduler` ⚠ | `fast-generalist` | Dispatches READY_ITEMS to workers (terminal step) | (leaf) |
+| `plan-scheduler` ⚠ | `fast-generalist` | Standalone helper: dispatches a wave's READY_ITEMS via `/schedule-plan-tasks` when invoked directly (e.g. "schedule these tasks"). **Not** part of `/c-thru-plan`'s own Phase 4 loop — that loop dispatches straight to `coder` | (leaf) |
 | `debugger-hypothesis` | `debugger-hypothesis` | Generates/ranks hypotheses for an unknown bug | `debugger-investigate`, `debugger-hard` ↑ |
 | `debugger-investigate` | `debugger-investigate` | Deep investigation of a hypothesis (logs, traces) | `debugger-investigate` (continue), `tester`, `debugger-hard` ↑ |
 | `debugger-hard` | `debugger-hard` | Bugs resisting normal debugging (Opus); hard-fail | `coder` (fix), `tester` |
@@ -329,5 +329,8 @@ The deterministic pre-processor applies dep_discoveries from findings to pending
 
 ## Skill source
 
-Skills live in `skills/` and are installed to `~/.claude/skills/c-thru/` by `install.sh`.
-Agents live in `agents/` and are installed to `~/.claude/agents/c-thru/`.
+Skills live in `skills/`, agents live in `agents/`. Neither is installed as a persistent
+`~/.claude/` symlink — `install.sh`'s `cleanup_old_persistent_config()` actively removes any
+legacy `~/.claude/skills/c-thru/` / `~/.claude/agents/c-thru/` symlink it finds. The live
+mechanism is ephemeral `--agents`/`--settings` JSON injection per `c-thru` launch (see the
+"Injection layer" table in `docs/functionality-map.md`).
