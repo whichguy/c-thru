@@ -54,8 +54,11 @@ console.log('proxy sentinel detection (parseAgentSentinel) + C19 trust gate\n');
   assert(r && r.name === 'docs' && r.tag === null, 'plain-string body with marker → docs');
 }
 
-assert(parseAgentSentinel(body({ model: 'sonnet', messages: [{ role: 'user', content: '[[c-thru-agent:advisor:deepseek-v4-pro:cloud]]\nhi' }] }), undefined) === 'advisor:deepseek-v4-pro:cloud',
+{
+  const r = parseAgentSentinel(body({ model: 'sonnet', messages: [{ role: 'user', content: '[[c-thru-agent:advisor:deepseek-v4-pro:cloud]]\nhi' }] }), undefined);
+  assert(r && r.name === 'advisor:deepseek-v4-pro:cloud' && r.tag === null,
   'advisor marker with colon model id → advisor:deepseek-v4-pro:cloud');
+}
 
 // ── signed marker → tag captured ─────────────────────────────────────────────────
 {
