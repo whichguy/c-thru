@@ -388,6 +388,11 @@ Before finishing, verify:
 5. Run a quick grep for any remaining stale version references — e.g. if a bug
    was "open as of v0.20.3" and has now been fixed, the "open as of" phrase
    must be removed or updated.
+6. New Anthropic model families have been checked against
+   `SAMPLING_UNSUPPORTED_MODEL_PATTERNS` in `tools/claude-proxy`; families that
+   reject `temperature`/`top_p`/`top_k` need a pattern entry, while
+   `sampling_unsupported_models` is the config-level escape hatch for exceptions
+   without a code change.
 
 ---
 

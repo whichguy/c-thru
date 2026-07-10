@@ -264,11 +264,11 @@ After editing a source file, sync:
 tools/sync-plugin-bundle.sh          # copy changed files into bundle
 ```
 
-The pre-commit hook (`.githooks/pre-commit`) runs `--check` mode automatically.
-Activate it once: `git config core.hooksPath .githooks`
-`test/run-all.sh` enforces this fail-closed: its `hooks-armed` suite fails when
-`core.hooksPath` doesn't resolve to `.githooks/`, and the run also executes both
-drift checks directly — a green full run no longer depends on the hook being armed.
+There is no git hook automation for plugin bundle drift. Run
+`tools/sync-plugin-bundle.sh` manually after editing a mirrored source file, and
+use `tools/sync-plugin-bundle.sh --check` to verify. `test/run-all.sh` executes
+the bundle drift checks directly as part of its suite, so a green full run does
+not depend on any hook being installed.
 
 ## Working-tree hygiene
 

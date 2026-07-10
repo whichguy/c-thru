@@ -36,6 +36,15 @@ Individual suites live in `test/` and run directly (`node test/<name>.test.js`,
 `bash test/<name>.test.sh`). `test/run-all.sh` (full run) needs exclusivity; `make test-fast`
 is safe concurrently.
 
+## Sandbox limitations
+
+- The Codex workspace-write sandbox cannot bind loopback TCP ports (`listen EPERM` on
+  `127.0.0.1`) and cannot use `sysctl`.
+- Suites that spawn the proxy or stub servers (`proxy-*.test.js`, `*-e2e` tests) fail with
+  EPERM in the sandbox even when the code under test is correct.
+- Report those runs as "blocked: needs native verification"; do not rework the tests to avoid
+  port binds, and do not claim pass/fail from a sandboxed EPERM run.
+
 ## Key architecture notes
 
 - `tools/c-thru` (bash) resolves route → backend → env, spawns `tools/claude-proxy` (node)
