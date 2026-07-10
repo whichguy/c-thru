@@ -4145,7 +4145,7 @@ fi
 # --- explain subcommand — print resolution chain for a hypothetical request ---
 if [[ "${1:-}" == "explain" ]]; then
   shift
-  exec node "$(dirname "$0")/c-thru-explain.js" "$@"
+  exec node "$CTHRU_SELF_DIR/c-thru-explain.js" "$@"
 fi
 
 # --- reload / restart management subcommands ---

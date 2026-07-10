@@ -247,6 +247,8 @@ run_suite "model-map-ranking (quality-score ranking)" \
   node "$REPO_DIR/test/model-map-ranking.test.js"
 run_suite "proxy-tool-use (tool use / function calling)" \
   node "$REPO_DIR/test/proxy-tool-use.test.js"
+run_suite "proxy-count-tokens (count_tokens short-circuit + HEAD /)" \
+  node "$REPO_DIR/test/proxy-count-tokens.test.js"
 run_suite "hw-profile (hardware tier detection)" \
   node "$REPO_DIR/test/hw-profile.test.js"
 run_suite "model-map-layered (3-tier config merge)" \

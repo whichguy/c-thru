@@ -38,7 +38,7 @@ function mkConfig(stubPort, model) {
 }
 
 async function assertResolvedModel(port, stub, expected, message) {
-  const r = await httpJson(port, 'POST', '/v1/messages', MSG);
+  const r = await httpJson(port, 'POST', '/v1/messages', MSG, {}, 5000);
   assert(r.status === 200, `${message}: /v1/messages returns 200 (got ${r.status})`);
   assert(stub.lastRequest()?.model_used === expected,
     `${message}: forwarded model ${expected} (got ${JSON.stringify(stub.lastRequest()?.model_used)})`);
