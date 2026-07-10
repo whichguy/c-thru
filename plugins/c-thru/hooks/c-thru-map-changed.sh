@@ -33,7 +33,8 @@ while [ -L "$_src" ]; do
     case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
 done
 _hook_dir=$(cd -P "$(dirname "$_src")" && pwd)
-validator="$(cd "$_hook_dir/.." && pwd)/tools/model-map-validate.js"
+repo_root="$(cd "$_hook_dir/.." && pwd)"
+validator="$repo_root/tools/model-map-validate.js"
 
 if ! command -v node >/dev/null 2>&1 || [ ! -f "$validator" ]; then
     exit 0  # validator unavailable — skip silently
@@ -44,6 +45,29 @@ if validator_out=$(node "$validator" "$file_path" 2>&1); then
     msg="model-map.json valid — restart proxy to apply: pkill -f claude-proxy"
 else
     msg=$(printf '%s' "$validator_out" | head -5)
+fi
+
+resolve_path() {
+    local path="$1"
+    local dir base
+    dir=$(dirname "$path")
+    base=$(basename "$path")
+    if command -v realpath >/dev/null 2>&1; then
+        realpath "$path" 2>/dev/null && return 0
+    fi
+    dir=$(cd -P "$dir" 2>/dev/null && pwd) || return 1
+    printf '%s/%s\n' "$dir" "$base"
+}
+
+lineage_test="$repo_root/test/model-map-lineage.test.js"
+repo_model_map="$repo_root/config/model-map.json"
+if [ -f "$lineage_test" ] && resolved_file=$(resolve_path "$file_path") && resolved_repo_model_map=$(resolve_path "$repo_model_map"); then
+    if [ "$resolved_file" = "$resolved_repo_model_map" ]; then
+        if ! node "$lineage_test" >/dev/null 2>&1; then
+            msg="${msg}
+WARN: model-map lineage snapshot drift — review the routing diff, then run: node test/model-map-lineage.test.js --update"
+        fi
+    fi
 fi
 
 if command -v jq >/dev/null 2>&1; then

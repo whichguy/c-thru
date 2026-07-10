@@ -17,12 +17,12 @@
 
 const SENTINEL_PREFIX = '[[c-thru-agent:';
 // Marker shape: [[c-thru-agent:<name>]] or, when the per-user HMAC key exists,
-// [[c-thru-agent:<name>:<hex>]] where <hex> is a 16-char HMAC tag the proxy
+// [[c-thru-agent:<name>:<hex16>]] where <hex16> is exactly a 16-char HMAC tag the proxy
 // verifies (C19 anti-spoof). The tag group is optional so this stays a pure
 // parser — the trust decision (HMAC verify / fail-open) lives in the proxy.
 // Name charset includes :cloud suffixes, dotted names, provider/name namespaces,
 // and @backend sigils (advisor:<model-id> pins need these).
-const SENTINEL_RE = /\[\[c-thru-agent:([A-Za-z0-9_.:/@-]+)(?::([0-9a-fA-F]+))?\]\]/;
+const SENTINEL_RE = /\[\[c-thru-agent:([A-Za-z0-9_.:/@-]+?)(?::([0-9a-fA-F]{16}))?\]\]/;
 const NAME_RE = /^[A-Za-z0-9_.:/@-]+$/;
 // Widened from 50 → 80 to fit a name plus the optional ':<hex16>' tag.
 const READ_WINDOW = 80; // bytes read after locating the prefix; bounds the extract

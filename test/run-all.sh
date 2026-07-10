@@ -150,6 +150,8 @@ run_suite "c-thru-listen-port (ANTHROPIC_BASE_URL port discovery)" \
   bash "$REPO_DIR/test/c-thru-listen-port.test.sh"
 run_suite "hook-payload-extraction (hook payload extraction)" \
   bash "$REPO_DIR/test/hook-payload-extraction.test.sh"
+run_suite "map-changed-hook (validate + warn-only lineage drift guard)" \
+  bash "$REPO_DIR/test/c-thru-map-changed-hook.test.sh"
 run_suite "agent-router-hook (subagent_type → capability model rewrite)" \
   bash "$REPO_DIR/test/agent-router-hook.test.js"
 run_suite "strict-models (C_THRU_STRICT_MODELS=1 enforcement)" \
