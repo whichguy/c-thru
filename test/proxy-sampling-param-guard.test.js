@@ -159,6 +159,6 @@ async function testConfigExtendsGuardList() {
     process.exitCode = 1;
   } finally {
     const failed = summary();
-    if (failed) process.exitCode = 1;
+    process.exit(failed || process.exitCode ? 1 : 0);
   }
 })();
