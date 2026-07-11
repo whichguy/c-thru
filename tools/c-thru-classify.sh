@@ -55,7 +55,9 @@ fi
 if command -v jq >/dev/null 2>&1; then
     prompt_json=$(printf '%s' "$prompt" | jq -Rs .)
 elif command -v node >/dev/null 2>&1; then
-    prompt_json=$(node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(d)));" <<< "$prompt")
+    # printf '%s' (not a <<< here-string, which implicitly appends a trailing
+    # newline that would get baked into the JSON-escaped string).
+    prompt_json=$(printf '%s' "$prompt" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(d)));")
 else
     prompt_json='""'
 fi
@@ -89,6 +91,9 @@ fi
 if command -v jq >/dev/null 2>&1; then
     context_json=$(printf '%s' "$context" | jq -Rs .)
 else
-    context_json=$(node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(d)));" <<< "$context")
+    # printf '%s' (not a <<< here-string, which implicitly appends a trailing
+    # newline that would get baked into the JSON-escaped string, diverging
+    # from the jq path above).
+    context_json=$(printf '%s' "$context" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(d)));")
 fi
 printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":%s}}' "$context_json"

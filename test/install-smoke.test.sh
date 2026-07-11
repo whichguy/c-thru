@@ -141,6 +141,21 @@ if command -v jq >/dev/null 2>&1; then
     fi
 fi
 
+# ---------------------------------------------------------------------------
+# Regression guard: free-port capture must survive FORCE_COLOR (a coding-agent
+# sandbox commonly exports FORCE_COLOR=3, which makes Node's console.log
+# ANSI-colorize its args even through command substitution — this silently
+# corrupted the captured port with escape bytes and broke the whole install
+# E2E check). Assert the captured value is a bare integer string regardless.
+# ---------------------------------------------------------------------------
+echo "Free-port capture under FORCE_COLOR:"
+free_port_under_color="$(FORCE_COLOR=3 node -e "const s=require('net').createServer(); s.listen(0,'127.0.0.1',()=>{process.stdout.write(String(s.address().port));s.close()})" 2>/dev/null || true)"
+if [[ "$free_port_under_color" =~ ^[0-9]+$ ]]; then
+    check "free-port capture is a bare integer under FORCE_COLOR=3" "yes" "yes"
+else
+    check "free-port capture is a bare integer under FORCE_COLOR=3" "yes" "no (got: $free_port_under_color)"
+fi
+
 echo ""
 echo "$((PASS+FAIL)) tests: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

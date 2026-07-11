@@ -156,6 +156,10 @@ run_suite "hook-payload-extraction (hook payload extraction)" \
   bash "$REPO_DIR/test/hook-payload-extraction.test.sh"
 run_suite "map-changed-hook (validate + warn-only lineage drift guard)" \
   bash "$REPO_DIR/test/c-thru-map-changed-hook.test.sh"
+run_suite "c-thru-stop-hook (fallback systemMessage: parse/dedupe/staleness)" \
+  bash "$REPO_DIR/test/c-thru-stop-hook.test.sh"
+run_suite "c-thru-statusline-overlay (fallback badge: parse/staleness/fail-open)" \
+  bash "$REPO_DIR/test/c-thru-statusline-overlay.test.sh"
 run_suite "agent-router-hook (subagent_type → capability model rewrite)" \
   bash "$REPO_DIR/test/agent-router-hook.test.js"
 run_suite "strict-models (C_THRU_STRICT_MODELS=1 enforcement)" \
@@ -193,6 +197,8 @@ run_suite "hook-port-resolution (proxy-health + classify spawn, tools + plugin, 
   node "$REPO_DIR/test/hook-port-resolution.test.js"
 run_suite "session-start-injection (proxy /hooks/context block injected once)" \
   node "$REPO_DIR/test/session-start-injection.test.js"
+run_suite "c-thru-postcompact-context (PreCompact hook: port resolution + re-wrap)" \
+  node "$REPO_DIR/test/c-thru-postcompact-context.test.js"
 run_suite "preflight-model-readiness (/v1/active-models → PULL decisions)" \
   node "$REPO_DIR/test/preflight-model-readiness.test.js"
 run_suite "model-map-v12-adapter (regression)" \
@@ -261,10 +267,14 @@ run_suite "proxy-count-tokens (count_tokens short-circuit + HEAD /)" \
   node "$REPO_DIR/test/proxy-count-tokens.test.js"
 run_suite "hw-profile (hardware tier detection)" \
   node "$REPO_DIR/test/hw-profile.test.js"
+run_suite "benchmark-validate (docs/benchmark.json schema + cross-checks)" \
+  node "$REPO_DIR/test/benchmark-validate.test.js"
 run_suite "model-map-layered (3-tier config merge)" \
   node "$REPO_DIR/test/model-map-layered.test.js"
 run_suite "llm-profiles-editor (profile edit helpers)" \
   node "$REPO_DIR/test/llm-profiles-editor.test.js"
+run_suite "llm-capabilities-shared (classify_intent logic shared by mcp+proxy)" \
+  node "$REPO_DIR/test/llm-capabilities-shared.test.js"
 run_suite "model-map-config (config path resolution)" \
   node "$REPO_DIR/test/model-map-config.test.js"
 run_suite "proxy-cli-flags (parseCliFlags edge cases)" \

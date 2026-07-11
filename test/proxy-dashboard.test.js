@@ -70,6 +70,26 @@ async function main() {
     const dashSlash = await httpJson(port, 'GET', '/c-thru/dashboard/', null, {}, 3000);
     assertEq(dashSlash.status, 200, 'trailing-slash variant returns 200');
 
+    // ── 1b. DOM-level structural smoke (the page's actual content, not just
+    // the HTTP wiring around it) — every element the client-side JS writes
+    // into by id must exist, and the page must only ever fetch its own two
+    // endpoints (no accidental third-party/unexpected request target).
+    console.log('\n1b. dashboard markup: expected structural elements + fetch targets');
+    const EXPECTED_IDS = [
+      'topbar', 'kv-mode', 'kv-tier', 'kv-port', 'kv-pid', 'kv-uptime',
+      'kv-config', 'kv-default', 'conn', 'cooldown', 'recent-meta', 'recent',
+      'totals-meta', 'by-model', 'by-agent', 'by-backend',
+    ];
+    for (const id of EXPECTED_IDS) {
+      assert(new RegExp(`id="${id}"`).test(dash.bodyText), `markup has id="${id}"`);
+    }
+    const fetchTargets = [...dash.bodyText.matchAll(/fetch\(\s*'([^']+)'/g)].map(m => m[1]);
+    assert(fetchTargets.length > 0, 'page issues at least one fetch() call');
+    assert(
+      fetchTargets.every(t => t.startsWith('/c-thru/status') || t.startsWith('/c-thru/recent')),
+      `every fetch() target is one of the page's own two endpoints (got: ${JSON.stringify(fetchTargets)})`,
+    );
+
     // ── 2. /c-thru/status identity + discovery fields ─────────────────────
     console.log('\n2. /c-thru/status gains pid/port/uptime_s/started_at/dashboard_url');
     const st = await httpJson(port, 'GET', '/c-thru/status', null, {}, 3000);

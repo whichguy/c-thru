@@ -168,6 +168,74 @@ async function main() {
     });
   }
 
+  // ── Test 3: spawnProxy is hermetic against an ambient CLAUDE_CONFIG_DIR ─────
+  //
+  // Regression guard: when this whole test suite runs from inside a live
+  // c-thru session, CLAUDE_CONFIG_DIR/CLAUDE_PROFILE_DIR/CLAUDE_DIR are set in
+  // the parent process's real environment, pointing at that session's own
+  // ephemeral profile dir. spawnProxy's env-scrub previously missed these three
+  // vars, so profileClaudeDir() (tools/model-map-config.js) picked the ambient
+  // session's config over this test's own tmpHome sandbox — the watcher armed
+  // on the wrong file entirely, and this whole suite failed silently whenever
+  // it happened to run inside a live session (exactly what happened all
+  // session before the fix). Simulate that ambient-session condition
+  // deliberately and confirm spawnProxy still resolves to its own tmpHome.
+  console.log('\n3. spawnProxy scrubs an ambient CLAUDE_CONFIG_DIR (not just CLAUDE_MODEL_MAP_PATH)');
+  {
+    const decoyProfileDir = fs.mkdtempSync(path.join(tmpRoot, 'decoy-ambient-session-'));
+    const savedConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    const savedProfileDir = process.env.CLAUDE_PROFILE_DIR;
+    const savedDir = process.env.CLAUDE_DIR;
+    // Simulate the hazard: set these directly on process.env (not via spawnProxy's
+    // own `env:` option) so they flow into the child exactly the way an ambient
+    // parent-session environment would, via spawnProxy's own
+    // `Object.assign({}, process.env, ...)` base.
+    process.env.CLAUDE_CONFIG_DIR = decoyProfileDir;
+    process.env.CLAUDE_PROFILE_DIR = decoyProfileDir;
+    process.env.CLAUDE_DIR = decoyProfileDir;
+    try {
+      const tmpHome = path.join(tmpRoot, 'home-hermetic');
+      const claudeDir = path.join(tmpHome, '.claude');
+      fs.mkdirSync(claudeDir, { recursive: true });
+      const profileConfigPath = path.join(claudeDir, 'model-map.json');
+      fs.writeFileSync(profileConfigPath, JSON.stringify(minimalConfig('hermetic-model')));
+
+      // Tier 2 (project-local) walks ancestors of the launch cwd looking for
+      // .claude/model-map.json — it would find this test process's REAL
+      // ~/.claude/model-map.json if the launch cwd defaulted to somewhere
+      // under the real $HOME (e.g. the repo checkout), masking whether the
+      // CLAUDE_CONFIG_DIR scrub under test actually works. Point it at an
+      // empty tmp dir with no ancestor .claude/ so Tier 3 (profileClaudeDir,
+      // driven by HOME/CLAUDE_CONFIG_DIR) is what's actually exercised.
+      const isolatedLaunchCwd = fs.mkdtempSync(path.join(tmpRoot, 'launchcwd-hermetic-'));
+
+      const { child, port } = await spawnProxy({
+        tmpHome,
+        env: { CLAUDE_MODEL_MAP_LAUNCH_CWD: isolatedLaunchCwd },
+      });
+      try {
+        await waitForPing(port);
+        const ping = await httpJson(port, 'GET', '/ping', null);
+        assertEq(ping.status, 200, 'proxy up under a simulated ambient CLAUDE_CONFIG_DIR');
+        // The proxy canonicalizes CONFIG_PATH (fs.realpathSync), which resolves
+        // macOS's /var → /private/var symlink; realpath our expected value too
+        // so the comparison isn't just an incidental formatting mismatch.
+        assertEq(
+          ping.json?.config_path,
+          fs.realpathSync(profileConfigPath),
+          'proxy loaded its own tmpHome config, not the ambient CLAUDE_CONFIG_DIR decoy',
+        );
+      } finally {
+        try { child.kill('SIGTERM'); } catch {}
+        await new Promise(r => { child.once('exit', r); setTimeout(r, 2000); });
+      }
+    } finally {
+      if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = savedConfigDir;
+      if (savedProfileDir === undefined) delete process.env.CLAUDE_PROFILE_DIR; else process.env.CLAUDE_PROFILE_DIR = savedProfileDir;
+      if (savedDir === undefined) delete process.env.CLAUDE_DIR; else process.env.CLAUDE_DIR = savedDir;
+    }
+  }
+
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
 
   const failed = summary();

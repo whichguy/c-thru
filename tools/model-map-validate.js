@@ -569,6 +569,21 @@ function validateFallbackChains(chains, report, modelRoutes, backends) {
   }
 }
 
+// deprecated_models: flat map of concrete model name -> advice string, or
+// false/null to un-deprecate a built-in default (see GEMINI_DEPRECATED_DEFAULTS
+// and getDeprecatedModelAdvice in tools/claude-proxy, which reads this exact
+// shape at request time). Documented in CLAUDE.md but previously had zero
+// shape validation anywhere in this file.
+function validateDeprecatedModels(deprecatedModels, report) {
+  if (!isObject(deprecatedModels)) { report("'deprecated_models' must be an object when present"); return; }
+  for (const [model, advice] of Object.entries(deprecatedModels)) {
+    if (advice === false || advice === null) continue; // explicit un-deprecate — always valid
+    if (typeof advice !== 'string' || !advice.trim()) {
+      report(`'deprecated_models.${model}' must be a non-empty string (advice text), or false/null to un-deprecate (got ${JSON.stringify(advice)})`);
+    }
+  }
+}
+
 function resolveRoute(routes, start) {
   const seen = new Set();
   let current = start;
@@ -976,6 +991,10 @@ function validateConfig(config, _errors, options) {
 
   if (config.fallback_chains != null) {
     validateFallbackChains(config.fallback_chains, report, config.model_routes, endpointsOrBackends);
+  }
+
+  if (config.deprecated_models != null) {
+    validateDeprecatedModels(config.deprecated_models, report);
   }
 
   if (config.targets != null) {

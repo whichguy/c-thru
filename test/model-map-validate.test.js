@@ -707,6 +707,56 @@ console.log('\nC37: llm_profiles model routability warning');
   }
 }
 
+console.log('\nC38: deprecated_models validation');
+{
+  // (a) non-object deprecated_models → error
+  {
+    const errs = validate({ llm_mode: 'best-cloud', deprecated_models: 'not-an-object' });
+    assert(errs.some(e => e.includes("'deprecated_models' must be an object")),
+      `non-object deprecated_models is rejected (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (b) valid string advice → no error
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      deprecated_models: { 'gemini-1.5-pro': 'use gemini-pro-latest instead' },
+    });
+    assert(!errs.some(e => e.includes('deprecated_models')),
+      `string advice value passes (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (c) false / null → explicit un-deprecate, always valid
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      deprecated_models: { 'gemini-1.5-pro': false, 'gemini-1.0-pro': null },
+    });
+    assert(!errs.some(e => e.includes('deprecated_models')),
+      `false/null un-deprecate values pass (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (d) empty-string advice → error (not meaningfully "un-deprecate" nor real advice)
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      deprecated_models: { 'gemini-1.5-pro': '   ' },
+    });
+    assert(errs.some(e => e.includes("'deprecated_models.gemini-1.5-pro' must be a non-empty string")),
+      `whitespace-only advice string is rejected (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (e) non-string, non-boolean, non-null advice (e.g. a number) → error
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      deprecated_models: { 'gemini-1.5-pro': 42 },
+    });
+    assert(errs.some(e => e.includes("'deprecated_models.gemini-1.5-pro' must be a non-empty string")),
+      `non-string/non-boolean advice value is rejected (got: ${errs.join('; ') || 'none'})`);
+  }
+}
+
 // ── Summary ────────────────────────────────────────────────────────────────
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

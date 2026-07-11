@@ -204,6 +204,16 @@ async function spawnProxy(opts = {}) {
   }, extraEnv);
   if (!extraEnv.CLAUDE_MODEL_MAP_PATH) delete proxyEnv.CLAUDE_MODEL_MAP_PATH;
   delete proxyEnv.CLAUDE_MODEL_MAP_LAUNCH_CWD;
+  // When this test runs from inside a live c-thru session, the ambient
+  // CLAUDE_CONFIG_DIR/CLAUDE_PROFILE_DIR/CLAUDE_DIR point at that session's
+  // real ephemeral profile dir. profileClaudeDir() (tools/model-map-config.js)
+  // checks those before falling back to HOME/.claude, so without scrubbing
+  // them the spawned proxy loads the real session's config instead of this
+  // test's tmpHome sandbox — hijacking anything that depends on the profile
+  // dir (e.g. the config watcher arming on the wrong file).
+  for (const k of ['CLAUDE_CONFIG_DIR', 'CLAUDE_PROFILE_DIR', 'CLAUDE_DIR']) {
+    if (!Object.prototype.hasOwnProperty.call(extraEnv, k)) delete proxyEnv[k];
+  }
   Object.assign(proxyEnv, {
     CLAUDE_PROXY_STARTUP_PROBE: '0',
     CLAUDE_PROXY_SKIP_OLLAMA_WARMUP: '1',

@@ -494,7 +494,11 @@ run_e2e_checks() {
     # 3. Spawn proxy on a free port + /ping handshake.
     if command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
         local free_port=""
-        free_port="$(node -e "const s=require('net').createServer(); s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})" 2>/dev/null || true)"
+        # process.stdout.write (not console.log) — console.log ANSI-colorizes its
+        # args when FORCE_COLOR is set, even through command substitution (not a
+        # real TTY), corrupting the captured port with escape bytes and making
+        # the downstream parseInt() silently yield NaN.
+        free_port="$(node -e "const s=require('net').createServer(); s.listen(0,'127.0.0.1',()=>{process.stdout.write(String(s.address().port));s.close()})" 2>/dev/null || true)"
         if [ -z "$free_port" ]; then
             fail_e2e "proxy boot" "could not find a free port"
         fi
