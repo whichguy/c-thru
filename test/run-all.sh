@@ -176,6 +176,8 @@ else
 fi
 run_suite "session-start-seeding (first-run seed + settings registration)" \
   bash "$REPO_DIR/test/session-start-seeding.test.sh"
+run_suite "c-thru-ephemeral-settings (user preferences + denylist)" \
+  bash "$REPO_DIR/test/c-thru-ephemeral-settings.test.sh"
 run_suite "launcher-secret-gen-proxy-enforcement (C19/C23 secret-gen → live proxy enforces)" \
   bash "$REPO_DIR/test/launcher-secret-gen-proxy-enforcement.test.sh"
 run_suite "cross-session-secret-stability (HMAC key stable across sessions → A-signed marker verifies in B)" \

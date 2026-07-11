@@ -241,7 +241,9 @@ setup_ephemeral_session() {
   # builds it into EPHEMERAL_SETTINGS_JSON and it is passed inline via --settings.
 
   # 1. Shadow the entire .claude directory to make the session fully ephemeral
-  # Link everything except what we override (settings, agents, skills) or what causes noise (backups)
+  # Link everything except what we override (settings, agents, skills) or what causes noise (backups).
+  # User preference keys from the skipped settings.json are re-injected separately
+  # (and filtered) by write_ephemeral_settings(), so they are relocated, not lost.
   local item name
   # Use ls -A to catch hidden files
   while IFS= read -r name; do
@@ -355,13 +357,17 @@ cleanup_ephemeral_session() {
 
 # Build the ephemeral settings JSON in memory. It is passed inline to claude via
 # --settings "$json" (a JSON string — never written to disk) in build_forwarded_args.
-# No-op in bypass mode (no ephemeral session dir).
+# settings.json is excluded from the ephemeral CLAUDE_CONFIG_DIR shadow, so this
+# blob is the child claude process's only user-level settings source; preferences
+# must be re-injected here or they silently revert to defaults. This was a real
+# bug: showClearContextOnPlanAccept was silently dropped. No-op in bypass mode.
 # The proxy block (URL + endpoints + Profile/Mode) is injected by the
 # c-thru-session-start command hook, which curls /hooks/context itself — so this
 # registers no SessionStart HTTP hook, and the output no longer depends on PROXY_PORT.
 write_ephemeral_settings() {
   [[ -n "${EPHEMERAL_SESSION_DIR:-}" ]] || return 0
   local tools_dest="$CTHRU_SELF_DIR"
+  local user_settings_path="$ORIGINAL_CLAUDE_PROFILE_DIR/settings.json"
 
   # Resolve actual path for a tool (checks for .sh suffix too).
   find_tool_path() {
@@ -397,7 +403,7 @@ write_ephemeral_settings() {
   # SessionStart     *               c-thru-session-start      proxy+Ollama health + /hooks/context block (curled by the hook)
   # PreCompact       *               c-thru-postcompact-context re-inject context before compaction (PreCompact is the live event; the old PostCompact never fired)
   # UserPromptSubmit *               c-thru-proxy-health       asyncRewake if proxy down
-  # UserPromptSubmit *               c-thru-classify           classify_intent tagging
+  # UserPromptSubmit *               c-thru-classify           fetch static /hooks/context block (no prompt inspection; not intent classification)
   # PostToolUse      Write|Edit      c-thru-map-changed        validate model-map.json on edit
   # PreToolUse       Agent|WebSearch|c-thru-agent-router-hook  resolve capability for tool calls (log-only for non-Agent)
   #                   WebFetch|Monitor|Plan
@@ -420,9 +426,37 @@ write_ephemeral_settings() {
   # a `"` or `\` in a resolved tool path can no longer produce malformed JSON.
   # Paths are passed as argv so node handles all escaping.
   EPHEMERAL_SETTINGS_JSON=$(node -e '
-    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, agentRouterCmd, plannerHintCmd] = process.argv.slice(1);
+    const fs = require("fs");
+    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, agentRouterCmd, plannerHintCmd, userSettingsPath] = process.argv.slice(1);
+    const USER_SETTINGS_DENYLIST = new Set([
+      // c-thru injects ephemeral versions; user originals would fight the merge.
+      "hooks", "mcpServers", "permissions",
+      // The proxy owns routing/auth, so user overrides could conflict or bypass it.
+      "env", "model", "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod",
+    ]);
+    const isPlainObject = value =>
+      value !== null && typeof value === "object" && !Array.isArray(value) &&
+      Object.getPrototypeOf(value) === Object.prototype;
+    let userSettings = {};
+    let userSettingsText;
+    try {
+      userSettingsText = fs.readFileSync(userSettingsPath, "utf8");
+    } catch (_) {
+      // A missing or unreadable user settings file is equivalent to no settings.
+    }
+    if (userSettingsText !== undefined) {
+      try {
+        const parsed = JSON.parse(userSettingsText);
+        if (isPlainObject(parsed)) userSettings = parsed;
+      } catch (error) {
+        process.stderr.write("c-thru: ignoring unparseable user settings.json: " + error.message + "\n");
+      }
+    }
+    const filteredUserSettings = Object.fromEntries(
+      Object.entries(userSettings).filter(([key]) => !USER_SETTINGS_DENYLIST.has(key))
+    );
     const cmdHook = (command, timeout, extra = {}) => ({ type: "command", command, timeout, ...extra });
-    const settings = {
+    const cThruInjected = {
       mcpServers: {
         "llm-capabilities": { type: "stdio", command: "node", args: [mcpJs] },
       },
@@ -445,8 +479,9 @@ write_ephemeral_settings() {
       },
       permissions: { allow: ["mcp__llm-capabilities__*"] },
     };
+    const settings = { ...filteredUserSettings, ...cThruInjected };
     process.stdout.write(JSON.stringify(settings));
-  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$agent_router_cmd" "$planner_hint_cmd") || {
+  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path") || {
     echo "c-thru: failed to build ephemeral settings JSON" >&2
     exit 1
   }

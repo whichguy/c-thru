@@ -68,18 +68,18 @@ one, #10, was converted to an inline `--settings` JSON string).
 | 7 | `--dangerously-skip-permissions` (user-supplied only; not injected) | CLI arg passthrough | PASSTHROUGH | `:3709` | not an injection |
 | 8 | System-info + proxy URL + `/no_thinking` | `--append-system-prompt` CLI arg | INLINE | `:3658` | necessary |
 | 9 | `CLAUDE_MODEL_MAP_PATH` → proxy | `env VAR=… claude-proxy` at spawn | INLINE (passes a path, writes nothing) | `:1854` | necessary |
-| 10 | Per-session settings (hooks/mcp/permissions) | JSON built in-memory → `--settings <json>` CLI arg | INLINE arg | build `:410`, flag `:3659` | necessary (converted from a temp-file write) |
+| 10 | Per-session settings (c-thru hooks/mcp/permissions + filtered user preferences) | JSON built in-memory → `--settings <json>` CLI arg | INLINE arg | build `:410`, flag `:3659` | necessary (converted from a temp-file write) |
 | 11 | **Ephemeral session dir** shadowing `~/.claude` | **`mktemp -d` + symlinks/cp** → `CLAUDE_CONFIG_DIR` | **FILE-BASED** | `:246` | necessary (isolation) |
 | 12 | `--agents <json>` | CLI arg (JSON built from agent `.md`) | INLINE arg | `:3668` | necessary |
 | 13 | `proxy.pid` + ready FIFO + startup log | files in profile dir | FILE-BASED (runtime IPC) | `:1848` | necessary (process IPC) |
 
-- **#10 was the one avoidable file write — now converted.** The settings JSON is statically known (no
-  PROXY_PORT dependency). `write_ephemeral_settings` builds it into the `EPHEMERAL_SETTINGS_JSON` shell var
-  and `build_forwarded_args` passes it inline as `--settings "$json"` — the flag accepts "a JSON file path
-  **or** a JSON string" (verified against Claude Code 2.1.177), so nothing is written to disk. This mirrors
-  the existing inline `--agents "$json"` (#12). Covered by `test/cli-e2e-flags.test.js` Test 18 (the inline
-  arg parses and has the expected SessionStart-hook shape) and Test 20 (the durable
-  `~/.claude/settings.json` stays byte-identical and mtime-unchanged across a launch).
+- **#10 was the one avoidable file write — now converted.** `write_ephemeral_settings` tolerantly reads user
+  `settings.json`, passes through preference keys except its c-thru/proxy denylist, and builds the merged result
+  into the `EPHEMERAL_SETTINGS_JSON` shell var. `build_forwarded_args` passes it inline as `--settings "$json"`
+  — the flag accepts "a JSON file path **or** a JSON string" (verified against Claude Code 2.1.177), so nothing
+  is written to disk. This mirrors the existing inline `--agents "$json"` (#12). Covered by
+  `test/cli-e2e-flags.test.js` Test 18 (the inline arg parses and has the expected SessionStart-hook shape) and
+  Test 20 (the durable `~/.claude/settings.json` stays byte-identical and mtime-unchanged across a launch).
 - **#11 is genuinely not avoidable.** This is per-session filesystem *isolation* — shadowing `~/.claude`
   so injected agents/skills/settings don't pollute the durable profile — not user-supplied config. Claude
   Code reads a whole `CLAUDE_CONFIG_DIR`; there is no inline equivalent for "a directory." The
