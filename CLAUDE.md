@@ -86,21 +86,32 @@ content-block / server-tool sub-matrices), see
 
 ### Request flow
 
+<!-- BEGIN shared-diagram:launch-flow -->
+```mermaid
+flowchart TD
+    A[c-thru invoked] --> B[resolve model-map + route/model]
+    B --> C{backend needs a proxy?}
+    C -- yes --> D[spawn claude-proxy<br/>FIFO READY-port handshake]
+    C -- no --> E[transparent: skip proxy spawn]
+    D --> F[inject --settings / --agents /<br/>--append-system-prompt]
+    E --> F
+    F --> G[exec real claude binary]
 ```
-c-thru (bash)
-  ├─ selects active model-map (override path → project/.claude/ → ~/.claude/model-map.json)
-  ├─ resolves route → backend → env vars
-  ├─ for Ollama backends: spawns/reuses claude-proxy (HTTP server on a free port)
-  │    claude-proxy default: pass-through to Ollama's /v1/messages adapter
-  │    claude-proxy legacy:  Anthropic → Ollama /api/chat translation
-  │    (other backends — Anthropic, OpenRouter — always pass-through to /v1/messages)
-  └─ exec's the real claude binary with ephemeral session injection:
-       - ANTHROPIC_BASE_URL=http://127.0.0.1:<proxy_port>
-       - ANTHROPIC_AUTH_TOKEN="ollama" (for local/spoofed backends)
-       - --settings <temp_json> (injects hooks & llm-capabilities MCP)
-       - --agents <json> (injects all agents from agents/*.md)
-       - --append-system-prompt "..." (injects fleet awareness)
-```
+<!-- END shared-diagram:launch-flow -->
+
+Every backend (Anthropic, OpenRouter, Ollama) always routes through the spawned proxy unless
+`CLAUDE_PROXY_BYPASS=1` is set — the proxy passes real-Anthropic/OpenRouter/modern-Ollama
+requests through to `/v1/messages` near-verbatim (`forwardAnthropic`) and only does a legacy
+`/api/chat` translation for backends explicitly marked `format:"ollama-legacy"`
+(`forwardOllamaLegacy`). Ephemeral injection on exec:
+  - `ANTHROPIC_BASE_URL=http://127.0.0.1:<proxy_port>`
+  - `ANTHROPIC_AUTH_TOKEN="ollama"` (for local/spoofed backends)
+  - `--settings <inline json>` (injects hooks & llm-capabilities MCP)
+  - `--agents <json>` (injects all agents from agents/*.md)
+  - `--append-system-prompt "..."` (injects fleet awareness)
+
+Full flow with every branch: [docs/architecture-diagrams.md § 1](docs/architecture-diagrams.md#1-cli-launch--proxy-spawn--claude-exec).
+Wire-translation dispatch detail: [docs/architecture-diagrams.md § 3](docs/architecture-diagrams.md#3-wire-translation-dispatch-v1messages).
 
 ### Ollama backend wire format
 
@@ -282,6 +293,17 @@ secret-shaped strings (AKIA/ghp_/sk-/AIza), accumulated experiment-artifact
 directories, large unstaged WIP, and local commits ahead of `origin/main`
 (which would be invisible to isolated-worktree agents). Symlinked by
 `install.sh` to `~/.claude/tools/c-thru-hygiene-check`.
+
+## Quality-review rounds and test authoring
+
+Running a deliberate, whole-codebase (or whole-subsystem) review campaign — not a one-off fix?
+See `docs/review-methodology.md` for the process (survey → mandatory adversarial verification →
+grouped fix dispatch → regression test → mandatory chronic-failure audit → open-items handling →
+commit) and its 9 numbered anti-patterns. For the mechanics of writing a new test file itself
+(suite conventions, the exit-code contract, `test/run-all.sh` registration), see
+`docs/test-authoring.md`. Neither doc overlaps `docs/test-coverage-audit.md` (tracks WHAT'S
+untested) or `docs/functionality-verification.md` (per-capability verdicts) — those are state
+trackers; the two new docs are process/mechanics references.
 
 ## Agentic plan/wave system
 

@@ -496,6 +496,8 @@ run_suite "sync-plugin-bundle --check (bundle drift)" \
   bash "$REPO_DIR/tools/sync-plugin-bundle.sh" --check
 run_suite "gen-routing-doc --check (README routing table drift)" \
   node "$REPO_DIR/tools/gen-routing-doc.js" --check
+run_suite "check-diagram-sync (shared launch-flow diagram: README ↔ CLAUDE.md)" \
+  node "$REPO_DIR/tools/check-diagram-sync.js"
 run_suite "hooks-armed (core.hooksPath → .githooks, fail-closed)" \
   bash "$REPO_DIR/test/hooks-armed.test.sh"
 run_suite "run-all-coverage (every test/ runnable referenced in this registry)" \

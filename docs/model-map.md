@@ -6,7 +6,7 @@ The router/proxy selects one active `model-map.json` graph by precedence:
 2. `$PWD/.claude/model-map.json` — project-local selected graph.
 3. `$HOME/.claude/model-map.json` — profile selected graph.
 
-Only the profile graph is layered. `install.sh` seeds `model-map.system.json`, user changes live in `model-map.overrides.json`, and those are synced into the effective profile `model-map.json`. A project-local `model-map.json` is selected as-is and traversed as its own DAG; it is not merged with the profile graph.
+These two tiers are merged differently depending on when the merge runs. `install.sh` seeds `model-map.system.json`, user changes live in `model-map.overrides.json`. At **CLI launch / build time**, `maybeSyncLayeredProfileModelMap()` (`tools/model-map-config.js:91-172`) runs a real 2-pass merge: Pass 1 syncs system + overrides into the profile's effective `model-map.json`; Pass 2, when a project-local `.claude/model-map.json` is found walking up from cwd, merges system + overrides + project into a session-scoped temp overlay (the shared profile file itself is never polluted with project entries). At **proxy SIGHUP-reload time**, by contrast, `resolveConfigSelectionForReload()` (`tools/claude-proxy:4463-4479`) skips that layered sync for reload speed and instead does a cheap 3-tier path *selection* only — override → project-local (walked directly, no merge) → profile — so a project-local `model-map.json` really is used as-is on that path, not merged with the profile graph. See [architecture-diagrams.md § 6](architecture-diagrams.md#6-config-layering) for diagrams of both paths.
 
 ## Shape
 

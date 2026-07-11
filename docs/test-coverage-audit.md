@@ -306,6 +306,9 @@ npm test 2>&1 | grep -E "^(✓|×|proxy|model-map|tests?:)" | head -50
 - **Model-map config:** `tools/model-map-config.js`
 - **Test helpers:** `test/helpers.js`
 - **TODO entry (CLAUDE.md):** "[review] Test-coverage audit — every guard/check should have a quality test"
+- **How to write the test:** this doc tracks WHAT'S untested; see `docs/test-authoring.md` for
+  suite conventions, registration, and the regression-test pattern. **How to run a whole review
+  round:** `docs/review-methodology.md`.
 
 ---
 

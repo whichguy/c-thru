@@ -72,28 +72,35 @@ Plugin users can still drive routing via environment variables — `CLAUDE_LLM_M
 
 ## How c-thru works
 
-The bash entrypoint selects a model-map and routing mode, the Node proxy translates Anthropic ↔ Gemini / Ollama and forwards everything else, and agent files declare logical capability names (`planner`, `coder`, ...) that the proxy resolves to concrete models at request time.
+The bash entrypoint selects a model-map and routing mode, spawns the Node proxy (unless
+`CLAUDE_PROXY_BYPASS=1` is set), and execs the real `claude` binary with ephemeral session
+injection. The proxy translates Anthropic ↔ Gemini / Ollama and forwards everything else; agent
+files declare logical capability names (`planner`, `coder`, ...) that the proxy resolves to
+concrete models at request time.
 
+<!-- BEGIN shared-diagram:launch-flow -->
+```mermaid
+flowchart TD
+    A[c-thru invoked] --> B[resolve model-map + route/model]
+    B --> C{backend needs a proxy?}
+    C -- yes --> D[spawn claude-proxy<br/>FIFO READY-port handshake]
+    C -- no --> E[transparent: skip proxy spawn]
+    D --> F[inject --settings / --agents /<br/>--append-system-prompt]
+    E --> F
+    F --> G[exec real claude binary]
 ```
-c-thru (bash)
-  ├─ selects model-map (CLAUDE_MODEL_MAP_PATH → project/.claude/ → ~/.claude/model-map.json)
-  ├─ resolves route → backend → env vars
-  ├─ for cloud-only paths: exec's claude directly (transparent, no proxy)
-  └─ for local/translated backends: spawns claude-proxy on a free port, then
-     exec's claude with:
-       - ANTHROPIC_BASE_URL=http://127.0.0.1:<port>
-       - --settings <ephemeral json>   (hooks + llm-capabilities MCP)
-       - --agents <json>               (full agent fleet)
-       - --append-system-prompt        (fleet awareness)
+<!-- END shared-diagram:launch-flow -->
 
-claude-proxy (Node.js, stdlib only)
-  ├─ resolves capability alias → llm_profiles[capability][mode][tier] → concrete model
-  ├─ rewrites: model field, URL/Host, auth headers, model_overrides, @sigil
-  ├─ translates Anthropic ↔ Gemini where needed (forwardGemini)
-  ├─ forwards Ollama via /v1/messages (Ollama 0.4+) — preserves tool_use, thinking
-  ├─ catch-all passthrough for anything not explicitly handled
-  └─ stamps x-c-thru-* response headers (resolved-via, translation-gap, …)
-```
+Full flow with every branch (native-subcommand bypass, `--bypass-proxy`, backend lookup ladder,
+FIFO handshake failure modes): [docs/architecture-diagrams.md § 1](docs/architecture-diagrams.md#1-cli-launch--proxy-spawn--claude-exec).
+
+claude-proxy (Node.js, stdlib only):
+  - resolves capability alias → llm_profiles[capability][mode][tier] → concrete model
+  - rewrites: model field, URL/Host, auth headers, model_overrides, @sigil
+  - translates Anthropic ↔ Gemini where needed (forwardGemini)
+  - forwards Ollama via /v1/messages (Ollama 0.4+) — preserves tool_use, thinking
+  - catch-all passthrough for anything not explicitly handled
+  - stamps x-c-thru-* response headers (resolved-via, translation-gap, …)
 
 > The `--settings`, `--agents`, and `--append-system-prompt` injections only happen on the CLI install path. Plugin users get the proxy and `ANTHROPIC_BASE_URL` registration only — agent files and the `llm-capabilities` MCP are not loaded that way.
 

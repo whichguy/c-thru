@@ -13,6 +13,10 @@ is now ~4939 lines. **Every HIGH-priority gap it named has since been implemente
 except `sessionEffectivePath` collision detection.** Treat `test-coverage-audit.md` as a historical
 snapshot; this file supersedes it for current state.
 
+This file itself is a dated verdict snapshot, not a process doc — see `docs/review-methodology.md`
+for how to run a review round that would refresh it, and `docs/test-authoring.md` for how to
+write the tests that close a GAP row.
+
 ---
 
 ## 1. Proxy core — the prior audit's HIGH-priority items, re-verified live

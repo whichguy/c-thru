@@ -23,6 +23,9 @@
 9. [Observability & ops](#9-observability--ops)
 10. [Headers (`x-c-thru-*`)](#10-headers-x-c-thru-)
 11. [Plugin / install](#11-plugin--install)
+12. [Architecture diagrams](architecture-diagrams.md) — visual flow view of 6 key sequences
+    (CLI launch, model resolution + fallback, wire translation, hook lifecycle, wave lifecycle,
+    config layering), each with verified file:line grounding
 
 ---
 
@@ -96,22 +99,23 @@ Detail: `docs/subscription-auth.md` (auth env), `docs/env-vars.md` (the full env
 
 A local HTTP server (~4900 lines) that intercepts Claude Code's API traffic and forwards to the resolved
 backend, translating wire shapes where the backend isn't Anthropic-native. Detail:
-`docs/anthropic-api-coverage.md`, `docs/headers.md`.
+`docs/anthropic-api-coverage.md`, `docs/headers.md`. Visual dispatch-fork view:
+[architecture-diagrams.md § 3](architecture-diagrams.md#3-wire-translation-dispatch-v1messages).
 
 | Capability | Trigger | Status | Impl |
 |---|---|---|---|
-| Request interception (`/v1/*`, `/c-thru/*`) | HTTP server | full | `tools/claude-proxy:~4700` |
-| CLI flag parsing (`--flag value` / `=`) | `process.argv` | full | `tools/claude-proxy:46` |
-| **Translation: Anthropic passthrough** | default | full | `forwardAnthropic:1710` |
-| **Translation: Anthropic⇄Ollama-legacy** | `format:ollama-legacy` | full (lossy by design — text only) | `forwardOllamaLegacy:3974` |
-| **Translation: Anthropic⇄Gemini** (req+stream+non-stream, tool_use/thinking/thoughtSignature/schema-scrub) | `call_style:gemini` | full | `mapAnthropicToGemini:3690`, `forwardGemini:2934` |
-| **Translation: Anthropic⇄OpenAI** | `call_style:openai` | **stub (501)** | `tools/claude-proxy:4844` |
+| Request interception (`/v1/*`, `/c-thru/*`) | HTTP server | full | `tools/claude-proxy:4653` |
+| CLI flag parsing (`--flag value` / `=`) | `process.argv` | full | `parseCliFlags:57` |
+| **Translation: Anthropic passthrough** (also covers modern `kind:"ollama"` — Ollama 0.4+ serves an Anthropic-shaped `/v1/messages`) | default | full | `forwardAnthropic:1900` |
+| **Translation: Anthropic⇄Ollama-legacy** | `format:ollama-legacy` | full (lossy by design — text only) | `forwardOllamaLegacy:4244` |
+| **Translation: Anthropic⇄Gemini** (req+stream+non-stream, tool_use/thinking/thoughtSignature/schema-scrub) | `call_style:gemini` | full | `mapAnthropicToGemini:3960`, `forwardGemini:3177` |
+| **Translation: Anthropic⇄OpenAI** | `call_style:openai` | **stub (501)** | `tools/claude-proxy:5271` |
 | **Translation: Bedrock** | — | **absent** | n/a |
-| Vertex (Gemini-over-Vertex URL/auth; no SigV4) | `backend.vertex:true` | full (Gemini reuse) | `tools/claude-proxy:2973` |
-| Streaming (Ollama ndjson → Anthropic SSE) + watchdogs (TTFT/stall/wall/ping) | `stream:true` | full | `setupOllamaStream:1968` |
-| Usage recording (debounced 5s, lock + atomic rename) | every success | full | `recordUsage:443` |
-| Journaling (per-request JSONL) | `CLAUDE_PROXY_JOURNAL=1` | full | `shouldJournal:629` |
-| Gemini Files API (`/v1/files`) | `/v1/files` | full (AI Studio; Vertex 501) | `tools/claude-proxy:2459` |
+| Vertex (Gemini-over-Vertex URL/auth; no SigV4) | `backend.vertex:true` | full (Gemini reuse) | `tools/claude-proxy:3142` |
+| Streaming (Ollama ndjson → Anthropic SSE) + watchdogs (TTFT/stall/wall/ping) | `stream:true` | full | `setupOllamaStream:2207` |
+| Usage recording (debounced 5s, lock + atomic rename) | every success | full | `recordUsage:556` |
+| Journaling (per-request JSONL) | `CLAUDE_PROXY_JOURNAL=1` | full | `shouldJournal:742` |
+| Gemini Files API (`/v1/files`) | `/v1/files` | full (AI Studio; Vertex 501) | `tools/claude-proxy:2807` |
 | Anthropic catch-all (`/v1/me`, `/v1/organizations`) | unhandled `/v1/*` | full | `forwardToAnthropicCatchAll:1275` |
 
 ---
@@ -180,7 +184,8 @@ Detail: `docs/model-map.md`, `docs/hardware-profile-matrix.md`.
 ## 7. Hooks
 
 Installed two ways: plugin (`plugins/c-thru/hooks/hooks.json`) and CLI-ephemeral (settings heredoc). Drift
-guarded by `test/hooks-declaration-parity.test.js`.
+guarded by `test/hooks-declaration-parity.test.js`. Visual event→hook view:
+[architecture-diagrams.md § 4](architecture-diagrams.md#4-hook-lifecycle).
 
 | Hook | Event | What | Impl | Registered |
 |---|---|---|---|---|
@@ -191,7 +196,15 @@ guarded by `test/hooks-declaration-parity.test.js`.
 | postcompact-context | PreCompact | Re-inject routing context | `c-thru-postcompact-context.sh` | hooks.json + ephemeral |
 | agent-router | PreToolUse `Agent` | subagent_type → capability model rewrite | `c-thru-agent-router-hook.sh` | **CLI-only** |
 | enter-plan | PreToolUse `EnterPlanMode` | Advisory `/c-thru-plan` hint (never blocks) | `c-thru-enter-plan-hook.sh` | CLI-only + skill-managed |
-| stop | Stop | One systemMessage per new fallback event | `c-thru-stop-hook.sh` | **manual/ephemeral** (semi-orphan — symlinked, not auto-registered) |
+| stop | Stop | One systemMessage per new fallback event¹ | `c-thru-stop-hook.sh` | **manual/ephemeral** (semi-orphan — symlinked, not auto-registered) |
+
+¹ **Known gap:** `stop` (and the sibling `c-thru-statusline-overlay.sh`, not itself a registered
+hook) watch `proxy.log` for event tags confirmed via git history to be from an old, since-rewritten
+fallback architecture (commit `10e88d4`) — neither tag is emitted by the current
+`tools/claude-proxy`, so this hook has likely never fired a real systemMessage since that
+rewrite. The registration/wiring described above is accurate; what it watches *for* is stale. Not
+yet fixed — the correct replacement signal needs tracing current success-path logging rather than
+a guess. See `docs/architecture-diagrams.md` § 4's "Known open item" note.
 
 ---
 
