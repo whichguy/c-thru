@@ -10,8 +10,10 @@ CTHRU="$SCRIPT_DIR/../tools/c-thru"
 # The builder only needs these fixture globals and its nested find_tool_path.
 # Extracting it avoids starting a proxy or reading the invoking user's profile.
 eval "$(awk '/^write_ephemeral_settings\(\) \{/,/^\}$/' "$CTHRU")"
+eval "$(awk '/^build_ephemeral_agents\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^cthru_flag_width\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^build_forwarded_args\(\) \{/,/^\}$/' "$CTHRU")"
+eval "$(awk '/^setup_ephemeral_session\(\) \{/,/^\}$/' "$CTHRU")"
 
 PASS=0
 FAIL=0
@@ -48,6 +50,20 @@ run_builder() {
   BUILT_JSON="$EPHEMERAL_SETTINGS_JSON"
 }
 
+run_agents_builder() {
+  EPHEMERAL_SESSION_DIR="$SESSION_DIR"
+  ORIGINAL_CLAUDE_PROFILE_DIR="$PROFILE_DIR"
+  CTHRU_REPO_ROOT="$FIXTURE_DIR/agent-fleet"
+  EPHEMERAL_AGENTS_JSON=""
+  CALLER_AGENTS_PARSEABLE=()
+  CALLER_AGENTS_PAYLOADS=()
+  if [[ ${#RUN_PAYLOADS[@]} -gt 0 ]]; then
+    CALLER_AGENTS_PAYLOADS=("${RUN_PAYLOADS[@]}")
+  fi
+  build_ephemeral_agents
+  BUILT_AGENTS_JSON="$EPHEMERAL_AGENTS_JSON"
+}
+
 run_forwarder() {
   local desired_model="${1:-}"
   FORWARDED_ARGS=()
@@ -71,6 +87,12 @@ run_phase1_scan() (
   printf '%s\n' "${CALLER_SETTINGS_PAYLOADS[@]}"
 )
 
+run_agents_phase1_scan() (
+  TEST_ORIG_ARGS=("$@")
+  eval "$(awk '/^# ── Phase 1: Argument Pre-Parsing/,/^# ── Per-Process Ephemeral Session Control/' "$CTHRU" | sed 's|ORIG_ARGS=("$@")|ORIG_ARGS=("${TEST_ORIG_ARGS[@]}")|')"
+  printf '%s\n' "${CALLER_AGENTS_PAYLOADS[@]-}"
+)
+
 assert_json_case() {
   local case_name="$1" json="$2"
   node - "$case_name" "$json" <<'NODE'
@@ -92,7 +114,7 @@ if (caseName === 'preferences') {
   if (!hasInjectedCore()) fail('c-thru injected core settings are missing');
 } else if (caseName === 'missing') {
   const keys = Object.keys(settings).sort().join(',');
-  if (keys !== 'hooks,mcpServers,permissions') fail(`missing-file baseline leaked keys: ${keys}`);
+  if (keys !== 'hooks,mcpServers,permissions,statusLine') fail(`missing-file baseline leaked keys: ${keys}`);
   if (!hasInjectedCore()) fail('c-thru injected core settings are missing');
 } else if (caseName === 'corrupt') {
   if (!hasInjectedCore()) fail('c-thru injected core settings are missing after corrupt user settings');
@@ -191,8 +213,10 @@ if (commands('SessionStart', '*').filter(h => h.command === session).length !== 
 const mixed = commands('PostToolUse', 'Write|Edit');
 if (!mixed.some(h => h.command === '/foreign/mixed-hook.sh') || mixed.some(h => h.timeout === 99)) fail('mixed entry did not retain only its novel command');
 if (!commands('SessionStart', '*').some(h => h.command === dangling)) fail('dangling symlink hook did not survive');
-const preForeign = entries('PreToolUse', 'ExitPlanMode')[0];
-const postForeign = entries('PostToolUse', 'ExitPlanMode')[0];
+const foreignEntry = (event, matcher, command) => entries(event, matcher).find(e =>
+  e.hooks.some(h => h.command === command));
+const preForeign = foreignEntry('PreToolUse', 'ExitPlanMode', '/foreign/pre-hook.sh');
+const postForeign = foreignEntry('PostToolUse', 'ExitPlanMode', '/foreign/post-hook.sh');
 if (preForeign?.timeout !== 180 || postForeign?.timeout !== 5) fail('foreign entry attributes were not preserved');
 if (!commands('PreToolUse', 'Prompt').some(h => h.type === 'prompt' && h.prompt === 'keep this verbatim')) fail('non-command hook was not preserved');
 if (!commands('PreToolUse', 'Args').some(h => h.command === '/foreign/with-args.sh --flag value')) fail('command with arguments was not preserved');
@@ -208,7 +232,8 @@ for malformed in \
   '{"permissions":"oops"}' \
   '{"hooks":{"SessionStart":"oops"}}' \
   '{"hooks":{"SessionStart":[{"matcher":"*"}]}}' \
-  '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","timeout":5}]}]}}'; do
+  '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","timeout":5}]}]}}' \
+  '{"hooks":{"SessionStart":[{"hooks":[{"timeout":5}]}]}}'; do
   printf '%s\n' "$malformed" > "$PROFILE_DIR/settings.json"
   WARN_FILE="$FIXTURE_DIR/malformed-warning-$RANDOM"
   RUN_PAYLOADS=()
@@ -326,11 +351,111 @@ for (const { event, matcher, canonical } of expected) {
   }).length;
   if (count !== 1) { console.error(`${event}/${matcher}/${canonical}: got ${count}`); process.exit(1); }
 }
-const find = (event, matcher) => (s.hooks[event] || []).find(e => e.matcher === matcher);
-if (find('PreToolUse', 'ExitPlanMode')?.timeout !== 180 || find('PostToolUse', 'ExitPlanMode')?.timeout !== 5 || !s.permissions.allow.includes('user-allow') || s.showClearContextOnPlanAccept !== true) process.exit(1);
+const findForeign = (event, matcher, command) => (s.hooks[event] || []).find(e => e.matcher === matcher && e.hooks.some(h => h.command === command));
+if (findForeign('PreToolUse', 'ExitPlanMode', '/foreign/pre-real.sh')?.timeout !== 180 || findForeign('PostToolUse', 'ExitPlanMode', '/foreign/post-real.sh')?.timeout !== 5 || !s.permissions.allow.includes('user-allow') || s.showClearContextOnPlanAccept !== true) process.exit(1);
+NODE
+
+echo
+echo "8. settings.local.json is filtered, merged, and excluded from the session shadow"
+printf '%s\n' '{"tui":"compact"}' > "$PROFILE_DIR/settings.json"
+printf '%s\n' '{"localOnlyPreference":true,"tui":"fullscreen","model":"x","env":{"A":"B"}}' > "$PROFILE_DIR/settings.local.json"
+RUN_PAYLOADS=()
+run_builder
+assert "settings.local builder exits 0" test "$?" -eq 0
+assert "settings.local preference, denylist, and precedence behavior" node - "$BUILT_JSON" <<'NODE'
+const settings = JSON.parse(process.argv[2]);
+process.exit(settings.localOnlyPreference === true && settings.tui === 'fullscreen' &&
+  !('model' in settings) && !('env' in settings) ? 0 : 1);
+NODE
+
+CLAUDE_PROXY_BYPASS=0
+ORIGINAL_CLAUDE_PROFILE_DIR="$PROFILE_DIR"
+CTHRU_REPO_ROOT="$FIXTURE_DIR/nonexistent-repo"
+NO_AGENTS=1
+setup_ephemeral_session
+assert "settings.local is excluded from the ephemeral session shadow" test ! -e "$EPHEMERAL_SESSION_DIR/settings.local.json" -a ! -L "$EPHEMERAL_SESSION_DIR/settings.local.json"
+rm -rf "$EPHEMERAL_SESSION_DIR"
+EPHEMERAL_SESSION_DIR=""
+
+echo
+echo "9. Matching foreign hooks across caller payloads dedupe to one registration"
+printf '%s\n' '{}' > "$PROFILE_DIR/settings.json"
+rm -f "$PROFILE_DIR/settings.local.json"
+RUN_PAYLOADS=(
+  '{"hooks":{"SessionStart":[{"matcher":"*","hooks":[{"command":"/foreign/shared-across-payloads.sh"}]}]}}'
+  '{"hooks":{"SessionStart":[{"matcher":"*","hooks":[{"command":"/foreign/shared-across-payloads.sh"}]}]}}'
+)
+run_builder
+assert "cross-payload hook builder exits 0" test "$?" -eq 0
+assert "cross-payload foreign hook has one surviving registration" node - "$BUILT_JSON" <<'NODE'
+const settings = JSON.parse(process.argv[2]);
+const commands = (settings.hooks.SessionStart || [])
+  .filter(entry => (entry.matcher ?? '*') === '*')
+  .flatMap(entry => entry.hooks)
+  .filter(hook => hook.command === '/foreign/shared-across-payloads.sh');
+process.exit(commands.length === 1 ? 0 : 1);
 NODE
 
 echo
 echo "============================================="
+echo
+echo "10. Caller --agents payloads merge with ephemeral agent inventory"
+AGENT_FLEET_DIR="$FIXTURE_DIR/agent-fleet/agents"
+mkdir -p "$AGENT_FLEET_DIR" "$PROFILE_DIR/agents" "$SESSION_DIR/agents"
+printf '%s\n' $'---\ndescription: fleet collision\nmodel: fleet-model\ntier_budget: 1\n---\nfleet prompt' > "$AGENT_FLEET_DIR/collision.md"
+printf '%s\n' $'---\ndescription: profile collision\nmodel: profile-model\ntier_budget: 2\n---\nprofile prompt' > "$PROFILE_DIR/agents/collision.md"
+NO_AGENTS=0
+RUN_PAYLOADS=()
+rm -rf "$SESSION_DIR/agents"
+run_agents_builder
+assert "profile wins fleet basename collision before caller reconciliation" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+process.exit(agents.collision?.description === 'profile collision' ? 0 : 1);
+NODE
+RUN_PAYLOADS=('{"collision":{"description":"caller collision"}}')
+rm -rf "$SESSION_DIR/agents"
+run_agents_builder
+assert "caller --agents wins profile and fleet collisions" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+process.exit(agents.collision?.description === 'caller collision' ? 0 : 1);
+NODE
+
+PHASE_AGENT_PAYLOADS="$(run_agents_phase1_scan '--agents={"equals":{"description":"e"}}' --agents '{"space":{"description":"s"}}')"
+assert "Phase-1 collects equals and two-token --agents payloads in order" test "$PHASE_AGENT_PAYLOADS" = $'{"equals":{"description":"e"}}\n{"space":{"description":"s"}}'
+RUN_PAYLOADS=()
+while IFS= read -r payload; do
+  RUN_PAYLOADS+=("$payload")
+done < <(run_agents_phase1_scan '--agents={"equals-valid":{"description":"e"}}' --agents not-json)
+rm -rf "$SESSION_DIR/agents"
+run_agents_builder
+assert "equals-form valid and two-token invalid --agents payloads retain aligned parseability" test "${CALLER_AGENTS_PARSEABLE[*]}" = "1 0"
+RUN_PAYLOADS=('{"valid":{"description":"yes"}}' 'not-json' '[{"array":true}]' '1')
+rm -rf "$SESSION_DIR/agents"
+run_agents_builder
+assert "mixed valid and invalid caller --agents payloads retain one parseability bit each" test "${CALLER_AGENTS_PARSEABLE[*]}" = "1 0 0 0"
+assert "non-object caller --agents payloads are ignored" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+process.exit(agents.valid?.description === 'yes' && !('array' in agents) ? 0 : 1);
+NODE
+PHASE_AGENT_WARN="$FIXTURE_DIR/phase-agents-warning"
+run_agents_phase1_scan --agents >"$FIXTURE_DIR/phase-agents-output" 2>"$PHASE_AGENT_WARN"
+PHASE_AGENT_STATUS=$?
+assert "Phase-1 rejects a missing two-token --agents value" test "$PHASE_AGENT_STATUS" -ne 0
+assert "Phase-1 missing --agents error text is exact" grep -qx 'c-thru: --agents requires a value' "$PHASE_AGENT_WARN"
+PHASE_AGENT_TERMINATED="$(run_agents_phase1_scan -- --agents '{"after":true}')"
+assert "Phase-1 leaves --agents after -- untouched" test -z "$PHASE_AGENT_TERMINATED"
+
+REAL_PROFILE_AGENT="$PROFILE_DIR/agents/remove-me.md"
+printf '%s\n' 'profile agent must remain unchanged' > "$REAL_PROFILE_AGENT"
+cp "$REAL_PROFILE_AGENT" "$FIXTURE_DIR/remove-me-before"
+rm -rf "$SESSION_DIR/agents"
+mkdir -p "$SESSION_DIR/agents"
+ln -s "$REAL_PROFILE_AGENT" "$SESSION_DIR/agents/remove-me.md"
+RUN_PAYLOADS=('{"remove-me":{"description":"caller override"}}')
+NO_AGENTS=0
+run_agents_builder
+assert "caller agent collision removes only the ephemeral symlink" test ! -e "$SESSION_DIR/agents/remove-me.md" -a ! -L "$SESSION_DIR/agents/remove-me.md"
+assert "caller agent collision does not modify the symlink target" cmp -s "$REAL_PROFILE_AGENT" "$FIXTURE_DIR/remove-me-before"
+
 echo "$((PASS + FAIL)) tests: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]
