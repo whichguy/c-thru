@@ -386,6 +386,20 @@ write_ephemeral_settings() {
   planner_hint_cmd="$(find_tool_path c-thru-enter-plan-hook)"
   agent_router_cmd="$(find_tool_path c-thru-agent-router-hook)"
   mcp_js="$(find_tool_path llm-capabilities-mcp.js)"
+  local caller_settings_payloads_json
+  local -a caller_settings_payloads=()
+  if declare -p CALLER_SETTINGS_PAYLOADS >/dev/null 2>&1 && [[ ${#CALLER_SETTINGS_PAYLOADS[@]} -gt 0 ]]; then
+    caller_settings_payloads=("${CALLER_SETTINGS_PAYLOADS[@]}")
+  fi
+  if [[ ${#caller_settings_payloads[@]} -gt 0 ]]; then
+    caller_settings_payloads_json="$(node -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' "${caller_settings_payloads[@]}")"
+  else
+    caller_settings_payloads_json="[]"
+  fi
+  [[ -n "$caller_settings_payloads_json" ]] || {
+    echo "c-thru: failed to prepare caller --settings payloads" >&2
+    exit 1
+  }
 
   # Hook inventory — every hook registered per session. To add a hook:
   #   1. Create tools/c-thru-<name>.sh with a # ARCH: <Event>/<matcher> header line.
@@ -427,16 +441,147 @@ write_ephemeral_settings() {
   # Paths are passed as argv so node handles all escaping.
   EPHEMERAL_SETTINGS_JSON=$(node -e '
     const fs = require("fs");
-    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, agentRouterCmd, plannerHintCmd, userSettingsPath] = process.argv.slice(1);
+    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, agentRouterCmd, plannerHintCmd, userSettingsPath, callerSettingsPayloadsJson] = process.argv.slice(1);
     const USER_SETTINGS_DENYLIST = new Set([
-      // c-thru injects ephemeral versions; user originals would fight the merge.
-      "hooks", "mcpServers", "permissions",
+      // c-thru injects an ephemeral MCP server; a user original would fight it.
+      "mcpServers",
       // The proxy owns routing/auth, so user overrides could conflict or bypass it.
       "env", "model", "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod",
     ]);
     const isPlainObject = value =>
       value !== null && typeof value === "object" && !Array.isArray(value) &&
       Object.getPrototypeOf(value) === Object.prototype;
+    const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+    const normalizedMatcher = matcher => matcher === undefined || matcher === null || matcher === "" ? "*" : String(matcher);
+    const canonicalCommand = command => {
+      if (typeof command !== "string") return command;
+      if (!command.startsWith("/") || command.includes(" ") || command.includes("~") || command.includes("$")) return command;
+      try { return fs.realpathSync(command); } catch (_) { return command; }
+    };
+    const hookKey = (event, matcher, hook) => `${event}\u0000${normalizedMatcher(matcher)}\u0000${canonicalCommand(hook.command)}`;
+    const validatePermissions = permissions => {
+      if (!isPlainObject(permissions)) return "permissions is not an object";
+      for (const key of ["allow", "deny", "ask"]) {
+        if (own(permissions, key) && !Array.isArray(permissions[key])) return `permissions.${key} is not an array`;
+      }
+      return null;
+    };
+    const validateHooks = hooks => {
+      if (!isPlainObject(hooks)) return "hooks is not an object";
+      for (const [event, entries] of Object.entries(hooks)) {
+        if (!Array.isArray(entries)) return `hooks.${event} is not an array`;
+        for (const entry of entries) {
+          if (!isPlainObject(entry)) return `hooks.${event} entry is not an object`;
+          if (!Array.isArray(entry.hooks)) return `hooks.${event} entry.hooks is not an array`;
+        }
+      }
+      return null;
+    };
+    const sanitizeHooks = (hooks, sourceLabel) => {
+      const result = {};
+      for (const [event, entries] of Object.entries(hooks)) {
+        const survivingEntries = [];
+        for (const entry of entries) {
+          const survivingHooks = [];
+          for (const hook of entry.hooks) {
+            if (!isPlainObject(hook)) {
+              process.stderr.write(`c-thru: ignoring malformed ${sourceLabel} hook (not an object) in ${event}\n`);
+              continue;
+            }
+            const explicitType = own(hook, "type");
+            const commandCandidate = hook.type === "command" || (!explicitType && own(hook, "command"));
+            if (commandCandidate && typeof hook.command !== "string") {
+              process.stderr.write(`c-thru: ignoring malformed ${sourceLabel} hook (missing command) in ${event}\n`);
+              continue;
+            }
+            survivingHooks.push(hook);
+          }
+          if (survivingHooks.length) survivingEntries.push({ ...entry, hooks: survivingHooks });
+        }
+        if (survivingEntries.length) result[event] = survivingEntries;
+      }
+      return result;
+    };
+    const mergeHooks = (lower = {}, higher = {}) => {
+      const result = {};
+      for (const [event, entries] of Object.entries(higher)) result[event] = entries.slice();
+      for (const [event, entries] of Object.entries(lower)) {
+        const seen = new Set();
+        for (const entry of result[event] || []) {
+          for (const hook of entry.hooks) {
+            const explicitType = own(hook, "type");
+            if (hook.type === "command" || (!explicitType && typeof hook.command === "string")) {
+              seen.add(hookKey(event, entry.matcher, hook));
+            }
+          }
+        }
+        const survivingEntries = [];
+        for (const entry of entries) {
+          const survivingHooks = entry.hooks.filter(hook => {
+            const explicitType = own(hook, "type");
+            if (!(hook.type === "command" || (!explicitType && typeof hook.command === "string"))) return true;
+            return !seen.has(hookKey(event, entry.matcher, hook));
+          });
+          if (survivingHooks.length) survivingEntries.push({ ...entry, hooks: survivingHooks });
+        }
+        if (survivingEntries.length) result[event] = [...(result[event] || []), ...survivingEntries];
+      }
+      return result;
+    };
+    const union = (higher = [], lower = []) => [...higher, ...lower.filter(value => !higher.includes(value))];
+    const mergePermissions = (lower = {}, higher = {}) => {
+      const result = { ...lower, ...higher };
+      for (const key of ["allow", "deny", "ask"]) {
+        if (own(lower, key) || own(higher, key)) result[key] = union(higher[key] || [], lower[key] || []);
+      }
+      return result;
+    };
+    const mergeSettings = (lower, higher) => {
+      const result = { ...lower, ...higher };
+      if (own(lower, "hooks") || own(higher, "hooks")) result.hooks = mergeHooks(lower.hooks, higher.hooks);
+      if (own(lower, "permissions") || own(higher, "permissions")) result.permissions = mergePermissions(lower.permissions, higher.permissions);
+      return result;
+    };
+    const sanitizeSettings = (source, sourceLabel, warnProxyOwned) => {
+      const filtered = {};
+      for (const [key, value] of Object.entries(source)) {
+        if (USER_SETTINGS_DENYLIST.has(key)) {
+          if (warnProxyOwned) process.stderr.write(`c-thru: --settings key "${key}" is proxy-owned, ignored\n`);
+          continue;
+        }
+        if (key === "permissions") {
+          const reason = validatePermissions(value);
+          if (reason) {
+            process.stderr.write(`c-thru: ignoring malformed ${sourceLabel} permissions: ${reason}\n`);
+          } else {
+            filtered.permissions = value;
+          }
+          continue;
+        }
+        if (key === "hooks") {
+          const reason = validateHooks(value);
+          if (reason) {
+            process.stderr.write(`c-thru: ignoring malformed ${sourceLabel} hooks: ${reason}\n`);
+          } else {
+            filtered.hooks = sanitizeHooks(value, sourceLabel);
+          }
+          continue;
+        }
+        filtered[key] = value;
+      }
+      return filtered;
+    };
+    const parseCallerPayload = payload => {
+      let text;
+      try { text = fs.readFileSync(payload, "utf8"); } catch (_) { text = payload; }
+      try {
+        const parsed = JSON.parse(text);
+        if (!isPlainObject(parsed)) return { error: "settings payload is not an object" };
+        return { settings: parsed };
+      } catch (error) {
+        return { error: error.message };
+      }
+    };
     let userSettings = {};
     let userSettingsText;
     try {
@@ -452,9 +597,6 @@ write_ephemeral_settings() {
         process.stderr.write("c-thru: ignoring unparseable user settings.json: " + error.message + "\n");
       }
     }
-    const filteredUserSettings = Object.fromEntries(
-      Object.entries(userSettings).filter(([key]) => !USER_SETTINGS_DENYLIST.has(key))
-    );
     const cmdHook = (command, timeout, extra = {}) => ({ type: "command", command, timeout, ...extra });
     const cThruInjected = {
       mcpServers: {
@@ -479,12 +621,60 @@ write_ephemeral_settings() {
       },
       permissions: { allow: ["mcp__llm-capabilities__*"] },
     };
-    const settings = { ...filteredUserSettings, ...cThruInjected };
-    process.stdout.write(JSON.stringify(settings));
-  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path") || {
+    let callerSettingsPayloads = [];
+    let callerSettingsPayloadsAreSerialized = false;
+    try {
+      const parsed = JSON.parse(callerSettingsPayloadsJson || "[]");
+      if (Array.isArray(parsed)) {
+        callerSettingsPayloads = parsed;
+        callerSettingsPayloadsAreSerialized = true;
+      }
+    } catch (_) {
+      // The bash wrapper always serializes this array; tolerate direct script execution too.
+    }
+    let settings = sanitizeSettings(userSettings, "user", false);
+    const callerSettingsParseable = [];
+    for (const payload of callerSettingsPayloads) {
+      const parsed = parseCallerPayload(payload);
+      if (parsed.error) {
+        process.stderr.write(`c-thru: ignoring unparseable --settings payload: ${parsed.error}\n`);
+        callerSettingsParseable.push(false);
+        continue;
+      }
+      callerSettingsParseable.push(true);
+      settings = mergeSettings(settings, sanitizeSettings(parsed.settings, "--settings", true));
+    }
+    settings = mergeSettings(settings, cThruInjected);
+    // The production wrapper provides a serialized payload array and needs the
+    // parseability bits from this same resolution pass. The parity test runs
+    // this script with sentinel argv instead, so retain its plain-settings
+    // output when that final argv is not a serialized array.
+    process.stdout.write(JSON.stringify(callerSettingsPayloadsAreSerialized ? {
+      settings, callerSettingsParseable,
+    } : settings));
+  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path" "$caller_settings_payloads_json") || {
     echo "c-thru: failed to build ephemeral settings JSON" >&2
     exit 1
   }
+
+  # The builder returns parseability from the same file/JSON resolution pass,
+  # so build_forwarded_args never disagrees with the settings merge if a
+  # caller-provided file changes while this launch is being assembled.
+  local settings_result caller_settings_parseable
+  settings_result="$(node -e '
+    const result = JSON.parse(process.argv[1]);
+    process.stdout.write(JSON.stringify(result.settings) + "\n" + result.callerSettingsParseable.map(value => value ? "1" : "0").join(""));
+  ' "$EPHEMERAL_SETTINGS_JSON")" || {
+    echo "c-thru: failed to unpack ephemeral settings JSON" >&2
+    exit 1
+  }
+  EPHEMERAL_SETTINGS_JSON="${settings_result%%$'\n'*}"
+  caller_settings_parseable="${settings_result#*$'\n'}"
+  CALLER_SETTINGS_PARSEABLE=()
+  local caller_payload_index
+  for ((caller_payload_index = 0; caller_payload_index < ${#caller_settings_payloads[@]}; caller_payload_index++)); do
+    CALLER_SETTINGS_PARSEABLE+=("${caller_settings_parseable:caller_payload_index:1}")
+  done
 }
 
 
@@ -3824,7 +4014,7 @@ run_real_claude() {
 #   follows — treat as valueless), "1" (bare/valueless flag, or value-taking
 #   flag with no legitimate value to consume), or "2" (flag + one value token
 #   consumed). Encodes two peek rules:
-#     - --model/--route/--mode/--profile/--memory-gb: consume the next token
+#     - --model/--route/--mode/--profile/--memory-gb/--settings: consume the next token
 #       as the value only if it doesn't look like a flag (doesn't start with
 #       '-') — otherwise a following flag (e.g. --print) would be swallowed.
 #     - --proxy-debug/--router-debug: optional numeric value; consume the
@@ -3834,7 +4024,7 @@ run_real_claude() {
 cthru_flag_width() {
   local flag="$1" next="$2" has_next="$3"
   case "$flag" in
-    --model | --route | --mode | --profile | --memory-gb)
+    --model | --route | --mode | --profile | --memory-gb | --settings)
       if [[ "$has_next" == "1" && "$next" != -* ]]; then
         printf '2'
       else
@@ -3867,10 +4057,15 @@ build_forwarded_args() {
   local i=0
   local saw_model=0
   local saw_skip_permissions=0
+  local caller_settings_index=0
   local _w=""
 
   while [[ $i -lt ${#ORIG_ARGS[@]} ]]; do
     local arg="${ORIG_ARGS[i]}"
+    if [[ "$arg" == "--" ]]; then
+      forwarded+=("${ORIG_ARGS[@]:i}")
+      break
+    fi
     case "$arg" in
       --route)
         # Width decided by the shared cthru_flag_width helper (see its
@@ -3944,6 +4139,32 @@ build_forwarded_args() {
           saw_model=1
         fi
         i=$((i + 1))
+        continue
+        ;;
+      --settings)
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        if [[ "$_w" == "2" && "${CALLER_SETTINGS_PARSEABLE[caller_settings_index]:-0}" == "1" ]]; then
+          i=$((i + _w))
+        else
+          forwarded+=("$arg")
+          [[ "$_w" == "2" ]] && forwarded+=("${ORIG_ARGS[i+1]}")
+          i=$((i + _w))
+        fi
+        caller_settings_index=$((caller_settings_index + 1))
+        continue
+        ;;
+      --settings=*)
+        if [[ "${CALLER_SETTINGS_PARSEABLE[caller_settings_index]:-0}" == "1" ]]; then
+          i=$((i + 1))
+        else
+          forwarded+=("$arg")
+          i=$((i + 1))
+        fi
+        caller_settings_index=$((caller_settings_index + 1))
         continue
         ;;
       --dangerously-skip-permissions)
@@ -4531,6 +4752,8 @@ fi
 # Parse c-thru flags early so they are active during ephemeral setup and warming.
 # These flags are stripped later before forwarding to the real claude binary.
 ORIG_ARGS=("$@")
+CALLER_SETTINGS_PAYLOADS=()
+CALLER_SETTINGS_PARSEABLE=()
 explicit_model=""
 route_name=""
 print_routing_only=""
@@ -4538,6 +4761,9 @@ i=0
 n=${#ORIG_ARGS[@]}
 while [[ $i -lt $n ]]; do
   a="${ORIG_ARGS[i]}"
+  # Preserve native Claude arguments after the conventional end-of-options
+  # marker; neither c-thru nor its settings collector interprets them.
+  [[ "$a" == "--" ]] && break
   case "$a" in
     --route=*)          route_name="${a#--route=}"; i=$((i + 1)) ;;
     --route)
@@ -4552,6 +4778,17 @@ while [[ $i -lt $n ]]; do
       if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
       [[ "$_w" == "2" ]] && explicit_model="${ORIG_ARGS[i+1]}"
       i=$((i + _w)) ;;
+    --settings=*)
+      CALLER_SETTINGS_PAYLOADS+=("${a#--settings=}")
+      i=$((i + 1)) ;;
+    --settings)
+      if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
+      if [[ "$_w" == "2" ]]; then
+        CALLER_SETTINGS_PAYLOADS+=("${ORIG_ARGS[i+1]}")
+        i=$((i + _w))
+      else
+        echo "c-thru: --settings requires a value" >&2; exit 1
+      fi ;;
     --mode=*)           export CLAUDE_LLM_MODE="${a#--mode=}"; i=$((i + 1)) ;;
     --mode)
       if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
