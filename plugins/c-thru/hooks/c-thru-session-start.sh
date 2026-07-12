@@ -4,6 +4,22 @@
 # A13: `-u` catches unset-var bugs. `-e` off — failed curls are flow control.
 set -uo pipefail
 
+stdin_data=$(cat)
+_hook_session_id=""
+if command -v jq >/dev/null 2>&1; then
+    _hook_session_id=$(printf '%s' "$stdin_data" | jq -r '.session_id // empty' 2>/dev/null)
+elif command -v node >/dev/null 2>&1; then
+    _hook_session_id=$(printf '%s' "$stdin_data" | node -e "
+        let d=''; process.stdin.setEncoding('utf8');
+        process.stdin.on('data',c=>d+=c);
+        process.stdin.on('end',()=>{
+            try{const s=JSON.parse(d).session_id;if(s)process.stdout.write(s)}catch(e){}
+        });
+    " 2>/dev/null)
+fi
+_hook_session_id=$(printf '%s' "$_hook_session_id" | tr -cd '[:alnum:]_-' | cut -c1-128)
+[ -n "$_hook_session_id" ] && export C_THRU_SESSION_ID="${C_THRU_SESSION_ID:-$_hook_session_id}"
+
 # --- Resolve script location (follow symlinks) so ROUTER_REPO_ROOT is correct
 # whether this script is invoked via ~/.claude/tools symlink, repo direct, or plugin bundle.
 _src="${BASH_SOURCE[0]:-$0}"
@@ -59,10 +75,15 @@ fi
 # → USE_OLLAMA_PORT → ANTHROPIC_BASE_URL → plugin default). Fail-open: lib
 # unreadable → PORT empty → the guard below no-ops (same as "c-thru not active").
 PORT=""
+BASE_URL=""
 if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
     # shellcheck source=c-thru-lib.sh
     . "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh"
     PORT="$(cthru_hook_listen_port)"
+    # Round-5 B2: carries /s/<session-id> when this session set one, so
+    # /hooks/context reflects THIS session's own mode, not silently the
+    # proxy's global default (see cthru_hook_base_url in c-thru-lib.sh).
+    BASE_URL="$(cthru_hook_base_url)"
 fi
 [ -n "$PORT" ] || exit 0  # c-thru not active (or lib unavailable — fail open)
 
@@ -81,7 +102,7 @@ issues=()
 # "no block, no advisory" — same as before.
 proxy_ctx=""
 hook_json=""
-if hook_json=$(curl -sf --max-time 2 -X POST "http://127.0.0.1:$PORT/hooks/context" 2>/dev/null); then
+if hook_json=$(curl -sf --max-time 2 -X POST "${BASE_URL:-http://127.0.0.1:$PORT}/hooks/context" 2>/dev/null); then
     if command -v jq >/dev/null 2>&1; then
         proxy_ctx=$(printf '%s' "$hook_json" | jq -r '.hookSpecificOutput.additionalContext // ""')
     elif command -v node >/dev/null 2>&1; then

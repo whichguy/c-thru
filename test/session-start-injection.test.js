@@ -24,7 +24,7 @@
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const {
   assert, assertEq, skip, summary, getFreePort, startStubServer, spawnCapture,
@@ -77,13 +77,33 @@ async function main() {
     delete env.OLLAMA_URL;
     delete env.OLLAMA_BASE_URL;
     delete env.CLAUDE_PROXY_PORT;
+    delete env.C_THRU_SESSION_ID;
+    delete env.C_THRU_SESSION_SCOPED_MODE;
     return Object.assign(env, { CLAUDE_PROFILE_DIR: profileDir }, extra);
   }
 
   // Async (spawnCapture, NOT spawnSync): the hook curls the in-process stub, so
   // this process's event loop must stay free to answer it.
-  async function runHook(env) {
-    const r = await spawnCapture(BASH, [scratchHook], { env, timeout: 15000 });
+  async function runHook(env, stdinPayload) {
+    let r;
+    if (stdinPayload === undefined) {
+      r = await spawnCapture(BASH, [scratchHook], { env, timeout: 15000 });
+    } else {
+      r = await new Promise((resolve, reject) => {
+        const child = spawn(BASH, [scratchHook], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 15000);
+        child.stdout.on('data', d => { stdout += d.toString(); });
+        child.stderr.on('data', d => { stderr += d.toString(); });
+        child.on('error', err => { clearTimeout(timer); reject(err); });
+        child.on('close', (status, signal) => {
+          clearTimeout(timer);
+          resolve({ status, signal, stdout, stderr });
+        });
+        child.stdin.end(stdinPayload);
+      });
+    }
     let addl = '';
     try { addl = JSON.parse(r.stdout).hookSpecificOutput.additionalContext; } catch {}
     return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', addl };
@@ -93,13 +113,15 @@ async function main() {
 
   // Stub proxy used by B1/B3/B4: answers POST /hooks/context with the canonical
   // block built from its own port. No /ping route — the hook must not need one.
+  const upContext = (req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: blockFor(upStub.port) },
+    }));
+  };
   const upStub = await startStubServer({
-    'POST /hooks/context': (req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: blockFor(upStub.port) },
-      }));
-    },
+    'POST /hooks/context': upContext,
+    'POST /s/ss-sess-1/hooks/context': upContext,
   });
 
   // Slow stub for B5: stalls /hooks/context ~10s (cleared if the client aborts).
@@ -166,7 +188,7 @@ async function main() {
     // under this PATH and the hook takes its node fallback. (Prepending an empty
     // dir would NOT hide jq: `command -v` walks the whole PATH.)
     for (const t of ['bash', 'sh', 'env', 'curl', 'node', 'sed', 'awk', 'grep',
-                     'tr', 'paste', 'cut', 'dirname', 'readlink', 'find', 'git',
+                     'cat', 'tr', 'paste', 'cut', 'dirname', 'readlink', 'find', 'git',
                      'head', 'ollama']) {
       const p = which(t);
       if (p) { try { fs.symlinkSync(p, path.join(nojqBin, t)); } catch {} }
@@ -201,6 +223,21 @@ async function main() {
     assert(elapsedMs < 5000,
       `hook completes within bounded wall-time (${elapsedMs}ms < 5000ms — proves --max-time 2)`);
     assert(!b5.addl.includes('SLOW'), 'slow block dropped (no partial block on timeout)');
+
+    // ── B6: plugin-mode session_id scopes the hook context request ───────────
+    console.log('\nB6. stdin session_id scopes /hooks/context and preserves the injected block');
+    const b6RequestStart = upStub.requests.length;
+    const b6 = await runHook(hookEnv({ ANTHROPIC_BASE_URL: upStub.url }), '{"session_id":"ss-sess-1"}');
+    const b6Requests = upStub.requests.slice(b6RequestStart);
+    assertEq(b6.status, 0, `hook exits 0 with stdin session_id (stderr: ${b6.stderr.slice(0, 200)})`);
+    assert(b6Requests.some(r => r.method === 'POST' && r.path === '/s/ss-sess-1/hooks/context'),
+      'stub saw POST /s/ss-sess-1/hooks/context');
+    assert(!b6Requests.some(r => r.method === 'POST' && r.path === '/hooks/context'),
+      'stdin session_id does not use the bare /hooks/context path');
+    assert(b6.addl.includes('/c-thru/status') && b6.addl.includes('/c-thru/recent') && b6.addl.includes('/c-thru/dashboard'),
+      'scoped hook response carries all control-plane endpoints');
+    const b6BlockCount = (b6.addl.match(/proxy control plane/g) || []).length;
+    assertEq(b6BlockCount, 1, 'scoped hook response injects the proxy block exactly once');
   } finally {
     await upStub.close();
     await slowStub.close();

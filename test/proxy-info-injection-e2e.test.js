@@ -82,7 +82,7 @@ async function main() {
       delete hookEnv.CLAUDE_PROXY_PORT;
       delete hookEnv.CLAUDE_PROXY_USE_OLLAMA_PORT;
 
-      const r = spawnSync('bash', [SESSION_START], { encoding: 'utf8', env: hookEnv, timeout: 15000 });
+      const r = spawnSync('bash', [SESSION_START], { encoding: 'utf8', env: hookEnv, input: '', timeout: 15000 });
       assertEq(r.status, 0, `hook exits 0 (stderr: ${(r.stderr || '').slice(0, 200)})`);
       let hookAddl = '';
       try { hookAddl = JSON.parse(r.stdout).hookSpecificOutput.additionalContext; } catch {}

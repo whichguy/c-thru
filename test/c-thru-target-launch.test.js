@@ -56,6 +56,7 @@ function runCthru({ modelArg, args, extraEnv = {}, ...config }) {
       PATH: `${fakeBin}:${process.env.PATH}`,
       CLAUDE_MODEL_MAP_PATH: configPath,
       C_THRU_NO_UPDATE: '1',
+      C_THRU_SESSION_SCOPED_MODE: '1',
       C_THRU_SKIP_PREPULL: '1',
       CLAUDE_PROXY_STARTUP_PROBE: '0',
       CLAUDE_PROXY_SKIP_OLLAMA_WARMUP: '1',
@@ -123,7 +124,7 @@ async function main() {
       console.log('  SKIP  explicit target proxy mediation (sandbox denied loopback bind)');
     } else {
       assert(result.code === 0, `launcher exits 0 for explicit target id (got ${result.code})`);
-      assert(typeof result.json?.anthropic_base_url === 'string' && /^http:\/\/127\.0\.0\.1:\d+$/.test(result.json.anthropic_base_url),
+      assert(typeof result.json?.anthropic_base_url === 'string' && /^http:\/\/127\.0\.0\.1:\d+\/s\/\d+$/.test(result.json.anthropic_base_url),
         `explicit target uses proxy mediation instead of direct provider URL (got ${JSON.stringify(result.json?.anthropic_base_url)})`);
       assert((result.json?.args || []).some(arg => arg === '--model=explicit-target' || arg === 'explicit-target'),
         'forwarded args preserve explicit target label');

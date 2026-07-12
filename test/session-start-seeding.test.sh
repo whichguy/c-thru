@@ -50,12 +50,19 @@ cp "$REPO_DIR/tools/c-thru-lib.sh" "$SCRATCH/tools/"
 printf '{"sentinel":"seeding-test"}\n' > "$SCRATCH/config/model-map.json"
 SENTINEL="$SCRATCH/config/model-map.json"
 
-run_hook() {  # $1 = profile dir → sets HOOK_EC, HOOK_STDERR
+run_hook() {  # $1 = profile dir, $2 = optional JSON stdin payload → sets HOOK_EC, HOOK_STDERR
   HOOK_EC=0
-  HOOK_STDERR="$(env -u ANTHROPIC_BASE_URL -u CLAUDE_PROXY_PORT \
-    -u OLLAMA_URL -u OLLAMA_BASE_URL -u CLAUDE_CONFIG_DIR -u CLAUDE_DIR \
-    CLAUDE_PROFILE_DIR="$1" C_THRU_PLUGIN_PORT=10017 \
-    bash "$SCRATCH/tools/c-thru-session-start.sh" 2>&1 >/dev/null)" || HOOK_EC=$?
+  if [ -n "${2:-}" ]; then
+    HOOK_STDERR="$(printf '%s' "$2" | env -u ANTHROPIC_BASE_URL -u CLAUDE_PROXY_PORT \
+      -u OLLAMA_URL -u OLLAMA_BASE_URL -u CLAUDE_CONFIG_DIR -u CLAUDE_DIR \
+      CLAUDE_PROFILE_DIR="$1" C_THRU_PLUGIN_PORT=10017 \
+      bash "$SCRATCH/tools/c-thru-session-start.sh" 2>&1 >/dev/null)" || HOOK_EC=$?
+  else
+    HOOK_STDERR="$(env -u ANTHROPIC_BASE_URL -u CLAUDE_PROXY_PORT \
+      -u OLLAMA_URL -u OLLAMA_BASE_URL -u CLAUDE_CONFIG_DIR -u CLAUDE_DIR \
+      CLAUDE_PROFILE_DIR="$1" C_THRU_PLUGIN_PORT=10017 \
+      bash "$SCRATCH/tools/c-thru-session-start.sh" </dev/null 2>&1 >/dev/null)" || HOOK_EC=$?
+  fi
 }
 
 json_get() {  # $1 = file, $2 = dotted path → prints value or ""
@@ -148,6 +155,18 @@ echo "d. first run, settings.json already routes elsewhere: preserved verbatim"
     || fail "settings.json preserved verbatim"
   check_absent "no registration notice when base URL pre-set" \
     "routing registered" "$HOOK_STDERR"
+}
+
+echo ""
+echo "e. first run with a session_id on stdin: seeded ANTHROPIC_BASE_URL stays UNSCOPED"
+{
+  P="$BASE/profile-e"; mkdir -p "$P"
+  printf '{}\n' > "$P/settings.json"
+  run_hook "$P" '{"session_id":"scenario-e-sess"}'
+  [[ $HOOK_EC -eq 0 ]] && pass "exits 0" || fail "exits 0 (got $HOOK_EC)"
+  [[ "$(json_get "$P/settings.json" env.ANTHROPIC_BASE_URL)" == "http://127.0.0.1:10017" ]] \
+    && pass "settings.json env.ANTHROPIC_BASE_URL stays unscoped despite stdin session_id" \
+    || fail "settings.json env.ANTHROPIC_BASE_URL stays unscoped despite stdin session_id (got: $(json_get "$P/settings.json" env.ANTHROPIC_BASE_URL))"
 }
 
 # ── Summary ──────────────────────────────────────────────────────────────────

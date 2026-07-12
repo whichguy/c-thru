@@ -30,7 +30,7 @@ const LAYOUTS = [
 // only signal cthru_hook_listen_port can use.
 function hookEnv(extra = {}) {
   const env = Object.assign({}, process.env);
-  for (const k of ['CLAUDE_PROXY_PORT', 'PROXY_PORT', 'CLAUDE_PROXY_USE_OLLAMA_PORT', 'C_THRU_PLUGIN_PORT', 'OLLAMA_URL', 'OLLAMA_BASE_URL']) delete env[k];
+  for (const k of ['CLAUDE_PROXY_PORT', 'PROXY_PORT', 'CLAUDE_PROXY_USE_OLLAMA_PORT', 'C_THRU_PLUGIN_PORT', 'OLLAMA_URL', 'OLLAMA_BASE_URL', 'C_THRU_SESSION_ID', 'C_THRU_SESSION_SCOPED_MODE']) delete env[k];
   return Object.assign(env, extra);
 }
 
@@ -94,6 +94,30 @@ async function main() {
         try { ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext; } catch {}
         assert(ctx && ctx.includes('CTX-MARKER-42'),
           `[${name}] classify echoed the returned additionalContext (got: ${JSON.stringify(r.stdout).slice(0, 120)})`);
+      } finally { await stub.close(); }
+    }
+
+    // ── classify: stdin session_id scopes /hooks/context + preserves context ─
+    {
+      const contextResponse = {
+        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'CTX-SCOPED-MARKER-123' },
+      };
+      const stub = await startStubServer({
+        'POST /hooks/context': contextResponse,
+        'POST /s/abc123/hooks/context': contextResponse,
+      });
+      try {
+        const r = await spawnWithStdin(classify, '{"prompt":"hello world","session_id":"abc123"}',
+          hookEnv({ ANTHROPIC_BASE_URL: `http://127.0.0.1:${stub.port}` }));
+        assertEq(r.status, 0, `[${name}] scoped classify exits 0`);
+        assert(stub.requests.some(q => q.path === '/s/abc123/hooks/context'),
+          `[${name}] scoped classify hit /s/abc123/hooks/context`);
+        assert(!stub.requests.some(q => q.path === '/hooks/context'),
+          `[${name}] scoped classify did not hit bare /hooks/context`);
+        let ctx = null;
+        try { ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext; } catch {}
+        assert(ctx && ctx.includes('CTX-SCOPED-MARKER-123'),
+          `[${name}] scoped classify echoed the returned additionalContext (got: ${JSON.stringify(r.stdout).slice(0, 120)})`);
       } finally { await stub.close(); }
     }
   }

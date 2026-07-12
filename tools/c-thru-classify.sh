@@ -8,6 +8,22 @@
 # hook uses command failures as flow control (exit 0 on anything unexpected).
 set -uo pipefail
 
+stdin_data=$(cat)
+_hook_session_id=""
+if command -v jq >/dev/null 2>&1; then
+    _hook_session_id=$(printf '%s' "$stdin_data" | jq -r '.session_id // empty' 2>/dev/null)
+elif command -v node >/dev/null 2>&1; then
+    _hook_session_id=$(printf '%s' "$stdin_data" | node -e "
+        let d=''; process.stdin.setEncoding('utf8');
+        process.stdin.on('data',c=>d+=c);
+        process.stdin.on('end',()=>{
+            try{const s=JSON.parse(d).session_id;if(s)process.stdout.write(s)}catch(e){}
+        });
+    " 2>/dev/null)
+fi
+_hook_session_id=$(printf '%s' "$_hook_session_id" | tr -cd '[:alnum:]_-' | cut -c1-128)
+[ -n "$_hook_session_id" ] && export C_THRU_SESSION_ID="${C_THRU_SESSION_ID:-$_hook_session_id}"
+
 prompt=""
 context=""
 
@@ -33,9 +49,6 @@ if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
     BASE_URL="$(cthru_hook_base_url)"
 fi
 [ -n "$PORT" ] || exit 0
-
-# Read stdin and extract prompt
-stdin_data=$(cat)
 
 # Extract prompt field via jq or node
 if command -v jq >/dev/null 2>&1; then

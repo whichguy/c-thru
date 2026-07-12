@@ -103,7 +103,7 @@ run_session_start() {  # $1 = scratch → prints additionalContext (jq = JSON as
   profile="$(mktemp -d "$BASE/profile.XXXXXX")"
   out="$(CLAUDE_PROXY_PORT=1 OLLAMA_URL="" OLLAMA_BASE_URL="" \
     ANTHROPIC_BASE_URL="" CLAUDE_PROFILE_DIR="$profile" \
-    bash "$1/tools/c-thru-session-start.sh")"
+    bash "$1/tools/c-thru-session-start.sh" </dev/null)"
   printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext'
 }
 

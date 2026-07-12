@@ -5,6 +5,22 @@
 # A13: `-u` catches unset-var bugs. `-e` off — failed curls are flow control.
 set -uo pipefail
 
+stdin_data=$(cat)
+_hook_session_id=""
+if command -v jq >/dev/null 2>&1; then
+    _hook_session_id=$(printf '%s' "$stdin_data" | jq -r '.session_id // empty' 2>/dev/null)
+elif command -v node >/dev/null 2>&1; then
+    _hook_session_id=$(printf '%s' "$stdin_data" | node -e "
+        let d=''; process.stdin.setEncoding('utf8');
+        process.stdin.on('data',c=>d+=c);
+        process.stdin.on('end',()=>{
+            try{const s=JSON.parse(d).session_id;if(s)process.stdout.write(s)}catch(e){}
+        });
+    " 2>/dev/null)
+fi
+_hook_session_id=$(printf '%s' "$_hook_session_id" | tr -cd '[:alnum:]_-' | cut -c1-128)
+[ -n "$_hook_session_id" ] && export C_THRU_SESSION_ID="${C_THRU_SESSION_ID:-$_hook_session_id}"
+
 # Resolve script location (follow symlinks) so the shared resolver lib is
 # found via symlink, repo direct, or plugin bundle.
 _src="${BASH_SOURCE[0]:-$0}"
@@ -20,15 +36,18 @@ ROUTER_REPO_ROOT=$(cd -P "$(dirname "$_src")/.." && pwd)
 # other hooks use. Fail-open: lib unreadable → PORT empty → no-op (same as
 # "c-thru not active").
 PORT=""
+BASE_URL=""
 if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
     # shellcheck source=c-thru-lib.sh
     . "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh"
     PORT="$(cthru_hook_listen_port)"
+    # Round-5 B2: carries /s/<session-id> when set — see c-thru-lib.sh.
+    BASE_URL="$(cthru_hook_base_url)"
 fi
 [ -n "$PORT" ] || exit 0  # c-thru not active (or lib unavailable — fail open)
 
 response=$(curl --silent --max-time 3 --fail \
-  -X POST "http://127.0.0.1:${PORT}/hooks/context" \
+  -X POST "${BASE_URL:-http://127.0.0.1:$PORT}/hooks/context" \
   -H "Content-Type: application/json" \
   -d '{"event":"PreCompact"}' 2>/dev/null) || exit 0
 

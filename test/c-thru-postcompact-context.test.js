@@ -16,7 +16,7 @@
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const {
   assert, assertEq, skip, summary, getFreePort, startStubServer, spawnCapture,
@@ -48,11 +48,27 @@ async function main() {
     delete env.CLAUDE_PROXY_PORT;
     delete env.PROXY_PORT;
     delete env.ANTHROPIC_BASE_URL;
+    delete env.C_THRU_SESSION_ID;
+    delete env.C_THRU_SESSION_SCOPED_MODE;
     return Object.assign(env, extra);
   }
 
-  async function runHook(env) {
-    const r = await spawnCapture(BASH, [scratchHook], { env, timeout: 10000 });
+  async function runHook(env, input) {
+    let r;
+    if (input === undefined) {
+      r = await spawnCapture(BASH, [scratchHook], { env, timeout: 10000 });
+    } else {
+      r = await new Promise((resolve, reject) => {
+        const child = spawn(BASH, [scratchHook], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+        let stdout = '', stderr = '';
+        const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 10000);
+        child.stdout.on('data', d => { stdout += d.toString(); });
+        child.stderr.on('data', d => { stderr += d.toString(); });
+        child.on('error', err => { clearTimeout(timer); reject(err); });
+        child.on('close', (status, signal) => { clearTimeout(timer); resolve({ status, signal, stdout, stderr }); });
+        child.stdin.end(input);
+      });
+    }
     let parsed = null;
     try { parsed = JSON.parse(r.stdout); } catch {}
     return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', parsed };
@@ -67,6 +83,12 @@ async function main() {
       // The proxy's real /hooks/context handler hardcodes hookEventName:
       // "SessionStart" regardless of which hook called it — the postcompact
       // hook's job is to re-wrap this under its OWN event name.
+      res.end(JSON.stringify({
+        hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: CONTEXT_TEXT },
+      }));
+    },
+    'POST /s/pc-sess-1/hooks/context': (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: CONTEXT_TEXT },
       }));
@@ -127,7 +149,7 @@ async function main() {
     console.log('\n6. jq forced absent → node fallback extracts + re-wraps identically');
     const nojqBin = path.join(base, 'nojq-bin');
     fs.mkdirSync(nojqBin, { recursive: true });
-    for (const t of ['bash', 'sh', 'env', 'curl', 'node', 'sed', 'awk', 'grep', 'cat', 'dirname', 'readlink']) {
+    for (const t of ['bash', 'sh', 'env', 'curl', 'node', 'sed', 'awk', 'grep', 'cat', 'tr', 'cut', 'dirname', 'readlink']) {
       const p = which(t);
       if (p) { try { fs.symlinkSync(p, path.join(nojqBin, t)); } catch {} }
     }
@@ -147,6 +169,19 @@ async function main() {
     } else {
       skip('jq-path cross-check (jq absent on host — node fallback already covered above)');
     }
+
+    // ── 7. stdin session_id scopes the request + preserves PreCompact output ─
+    console.log('\n7. stdin session_id scopes /hooks/context and preserves PreCompact output');
+    const requestsBeforeScoped = upStub.requests.length;
+    const r7 = await runHook(hookEnv({ CLAUDE_PROXY_PORT: String(upStub.port) }), '{"session_id":"pc-sess-1"}');
+    assertEq(r7.status, 0, `hook exits 0 with stdin session_id (stderr: ${r7.stderr.slice(0, 200)})`);
+    const scopedRequests = upStub.requests.slice(requestsBeforeScoped);
+    assert(scopedRequests.some(r => r.method === 'POST' && r.path === '/s/pc-sess-1/hooks/context'),
+      'stdin session_id hit POST /s/pc-sess-1/hooks/context');
+    assert(!scopedRequests.some(r => r.method === 'POST' && r.path === '/hooks/context'),
+      'stdin session_id did not hit bare POST /hooks/context');
+    assertEq(r7.parsed?.hookSpecificOutput?.hookEventName, 'PreCompact', 'scoped response is re-wrapped as PreCompact');
+    assertEq(r7.parsed?.hookSpecificOutput?.additionalContext, CONTEXT_TEXT, 'scoped response additionalContext is extracted verbatim');
   } finally {
     await upStub.close();
     await emptyStub.close();
