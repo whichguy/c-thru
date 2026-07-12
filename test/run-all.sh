@@ -213,6 +213,8 @@ run_suite "proxy-body-size-cap (MAX_BODY_BYTES 413 guard)" \
   node "$REPO_DIR/test/proxy-body-size-cap.test.js"
 run_suite "proxy-forward-ollama-midstream-error" \
   node "$REPO_DIR/test/proxy-forward-ollama-midstream-error.test.js"
+run_suite "proxy-upstream-midstream-failure (transport failure post-commitment: terminate, never hang/crash)" \
+  node "$REPO_DIR/test/proxy-upstream-midstream-failure.test.js"
 run_suite "proxy-client-disconnect-cleanup" \
   node "$REPO_DIR/test/proxy-client-disconnect-cleanup.test.js"
 run_suite "proxy-anthropic-disconnect-cleanup (F2: forwardAnthropic tears down upstream on client disconnect)" \

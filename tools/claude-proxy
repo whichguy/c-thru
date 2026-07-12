@@ -128,6 +128,11 @@ const GEMINI_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_GEMINI_TIMEOUT_MS
 // rearms on socket activity, so it never cuts off a legitimate long
 // generation that is still streaming bytes.
 const ANTHROPIC_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_ANTHROPIC_TIMEOUT_MS', 300000);
+// Cap for fully-buffered (non-streaming) upstream response bodies on the
+// translated paths (Gemini, Ollama-legacy) — those handlers accumulate the
+// whole body before translating, so an unbounded upstream would grow proxy
+// memory without limit. 64 MB comfortably covers any real completion body.
+const UPSTREAM_NONSTREAM_BODY_CAP = numberFromEnv('CLAUDE_PROXY_NONSTREAM_BODY_CAP', 64 * 1024 * 1024);
 const STREAM_STALL_HARDFAIL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_STALL_MS', 300000);
 const STREAM_WALL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_WALL_MS', 2100000);
 const SSE_PING_INTERVAL_MS = numberFromEnv('CLAUDE_PROXY_PING_INTERVAL_MS', 15000);
@@ -1586,6 +1591,32 @@ function sseWrite(res, event, data) {
   res.write(`event: ${event}\ndata: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`);
 }
 
+// ── Post-commitment upstream-failure termination ─────────────────────────────
+// Once response headers (and possibly body bytes) have reached the client,
+// fallback dispatch is impossible and the only correct moves are:
+//   - SSE response:  emit one Anthropic-shape terminal `error` frame, end.
+//   - JSON response: destroy the connection — appending anything to a
+//     partially-written JSON body would corrupt it; a truncated body plus
+//     socket close is the least-wrong signal a JSON client can receive.
+// Idempotent per response (guard symbol) so 'error'+'aborted' double-fire and
+// multi-handler wiring (upRes + up) can never emit two terminal frames.
+// Only for POST-commitment failures — pre-commitment failures must keep
+// taking the backend-failure path (markBackendFailed + tryFallbackOrFail).
+const RES_TERMINATED = Symbol('cthruCommittedResponseTerminated');
+function terminateCommittedResponse(ctx, res, isSse, logEvent, message) {
+  if (res[RES_TERMINATED]) return;
+  res[RES_TERMINATED] = true;
+  ctxLog(ctx, logEvent, { message });
+  try {
+    if (isSse) {
+      sseWrite(res, 'error', { type: 'error', error: { type: 'api_error', message } });
+      if (res.writable) res.end();
+    } else {
+      res.destroy();
+    }
+  } catch { /* client already gone */ }
+}
+
 const MAX_BODY_BYTES = 100 * 1024 * 1024; // 100 MB
 
 function readBody(req) {
@@ -1998,6 +2029,10 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   const backendStartedAt = Date.now();
   if (requestMeta) requestMeta.backendStartedAt = backendStartedAt;
 
+  // Set once headers are committed (in the upRes callback); read by the
+  // post-commitment failure paths in both upRes and up error handlers.
+  let responseIsSse = false;
+
   const up = lib.request(options, upRes => {
     const backendLatencyMs = Date.now() - backendStartedAt;
     ctxLog(ctx, 'backend_response', { backend: backend.id, statusCode: upRes.statusCode });
@@ -2073,11 +2108,40 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       tailBuf = Buffer.concat([tailBuf, chunk]);
       if (tailBuf.length > TAIL_BUF_CAP) tailBuf = tailBuf.subarray(tailBuf.length - TAIL_BUF_CAP);
     });
+    // Post-commitment transport failure: headers are already sent, so no
+    // fallback is possible — terminate coherently instead of leaving the
+    // client on a truncated response (or worse, letting the unhandled
+    // 'error' reach uncaughtException and kill the whole proxy). 'aborted'
+    // is wired alongside 'error' (older Node emits it first / instead);
+    // terminateCommittedResponse is idempotent so double-fire is safe.
+    responseIsSse = (upRes.headers['content-type'] || '').includes('text/event-stream');
+    const onUpstreamMidstreamFailure = e => {
+      if (!upstreamCancelled) {
+        // Genuine backend failure (not our own client-disconnect teardown):
+        // cool it down like any other connection error, and record what
+        // usage we can — message_start (input_tokens) may already be in the
+        // tee buffer even though message_delta never arrived.
+        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+        try {
+          const startFrame = Buffer.concat(usageBuf).toString('utf8')
+            .match(/event:\s*message_start\s*\n\s*data:\s*({[^\n]+})/);
+          if (startFrame) {
+            const inTok = JSON.parse(startFrame[1]).message?.usage?.input_tokens || 0;
+            if (inTok) recordUsageAndStamp(requestMeta, effectiveModel, backend.id, inTok, 0,
+              Date.now() - (requestMeta.startedAt || Date.now()), requestMeta.capability || null);
+          }
+        } catch { /* best-effort only */ }
+      }
+      terminateCommittedResponse(ctx, res, responseIsSse, 'anthropic.upstream.midstream_error',
+        `upstream ${backend.id} failed mid-response: ${e.message}`);
+    };
+    upRes.on('error', onUpstreamMidstreamFailure);
+    upRes.on('aborted', () => onUpstreamMidstreamFailure(new Error('upstream aborted')));
     upRes.on('end', () => {
       if (upRes.statusCode !== 200) return;
       try {
         const txt = Buffer.concat(usageBuf).toString('utf8');
-        const isSse = (upRes.headers['content-type'] || '').includes('text/event-stream');
+        const isSse = responseIsSse;
         let inputTokens = 0, outputTokens = 0;
         if (isSse) {
           // Locate the message_start frame and pull data: line; parse as JSON.
@@ -2151,12 +2215,23 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   // markBackendFailed + tryFallbackOrFail (cascade or 502, never a silent hang).
   up.on('timeout', () => up.destroy(new Error(`anthropic upstream timeout after ${ANTHROPIC_UPSTREAM_TIMEOUT_MS}ms`)));
   up.on('error', async e => {
+    // Our own client-disconnect teardown (cancelUpstream -> up.destroy) also
+    // surfaces here — that's not a backend failure; don't cool the backend
+    // down or emit anything (the client is already gone).
+    if (upstreamCancelled) return;
     ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'anthropic', error: e.message });
     // Connection-error path — no HTTP status to read. classifyFailure
     // inspects the error string for ECONNREFUSED/timeout markers; result
     // is 'transient' (we want to cooldown wedged backends so retries skip
     // them quickly).
     markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+    if (res.headersSent) {
+      // Post-commitment: fallback is impossible (bytes already reached the
+      // client) — terminate coherently instead of hanging the response.
+      terminateCommittedResponse(ctx, res, responseIsSse, 'anthropic.upstream.midstream_error',
+        `upstream ${backend.id} failed mid-response: ${e.message}`);
+      return;
+    }
     const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
       reason: 'connection error',
       error: e.message,
@@ -2635,9 +2710,36 @@ async function handleProbeLlm(req, res) {
 function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, requestMeta, upRes) {
   let fullBody = '';
   let bytesOut = 0;
+  let nonStreamAborted = false;
   const nonStreamStart = Date.now();
-  upRes.on('data', chunk => { bytesOut += chunk.length; fullBody += chunk.toString(); });
+  // Headers are only written on 'end', so failures here are pre-commitment:
+  // a clean 502 is always deliverable (send() guards headersSent). Buffer is
+  // capped so an unbounded upstream body can't exhaust proxy memory. The
+  // finalize-hook recent-requests ring records these failures (status 502);
+  // recordUsage is skipped by design — no tokens were delivered.
+  upRes.on('data', chunk => {
+    if (nonStreamAborted) return;
+    bytesOut += chunk.length;
+    if (bytesOut > UPSTREAM_NONSTREAM_BODY_CAP) {
+      nonStreamAborted = true;
+      ctxLog(ctx, 'ollama.nonstream.body_cap_exceeded', { cap_bytes: UPSTREAM_NONSTREAM_BODY_CAP, backend: backend.id });
+      try { upRes.destroy(); } catch {}
+      sendAnthropicError(res, 502, `Ollama non-stream response exceeded ${UPSTREAM_NONSTREAM_BODY_CAP} bytes`);
+      return;
+    }
+    fullBody += chunk.toString();
+  });
+  const onOllamaNonStreamFailure = e => {
+    if (nonStreamAborted) return;
+    nonStreamAborted = true;
+    ctxLog(ctx, 'ollama.nonstream.upstream_error', { error: e.message, backend: backend.id });
+    markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+    sendAnthropicError(res, 502, `upstream ${backend.id} failed mid-response: ${e.message}`);
+  };
+  upRes.on('error', onOllamaNonStreamFailure);
+  upRes.on('aborted', () => onOllamaNonStreamFailure(new Error('upstream aborted')));
   upRes.on('end', () => {
+    if (nonStreamAborted) return;
     try {
       const ollamaJson = JSON.parse(fullBody);
       const promptTokens = ollamaJson.prompt_eval_count || 0;
@@ -3614,16 +3716,57 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         clearBackendCooldown(backend.id);
         scheduleCacheCreate();
       });
-      upRes.on('error', stopGeminiPing);
+      // Post-commitment transport failure: the SSE stream is already
+      // committed, so emit one terminal Anthropic-shape error frame and end
+      // instead of leaving the client on a truncated stream with no
+      // message_stop (or crashing on an unhandled 'error').
+      const onGeminiStreamFailure = e => {
+        stopGeminiPing();
+        if (!upstreamCancelled) {
+          markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+        }
+        terminateCommittedResponse(ctx, res, true, 'gemini.upstream.midstream_error',
+          `upstream ${backend.id} failed mid-stream: ${e.message}`);
+      };
+      upRes.on('error', onGeminiStreamFailure);
+      upRes.on('aborted', () => onGeminiStreamFailure(new Error('upstream aborted')));
       // Note: client-disconnect handling is wired at the function level via
       // cancelUpstream (req/res 'close' -> up.destroy() + stopGeminiPing).
       // This branch's old `res.on('close', stopGeminiPing)` was removed in
       // Wave 1 to consolidate cleanup into the single cancelUpstream path.
     } else {
-      // Non-streaming
+      // Non-streaming. Headers are only written on 'end', so failures here
+      // are pre-commitment: surface a clean 502 (send() guards headersSent).
+      // The buffer is capped so a runaway/looping upstream can't exhaust
+      // proxy memory — past the cap we abort rather than truncate-and-parse.
       let respBody = '';
-      upRes.on('data', d => respBody += d);
+      let respBytes = 0;
+      let nonStreamAborted = false;
+      upRes.on('data', d => {
+        if (nonStreamAborted) return;
+        respBytes += d.length;
+        if (respBytes > UPSTREAM_NONSTREAM_BODY_CAP) {
+          nonStreamAborted = true;
+          ctxLog(ctx, 'gemini.nonstream.body_cap_exceeded', { cap_bytes: UPSTREAM_NONSTREAM_BODY_CAP });
+          try { upRes.destroy(); } catch {}
+          sendAnthropicError(res, 502, `Gemini non-stream response exceeded ${UPSTREAM_NONSTREAM_BODY_CAP} bytes`);
+          return;
+        }
+        respBody += d;
+      });
+      const onGeminiNonStreamFailure = e => {
+        if (nonStreamAborted) return;
+        nonStreamAborted = true;
+        if (!upstreamCancelled) {
+          markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+        }
+        ctxLog(ctx, 'gemini.nonstream.upstream_error', { error: e.message, backend: backend.id });
+        sendAnthropicError(res, 502, `upstream ${backend.id} failed mid-response: ${e.message}`);
+      };
+      upRes.on('error', onGeminiNonStreamFailure);
+      upRes.on('aborted', () => onGeminiNonStreamFailure(new Error('upstream aborted')));
       upRes.on('end', () => {
+        if (nonStreamAborted) return;
         try {
           const geminiData = JSON.parse(respBody);
           if (isCountTokens) {
