@@ -140,6 +140,8 @@ run_suite "c-thru-ollama-gc (sweep/purge state-tracking invariants)" \
   bash "$REPO_DIR/test/c-thru-ollama-gc.test.sh"
 run_suite "c-thru-contract-check (agent/skill contracts)" \
   bash "$REPO_DIR/test/c-thru-contract-check.test.sh"
+run_suite "c-thru-hygiene-check (cross-user/secrets/bak/stale-worktree findings)" \
+  bash "$REPO_DIR/test/c-thru-hygiene-check.test.sh"
 run_suite "contract-check-guards-bite (10/11/14/15 fail-loud guards bite on mutation)" \
   bash "$REPO_DIR/test/contract-check-guards-bite.test.sh"
 run_suite "c-thru-explain-bash (bash integration: _explain_all_json cache + TSV contracts)" \

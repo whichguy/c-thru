@@ -91,6 +91,32 @@ if [[ "${DIRTY:-0}" -gt 10 ]]; then
   note_warn "$DIRTY modified files in working tree — consider committing/stashing before new task"
 fi
 
+# 7. Stale worktrees — each isolation:"worktree" Agent-tool run (and manual
+#    `git worktree add`) leaves one behind; they accumulate silently. Report
+#    only, never prune: a branch already merged into origin/main can still
+#    hold uncommitted WIP in its worktree (git worktree remove only refuses
+#    when dirty — --force would discard it), so staleness is surfaced for a
+#    human decision, not acted on here.
+if git remote get-url origin >/dev/null 2>&1; then
+  STALE_WORKTREE_DAYS=14
+  NOW_EPOCH="$(date +%s)"
+  while IFS= read -r wt_path; do
+    [[ -z "$wt_path" || "$wt_path" == "$REPO_DIR" ]] && continue
+    [[ -d "$wt_path" ]] || continue
+    branch="$(git -C "$wt_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")"
+    last_commit_epoch="$(git -C "$wt_path" log -1 --format=%ct 2>/dev/null || echo 0)"
+    [[ "$last_commit_epoch" -eq 0 ]] && continue
+    age_days=$(( (NOW_EPOCH - last_commit_epoch) / 86400 ))
+    [[ "$age_days" -lt "$STALE_WORKTREE_DAYS" ]] && continue
+    merged="no"
+    if git branch --merged origin/main --format='%(refname:short)' 2>/dev/null | grep -qxF "$branch"; then
+      merged="yes"
+    fi
+    dirty_count="$(git -C "$wt_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+    note_warn "stale worktree (${age_days}d old, branch=$branch, merged_into_origin_main=$merged, ${dirty_count} dirty file(s)) — $wt_path"
+  done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}')
+fi
+
 # Output
 if [[ ${#FINDINGS[@]} -eq 0 ]]; then
   echo "hygiene: clean (0 findings) at $REPO_DIR"
