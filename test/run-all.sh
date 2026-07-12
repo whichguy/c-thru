@@ -156,6 +156,8 @@ run_suite "hook-payload-extraction (hook payload extraction)" \
   bash "$REPO_DIR/test/hook-payload-extraction.test.sh"
 run_suite "map-changed-hook (validate + warn-only lineage drift guard)" \
   bash "$REPO_DIR/test/c-thru-map-changed-hook.test.sh"
+run_suite "plan-visibility-hook (approved plan spool, auto-open, rotation)" \
+  bash "$REPO_DIR/test/c-thru-plan-visibility-hook.test.sh"
 run_suite "c-thru-stop-hook (fallback systemMessage: parse/dedupe/staleness)" \
   bash "$REPO_DIR/test/c-thru-stop-hook.test.sh"
 run_suite "c-thru-autonomous-gate (Stop-hook gate sentinel/block matrix)" \
@@ -255,6 +257,8 @@ run_suite "proxy-auth-strip-e2e (C12: incoming Anthropic auth stripped to unknow
   node "$REPO_DIR/test/proxy-auth-strip-e2e.test.js"
 run_suite "proxy-agent-sentinel-e2e (live proxy: signed/unsigned/forged marker, fail-open, by_agent)" \
   node "$REPO_DIR/test/proxy-agent-sentinel-e2e.test.js"
+run_suite "c-thru-verify-routing (live-smoke tool: resolved-via header + usage-stats cross-check)" \
+  node "$REPO_DIR/test/c-thru-verify-routing.test.js"
 run_suite "agent-offload-lib (delegation parser: parse-not-grep, call↔result join)" \
   node "$REPO_DIR/test/agent-offload-lib.test.js"
 run_suite "c-thru-agent-usage (per-agent transcript telemetry CLI)" \
@@ -295,6 +299,8 @@ run_suite "proxy-recent-requests (ring buffer + /c-thru/recent)" \
   node "$REPO_DIR/test/proxy-recent-requests.test.js"
 run_suite "proxy-dashboard (/c-thru/dashboard + discovery header)" \
   node "$REPO_DIR/test/proxy-dashboard.test.js"
+run_suite "plan-dashboard (/c-thru/plan + live plan HTML)" \
+  node "$REPO_DIR/test/plan-dashboard.test.js"
 run_suite "proxy-info-injection-e2e (real proxy ↔ session-start hook ↔ --list discovery + skill)" \
   node "$REPO_DIR/test/proxy-info-injection-e2e.test.js"
 run_suite "agent-contract-static (agent/skill static contracts)" \
@@ -307,6 +313,8 @@ run_suite "c-thru-explain (explain command resolution)" \
   node "$REPO_DIR/test/c-thru-explain.test.js"
 run_suite "c-thru-plan-harness (plan harness utilities)" \
   node "$REPO_DIR/test/c-thru-plan-harness.test.js"
+run_suite "plan-state-lib (native plans + wave/session aggregation)" \
+  node "$REPO_DIR/test/plan-state-lib.test.js"
 run_suite "plan-orchestrator-integration (orchestrator wave lifecycle, hermetic)" \
   node "$REPO_DIR/test/plan-orchestrator-integration.test.js"
 run_suite "c-thru-target-launch (target launch helpers)" \
