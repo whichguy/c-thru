@@ -1,19 +1,42 @@
 #!/usr/bin/env bash
-# c-thru statusline overlay: prints a fallback badge when a recent
-# [fallback.candidate_success] event is in ~/.claude/proxy.log, else empty.
-# Safe to append to any host statusline script. Always exits 0.
+# c-thru statusline overlay: prints a fallback badge when this session's most
+# recent request (via GET /c-thru/recent, session-scoped through the /s/<id>
+# path prefix) was served by a fallback, else empty. Safe to append to any
+# host statusline script. Always exits 0.
+#
+# Round-5 B3: rewritten from grepping ~/.claude/proxy.log for
+# [fallback.candidate_success] — an event name the fallback engine stopped
+# emitting; this hook watched a dead string. See c-thru-stop-hook.sh's header
+# for the fuller rationale (same rebuild, same data source).
 set +e
 trap 'exit 0' ERR
 
+_src="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_src" ]; do
+    _dir=$(cd -P "$(dirname "$_src")" && pwd)
+    _src=$(readlink "$_src")
+    case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+ROUTER_REPO_ROOT=$(cd -P "$(dirname "$_src")/.." && pwd)
+
 command -v jq >/dev/null 2>&1 || exit 0
-log_file="$HOME/.claude/proxy.log"
-[[ -r "$log_file" ]] || exit 0
 
-last_line=$(tail -c 50000 "$log_file" 2>/dev/null | grep '\[fallback\.candidate_success\]' | tail -1)
-[[ -n "$last_line" ]] || exit 0
+BASE_URL=""
+if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
+    # shellcheck source=c-thru-lib.sh
+    . "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh"
+    BASE_URL="$(cthru_hook_base_url)"
+fi
+[ -n "$BASE_URL" ] || exit 0
 
-ts_iso=$(printf '%s' "$last_line" | awk '{print $1}')
-# Portable ISO-8601 → epoch-ms via node (avoids BSD-vs-GNU `date` divergence).
+recent_json=$(curl -sf --max-time 2 "${BASE_URL}/c-thru/recent?n=5" 2>/dev/null)
+[ -n "$recent_json" ] || exit 0
+
+fallback_entry=$(printf '%s' "$recent_json" | jq -c '.requests[]? | select(.fallback_from != null)' 2>/dev/null | head -1)
+[ -n "$fallback_entry" ] || exit 0
+
+ts_iso=$(printf '%s' "$fallback_entry" | jq -r '.ts // empty' 2>/dev/null)
+[ -n "$ts_iso" ] || exit 0
 last_ms=$(node -e 'const t=Date.parse(process.argv[1]);if(Number.isFinite(t))process.stdout.write(String(t))' "$ts_iso" 2>/dev/null)
 [[ "$last_ms" =~ ^[0-9]+$ ]] || exit 0
 
@@ -21,9 +44,8 @@ now_ms=$(($(date +%s) * 1000))
 age=$((now_ms - last_ms))
 (( age < 120000 )) || exit 0
 
-json_payload=$(printf '%s' "$last_line" | grep -oE '\{.*\}$' | head -1)
-served_by=$(printf '%s' "$json_payload" | jq -r '.candidate // empty' 2>/dev/null)
-[[ -n "$served_by" ]] || exit 0
+served_by=$(printf '%s' "$fallback_entry" | jq -r '.served_by // empty' 2>/dev/null)
+[ -n "$served_by" ] || exit 0
 
 printf ' ⚠️  FALLBACK → %s' "$served_by"
 exit 0

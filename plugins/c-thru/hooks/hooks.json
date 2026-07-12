@@ -7,6 +7,12 @@
         { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-session-start.sh", "timeout": 5 }
       ]
     }],
+    "Stop": [{
+      "matcher": "*",
+      "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-stop-hook.sh", "timeout": 5 }
+      ]
+    }],
     "UserPromptSubmit": [{
       "matcher": "*",
       "hooks": [
@@ -18,6 +24,11 @@
       "matcher": "Write|Edit",
       "hooks": [
         { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-map-changed.sh", "timeout": 5 }
+      ]
+    }, {
+      "matcher": "ExitPlanMode",
+      "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-plan-visibility-hook.sh", "timeout": 5 }
       ]
     }],
     "PreCompact": [{

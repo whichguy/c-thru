@@ -160,12 +160,14 @@ run_suite "map-changed-hook (validate + warn-only lineage drift guard)" \
   bash "$REPO_DIR/test/c-thru-map-changed-hook.test.sh"
 run_suite "plan-visibility-hook (approved plan spool, auto-open, rotation)" \
   bash "$REPO_DIR/test/c-thru-plan-visibility-hook.test.sh"
-run_suite "c-thru-stop-hook (fallback systemMessage: parse/dedupe/staleness)" \
-  bash "$REPO_DIR/test/c-thru-stop-hook.test.sh"
+run_suite "c-thru-stop-hook (fallback systemMessage: real proxy, real fallback, session isolation)" \
+  node "$REPO_DIR/test/c-thru-stop-hook.test.js"
 run_suite "c-thru-autonomous-gate (Stop-hook gate sentinel/block matrix)" \
   bash "$REPO_DIR/test/c-thru-autonomous-gate.test.sh"
-run_suite "c-thru-statusline-overlay (fallback badge: parse/staleness/fail-open)" \
-  bash "$REPO_DIR/test/c-thru-statusline-overlay.test.sh"
+run_suite "c-thru-statusline-overlay (fallback badge: real proxy, real fallback, session isolation)" \
+  node "$REPO_DIR/test/c-thru-statusline-overlay.test.js"
+run_suite "statusline absent-only injection (c-thru never overwrites a user statusLine)" \
+  node "$REPO_DIR/test/c-thru-statusline-injection.test.js"
 run_suite "agent-router-hook (subagent_type → capability model rewrite)" \
   bash "$REPO_DIR/test/agent-router-hook.test.js"
 run_suite "strict-models (C_THRU_STRICT_MODELS=1 enforcement)" \

@@ -39,6 +39,8 @@ HOOKS=(
   c-thru-proxy-health.sh
   c-thru-classify.sh
   c-thru-map-changed.sh
+  c-thru-plan-visibility-hook.sh
+  c-thru-stop-hook.sh
   c-thru-postcompact-context.sh
 )
 for h in "${HOOKS[@]}"; do
@@ -50,7 +52,7 @@ done
 #   logical-gearbox                             — internal routing research
 #   review-fix, review-plan                     — review-suite; shipped via separate plugin
 #   update-model-research                       — internal capability research tool
-SKILLS=(c-thru-plan c-thru-config c-thru-control)
+SKILLS=(c-thru-plan c-thru-config c-thru-control plan-page)
 for s in "${SKILLS[@]}"; do
   check_or_copy "$ROOT/skills/$s/SKILL.md" "$BUNDLE/skills/$s/SKILL.md"
 done
@@ -58,7 +60,7 @@ done
 # Proxy binary + JS runtime deps (needed for plugin-only installs without install.sh).
 # c-thru-lib.sh: the bundled hooks source it from $ROUTER_REPO_ROOT/tools/ (which
 # resolves to $BUNDLE/tools/ in plugin mode), so it must ship here too.
-for f in c-thru-lib.sh claude-proxy proxy-dashboard.html model-map-config.js model-map-resolve.js model-map-layered.js \
+for f in c-thru-lib.sh claude-proxy proxy-dashboard.html plan-dashboard.html plan-state-lib.js c-thru-plan-harness.js model-map-config.js model-map-resolve.js model-map-layered.js \
           model-map-validate.js hw-profile.js agent-sentinel.js; do
   check_or_copy "$ROOT/tools/$f" "$BUNDLE/tools/$f"
 done

@@ -227,6 +227,151 @@ resolve_model_map_config() {
   return 1
 }
 
+# Build the additive agents object for the ephemeral session and reconcile any
+# caller-supplied --agents payloads. Caller definitions override profile/fleet
+# definitions, and later caller payloads override earlier ones.
+build_ephemeral_agents() {
+  local caller_agents_payloads_json
+  local agents_result
+  local caller_agents_parseable
+  local -a caller_agents_payloads=()
+  if declare -p CALLER_AGENTS_PAYLOADS >/dev/null 2>&1 && [[ ${#CALLER_AGENTS_PAYLOADS[@]} -gt 0 ]]; then
+    caller_agents_payloads=("${CALLER_AGENTS_PAYLOADS[@]}")
+  fi
+
+  if [[ "${NO_AGENTS:-0}" != "1" ]]; then
+    mkdir -p "$EPHEMERAL_SESSION_DIR/agents"
+    # Link profile agents first so they retain their existing precedence over
+    # same-basename fleet entries.
+    if [[ -d "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" ]]; then
+      local name src
+      while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        src="$ORIGINAL_CLAUDE_PROFILE_DIR/agents/$name"
+        [[ -e "$src" ]] || continue
+        ln -s "$src" "$EPHEMERAL_SESSION_DIR/agents/$name" 2>/dev/null || true
+      done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" 2>/dev/null)
+    fi
+    if [[ -d "$CTHRU_REPO_ROOT/agents" ]]; then
+      local item
+      for item in "$CTHRU_REPO_ROOT/agents"/*.md; do
+        [ -f "$item" ] || continue
+        ln -s "$item" "$EPHEMERAL_SESSION_DIR/agents/$(basename "$item")" 2>/dev/null || true
+      done
+    fi
+  fi
+
+  if [[ ${#caller_agents_payloads[@]} -gt 0 ]]; then
+    caller_agents_payloads_json="$(node -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' "${caller_agents_payloads[@]}")"
+  else
+    caller_agents_payloads_json="[]"
+  fi
+  [[ -n "$caller_agents_payloads_json" ]] || {
+    echo "c-thru: failed to prepare caller --agents payloads" >&2
+    exit 1
+  }
+
+  if ! agents_result="$(node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const [agentsDir, noAgents, callerPayloadsJson] = process.argv.slice(1);
+    const agents = Object.create(null);
+    const callerParseable = [];
+    const callerNames = new Set();
+    const isPlainObject = value =>
+      value !== null && typeof value === "object" && !Array.isArray(value) &&
+      Object.getPrototypeOf(value) === Object.prototype;
+
+    if (noAgents !== "1" && fs.existsSync(agentsDir)) {
+      fs.readdirSync(agentsDir).forEach(file => {
+        if (!file.endsWith(".md")) return;
+        const name = file.replace(".md", "");
+        let content;
+        try {
+          content = fs.readFileSync(path.join(agentsDir, file), "utf8");
+        } catch (e) {
+          process.stderr.write("c-thru: skipping unreadable agent file " + file + ": " + e.message + "\n");
+          return;
+        }
+        const m = content.match(/^---\r?\n([\s\S]*?)\n---\r?\n/);
+        let description = "";
+        let prompt = content;
+        let model = name;
+        let tier_budget = 999999;
+        if (m) {
+          const frontmatter = m[1];
+          const descMatch = frontmatter.match(/^description:\s*(.*)$/m);
+          if (descMatch) description = descMatch[1].trim();
+          const modelMatch = frontmatter.match(/^model:\s*(.*)$/m);
+          if (modelMatch) model = modelMatch[1].trim();
+          const budgetMatch = frontmatter.match(/^tier_budget:\s*(.*)$/m);
+          if (budgetMatch) tier_budget = parseInt(budgetMatch[1].trim(), 10);
+          prompt = content.slice(m[0].length).trim();
+        }
+        agents[name] = { description, prompt, model, tier_budget };
+      });
+    }
+
+    let callerPayloads;
+    try {
+      callerPayloads = JSON.parse(callerPayloadsJson);
+    } catch (_) {
+      callerPayloads = [];
+    }
+    for (const payload of callerPayloads) {
+      let parsed;
+      try {
+        parsed = JSON.parse(payload);
+      } catch (_) {
+        try {
+          parsed = JSON.parse(fs.readFileSync(payload, "utf8"));
+        } catch (_) {
+          parsed = undefined;
+        }
+      }
+      if (!isPlainObject(parsed)) {
+        process.stderr.write("c-thru: ignoring unparseable --agents payload: " + String(payload).slice(0, 120) + "\n");
+        callerParseable.push(false);
+        continue;
+      }
+      callerParseable.push(true);
+      for (const [name, definition] of Object.entries(parsed)) {
+        agents[name] = definition;
+        callerNames.add(name);
+      }
+    }
+
+    // Only remove session-local symlinks. Reject names that would escape the
+    // ephemeral agents directory before consulting the filesystem.
+    const agentsRoot = path.resolve(agentsDir);
+    for (const name of callerNames) {
+      const mdPath = path.resolve(agentsRoot, name + ".md");
+      if (path.dirname(mdPath) !== agentsRoot) continue;
+      try {
+        if (fs.lstatSync(mdPath).isSymbolicLink()) fs.unlinkSync(mdPath);
+      } catch (_) {}
+    }
+    process.stdout.write(JSON.stringify({ agents, callerParseable }));
+  ' "$EPHEMERAL_SESSION_DIR/agents" "${NO_AGENTS:-0}" "$caller_agents_payloads_json")"; then
+    echo "c-thru: failed to build ephemeral agents JSON" >&2
+    exit 1
+  fi
+
+  EPHEMERAL_AGENTS_JSON="$(node -e 'process.stdout.write(JSON.stringify(JSON.parse(process.argv[1]).agents))' "$agents_result")" || {
+    echo "c-thru: failed to build ephemeral agents JSON" >&2
+    exit 1
+  }
+  caller_agents_parseable="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).callerParseable.map(value => value ? "1" : "0").join(""))' "$agents_result")" || {
+    echo "c-thru: failed to build ephemeral agents JSON" >&2
+    exit 1
+  }
+  CALLER_AGENTS_PARSEABLE=()
+  local caller_payload_index
+  for ((caller_payload_index = 0; caller_payload_index < ${#caller_agents_payloads[@]}; caller_payload_index++)); do
+    CALLER_AGENTS_PARSEABLE+=("${caller_agents_parseable:caller_payload_index:1}")
+  done
+}
+
 # ARCH: setup_ephemeral_session — creates a per-session tmpdir that shadows ~/.claude so
 #   the injected settings (inline), agents, and skills don't pollute the user's permanent config.
 #   the settings JSON is built LATER by write_ephemeral_settings() and passed inline via --settings;
@@ -241,15 +386,15 @@ setup_ephemeral_session() {
   # builds it into EPHEMERAL_SETTINGS_JSON and it is passed inline via --settings.
 
   # 1. Shadow the entire .claude directory to make the session fully ephemeral
-  # Link everything except what we override (settings, agents, skills) or what causes noise (backups).
-  # User preference keys from the skipped settings.json are re-injected separately
+  # Link everything except what we override (settings files, agents, skills) or what causes noise (backups).
+  # User preference keys from the skipped settings files are re-injected separately
   # (and filtered) by write_ephemeral_settings(), so they are relocated, not lost.
   local item name
   # Use ls -A to catch hidden files
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
     item="$ORIGINAL_CLAUDE_PROFILE_DIR/$name"
-    [[ "$name" == "settings.json" || "$name" == "agents" || "$name" == "skills" || "$name" == "backups" ]] && continue
+    [[ "$name" == "settings.json" || "$name" == "settings.local.json" || "$name" == "agents" || "$name" == "skills" || "$name" == "backups" ]] && continue
     ln -s "$item" "$EPHEMERAL_SESSION_DIR/$name" 2>/dev/null || true
   done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR" 2>/dev/null)
 
@@ -289,64 +434,10 @@ setup_ephemeral_session() {
     done
   fi
 
-  # 3. Additive Agents: link c-thru agents (namespaced) and build --agents JSON.
-  if [[ "${NO_AGENTS:-0}" != "1" ]]; then
-    mkdir -p "$EPHEMERAL_SESSION_DIR/agents"
-    # Link user's existing agents first.
-    # `-e` dereferences symlinks, so dangling symlinks in the source dir are
-    # skipped instead of being faithfully re-created (which would later spam
-    # ENOENT from Node's readFileSync). Common when a vendor agents repo
-    # (e.g. claude-craft) is moved or deleted but the user's symlinks remain.
-    if [[ -d "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" ]]; then
-      while IFS= read -r name; do
-        [[ -z "$name" ]] && continue
-        src="$ORIGINAL_CLAUDE_PROFILE_DIR/agents/$name"
-        [[ -e "$src" ]] || continue
-        ln -s "$src" "$EPHEMERAL_SESSION_DIR/agents/$name" 2>/dev/null || true
-      done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" 2>/dev/null)
-    fi
-    # Link c-thru agents
-    if [[ -d "$CTHRU_REPO_ROOT/agents" ]]; then
-      for item in "$CTHRU_REPO_ROOT/agents"/*.md; do
-        [ -f "$item" ] || continue
-        ln -s "$item" "$EPHEMERAL_SESSION_DIR/agents/$(basename "$item")" 2>/dev/null || true
-      done
-    fi
+  # 4. Additive Agents: link c-thru/profile agents and build the merged --agents JSON.
+  build_ephemeral_agents
 
-    EPHEMERAL_AGENTS_JSON=$(node -e '
-      const fs = require("fs");
-      const path = require("path");
-      const agentsDir = process.argv[1];
-      const agents = {};
-      if (fs.existsSync(agentsDir)) {
-        fs.readdirSync(agentsDir).forEach(file => {
-          if (!file.endsWith(".md")) return;
-          const name = file.replace(".md", "");
-          let content;
-          try { content = fs.readFileSync(path.join(agentsDir, file), "utf8"); } catch (e) { process.stderr.write("c-thru: skipping unreadable agent file " + file + ": " + e.message + "\n"); return; }
-          const m = content.match(/^---\r?\n([\s\S]*?)\n---\r?\n/);
-          let description = "";
-          let prompt = content;
-          let model = name;
-          let tier_budget = 999999;
-          if (m) {
-            const frontmatter = m[1];
-            const descMatch = frontmatter.match(/^description:\s*(.*)$/m);
-            if (descMatch) description = descMatch[1].trim();
-            const modelMatch = frontmatter.match(/^model:\s*(.*)$/m);
-            if (modelMatch) model = modelMatch[1].trim();
-            const budgetMatch = frontmatter.match(/^tier_budget:\s*(.*)$/m);
-            if (budgetMatch) tier_budget = parseInt(budgetMatch[1].trim(), 10);
-            prompt = content.slice(m[0].length).trim();
-          }
-          agents[name] = { description, prompt, model, tier_budget };
-        });
-      }
-      console.log(JSON.stringify(agents));
-    ' "$EPHEMERAL_SESSION_DIR/agents")
-  fi
-
-  # 4. Export the ephemeral config dir for the child process
+  # 5. Export the ephemeral config dir for the child process
   export CLAUDE_CONFIG_DIR="$EPHEMERAL_SESSION_DIR"
   export CLAUDE_PROFILE_DIR="$EPHEMERAL_SESSION_DIR"
   # the settings JSON is built later by write_ephemeral_settings() and passed
@@ -380,6 +471,7 @@ write_ephemeral_settings() {
   [[ -n "${EPHEMERAL_SESSION_DIR:-}" ]] || return 0
   local tools_dest="$CTHRU_SELF_DIR"
   local user_settings_path="$ORIGINAL_CLAUDE_PROFILE_DIR/settings.json"
+  local user_local_settings_path="$ORIGINAL_CLAUDE_PROFILE_DIR/settings.local.json"
 
   # Resolve actual path for a tool (checks for .sh suffix too).
   find_tool_path() {
@@ -389,11 +481,14 @@ write_ephemeral_settings() {
     else echo "$tools_dest/$base"; fi
   }
 
-  local session_cmd health_cmd classify_cmd map_changed_cmd postcompact_cmd planner_hint_cmd agent_router_cmd mcp_js
+  local session_cmd health_cmd classify_cmd map_changed_cmd plan_visibility_cmd stop_hook_cmd statusline_cmd postcompact_cmd planner_hint_cmd agent_router_cmd mcp_js
   session_cmd="$(find_tool_path c-thru-session-start)"
   health_cmd="$(find_tool_path c-thru-proxy-health)"
   classify_cmd="$(find_tool_path c-thru-classify)"
   map_changed_cmd="$(find_tool_path c-thru-map-changed)"
+  plan_visibility_cmd="$(find_tool_path c-thru-plan-visibility-hook)"
+  stop_hook_cmd="$(find_tool_path c-thru-stop-hook)"
+  statusline_cmd="$(find_tool_path c-thru-statusline)"
   postcompact_cmd="$(find_tool_path c-thru-postcompact-context)"
   planner_hint_cmd="$(find_tool_path c-thru-enter-plan-hook)"
   agent_router_cmd="$(find_tool_path c-thru-agent-router-hook)"
@@ -431,6 +526,8 @@ write_ephemeral_settings() {
   # UserPromptSubmit *               c-thru-proxy-health       asyncRewake if proxy down
   # UserPromptSubmit *               c-thru-classify           fetch static /hooks/context block (no prompt inspection; not intent classification)
   # PostToolUse      Write|Edit      c-thru-map-changed        validate model-map.json on edit
+  # PostToolUse      ExitPlanMode    c-thru-plan-visibility-hook spool approved plan + open live dashboard
+  # Stop              *               c-thru-stop-hook          fallback systemMessage advisory
   # PreToolUse       Agent|WebSearch|c-thru-agent-router-hook  resolve capability for tool calls (log-only for non-Agent)
   #                   WebFetch|Monitor|Plan
   # PreToolUse       EnterPlanMode   c-thru-enter-plan-hook    advisory hint for /c-thru-plan
@@ -453,7 +550,7 @@ write_ephemeral_settings() {
   # Paths are passed as argv so node handles all escaping.
   EPHEMERAL_SETTINGS_JSON=$(node -e '
     const fs = require("fs");
-    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, agentRouterCmd, plannerHintCmd, userSettingsPath, callerSettingsPayloadsJson] = process.argv.slice(1);
+    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, planVisibilityCmd, agentRouterCmd, plannerHintCmd, userSettingsPath, callerSettingsPayloadsJson, stopHookCmd, statuslineCmd, userLocalSettingsPath] = process.argv.slice(1);
     const USER_SETTINGS_DENYLIST = new Set([
       // c-thru injects an ephemeral MCP server; a user original would fight it.
       "mcpServers",
@@ -464,6 +561,7 @@ write_ephemeral_settings() {
       value !== null && typeof value === "object" && !Array.isArray(value) &&
       Object.getPrototypeOf(value) === Object.prototype;
     const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+    const isCommandHook = hook => !own(hook, "type") || hook.type === "command";
     const normalizedMatcher = matcher => matcher === undefined || matcher === null || matcher === "" ? "*" : String(matcher);
     const canonicalCommand = command => {
       if (typeof command !== "string") return command;
@@ -500,9 +598,7 @@ write_ephemeral_settings() {
               process.stderr.write(`c-thru: ignoring malformed ${sourceLabel} hook (not an object) in ${event}\n`);
               continue;
             }
-            const explicitType = own(hook, "type");
-            const commandCandidate = hook.type === "command" || (!explicitType && own(hook, "command"));
-            if (commandCandidate && typeof hook.command !== "string") {
+            if (isCommandHook(hook) && typeof hook.command !== "string") {
               process.stderr.write(`c-thru: ignoring malformed ${sourceLabel} hook (missing command) in ${event}\n`);
               continue;
             }
@@ -521,8 +617,7 @@ write_ephemeral_settings() {
         const seen = new Set();
         for (const entry of result[event] || []) {
           for (const hook of entry.hooks) {
-            const explicitType = own(hook, "type");
-            if (hook.type === "command" || (!explicitType && typeof hook.command === "string")) {
+            if (isCommandHook(hook)) {
               seen.add(hookKey(event, entry.matcher, hook));
             }
           }
@@ -530,8 +625,7 @@ write_ephemeral_settings() {
         const survivingEntries = [];
         for (const entry of entries) {
           const survivingHooks = entry.hooks.filter(hook => {
-            const explicitType = own(hook, "type");
-            if (!(hook.type === "command" || (!explicitType && typeof hook.command === "string"))) return true;
+            if (!isCommandHook(hook)) return true;
             return !seen.has(hookKey(event, entry.matcher, hook));
           });
           if (survivingHooks.length) survivingEntries.push({ ...entry, hooks: survivingHooks });
@@ -609,6 +703,21 @@ write_ephemeral_settings() {
         process.stderr.write("c-thru: ignoring unparseable user settings.json: " + error.message + "\n");
       }
     }
+    let userLocalSettings = {};
+    let userLocalSettingsText;
+    try {
+      userLocalSettingsText = fs.readFileSync(userLocalSettingsPath, "utf8");
+    } catch (_) {
+      // A missing or unreadable user local settings file is equivalent to no settings.
+    }
+    if (userLocalSettingsText !== undefined) {
+      try {
+        const parsed = JSON.parse(userLocalSettingsText);
+        if (isPlainObject(parsed)) userLocalSettings = parsed;
+      } catch (error) {
+        process.stderr.write("c-thru: ignoring unparseable user settings.local.json: " + error.message + "\n");
+      }
+    }
     const cmdHook = (command, timeout, extra = {}) => ({ type: "command", command, timeout, ...extra });
     const cThruInjected = {
       mcpServers: {
@@ -617,11 +726,15 @@ write_ephemeral_settings() {
       hooks: {
         SessionStart: [{ matcher: "*", hooks: [cmdHook(sessionCmd, 5)] }],
         PreCompact: [{ matcher: "*", hooks: [cmdHook(postcompactCmd, 10)] }],
+        Stop: [{ matcher: "*", hooks: [cmdHook(stopHookCmd, 5)] }],
         UserPromptSubmit: [
           { matcher: "*", hooks: [cmdHook(healthCmd, 5, { async: true, asyncRewake: true })] },
           { matcher: "*", hooks: [cmdHook(classifyCmd, 8, { async: true })] },
         ],
-        PostToolUse: [{ matcher: "Write|Edit", hooks: [cmdHook(mapChangedCmd, 5)] }],
+        PostToolUse: [
+          { matcher: "Write|Edit", hooks: [cmdHook(mapChangedCmd, 5)] },
+          { matcher: "ExitPlanMode", hooks: [cmdHook(planVisibilityCmd, 5)] },
+        ],
         PreToolUse: [
           { matcher: "Agent", hooks: [cmdHook(agentRouterCmd, 3)] },
           { matcher: "WebSearch", hooks: [cmdHook(agentRouterCmd, 3)] },
@@ -645,6 +758,7 @@ write_ephemeral_settings() {
       // The bash wrapper always serializes this array; tolerate direct script execution too.
     }
     let settings = sanitizeSettings(userSettings, "user", false);
+    settings = mergeSettings(settings, sanitizeSettings(userLocalSettings, "user local", false));
     const callerSettingsParseable = [];
     for (const payload of callerSettingsPayloads) {
       const parsed = parseCallerPayload(payload);
@@ -656,6 +770,12 @@ write_ephemeral_settings() {
       callerSettingsParseable.push(true);
       settings = mergeSettings(settings, sanitizeSettings(parsed.settings, "--settings", true));
     }
+    // statusLine is absent-only: never overwrite a user- or caller-provided one.
+    // mergeSettings does a shallow spread for non-hooks/non-permissions keys, so
+    // leaving cThruInjected.statusLine undefined here lets an existing one survive.
+    if (!own(settings, "statusLine")) {
+      cThruInjected.statusLine = { type: "command", command: statuslineCmd };
+    }
     settings = mergeSettings(settings, cThruInjected);
     // The production wrapper provides a serialized payload array and needs the
     // parseability bits from this same resolution pass. The parity test runs
@@ -664,7 +784,7 @@ write_ephemeral_settings() {
     process.stdout.write(JSON.stringify(callerSettingsPayloadsAreSerialized ? {
       settings, callerSettingsParseable,
     } : settings));
-  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path" "$caller_settings_payloads_json") || {
+  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$plan_visibility_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path" "$caller_settings_payloads_json" "$stop_hook_cmd" "$statusline_cmd" "$user_local_settings_path") || {
     echo "c-thru: failed to build ephemeral settings JSON" >&2
     exit 1
   }
@@ -4050,7 +4170,7 @@ run_real_claude() {
 #   follows — treat as valueless), "1" (bare/valueless flag, or value-taking
 #   flag with no legitimate value to consume), or "2" (flag + one value token
 #   consumed). Encodes two peek rules:
-#     - --model/--route/--mode/--profile/--memory-gb/--settings: consume the next token
+#     - --model/--route/--mode/--profile/--memory-gb/--settings/--agents: consume the next token
 #       as the value only if it doesn't look like a flag (doesn't start with
 #       '-') — otherwise a following flag (e.g. --print) would be swallowed.
 #     - --proxy-debug/--router-debug: optional numeric value; consume the
@@ -4060,7 +4180,7 @@ run_real_claude() {
 cthru_flag_width() {
   local flag="$1" next="$2" has_next="$3"
   case "$flag" in
-    --model | --route | --mode | --profile | --memory-gb | --settings)
+    --model | --route | --mode | --profile | --memory-gb | --settings | --agents)
       if [[ "$has_next" == "1" && "$next" != -* ]]; then
         printf '2'
       else
@@ -4094,6 +4214,7 @@ build_forwarded_args() {
   local saw_model=0
   local saw_skip_permissions=0
   local caller_settings_index=0
+  local caller_agents_index=0
   local _w=""
 
   while [[ $i -lt ${#ORIG_ARGS[@]} ]]; do
@@ -4201,6 +4322,32 @@ build_forwarded_args() {
           i=$((i + 1))
         fi
         caller_settings_index=$((caller_settings_index + 1))
+        continue
+        ;;
+      --agents)
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        if [[ "$_w" == "2" && "${CALLER_AGENTS_PARSEABLE[caller_agents_index]:-0}" == "1" ]]; then
+          i=$((i + _w))
+        else
+          forwarded+=("$arg")
+          [[ "$_w" == "2" ]] && forwarded+=("${ORIG_ARGS[i+1]}")
+          i=$((i + _w))
+        fi
+        caller_agents_index=$((caller_agents_index + 1))
+        continue
+        ;;
+      --agents=*)
+        if [[ "${CALLER_AGENTS_PARSEABLE[caller_agents_index]:-0}" == "1" ]]; then
+          i=$((i + 1))
+        else
+          forwarded+=("$arg")
+          i=$((i + 1))
+        fi
+        caller_agents_index=$((caller_agents_index + 1))
         continue
         ;;
       --dangerously-skip-permissions)
@@ -4790,6 +4937,8 @@ fi
 ORIG_ARGS=("$@")
 CALLER_SETTINGS_PAYLOADS=()
 CALLER_SETTINGS_PARSEABLE=()
+CALLER_AGENTS_PAYLOADS=()
+CALLER_AGENTS_PARSEABLE=()
 explicit_model=""
 route_name=""
 print_routing_only=""
@@ -4824,6 +4973,17 @@ while [[ $i -lt $n ]]; do
         i=$((i + _w))
       else
         echo "c-thru: --settings requires a value" >&2; exit 1
+      fi ;;
+    --agents=*)
+      CALLER_AGENTS_PAYLOADS+=("${a#--agents=}")
+      i=$((i + 1)) ;;
+    --agents)
+      if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
+      if [[ "$_w" == "2" ]]; then
+        CALLER_AGENTS_PAYLOADS+=("${ORIG_ARGS[i+1]}")
+        i=$((i + _w))
+      else
+        echo "c-thru: --agents requires a value" >&2; exit 1
       fi ;;
     --mode=*)           export CLAUDE_LLM_MODE="${a#--mode=}"; i=$((i + 1)) ;;
     --mode)
