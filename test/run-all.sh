@@ -158,6 +158,8 @@ run_suite "map-changed-hook (validate + warn-only lineage drift guard)" \
   bash "$REPO_DIR/test/c-thru-map-changed-hook.test.sh"
 run_suite "c-thru-stop-hook (fallback systemMessage: parse/dedupe/staleness)" \
   bash "$REPO_DIR/test/c-thru-stop-hook.test.sh"
+run_suite "c-thru-autonomous-gate (Stop-hook gate sentinel/block matrix)" \
+  bash "$REPO_DIR/test/c-thru-autonomous-gate.test.sh"
 run_suite "c-thru-statusline-overlay (fallback badge: parse/staleness/fail-open)" \
   bash "$REPO_DIR/test/c-thru-statusline-overlay.test.sh"
 run_suite "agent-router-hook (subagent_type → capability model rewrite)" \

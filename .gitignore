@@ -27,3 +27,12 @@ supervisor_wiki.jsonl
 proxy.stderr
 proxy.stdout
 .mcp-gas/
+
+# Autonomous-run local state: Stop-hook gate sentinel + ralph-loop state,
+# and the per-session scheduled-tasks mutex (churns every session).
+.claude/*.local.json
+.claude/*.local.md
+.claude/scheduled_tasks.lock
+
+# Editor/tool backup files — accumulate as untracked cruft otherwise.
+*.bak

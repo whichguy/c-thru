@@ -1,4 +1,16 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(node test/*)",
+      "Bash(node tools/model-map-validate.js *)",
+      "Bash(bash test/*)",
+      "Bash(bash tools/c-thru-contract-check.sh*)",
+      "Bash(bash tools/c-thru-hygiene-check.sh*)",
+      "Bash(bash tools/sync-plugin-bundle.sh --check*)",
+      "Bash(make test-fast*)",
+      "mcp__claude_ai_Mermaid_Chart__validate_and_render_mermaid_diagram"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -43,6 +55,17 @@
             "if": "Edit(*/model-map.json)|Write(*/model-map.json)",
             "command": "\"$CLAUDE_PROJECT_DIR\"/tools/c-thru-map-changed.sh",
             "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/tools/c-thru-autonomous-gate.sh",
+            "timeout": 60
           }
         ]
       }
