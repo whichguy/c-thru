@@ -328,7 +328,14 @@ function numberFromEnv(key, def) {
 const PROXY_LOG_FILE = process.env.CLAUDE_PROXY_LOG_FILE || path.join(os.homedir(), '.claude', 'proxy.log');
 const PROXY_LOG_MAX_SIZE = 10 * 1024 * 1024;
 const USAGE_STATS_FILE = process.env.CLAUDE_PROXY_USAGE_STATS_FILE || path.join(os.homedir(), '.claude', 'usage-stats.json');
-const PID_FILE = path.join(os.homedir(), '.claude', 'proxy.pid');
+// Every reader of proxy.pid (c-thru cmd_reload/cmd_restart, c-thru-lib.sh)
+// looks in $CLAUDE_PROFILE_DIR — which c-thru shadows per launch for
+// ephemeral/named profiles. Writing only to ~/.claude broke reload/restart
+// for those profiles and let concurrent proxies clobber (and on exit,
+// delete) one another's pid file. Honor the profile dir like every sibling
+// path constant above.
+const PID_FILE = process.env.CLAUDE_PROXY_PID_FILE
+  || path.join(process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude'), 'proxy.pid');
 const PROXY_STARTED_AT = nowIso();
 
 // ── Per-user shared secrets (C19 agent-HMAC + C23 control token) ───────────

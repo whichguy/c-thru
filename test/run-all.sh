@@ -337,6 +337,8 @@ run_suite "proxy-observability-headers (backend latency, auth-missing, tier head
   node "$REPO_DIR/test/proxy-observability-headers.test.js"
 run_suite "proxy-init-race (READY_FAILED sentinel on EADDRINUSE)" \
   node "$REPO_DIR/test/proxy-init-race.test.js"
+run_suite "proxy-pid-file-profile (proxy.pid honors CLAUDE_PROFILE_DIR)" \
+  node "$REPO_DIR/test/proxy-pid-file-profile.test.js"
 run_suite "proxy-fallback-reload (fallback chain stable across SIGHUP reload)" \
   node "$REPO_DIR/test/proxy-fallback-reload.test.js"
 run_suite "proxy-e2e (end-to-end proxy request flow)" \
