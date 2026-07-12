@@ -254,6 +254,136 @@ Object.defineProperty(global, 'CONFIG', {
   configurable: true,
 });
 
+// ── Per-request session identity + mode isolation ───────────────────────────
+// A shared (fixed-port/plugin) proxy serves multiple Claude Code sessions.
+// c-thru launches with ANTHROPIC_BASE_URL=http://host:port/s/<session-id> when
+// the client preserves URL path prefixes (verified live: a real Claude Code
+// client's actual /v1/messages traffic keeps a `/s/<id>` prefix intact; only
+// some auxiliary hook scripts reconstruct a root URL and lose it — those are
+// migrated separately, see tools/c-thru-session-start.sh et al). The prefix
+// is stripped from req.url before any dispatch (below), so every existing
+// `req.url === '/xyz'` check keeps working unchanged; the extracted session
+// id is pinned here, in a SEPARATE AsyncLocalStorage from `configStorage`, so
+// it's available to standalone handler functions (handleProbeLlm, forward*)
+// without threading a new parameter through every call site.
+const requestContextStorage = new AsyncLocalStorage();
+Object.defineProperty(global, 'REQUEST_SESSION_ID', {
+  get: () => (requestContextStorage.getStore() || {}).sessionId || null,
+  configurable: true,
+});
+// The mode resolved ONCE at request start and frozen for the request's
+// lifetime — this is what fixes the in-flight race (a mode switch mid-request
+// no longer changes routing for a request already in progress), independent
+// of whether it's a per-session or the proxy-wide mode that's in play.
+Object.defineProperty(global, 'REQUEST_MODE', {
+  get: () => (requestContextStorage.getStore() || {}).mode || resolveLlmMode(CONFIG),
+  configurable: true,
+});
+
+// sessionId -> { mode, expiresAt }. FIFO eviction cap + TTL sweep mirror the
+// existing failedBackendUntil cooldown-map idiom (see markBackendFailed
+// above) — same shape, same reasoning: unbounded session churn (e.g. many
+// short-lived ephemeral sessions over a proxy's lifetime) must not leak
+// memory.
+const SESSION_MODE_MAX = 500;
+const SESSION_MODE_TTL_MS = numberFromEnv('CLAUDE_PROXY_SESSION_MODE_TTL_MS', 24 * 3600 * 1000);
+const SESSION_MODES = new Map();
+// Set by a bare (unkeyed) POST /c-thru/mode — the proxy-wide default for
+// clients that carry no session identity (old launchers, plugin mode, curl).
+// Replaces the old `process.env.CLAUDE_LLM_MODE = mode` mutation: that made
+// the switch invisible to session-scoped requests and unpinned mid-flight
+// ones. resolveLlmMode's own env-reading is now purely the CLI/offline
+// fallback path, consulted only when neither override is set.
+let GLOBAL_MODE_OVERRIDE = null;
+
+function setSessionMode(sessionId, mode) {
+  if (!SESSION_MODES.has(sessionId) && SESSION_MODES.size >= SESSION_MODE_MAX) {
+    const oldest = SESSION_MODES.keys().next().value;
+    if (oldest !== undefined) SESSION_MODES.delete(oldest);
+  }
+  SESSION_MODES.set(sessionId, { mode, expiresAt: Date.now() + SESSION_MODE_TTL_MS });
+}
+
+function getSessionMode(sessionId) {
+  if (!sessionId) return null;
+  const entry = SESSION_MODES.get(sessionId);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { SESSION_MODES.delete(sessionId); return null; }
+  return entry.mode;
+}
+
+// Precedence: per-session override -> proxy-wide override -> resolveLlmMode's
+// own env/config precedence (unkeyed clients, or no override set at all).
+function resolveActiveModeForRequest(sessionId) {
+  const sessionMode = getSessionMode(sessionId);
+  if (sessionMode) return sessionMode;
+  if (GLOBAL_MODE_OVERRIDE) return GLOBAL_MODE_OVERRIDE;
+  return resolveLlmMode(CONFIG);
+}
+
+// C48 reload-invalidation, generalized to every mode in play (not just the
+// legacy env-based global): a config reload that drops a custom/gov mode
+// currently held by a session or the global override must degrade that
+// specific holder loudly, not silently fall through to best-cloud.
+// Per-session parallel to the global MODE_DEGRADED slot (declared below with
+// its original C48 comment) — sessionId -> { was_mode, now, was_gov, detected_at }.
+const SESSION_MODE_DEGRADED = new Map();
+
+function invalidateOrphanedModes(prevConfig, nextConfig) {
+  const wasGov = m => isGovMode(m, prevConfig);
+  const stillValid = m => validModes(nextConfig).has(m);
+
+  // Env-based mode (CLI/offline launch, e.g. `c-thru --mode secure-gov`) —
+  // this is the original (pre-B2) C48 check, preserved as-is. resolveLlmMode
+  // itself already self-corrects silently on the next call (falls back to
+  // best-cloud when the env mode isn't in validModes); this block exists
+  // purely so /c-thru/status can surface that a silent degrade happened.
+  // Skipped when GLOBAL_MODE_OVERRIDE is set — that takes precedence over
+  // the env mode in resolveActiveModeForRequest, so the override case below
+  // is the one that actually governs resolution.
+  const envMode = process.env.CLAUDE_LLM_MODE;
+  if (envMode && !GLOBAL_MODE_OVERRIDE) {
+    const envWasValid = validModes(prevConfig).has(envMode);
+    const envStillValid = stillValid(envMode);
+    if (envWasValid && !envStillValid) {
+      const wasGovMode = wasGov(envMode);
+      MODE_DEGRADED = { was_mode: envMode, now: 'best-cloud', was_gov: wasGovMode, detected_at: nowIso() };
+      proxyLog('mode.orphaned_gov_degrade', {
+        scope: 'global-env', was_mode: envMode, now: 'best-cloud', was_gov: wasGovMode,
+        message: wasGovMode
+          ? `WARN: active gov mode '${envMode}' was removed by config reload — DEGRADING to best-cloud. Gov egress restrictions are NO LONGER ENFORCED until a valid gov mode is restored.`
+          : `WARN: active mode '${envMode}' was removed by config reload — degrading to best-cloud.`,
+      });
+    } else if (envStillValid && MODE_DEGRADED && MODE_DEGRADED.was_mode === envMode) {
+      proxyLog('mode.degrade_cleared', { mode: envMode });
+      MODE_DEGRADED = null;
+    }
+  }
+
+  if (GLOBAL_MODE_OVERRIDE && validModes(prevConfig).has(GLOBAL_MODE_OVERRIDE) && !stillValid(GLOBAL_MODE_OVERRIDE)) {
+    const wasGovMode = wasGov(GLOBAL_MODE_OVERRIDE);
+    MODE_DEGRADED = { was_mode: GLOBAL_MODE_OVERRIDE, now: 'best-cloud', was_gov: wasGovMode, detected_at: nowIso() };
+    proxyLog('mode.orphaned_gov_degrade', {
+      scope: 'global', was_mode: GLOBAL_MODE_OVERRIDE, now: 'best-cloud', was_gov: wasGovMode,
+      message: `WARN: proxy-wide mode '${GLOBAL_MODE_OVERRIDE}' was removed by config reload — degrading to best-cloud.`,
+    });
+    GLOBAL_MODE_OVERRIDE = null;
+  }
+  for (const [sessionId, entry] of SESSION_MODES) {
+    if (validModes(prevConfig).has(entry.mode) && !stillValid(entry.mode)) {
+      const wasGovMode = wasGov(entry.mode);
+      SESSION_MODE_DEGRADED.set(sessionId, { was_mode: entry.mode, now: 'best-cloud', was_gov: wasGovMode, detected_at: nowIso() });
+      proxyLog('mode.orphaned_gov_degrade', {
+        scope: 'session', session: sessionId, was_mode: entry.mode, now: 'best-cloud', was_gov: wasGovMode,
+        message: wasGovMode
+          ? `WARN: session '${sessionId}' gov mode '${entry.mode}' was removed by config reload — DEGRADING to best-cloud. Gov egress restrictions are NO LONGER ENFORCED for this session until a valid gov mode is restored.`
+          : `WARN: session '${sessionId}' mode '${entry.mode}' was removed by config reload — degrading to best-cloud.`,
+      });
+      SESSION_MODES.delete(sessionId);
+    }
+  }
+}
+
 function debugLog(event, fields = {}) {
   if (!DEBUG) return;
   console.error(`c-thru debug ${JSON.stringify({
@@ -2639,7 +2769,7 @@ const PROBE_QUESTION = 'What is your model name, where were you born, model id a
 
 async function handleProbeLlm(req, res) {
   const tier = resolveActiveTier(CONFIG);
-  const mode = resolveLlmMode(CONFIG);
+  const mode = REQUEST_MODE;
 
   let modelParam = null;
   try { modelParam = new URL(req.url, 'http://x').searchParams.get('model') || null; } catch {}
@@ -4738,38 +4868,10 @@ function maybeRegenerateMergedConfig() {
   } catch {}
 }
 
-// C48 — fail-OPEN advisory: a reload that removes the active custom (gov-based)
-// mode must not silently degrade to best-cloud. We compare the active
-// CLAUDE_LLM_MODE's validity under the outgoing vs incoming config. The env var
-// is the active mode set by POST /c-thru/mode (resolveLlmMode's top precedence).
-function detectOrphanedGovDegrade(prevConfig, nextConfig) {
-  const activeMode = process.env.CLAUDE_LLM_MODE;
-  if (!activeMode) return;  // no explicit env mode → nothing to orphan
-  const wasValid = validModes(prevConfig).has(activeMode);
-  const stillValid = validModes(nextConfig).has(activeMode);
-  if (wasValid && !stillValid) {
-    // Was the orphaned mode a gov (or gov-based) mode under the outgoing config?
-    const wasGov = isGovMode(activeMode, prevConfig);
-    MODE_DEGRADED = {
-      was_mode: activeMode,
-      now: 'best-cloud',          // resolveLlmMode's fallback for an unknown env mode
-      was_gov: wasGov,
-      detected_at: nowIso(),
-    };
-    proxyLog('mode.orphaned_gov_degrade', {
-      message: wasGov
-        ? `WARN: active gov mode '${activeMode}' was removed by config reload — DEGRADING to best-cloud. Gov egress restrictions are NO LONGER ENFORCED until a valid gov mode is restored.`
-        : `WARN: active mode '${activeMode}' was removed by config reload — degrading to best-cloud.`,
-      was_mode: activeMode,
-      now: 'best-cloud',
-      was_gov: wasGov,
-    });
-  } else if (stillValid && MODE_DEGRADED && MODE_DEGRADED.was_mode === activeMode) {
-    // The mode was restored by a later reload — clear the degraded flag.
-    proxyLog('mode.degrade_cleared', { mode: activeMode });
-    MODE_DEGRADED = null;
-  }
-}
+// C48 orphan-degrade detection now lives in invalidateOrphanedModes() (near
+// the SESSION_MODES declaration above), generalized to cover every mode in
+// play — the proxy-wide GLOBAL_MODE_OVERRIDE and every per-session override
+// — not just the legacy single env-based mode this function used to check.
 
 function reloadConfigFromDisk() {
   try {
@@ -4785,7 +4887,7 @@ function reloadConfigFromDisk() {
     // (prevConfig) vs the incoming one (nextConfig). If it was a valid gov mode
     // before and is gone now, resolveLlmMode will silently degrade to best-cloud
     // — make that LOUD (proxyLog advisory + status flag), but keep serving.
-    detectOrphanedGovDegrade(GLOBAL_CONFIG, nextConfig);
+    invalidateOrphanedModes(GLOBAL_CONFIG, nextConfig);
     GLOBAL_CONFIG = nextConfig;
     CONFIG_PATH = resolved.path;
     CONFIG_SOURCE = resolved.source;
@@ -4857,11 +4959,26 @@ const server = http.createServer((req, res) => {
   const snapshot = GLOBAL_CONFIG;
   configStorage.run(snapshot, async () => {
     const ctx = newRequestContext();
+    // Session-identity path prefix: c-thru launches with
+    // ANTHROPIC_BASE_URL=http://host:port/s/<session-id> for shared
+    // (fixed-port/plugin) proxies. Stripped here, before ANY dispatch, so
+    // every existing `req.url === '/xyz'` / `startsWith` check below keeps
+    // working unchanged against the un-prefixed path. Unkeyed clients (no
+    // prefix — old launchers, plugin mode, curl) see identical behavior to
+    // before this feature existed.
+    const rawUrl = req.url;
+    const sessionMatch = rawUrl.match(/^\/s\/([A-Za-z0-9_.-]{1,128})(\/.*)?$/);
+    const sessionId = sessionMatch ? sessionMatch[1] : null;
+    if (sessionMatch) req.url = sessionMatch[2] || '/';
+    const requestMode = resolveActiveModeForRequest(sessionId);
+    return requestContextStorage.run({ sessionId, mode: requestMode }, async () => {
     try {
       refreshConfigIfChanged();
       ctxLog(ctx, 'request', {
         method: req.method,
         url: req.url,
+        raw_url: sessionMatch ? rawUrl : undefined,
+        session: sessionId,
         bytes_in: Number(req.headers['content-length']) || 0,
         client: req.headers['user-agent'] || '',
       });
@@ -4890,8 +5007,9 @@ const server = http.createServer((req, res) => {
 
       if (req.url === '/ping') return send(res, 200, {
         ok: true, pid: process.pid, config_path: CONFIG_PATH,
-        active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG),
+        active_tier: resolveActiveTier(CONFIG), active_mode: REQUEST_MODE,
         bind_address: server.address().address,
+        plan_dashboard: DASHBOARD_URL ? DASHBOARD_URL.replace('/c-thru/dashboard', '/c-thru/plan/dashboard') : '',
         gemini_cache: { ...GEMINI_CACHE_STATS, entries: GEMINI_CACHE_MAP.size },
         vertex_env_ok: !!(process.env.GOOGLE_CLOUD_REGION && process.env.GOOGLE_CLOUD_PROJECT),
       });
@@ -4927,7 +5045,7 @@ const server = http.createServer((req, res) => {
 
       if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/' || req.url.startsWith('/c-thru/status?'))) {
         const tier = resolveActiveTier(CONFIG);
-        const mode = resolveLlmMode(CONFIG);
+        const mode = REQUEST_MODE;
         const baseMode = baseModeFor(mode, CONFIG);
         // New schema: llm_profiles[capability] (capability-outer, not tier-outer)
         const allProfiles = CONFIG.llm_profiles || {};
@@ -5009,9 +5127,13 @@ const server = http.createServer((req, res) => {
           // Global default-route resolution — ultimate last-resort target.
           default_route: CONFIG.routes && CONFIG.routes.default ? CONFIG.routes.default : null,
           // C48 — fail-open degrade advisory. true when a reload orphaned the
-          // active (gov-based) mode and the proxy silently fell back to best-cloud.
+          // proxy-wide (gov-based) mode and the proxy silently fell back to
+          // best-cloud. session_mode_degraded* is scoped to THIS request's
+          // session (null when the request carries no session identity).
           mode_degraded: !!MODE_DEGRADED,
           mode_degraded_detail: MODE_DEGRADED || null,
+          session_mode_degraded: REQUEST_SESSION_ID ? SESSION_MODE_DEGRADED.has(REQUEST_SESSION_ID) : null,
+          session_mode_degraded_detail: REQUEST_SESSION_ID ? (SESSION_MODE_DEGRADED.get(REQUEST_SESSION_ID) || null) : null,
         });
       }
 
@@ -5045,9 +5167,20 @@ const server = http.createServer((req, res) => {
           return sendAnthropicError(res, 400,
             `invalid mode '${requested}': valid modes are ${validList} (legacy aliases also accepted: offline, disconnect, connected)`);
         }
-        process.env.CLAUDE_LLM_MODE = mode;
-        proxyLog('mode-switch', { new_mode: mode, requested_mode: requested, source: 'control-channel' });
-        return send(res, 200, { ok: true, new_mode: mode, message: `Mode switched to ${mode}` });
+        // Session-scoped when the request carries a /s/<id> identity (this
+        // session's own switch, isolated from every other session sharing
+        // the proxy); a bare/unkeyed request sets the proxy-wide default for
+        // clients with no session identity (old launchers, plugin mode,
+        // curl) — never mutates process.env, which would leak across every
+        // session instantly, including requests already in flight.
+        const modeSessionId = REQUEST_SESSION_ID;
+        if (modeSessionId) { setSessionMode(modeSessionId, mode); SESSION_MODE_DEGRADED.delete(modeSessionId); }
+        else { GLOBAL_MODE_OVERRIDE = mode; MODE_DEGRADED = null; }
+        proxyLog('mode-switch', {
+          new_mode: mode, requested_mode: requested, source: 'control-channel',
+          scope: modeSessionId ? 'session' : 'global', session: modeSessionId || null,
+        });
+        return send(res, 200, { ok: true, new_mode: mode, scope: modeSessionId ? 'session' : 'global', message: `Mode switched to ${mode}` });
       }
 
       if (req.method === 'POST' && (req.url === '/c-thru/reload' || req.url === '/c-thru/reload/')) {
@@ -5069,9 +5202,27 @@ const server = http.createServer((req, res) => {
         }
       }
 
+      if (req.method === 'GET' && (req.url === '/c-thru/plan/dashboard' || req.url === '/c-thru/plan/dashboard/')) {
+        try {
+          const html = fs.readFileSync(path.join(__dirname, 'plan-dashboard.html'), 'utf8');
+          return sendHtml(res, 200, html);
+        } catch (e) {
+          return send(res, 503, { ok: false, error: `plan dashboard asset unavailable: ${e.message}` });
+        }
+      }
+
+      if (req.method === 'GET' && (req.url === '/c-thru/plan' || req.url === '/c-thru/plan/')) {
+        try {
+          const lib = require(path.join(__dirname, 'plan-state-lib.js'));
+          return send(res, 200, lib.aggregatePlanState({}));
+        } catch (e) {
+          return send(res, 503, { ok: false, error: `plan state unavailable: ${e.message}` });
+        }
+      }
+
       if (req.method === 'POST' && req.url === '/hooks/context') {
         const tier = resolveActiveTier(CONFIG);
-        const mode = resolveLlmMode(CONFIG);
+        const mode = REQUEST_MODE;
         proxyLog('hook_injection', { tier, mode });
         // Canonical control-plane block — the single source of the proxy URL +
         // endpoint list handed to a session. Built from this instance's own live
@@ -5194,7 +5345,7 @@ const server = http.createServer((req, res) => {
 
       if (req.method === 'GET' && (req.url === '/v1/active-models' || req.url === '/v1/active-models/')) {
         const tier = resolveActiveTier(CONFIG);
-        const mode = resolveLlmMode(CONFIG);
+        const mode = REQUEST_MODE;
         const baseMode2 = baseModeFor(mode, CONFIG);
         // New schema: llm_profiles[capability] (capability-outer)
         const allProfiles2 = CONFIG.llm_profiles || {};
@@ -5258,7 +5409,7 @@ const server = http.createServer((req, res) => {
           return sendAnthropicError(res, 400, `invalid JSON in request body: ${e.message}`);
         }
         const hwTier = resolveActiveTier(CONFIG);
-        const activeMode = resolveLlmMode(CONFIG);
+        const activeMode = REQUEST_MODE;
         const requestStartedAt = Date.now();
 
         if (!body || typeof body.model !== 'string' || !body.model) {
@@ -5509,6 +5660,7 @@ const server = http.createServer((req, res) => {
       proxyLog('fatal_error', { error: err.message, stack: err.stack });
       sendAnthropicError(res, 500, 'internal error');
     }
+    });
   });
 });
 

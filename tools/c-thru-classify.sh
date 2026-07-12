@@ -24,10 +24,13 @@ ROUTER_REPO_ROOT=$(cd -P "$(dirname "$_src")/.." && pwd)
 # Canonical hook port ladder (NO lsof tail — this is the per-prompt hot path).
 # Fail-open: lib unreadable → PORT empty → no-op (same as "c-thru not active").
 PORT=""
+BASE_URL=""
 if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
     # shellcheck source=c-thru-lib.sh
     . "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh"
     PORT="$(cthru_hook_listen_port)"
+    # Round-5 B2: carries /s/<session-id> when set — see c-thru-lib.sh.
+    BASE_URL="$(cthru_hook_base_url)"
 fi
 [ -n "$PORT" ] || exit 0
 
@@ -66,7 +69,7 @@ response=$(printf '{"prompt":%s}' "$prompt_json" | \
     curl -sf --max-time 3 -X POST \
         -H 'Content-Type: application/json' \
         --data-binary @- \
-        "http://127.0.0.1:${PORT}/hooks/context" 2>/dev/null)
+        "${BASE_URL:-http://127.0.0.1:$PORT}/hooks/context" 2>/dev/null)
 
 [ -n "$response" ] || exit 0
 

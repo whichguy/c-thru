@@ -59,10 +59,15 @@ fi
 # → USE_OLLAMA_PORT → ANTHROPIC_BASE_URL → plugin default). Fail-open: lib
 # unreadable → PORT empty → the guard below no-ops (same as "c-thru not active").
 PORT=""
+BASE_URL=""
 if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
     # shellcheck source=c-thru-lib.sh
     . "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh"
     PORT="$(cthru_hook_listen_port)"
+    # Round-5 B2: carries /s/<session-id> when this session set one, so
+    # /hooks/context reflects THIS session's own mode, not silently the
+    # proxy's global default (see cthru_hook_base_url in c-thru-lib.sh).
+    BASE_URL="$(cthru_hook_base_url)"
 fi
 [ -n "$PORT" ] || exit 0  # c-thru not active (or lib unavailable — fail open)
 
@@ -81,7 +86,7 @@ issues=()
 # "no block, no advisory" — same as before.
 proxy_ctx=""
 hook_json=""
-if hook_json=$(curl -sf --max-time 2 -X POST "http://127.0.0.1:$PORT/hooks/context" 2>/dev/null); then
+if hook_json=$(curl -sf --max-time 2 -X POST "${BASE_URL:-http://127.0.0.1:$PORT}/hooks/context" 2>/dev/null); then
     if command -v jq >/dev/null 2>&1; then
         proxy_ctx=$(printf '%s' "$hook_json" | jq -r '.hookSpecificOutput.additionalContext // ""')
     elif command -v node >/dev/null 2>&1; then

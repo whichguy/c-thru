@@ -2596,14 +2596,38 @@ ensure_proxy_http_base() {
       return 1
     }
     ensure_proxy_running "$explicit_base" || return 1
-    ENSURED_PROXY_HTTP_BASE="$explicit_base"
+    ENSURED_PROXY_HTTP_BASE="$(apply_session_scope_suffix "$explicit_base")"
     # Normalize so both paths populate PROXY_PORT (used for system-prompt injection).
     PROXY_PORT="${PROXY_PORT:-$CLAUDE_PROXY_PORT}"
     return 0
   fi
 
   ensure_proxy_running "" || return 1
-  ENSURED_PROXY_HTTP_BASE="$(claude_proxy_http_base)" || return 1
+  local dynamic_base=""
+  dynamic_base="$(claude_proxy_http_base)" || return 1
+  ENSURED_PROXY_HTTP_BASE="$(apply_session_scope_suffix "$dynamic_base")"
+}
+
+# Round-5 B2: appends a /s/<session-id> path prefix to the proxy base URL so
+# a shared (explicit-port/plugin) proxy can isolate per-session mode state
+# (POST /s/<id>/c-thru/mode) instead of one session's mode switch silently
+# rerouting every other session on the same proxy. Verified live: a real
+# Claude Code client's actual /v1/messages traffic preserves this prefix
+# (a canary run against the vendor binary confirmed `POST /s/<id>/v1/messages`
+# reaches the proxy with the prefix intact); some auxiliary hook scripts
+# reconstruct a root URL from a discovered port instead of reading
+# ANTHROPIC_BASE_URL and so lose it deliberately (they derive from
+# $ANTHROPIC_BASE_URL directly — see tools/c-thru-session-start.sh et al).
+# Dynamic-port launches get a private proxy per invocation and gain nothing
+# from this (no other session to isolate from), but the prefix is harmless
+# and keeps both paths consistent. Opt-out: C_THRU_SESSION_SCOPED_MODE=0.
+apply_session_scope_suffix() {
+  local base="$1"
+  if [[ "${C_THRU_SESSION_SCOPED_MODE:-1}" == "0" ]]; then
+    printf '%s' "$base"
+    return 0
+  fi
+  printf '%s/s/%s' "${base%/}" "$C_THRU_SESSION_ID"
 }
 
 # Normalize an Ollama base URL to a CLI-safe host (scheme://host[:port], no path).

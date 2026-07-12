@@ -47,6 +47,26 @@ cthru_hook_listen_port() {
   fi
 }
 
+# Round-5 B2: full proxy base URL for hooks, carrying the /s/<session-id>
+# suffix when available — same session identity tools/c-thru exports
+# (C_THRU_SESSION_ID) and inherits down to hook child processes. Hooks that
+# built "http://127.0.0.1:$PORT" directly (session-start, classify,
+# postcompact) silently dropped this prefix, so their /hooks/context calls
+# read the proxy's GLOBAL mode/config even when this session had switched its
+# own session-scoped mode via POST /s/<id>/c-thru/mode. Prints nothing when
+# cthru_hook_listen_port itself can't discover a port (fail-open, same as
+# "c-thru not active"). Opt-out mirrors tools/c-thru's own:
+# C_THRU_SESSION_SCOPED_MODE=0.
+cthru_hook_base_url() {
+  local port; port="$(cthru_hook_listen_port)"
+  [[ -n "$port" ]] || return 0
+  local base="http://127.0.0.1:${port}"
+  if [[ -n "${C_THRU_SESSION_ID:-}" && "${C_THRU_SESSION_SCOPED_MODE:-1}" != "0" ]]; then
+    base="${base}/s/${C_THRU_SESSION_ID}"
+  fi
+  printf '%s' "$base"
+}
+
 # Full proxy listen-port ladder for tools/c-thru (NOT the hot path): the hook
 # ladder above, then a pid-file/lsof tail. One precedence source — the tail is
 # appended here so hooks and c-thru never disagree on the leading ladder.

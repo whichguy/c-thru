@@ -20,15 +20,18 @@ ROUTER_REPO_ROOT=$(cd -P "$(dirname "$_src")/.." && pwd)
 # other hooks use. Fail-open: lib unreadable → PORT empty → no-op (same as
 # "c-thru not active").
 PORT=""
+BASE_URL=""
 if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
     # shellcheck source=c-thru-lib.sh
     . "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh"
     PORT="$(cthru_hook_listen_port)"
+    # Round-5 B2: carries /s/<session-id> when set — see c-thru-lib.sh.
+    BASE_URL="$(cthru_hook_base_url)"
 fi
 [ -n "$PORT" ] || exit 0  # c-thru not active (or lib unavailable — fail open)
 
 response=$(curl --silent --max-time 3 --fail \
-  -X POST "http://127.0.0.1:${PORT}/hooks/context" \
+  -X POST "${BASE_URL:-http://127.0.0.1:$PORT}/hooks/context" \
   -H "Content-Type: application/json" \
   -d '{"event":"PreCompact"}' 2>/dev/null) || exit 0
 

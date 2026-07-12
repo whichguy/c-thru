@@ -51,6 +51,7 @@ console.log(JSON.stringify({
   claude_proxy_debug:    process.env.CLAUDE_PROXY_DEBUG    || null,
   claude_router_debug:   process.env.C_THRU_DEBUG          || null,
   c_thru_no_update: process.env.C_THRU_NO_UPDATE || null,
+  c_thru_session_id: process.env.C_THRU_SESSION_ID || null,
 }));
 ' -- "$@"
 `;
@@ -202,6 +203,14 @@ console.log('\n6. ollama-backed model → ANTHROPIC_BASE_URL points to spawned p
   const url = r.json?.anthropic_base_url || '';
   assert(/^https?:\/\/127\.0\.0\.1:\d+/.test(url),
     `ANTHROPIC_BASE_URL = proxy URL on 127.0.0.1 (got ${JSON.stringify(url)})`);
+  // Round-5 B2: the base URL carries a /s/<C_THRU_SESSION_ID> suffix so the
+  // proxy can isolate per-session mode state on a shared proxy. The leading
+  // `^https?://127\.0\.0\.1:\d+` match above still holds unchanged (no `$`
+  // anchor) — this asserts the suffix ADDITIONALLY, not instead.
+  const sessionId = r.json?.c_thru_session_id || '';
+  assert(sessionId.length > 0, `C_THRU_SESSION_ID is set (got ${JSON.stringify(sessionId)})`);
+  assert(url.endsWith(`/s/${sessionId}`),
+    `ANTHROPIC_BASE_URL carries the /s/<session-id> suffix (got ${JSON.stringify(url)}, session ${JSON.stringify(sessionId)})`);
 }
 
 // ── Test 7: invalid --mode value should produce non-zero exit ──────────────
