@@ -37,7 +37,7 @@ make test               # full suite including smoke tests
 
 ## Concurrent sessions
 
-Multiple Claude sessions may share this working tree. Stage **explicit paths only** — never `git add -A`/`-u`/`.` or other broad adds (they silently stage another session's uncommitted WIP; a past session needed a soft-reset salvage after exactly this).
+Multiple Claude sessions may share this working tree. Stage **explicit paths only** — never `git add -A`/`-u`/`.` or other broad adds (they silently stage another session's uncommitted WIP; a past session needed a soft-reset salvage after exactly this). The equivalent danger at commit time: if another session already has files staged, a plain `git commit` (no pathspec) sweeps those in too — commit with `git commit -m "..." -- <exact-path>` instead, which builds the commit from only the named paths and leaves any other already-staged index entries untouched.
 Proxy e2e/smoke suites are port- and Ollama-contended: `make test-fast` is safe to run concurrently (unit proxy tests use random free ports), but full `test/run-all.sh` runs need exclusivity — full runs take an mkdir-lock for the whole run (proxy-e2e cross-fails on Ollama contention, observed empirically), so a second full run queues instead of cross-failing.
 
 ## Directory Layout and Path Invariants
@@ -229,6 +229,8 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 | `/c-thru-status fix` | Apply recommended mappings, reload proxy, show current status. |
 | `/c-thru-config planning [...]` | Toggle the `EnterPlanMode` advisory hint suggesting `/c-thru-plan`. On by default; fires in all Claude Code sessions on the machine. Natural-language args — e.g. "turn off", "disable", "what's the status". Opt-out env: `C_THRU_PLANNER_HINT=0`. |
 | `/cplan <intent>` | 4-letter shortcut for `/c-thru-plan <intent>` — wave-based agentic planner. |
+| `/plan-page [--deep\|--publish\|open]` | Add a brief narrative update to the selected plan, produce a deeper decision log, attempt a shareable artifact, or open the local page. |
+| `GET /c-thru/plan/dashboard` | Live zero-token plan dashboard served by the running proxy. |
 
 **Ollama defaults (changed):** `C_THRU_OLLAMA_AUTOSTART` now defaults to `1` — Ollama is started automatically when unreachable. Opt out with `C_THRU_OLLAMA_AUTOSTART=0`.
 
