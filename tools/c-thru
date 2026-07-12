@@ -253,10 +253,22 @@ setup_ephemeral_session() {
     ln -s "$item" "$EPHEMERAL_SESSION_DIR/$name" 2>/dev/null || true
   done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR" 2>/dev/null)
 
-  # 2. Additive config: Copy the global .claude.json into the session dir
-  # This avoids "config file not found" warnings when CLAUDE_CONFIG_DIR is redirected.
+  # 2. Additive config: symlink the global .claude.json into the session dir.
+  # This avoids "config file not found" warnings when CLAUDE_CONFIG_DIR is redirected,
+  # and — unlike a copy — lets state written during the session (trust-dialog
+  # acceptances, remembered choices, project entries) persist back to the real
+  # ~/.claude.json instead of being discarded when the ephemeral dir is cleaned
+  # up. Verified (v2.1.206, disposable CLAUDE_CONFIG_DIR): claude writes via
+  # temp-file-in-same-dir + rename onto the *resolved* target path, so the
+  # symlink survives and the real file's inode is what changes. If a future
+  # claude version renames onto the symlink path itself instead, the symlink
+  # would be replaced by a plain file — a silent reversion to today's
+  # discard-on-exit behavior, not a crash. `ln -s` failing for a reason
+  # unrelated to a missing source (e.g. no symlink support) falls back to the
+  # previous copy behavior.
   if [[ -f "$HOME/.claude.json" ]]; then
-    cp "$HOME/.claude.json" "$EPHEMERAL_SESSION_DIR/.claude.json" 2>/dev/null || true
+    ln -s "$HOME/.claude.json" "$EPHEMERAL_SESSION_DIR/.claude.json" 2>/dev/null || \
+      cp "$HOME/.claude.json" "$EPHEMERAL_SESSION_DIR/.claude.json" 2>/dev/null || true
   fi
 
   # 3. Additive Skills: merge user skills and c-thru skills
