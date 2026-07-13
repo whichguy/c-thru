@@ -1,6 +1,7 @@
 'use strict';
 
-// Shared classify_intent logic — used by llm-capabilities-mcp.js and claude-proxy.
+// Shared classify_intent logic — used by llm-capabilities-mcp.js (MCP tool path).
+// Not used by claude-proxy (in-proxy dynamic classification was never implemented).
 // No external deps; Node.js stdlib only.
 
 const CLASSIFY_INTENT_DEF = {

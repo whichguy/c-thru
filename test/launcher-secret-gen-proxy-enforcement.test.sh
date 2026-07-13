@@ -174,12 +174,14 @@ if [[ -n "$PROXY_PORT" ]]; then
   assert "[[ '$served_legacy' == 'agent-model' ]]" \
     "legacy :hex peel still routes → served-by='agent-model' (got '$served_legacy')"
 
+  # Loopback free: no token required for local control mutations.
   st_notok="$(post_control_status "")"
-  assert "[[ '$st_notok' == '403' ]]" "control /c-thru/mode WITHOUT token → 403 (got '$st_notok')"
+  assert "[[ '$st_notok' == '200' ]]" "control /c-thru/mode WITHOUT token (loopback) → 200 (got '$st_notok')"
   st_tok="$(post_control_status "$TOKEN_BEFORE")"
   assert "[[ '$st_tok' == '200' ]]" "control /c-thru/mode WITH launcher token → 200 (got '$st_tok')"
+  # Wrong token still accepted on loopback (token optional for local clients).
   st_badtok="$(post_control_status "$(printf 'b%.0s' {1..64})")"
-  assert "[[ '$st_badtok' == '403' ]]" "control /c-thru/mode with WRONG token → 403 (got '$st_badtok')"
+  assert "[[ '$st_badtok' == '200' ]]" "control /c-thru/mode with WRONG token (loopback) → 200 (got '$st_badtok')"
 fi
 
 echo

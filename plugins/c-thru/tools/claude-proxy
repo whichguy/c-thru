@@ -499,8 +499,12 @@ function readSecretFileOnce(filePath) {
   } catch { return null; }
 }
 
-/** True when the TCP peer is on the loopback adapter (IPv4/IPv6/mapped). */
+/** True when the TCP peer is on the loopback adapter (IPv4/IPv6/mapped).
+ *  CLAUDE_PROXY_TEST_FORCE_REMOTE_CLIENT=1 makes this return false so tests can
+ *  exercise the non-loopback control-auth branch without binding 0.0.0.0.
+ */
 function isLoopbackClient(req) {
+  if (process.env.CLAUDE_PROXY_TEST_FORCE_REMOTE_CLIENT === '1') return false;
   const raw = (req && req.socket && req.socket.remoteAddress) || '';
   let a = String(raw).toLowerCase();
   if (a.startsWith('::ffff:')) a = a.slice(7);
@@ -530,26 +534,30 @@ function buildResolvedViaJson(requestMeta, effectiveModel) {
   return JSON.stringify(o);
 }
 
-// C23 — per-user control token. Direct-value env override (CLAUDE_PROXY_CONTROL_TOKEN)
-// takes precedence over the file so the harness can spawn with a known token.
-// When null (no env, no file), mutating control routes FAIL OPEN with a one-time
-// warning; when present they require a matching X-C-Thru-Control header.
+// C23 — control-plane auth (hybrid, aligned with loopback agent trust):
+//   loopback client  → always allow (no token required)
+//   non-loopback     → require X-C-Thru-Control matching the per-user token
+// Direct-value env override (CLAUDE_PROXY_CONTROL_TOKEN) wins over the file.
+// When non-loopback and no token is configured, fail closed (403).
 const CONTROL_TOKEN = process.env.CLAUDE_PROXY_CONTROL_TOKEN || readSecretFileOnce(CONTROL_TOKEN_FILE);
-let _controlFailOpenWarned = false;
+let _controlRemoteNoTokenWarned = false;
 
 // Gate a mutating control route. Returns true if the request may proceed.
-// Fail-open (no token configured) → true + one-time warning. Configured →
-// require header X-C-Thru-Control to match via timingSafeEqual, else 403.
 function controlAuthorized(req, res) {
+  // Default bind is 127.0.0.1; local tools (/c-thru-control, dashboard) need no header.
+  if (isLoopbackClient(req)) return true;
+
   if (!CONTROL_TOKEN) {
-    if (!_controlFailOpenWarned) {
-      _controlFailOpenWarned = true;
+    if (!_controlRemoteNoTokenWarned) {
+      _controlRemoteNoTokenWarned = true;
       proxyLog('control.auth_disabled', {
         message: 'WARN: control token absent (no CLAUDE_PROXY_CONTROL_TOKEN / ' + CONTROL_TOKEN_FILE +
-          ') — mutating control routes are UNAUTHENTICATED. Run tools/c-thru to generate one.',
+          ') — non-loopback mutating routes are REJECTED. Run tools/c-thru to generate one, or bind loopback only.',
       });
     }
-    return true;
+    proxyLog('control.auth_rejected', { url: req.url, method: req.method, reason: 'non_loopback_no_token' });
+    send(res, 403, { ok: false, error: 'forbidden: control token required for non-loopback clients' });
+    return false;
   }
   const provided = req.headers['x-c-thru-control'];
   const expected = Buffer.from(CONTROL_TOKEN, 'utf8');

@@ -69,9 +69,9 @@
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
-        "48gb": "gpt-oss-20b:TODO",
-        "64gb": "gpt-oss-120b:TODO",
-        "128gb": "gpt-oss-120b:TODO"
+        "48gb": "phi4-reasoning:plus",
+        "64gb": "phi4-reasoning:plus",
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade",
       "fallback_to": "planner-hard"
@@ -104,8 +104,8 @@
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
         "48gb": "phi4-reasoning:plus",
-        "64gb": "gpt-oss-120b:TODO",
-        "128gb": "gpt-oss-120b:TODO"
+        "64gb": "phi4-reasoning:plus",
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade"
     },
@@ -156,14 +156,14 @@
         "32gb": "claude-sonnet-5",
         "48gb": "claude-sonnet-5",
         "64gb": "claude-sonnet-5",
-        "128gb": "gpt-oss-20b:TODO"
+        "128gb": "claude-sonnet-5"
       },
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
-        "48gb": "gpt-oss-20b:TODO",
-        "64gb": "gpt-oss-20b:TODO",
-        "128gb": "gpt-oss-20b:TODO"
+        "48gb": "phi4-reasoning:plus",
+        "64gb": "phi4-reasoning:plus",
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade",
       "fallback_to": "coder-fallback"
@@ -189,14 +189,14 @@
         "32gb": "claude-haiku-4-5-20251001",
         "48gb": "claude-sonnet-5",
         "64gb": "claude-sonnet-5",
-        "128gb": "gpt-oss-20b:TODO"
+        "128gb": "claude-sonnet-5"
       },
       "best-local-gov": {
         "16gb": "phi4-mini:3.8b",
         "32gb": "phi4-mini:3.8b",
         "48gb": "phi4-mini:3.8b",
-        "64gb": "gpt-oss-20b:TODO",
-        "128gb": "gpt-oss-20b:TODO"
+        "64gb": "phi4-mini:3.8b",
+        "128gb": "phi4-mini:3.8b"
       },
       "on_failure": "cascade"
     },
@@ -279,14 +279,14 @@
         "32gb": "claude-sonnet-5",
         "48gb": "claude-sonnet-5",
         "64gb": "claude-sonnet-5",
-        "128gb": "gpt-oss-20b:TODO"
+        "128gb": "claude-sonnet-5"
       },
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
         "48gb": "phi4-reasoning:plus",
-        "64gb": "gpt-oss-20b:TODO",
-        "128gb": "gpt-oss-20b:TODO"
+        "64gb": "phi4-reasoning:plus",
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade"
     },
@@ -312,8 +312,8 @@
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
         "48gb": "phi4-reasoning:plus",
-        "64gb": "gpt-oss-120b:TODO",
-        "128gb": "gpt-oss-120b:TODO"
+        "64gb": "phi4-reasoning:plus",
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "hard_fail"
     },
@@ -344,14 +344,14 @@
         "32gb": "claude-sonnet-5",
         "48gb": "claude-sonnet-5",
         "64gb": "claude-sonnet-5",
-        "128gb": "gpt-oss-20b:TODO"
+        "128gb": "claude-sonnet-5"
       },
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
         "48gb": "phi4-reasoning:plus",
-        "64gb": "gpt-oss-20b:TODO",
-        "128gb": "gpt-oss-20b:TODO"
+        "64gb": "phi4-reasoning:plus",
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade"
     },
@@ -382,14 +382,14 @@
         "32gb": "claude-sonnet-5",
         "48gb": "claude-sonnet-5",
         "64gb": "claude-sonnet-5",
-        "128gb": "gpt-oss-20b:TODO"
+        "128gb": "claude-sonnet-5"
       },
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
-        "48gb": "gpt-oss-20b:TODO",
-        "64gb": "gpt-oss-20b:TODO",
-        "128gb": "gpt-oss-20b:TODO"
+        "48gb": "phi4-reasoning:plus",
+        "64gb": "phi4-reasoning:plus",
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade"
     },
@@ -414,8 +414,8 @@
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
         "48gb": "phi4-reasoning:plus",
-        "64gb": "gpt-oss-120b:TODO",
-        "128gb": "gpt-oss-120b:TODO"
+        "64gb": "phi4-reasoning:plus",
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "hard_fail"
     },
@@ -453,7 +453,7 @@
         "32gb": "phi4-reasoning:plus",
         "48gb": "phi4-reasoning:plus",
         "64gb": "phi4-reasoning:plus",
-        "128gb": "gpt-oss-20b:TODO"
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade"
     },
@@ -491,7 +491,7 @@
         "32gb": "phi4-reasoning:plus",
         "48gb": "phi4-reasoning:plus",
         "64gb": "phi4-reasoning:plus",
-        "128gb": "gpt-oss-20b:TODO"
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade"
     },
@@ -529,7 +529,7 @@
         "32gb": "phi4-reasoning:plus",
         "48gb": "phi4-reasoning:plus",
         "64gb": "phi4-reasoning:plus",
-        "128gb": "gpt-oss-20b:TODO"
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade"
     },
@@ -575,7 +575,7 @@
         "32gb": "phi4-reasoning:plus",
         "48gb": "phi4-reasoning:plus",
         "64gb": "phi4-reasoning:plus",
-        "128gb": "gpt-oss-20b:TODO"
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade"
     },
@@ -658,8 +658,8 @@
         "16gb": "phi4-mini:3.8b",
         "32gb": "phi4-reasoning:plus",
         "48gb": "phi4-reasoning:plus",
-        "64gb": "gpt-oss-20b:TODO",
-        "128gb": "gpt-oss-20b:TODO"
+        "64gb": "phi4-reasoning:plus",
+        "128gb": "phi4-reasoning:plus"
       },
       "on_failure": "cascade"
     }
@@ -779,18 +779,6 @@
     "thudm/glm-4-plus": {
       "endpoint": "openrouter",
       "name": "thudm/glm-4-plus"
-    },
-    "qwen3-coder-next:TODO": {
-      "endpoint": "openrouter",
-      "name": "qwen3-coder-next:TODO"
-    },
-    "gpt-oss-120b:TODO": {
-      "endpoint": "ollama_local",
-      "name": "gpt-oss-120b:TODO"
-    },
-    "gpt-oss-20b:TODO": {
-      "endpoint": "ollama_local",
-      "name": "gpt-oss-20b:TODO"
     },
     "claude-opus-4-8": {
       "endpoint": "anthropic",
