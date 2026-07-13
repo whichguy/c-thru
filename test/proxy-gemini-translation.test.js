@@ -2378,6 +2378,83 @@ async function main() {
       });
     });
 
+    // ── B2. Server tools stripped from functionDeclarations ─────────────────
+    // Anthropic server tools (type !== custom) must not become Gemini
+    // functionDeclarations; only custom tools map. Gap header should list them.
+    console.log('\nB2. Server tools excluded from functionDeclarations; custom tools kept');
+    let capturedB2 = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          capturedB2 = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const anthropicReq = {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'search then calc' }],
+        tools: [
+          { type: 'web_search_20250305', name: 'web_search' },
+          { name: 'calc', description: 'calc', input_schema: { type: 'object', properties: { x: { type: 'number' } } } },
+          { type: 'code_execution_20250522', name: 'code_execution' },
+        ],
+        stream: false,
+      };
+      const r = await httpJson(port, 'POST', '/v1/messages', anthropicReq);
+      assert(r.status === 200, 'B2 status 200');
+      const decls = capturedB2?.tools?.[0]?.functionDeclarations || [];
+      assert(decls.length === 1, `B2 only custom tool declared (got ${decls.length})`);
+      assert(decls[0]?.name === 'calc', `B2 custom tool name is calc (got ${decls[0]?.name})`);
+      assert(!decls.some(d => d.name === 'web_search' || d.name === 'code_execution'),
+        'B2 server tools not in functionDeclarations');
+      const gap = r.headers['x-c-thru-translation-gap'] || '';
+      assert(/web_search|code_execution|tool:/.test(gap),
+        `B2 translation-gap header mentions server tools (got ${JSON.stringify(gap)})`);
+    });
+
+    // ── B3. Accept-Encoding forced to identity on Gemini path ───────────────
+    console.log('\nB3. Client Accept-Encoding:gzip scrubbed; upstream gets identity');
+    let capturedHdrsB3 = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        capturedHdrsB3 = { ...req.headers };
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      const anthropicReq = {
+        model: GEMINI_MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      };
+      const r = await httpJson(port, 'POST', '/v1/messages', anthropicReq, {
+        'Accept-Encoding': 'gzip, deflate, br',
+      });
+      assert(r.status === 200, 'B3 status 200');
+      const ae = capturedHdrsB3 && (capturedHdrsB3['accept-encoding'] || capturedHdrsB3['Accept-Encoding']);
+      assert(ae === 'identity', `B3 upstream Accept-Encoding is identity (got ${JSON.stringify(ae)})`);
+    });
+
     // ── C10b. Stream WITH finishReason is not double-closed ──────────────────
     // Idempotency guard: when a finishReason DID arrive, the 'end' handler must
     // NOT emit a second content_block_stop or message_delta.

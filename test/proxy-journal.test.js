@@ -79,7 +79,7 @@ async function main() {
       const e = entries[0];
       assertEq(e.schema_version, 1, 'schema_version = 1');
       assertEq(e.capability, 'workhorse', 'capability captured');
-      assertEq(e.mode, 'best-cloud', 'mode is best-cloud (default when no CLAUDE_LLM_MODE set)');
+      assertEq(e.mode, 'best-cloud-oss', 'mode is best-cloud-oss (default when no CLAUDE_LLM_MODE set)');
       assertEq(e.served_by, 'test-model', 'served_by captured');
       assertEq(e.endpoint, '/v1/messages', 'endpoint captured');
       assert(typeof e.id === 'string' && e.id.startsWith('j_'), 'id has j_ prefix');

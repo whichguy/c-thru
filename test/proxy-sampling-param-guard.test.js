@@ -27,7 +27,9 @@ function buildConfig(stubPort, overrides = {}) {
     },
     model_routes: {
       'claude-fable-5': 'stub',
-      'claude-sonnet-5': 'stub',
+      // Pre-Claude-5 family tag: NOT matched by sampling_unsupported_models
+      // (claude-sonnet-5* is guarded). Used as "legacy Anthropic still gets defaults".
+      'claude-sonnet-4-6': 'stub',
       'my-model-alpha': 'stub',
     },
     llm_profiles: {
@@ -35,7 +37,7 @@ function buildConfig(stubPort, overrides = {}) {
         'best-cloud': { '16gb': 'claude-fable-5' },
       },
       legacy_planner: {
-        'best-cloud': { '16gb': 'claude-sonnet-5' },
+        'best-cloud': { '16gb': 'claude-sonnet-4-6' },
       },
       custom_guard: {
         'best-cloud': { '16gb': 'my-model-alpha' },
@@ -114,7 +116,7 @@ async function testOlderAnthropicStillGetsDefaults() {
     assertEq(status, 200, 'Test B: /v1/messages returned 200');
 
     const req = stub.lastRequest();
-    assertEq(req.model_used, 'claude-sonnet-5', 'Test B: resolved model reached stub');
+    assertEq(req.model_used, 'claude-sonnet-4-6', 'Test B: resolved model reached stub');
     assertEq(req.body.temperature, 0.4, 'Test B: temperature injected from defaults');
     assertEq(req.body.top_p, 0.8, 'Test B: top_p injected from defaults');
   });

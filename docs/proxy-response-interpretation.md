@@ -34,7 +34,7 @@ restart (see [Restart after proxy code changes](#restart-after-proxy-code-change
 - **Content-Length** is deleted on outbound rewrite (`scrubCthruHeaders`) — Node recomputes length. Correct.
 - **Agent sentinel** is prepended by the PreToolUse hook into the task prompt. The proxy:
   1. Finds the marker with **`lastIndexOf`** (newest wins when multi-turn history still carries older markers).
-  2. Extracts an **opaque name** (arbitrary agent, capability, or model id until `]]`; optional trailing `:<16-hex>` HMAC). When trusted, sets `body.model = name` and runs normal **`resolveBackend`** mapping (not limited to `agent_to_capability`).
+  2. Extracts an **opaque name** (arbitrary agent, capability, or model id until `]]`; optional legacy trailing `:<16-hex>` tag, peeled but not verified). When trusted (loopback client or `x-c-thru-agent` header), sets `body.model = name` and runs normal **`resolveBackend`** mapping (not limited to `agent_to_capability`).
   3. **`stripAgentSentinelFromBody`** removes all `[[c-thru-agent:…]]` strings before forwarding so the upstream LLM never sees routing metadata.
   Client SQLite history still retains markers for the next turn. HTTP headers `x-c-thru-*` are already scrubbed outbound; the header `x-c-thru-agent` is optional and unused by stock Claude Code.
 - **Model rewrite** changes request JSON size; response is not a slice of the request.

@@ -38,6 +38,8 @@ function measuringStub() {
         model_used:     body ? body.model : null,
         // Content-length as seen by the upstream server (the value the proxy forwarded).
         forwarded_cl:   req.headers['content-length'],
+        // Accept-Encoding: scrubCthruHeaders must force identity (no gzip/br).
+        forwarded_ae:   req.headers['accept-encoding'],
         // Actual bytes received — what the real content-length SHOULD be.
         actual_bytes:   rawBody.length,
       });
@@ -198,6 +200,40 @@ async function main() {
           assert(req.forwarded_cl === undefined,
             `content-length NOT forwarded to anthropic upstream (got: ${JSON.stringify(req.forwarded_cl)})`);
           assert(req.actual_bytes > 0, `upstream received non-empty body (${req.actual_bytes} bytes)`);
+        });
+      } finally {
+        await stub.close().catch(() => {});
+      }
+    }
+
+    // ── Test 4: Accept-Encoding forced to identity ───────────────────────────
+    // Client may send Accept-Encoding: gzip; scrub must rewrite to identity so
+    // translate/usage paths never parse compressed upstream bodies as text.
+    console.log('\n4. Client Accept-Encoding:gzip → upstream gets identity');
+    {
+      const stub = await measuringStub();
+      try {
+        const cfg = {
+          backends: { cloud_stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
+          model_routes: { 'claude-test': 'cloud_stub' },
+          llm_profiles: {
+            '64gb': { workhorse: { connected_model: 'claude-test', disconnect_model: 'claude-test' } },
+          },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy({ configPath, profile: '64gb', mode: 'connected' }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'claude-test',
+            stream: false,
+            messages: [{ role: 'user', content: 'hello' }],
+            max_tokens: 10,
+          }, { 'Accept-Encoding': 'gzip, deflate, br' });
+
+          assertEq(r.status, 200, 'accept-encoding test request succeeded');
+          const req = stub.lastRequest();
+          assert(!!req, 'stub received request');
+          assertEq(req.forwarded_ae, 'identity',
+            `upstream Accept-Encoding is identity (got ${JSON.stringify(req.forwarded_ae)})`);
         });
       } finally {
         await stub.close().catch(() => {});

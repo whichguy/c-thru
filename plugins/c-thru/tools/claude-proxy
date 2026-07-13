@@ -1794,6 +1794,14 @@ function scrubCthruHeaders(headers) {
   for (const k of Object.keys(out)) {
     if (k.toLowerCase().startsWith('x-c-thru-')) delete out[k];
   }
+  // Force uncompressed upstream responses. Translate paths (Gemini / Ollama-legacy)
+  // and usage tees parse bodies as UTF-8 text; forwarding client Accept-Encoding
+  // gzip/br can yield binary frames the proxy cannot toString safely.
+  // Case-insensitive delete (Node lowercases most incoming headers but not always).
+  for (const k of Object.keys(out)) {
+    if (k.toLowerCase() === 'accept-encoding') delete out[k];
+  }
+  out['accept-encoding'] = 'identity';
   return out;
 }
 
@@ -4416,21 +4424,26 @@ function mapAnthropicToGemini(body, effectiveModel) {
   if (body.tools) {
     // Anthropic server tools (web_search_20250305, code_execution_20250522,
     // computer_20250124, etc.) declare a `type` field naming the upstream
-    // capability. Gemini has no equivalent — record the gap so the response
-    // header surfaces it. Custom user tools either omit `type` or set it to
-    // "custom"; those translate cleanly to functionDeclarations.
-    for (const t of body.tools) {
-      if (t && typeof t.type === 'string' && t.type !== 'custom') {
-        translationGap.add('tool:' + t.type);
+    // capability. Gemini has no equivalent — record the gap and DO NOT emit
+    // them as functionDeclarations (undefined schemas → Gemini 400 / fakes).
+    // Custom user tools omit `type` or set it to "custom".
+    const customTools = [];
+    for (const tool of body.tools) {
+      if (tool && typeof tool.type === 'string' && tool.type !== 'custom') {
+        translationGap.add('tool:' + tool.type);
+        continue;
       }
+      if (tool) customTools.push(tool);
     }
-    geminiReq.tools = [{
-      functionDeclarations: body.tools.map(t => ({
-        name: t.name,
-        description: t.description,
-        parameters: scrubGeminiSchema(t.input_schema, schemaRemoved)
-      }))
-    }];
+    if (customTools.length) {
+      geminiReq.tools = [{
+        functionDeclarations: customTools.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: scrubGeminiSchema(tool.input_schema, schemaRemoved)
+        }))
+      }];
+    }
   }
 
   const toolConfig = mapToolChoice(body.tool_choice);
