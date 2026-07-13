@@ -61,7 +61,7 @@ done
 # c-thru-lib.sh: the bundled hooks source it from $ROUTER_REPO_ROOT/tools/ (which
 # resolves to $BUNDLE/tools/ in plugin mode), so it must ship here too.
 for f in c-thru-lib.sh claude-proxy proxy-dashboard.html plan-dashboard.html plan-state-lib.js c-thru-plan-harness.js model-map-config.js model-map-resolve.js model-map-layered.js \
-          model-map-validate.js hw-profile.js agent-sentinel.js; do
+          model-map-validate.js hw-profile.js agent-sentinel.js upstream-error-body.js; do
   check_or_copy "$ROOT/tools/$f" "$BUNDLE/tools/$f"
 done
 

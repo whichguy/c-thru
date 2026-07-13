@@ -231,6 +231,14 @@ run_suite "proxy-anthropic-timeout (F1: forwardAnthropic upstream timeout → ca
   node "$REPO_DIR/test/proxy-anthropic-timeout.test.js"
 run_suite "proxy-content-length-scrub" \
   node "$REPO_DIR/test/proxy-content-length-scrub.test.js"
+run_suite "upstream-error-body (gzip/br decode + TUI-safe sanitize)" \
+  node "$REPO_DIR/test/upstream-error-body.test.js"
+run_suite "proxy-upstream-error-sanitize (gzip 429 never mojibake in error.message)" \
+  node "$REPO_DIR/test/proxy-upstream-error-sanitize.test.js"
+run_suite "proxy-response-pipe (compressed success intact + /s/ path + sibling require)" \
+  node "$REPO_DIR/test/proxy-response-pipe.test.js"
+run_suite "model-routes-alias-mode (sonnet/opus/haiku/fable × mode → no Anthropic under OSS)" \
+  node "$REPO_DIR/test/model-routes-alias-mode.test.js"
 run_suite "proxy-cooldown-ttl" \
   node "$REPO_DIR/test/proxy-cooldown-ttl.test.js"
 run_suite "proxy-cross-provider-concurrent (3 providers fired concurrently: routing + no auth bleed)" \

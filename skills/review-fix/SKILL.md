@@ -518,7 +518,7 @@ commit_mode == "pr": stage only files_changed (fix corrections only) + include p
 git commit -m "review-fix: <task_name>: apply corrections ([N] critical, [M] advisory)
 [If pre_staged_entries non-empty]: Pre-staged entries from caller: <list>
 
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 ```
 
 If commit_mode == "commit" → output `<!-- COMMITTED -->`, stop.

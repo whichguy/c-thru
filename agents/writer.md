@@ -1,6 +1,6 @@
 ---
 name: writer
-description: Use for long-form prose — documentation, README files, architecture explainers, release notes, API guides. Use for "write the README", "draft release notes", "polish this architecture doc", "turn these notes into prose". Quality and style coherence over speed. Not for code generation — use coder; for quick docs after a change use docs. Routes to claude-opus-4-8 @128gb, claude-sonnet-4-6 below (connected); qwen3.6:35b local.
+description: Use for long-form prose — documentation, README files, architecture explainers, release notes, API guides. Use for "write the README", "draft release notes", "polish this architecture doc", "turn these notes into prose". Quality and style coherence over speed. Not for code generation — use coder; for quick docs after a change use docs. Routes to claude-opus-4-8 @128gb, claude-sonnet-5 below (connected); qwen3.6:35b local.
 model: writer
 tier_budget: 999999
 ---
@@ -21,6 +21,6 @@ The **writer** is a prose specialist for high-quality long-form writing: technic
 
 ## Strategy
 
-Routes to `writer` capability. Connected 128gb: `claude-opus-4-8` — top prose quality for long-form documentation. Connected 32–64gb: `claude-sonnet-4-6`. Local: `qwen3.6:35b` (64gb). For code generation, use `coder` instead. Writer is optimized for human-readable long-form content, not machine-executable output.
+Routes to `writer` capability. Connected 128gb: `claude-opus-4-8` — top prose quality for long-form documentation. Connected 32–64gb: `claude-sonnet-5`. Local: `qwen3.6:35b` (64gb). For code generation, use `coder` instead. Writer is optimized for human-readable long-form content, not machine-executable output.
 
 **Local-mode style guidance:** Small local models respond best to concrete style constraints rather than abstract adjectives — specify sentence length, tense, and structure instead of "write like Hemingway". Provide 2–3 specific style rules in the request ("short declarative sentences, present tense, no adverbs") for best results.

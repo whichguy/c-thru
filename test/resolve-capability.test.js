@@ -119,9 +119,9 @@ console.log('\n6. resolveLlmMode — env overrides config; legacy env aliases st
   assert(resolveLlmMode({ llm_mode: 'best-local-oss' }) === 'best-local-oss',
     `config.llm_mode=best-local-oss respected`);
 
-  // Config llm_mode: legacy alias 'connected' → cloud default, then normal auto-detect
+  // Config llm_mode: legacy alias 'connected' → cloud default (now best-cloud-oss), then auto-detect
   const connectedMode = resolveLlmMode({ llm_mode: 'connected' });
-  assert(connectedMode === 'best-cloud' || connectedMode === 'best-local-oss',
+  assert(connectedMode === 'best-cloud-oss' || connectedMode === 'best-local-oss',
     `config.llm_mode=connected maps through cloud-default auto detection (got ${connectedMode})`);
 
   // Config llm_mode: legacy alias 'offline' → best-local-oss
@@ -130,8 +130,8 @@ console.log('\n6. resolveLlmMode — env overrides config; legacy env aliases st
 
   // Default when no config and no env
   const defaultMode = resolveLlmMode({});
-  assert(defaultMode === 'best-cloud' || defaultMode === 'best-local-oss',
-    `built-in default is best-cloud or best-local-oss (got ${defaultMode})`);
+  assert(defaultMode === 'best-cloud-oss' || defaultMode === 'best-local-oss',
+    `built-in default is best-cloud-oss or best-local-oss auto-fallback (got ${defaultMode})`);
 
   // CLAUDE_LLM_MODE env wins over config
   process.env.CLAUDE_LLM_MODE = 'best-cloud-oss';
@@ -272,7 +272,7 @@ console.log('\n11. Pinned-model regression guard — shipped config key triples'
     { cap: 'fast-scout',   tier: '64gb',  mode: 'best-cloud',     want: 'phi4-mini:3.8b'   },
     { cap: 'fast-scout',   tier: '64gb',  mode: 'best-local-oss', want: 'phi4-mini:3.8b'   },
     // coder in gov mode must be a non-Chinese claude model
-    { cap: 'coder',        tier: '64gb',  mode: 'best-cloud-gov',  want: 'claude-sonnet-4-6' },
+    { cap: 'coder',        tier: '64gb',  mode: 'best-cloud-gov',  want: 'claude-sonnet-5' },
     // edge is always the smallest local model
     { cap: 'edge',         tier: '64gb',  mode: 'best-cloud',     want: 'gemma4:e4b'        },
   ];

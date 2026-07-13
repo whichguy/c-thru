@@ -208,7 +208,7 @@ console.log('\n14. ollama:true iff local and anthropic/ollama-legacy format');
 // ── 15: --model branch still works (regression) ───────────────────────────
 console.log('\n15. --model branch still resolves via model_routes (regression)');
 {
-  const r = run(['--model', 'claude-sonnet-4-6']);
+  const r = run(['--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   assert(r.stdout.includes('Final routing'), '"Final routing" header present');
   assert(r.stdout.includes('served_by'), 'shows served_by');

@@ -38,8 +38,8 @@ Each line is a self-contained JSON object:
   "ts_iso": "2026-04-26T12:34:56.789Z",
   "capability": "workhorse",
   "tier": "128gb",                       // active hardware tier
-  "mode": "connected",                   // active LLM mode
-  "served_by": "claude-sonnet-4-6",      // post-resolution + post-filter model
+  "mode": "best-cloud",                  // active LLM mode
+  "served_by": "claude-sonnet-5",      // post-resolution + post-filter model
   "backend_id": "anthropic",
   "backend_kind": "anthropic",
   "endpoint": "/v1/messages",

@@ -215,7 +215,7 @@ console.log('\n14. fast-scout and edge: local models in best-local-oss');
 console.log('\n15. isChineseOrigin: known Chinese-origin and non-Chinese models classified correctly');
 {
   const chinese = ['qwen3:7b', 'deepseek-v4-flash:cloud', 'kimi-k2:cloud', 'glm-4:cloud', 'qwen3.6:35b-a3b-nvfp4'];
-  const notChinese = ['claude-sonnet-4-6', 'claude-opus-4-7', 'phi4-mini:3.8b', 'gemma4:e4b', 'gpt-oss-120b:TODO'];
+  const notChinese = ['claude-sonnet-5', 'claude-opus-4-7', 'phi4-mini:3.8b', 'gemma4:e4b', 'gpt-oss-120b:TODO'];
   for (const m of chinese) {
     assert(isChineseOrigin(m), `isChineseOrigin('${m}') === true`);
   }

@@ -30,8 +30,17 @@ const {
   filterFor,
   validModes,
   isGovMode,
+  KNOWN_HOSTS,
+  backendHost,
+  deriveAuthProfile,
 } = require('./model-map-resolve.js');
-const { parseAgentSentinel } = require('./agent-sentinel.js');
+const { parseAgentSentinel, stripAgentSentinelFromBody } = require('./agent-sentinel.js');
+const {
+  collectStreamBody,
+  formatUpstreamErrorMessage,
+  sanitizeErrorMessage,
+  isCompressedEncoding,
+} = require('./upstream-error-body.js');
 
 // CLI flag parsing — flags are aliases for env vars, set before any consumers
 // read them. Documented in CLAUDE.md ("Proxy CLI Flags"). Supported forms:
@@ -441,7 +450,13 @@ function traceLog(ctx, direction, method, url, headers, body) {
     method,
     url,
     headers: scrubbed,
-    body_snippet: body ? (typeof body === 'string' ? body.slice(0, 1000) : body.toString('utf8').slice(0, 1000)) : null
+    // Never log raw binary / control-heavy snippets (debug only, but keep clean).
+    body_snippet: body
+      ? sanitizeErrorMessage(
+          typeof body === 'string' ? body.slice(0, 1000) : body.toString('utf8').slice(0, 1000),
+          { cap: 1000 }
+        )
+      : null,
   });
 }
 
@@ -842,6 +857,11 @@ function pushRecentRequest(ctx, req, res, aborted) {
     tier: m.hwTier || null,
     mode: m.activeMode || null,
     user_id: m.userId || null,
+    // Round-5 B3: session identity from the /s/<id> path prefix (null for
+    // unkeyed clients) — lets GET /s/<id>/c-thru/recent scope to just this
+    // session's requests, the data source for the rebuilt fallback-badge
+    // hooks (was_fallback derives from fallback_from, no separate ring).
+    session_id: REQUEST_SESSION_ID,
   });
   if (RECENT_REQUESTS.length > RECENT_MAX) RECENT_REQUESTS.splice(0, RECENT_REQUESTS.length - RECENT_MAX);
 }
@@ -1052,61 +1072,6 @@ function injectSamplingDefaults(body, effectiveModel, capability, backend) {
     }
   }
   return out;
-}
-
-// Auto-auth: derive default auth shape from endpoint URL host. First match wins.
-// Each profile encodes both the outbound header shape and (for bearer_priority)
-// the incoming-Bearer-promotion semantics. Endpoints with explicit `auth*` fields
-// still win — this is the default when no explicit declaration is present.
-//   bearer_priority — Anthropic-family. Incoming Bearer wins; otherwise fill from env (x-api-key).
-//   header_env      — fixed header from env var; no incoming-Bearer promotion (third-party).
-//                     Incoming Anthropic auth is stripped to prevent key leakage.
-//   none            — strip all auth (local/dummy backends; Ollama gets Bearer ollama injected later).
-const KNOWN_HOSTS = [
-  { match: /(^|\.)anthropic\.com$/,
-    profile: 'bearer_priority', header: 'x-api-key', env: 'ANTHROPIC_API_KEY' },
-  { match: /(^|\.)openrouter\.ai$/,
-    profile: 'header_env', header: 'Authorization', scheme: 'Bearer', env: 'OPENROUTER_API_KEY' },
-  { match: /(^|\.)generativelanguage\.googleapis\.com$/,
-    profile: 'header_env', header: 'x-goog-api-key', env: 'GOOGLE_API_KEY' },
-  { match: /(^|\.)aiplatform\.googleapis\.com$/,
-    profile: 'header_env', header: 'Authorization', scheme: 'Bearer', env: 'GOOGLE_CLOUD_TOKEN' },
-  { match: /^localhost(:\d+)?$|^127\.0\.0\.1(:\d+)?$/,
-    profile: 'none' },
-  { match: /(^|\.)ollama\.ai$/,
-    profile: 'none' },
-];
-
-// Resolve the host of a backend URL, expanding ${VAR} placeholders if present so
-// templated URLs (e.g. Vertex with ${GOOGLE_CLOUD_REGION}) can still be matched
-// against the host table.
-function backendHost(backend) {
-  if (!backend || !backend.url) return null;
-  let url = backend.url.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_, name) => process.env[name] || '');
-  try { return new URL(url).host; } catch (_) { return null; }
-}
-
-function deriveAuthProfile(backend) {
-  // TEST-ONLY override (inert in production): the integration harness binds every
-  // stub on 127.0.0.1, which KNOWN_HOSTS maps to profile 'none' (always-forward),
-  // so a spawned proxy can never structurally reach the unknown-host 'passthrough'
-  // (auth-STRIP) branch in applyOutboundAuth. When — and ONLY when — the env var
-  // CLAUDE_PROXY_TEST_UNKNOWN_HOST_BACKENDS is set, the listed backend ids
-  // (comma-separated) are forced to the unknown-host classification (return null),
-  // exactly as a genuine non-KNOWN_HOSTS host would derive. The env var is set
-  // NOWHERE in any real launch/config path, so this short-circuit is a no-op
-  // outside tests. The env is read inline (not a module-scope const) so the
-  // string-extraction harness in test/proxy-quality.test.js can eval this
-  // function standalone. See test/proxy-auth-strip-e2e.test.js (C12 coverage).
-  const _testUnknown = process.env.CLAUDE_PROXY_TEST_UNKNOWN_HOST_BACKENDS;
-  if (_testUnknown && backend && backend.id &&
-      _testUnknown.split(',').map(s => s.trim()).includes(backend.id)) {
-    return null;
-  }
-  const host = backendHost(backend);
-  if (!host) return null;
-  for (const entry of KNOWN_HOSTS) if (entry.match.test(host)) return entry;
-  return null;
 }
 
 // Returns true when auth is needed (env or derived) but the env var is unset/empty.
@@ -1541,10 +1506,19 @@ function anthropicErrorType(statusCode, errBody) {
 
 // Send an Anthropic-shaped error response on a non-streaming connection.
 // Wraps `send()` so we get the same logging + headers-sent guard.
-function sendAnthropicError(res, code, message) {
+//
+// message is always sanitized: raw gzip/br error bodies must never reach the
+// Claude TUI (they render as mojibake and look like "garbled keystrokes").
+// Optional errBodyForType is the *decoded* upstream text used only for
+// anthropicErrorType's Gemini gRPC status mapping.
+function sendAnthropicError(res, code, message, errBodyForType) {
+  const safe = sanitizeErrorMessage(message);
   send(res, code, {
     type: 'error',
-    error: { type: anthropicErrorType(code), message },
+    error: {
+      type: anthropicErrorType(code, errBodyForType != null ? errBodyForType : safe),
+      message: safe || `upstream returned ${code}`,
+    },
   });
 }
 
@@ -2174,21 +2148,32 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     const backendLatencyMs = Date.now() - backendStartedAt;
     ctxLog(ctx, 'backend_response', { backend: backend.id, statusCode: upRes.statusCode });
     if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
-      // Buffer the upstream error body for the log, then attempt fallback. If
-      // fallback isn't configured or fails to resolve, we fall through to
-      // piping the original error to the client.
-      let errBody = '';
-      upRes.on('data', c => errBody += c.toString());
-      upRes.on('end', async () => {
-        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, errBody));
+      // Buffer the upstream error body, decode (gzip/br), extract a clean
+      // message — never embed raw compressed bytes (TUI mojibake). Then
+      // attempt fallback; if none fires, surface the sanitized Anthropic error.
+      collectStreamBody(upRes).then(async (rawBuf) => {
+        const { decoded, message: safeMsg } = formatUpstreamErrorMessage(rawBuf, {
+          contentEncoding: upRes.headers && upRes.headers['content-encoding'],
+          statusCode: upRes.statusCode,
+        });
+        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, decoded));
         const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
           reason: `upstream returned ${upRes.statusCode}`,
           statusCode: upRes.statusCode,
-          error: errBody.slice(0, 200),
+          error: safeMsg.slice(0, 200),
         });
         if (!handled && !res.headersSent) {
-          // Fallback didn't fire — surface the original error in Anthropic shape.
-          sendAnthropicError(res, upRes.statusCode, `backend ${backend.id} returned ${upRes.statusCode}: ${errBody.slice(0, 200)}`);
+          sendAnthropicError(
+            res,
+            upRes.statusCode,
+            `backend ${backend.id} returned ${upRes.statusCode}: ${safeMsg}`,
+            decoded
+          );
+        }
+      }).catch(async (e) => {
+        if (!res.headersSent) {
+          sendAnthropicError(res, upRes.statusCode || 502,
+            `backend ${backend.id} returned ${upRes.statusCode}: failed to read error body (${e.message})`);
         }
       });
       return;
@@ -2237,7 +2222,12 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     // stream length, without growing the head-cap memory bound.
     const TAIL_BUF_CAP = 32 * 1024;
     let tailBuf = Buffer.alloc(0);
+    // When upstream compresses the body, the client still gets a correct pipe
+    // (headers + compressed bytes). The stats/journal tee must NOT UTF-8-parse
+    // those bytes — that would fail or mis-read. Fail open: skip usage extract.
+    const upstreamCompressed = isCompressedEncoding(upRes.headers && upRes.headers['content-encoding']);
     upRes.on('data', chunk => {
+      if (upstreamCompressed) return; // client pipe still gets every byte via upRes.pipe(res)
       if (usageBytes < USAGE_BUF_CAP) {
         usageBuf.push(chunk);
         usageBytes += chunk.length;
@@ -2259,15 +2249,17 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
         // usage we can — message_start (input_tokens) may already be in the
         // tee buffer even though message_delta never arrived.
         markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
-        try {
-          const startFrame = Buffer.concat(usageBuf).toString('utf8')
-            .match(/event:\s*message_start\s*\n\s*data:\s*({[^\n]+})/);
-          if (startFrame) {
-            const inTok = JSON.parse(startFrame[1]).message?.usage?.input_tokens || 0;
-            if (inTok) recordUsageAndStamp(requestMeta, effectiveModel, backend.id, inTok, 0,
-              Date.now() - (requestMeta.startedAt || Date.now()), requestMeta.capability || null);
-          }
-        } catch { /* best-effort only */ }
+        if (!upstreamCompressed) {
+          try {
+            const startFrame = Buffer.concat(usageBuf).toString('utf8')
+              .match(/event:\s*message_start\s*\n\s*data:\s*({[^\n]+})/);
+            if (startFrame) {
+              const inTok = JSON.parse(startFrame[1]).message?.usage?.input_tokens || 0;
+              if (inTok) recordUsageAndStamp(requestMeta, effectiveModel, backend.id, inTok, 0,
+                Date.now() - (requestMeta.startedAt || Date.now()), requestMeta.capability || null);
+            }
+          } catch { /* best-effort only */ }
+        }
       }
       terminateCommittedResponse(ctx, res, responseIsSse, 'anthropic.upstream.midstream_error',
         `upstream ${backend.id} failed mid-response: ${e.message}`);
@@ -2276,6 +2268,11 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     upRes.on('aborted', () => onUpstreamMidstreamFailure(new Error('upstream aborted')));
     upRes.on('end', () => {
       if (upRes.statusCode !== 200) return;
+      if (upstreamCompressed) {
+        // Pipe already delivered compressed bytes + Content-Encoding to client.
+        clearBackendCooldown(backend.id);
+        return;
+      }
       try {
         const txt = Buffer.concat(usageBuf).toString('utf8');
         const isSse = responseIsSse;
@@ -2427,16 +2424,11 @@ function buildOllamaRequestBody(body, effectiveModel) {
 // ARCH: 400 is excluded from fallback (shouldFallbackOnStatus guard) so
 //       caller-malformed requests don't loop through the fallback chain.
 function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
-  let errBody = '';
-  upRes.on('data', c => errBody += c.toString());
-  upRes.on('end', async () => {
-    let message = errBody;
-    try {
-      const parsed = JSON.parse(errBody);
-      if (parsed.error) {
-        message = typeof parsed.error === 'string' ? parsed.error : (parsed.error.message || JSON.stringify(parsed.error));
-      }
-    } catch {}
+  collectStreamBody(upRes).then(async (rawBuf) => {
+    const { decoded, message: safeMsg } = formatUpstreamErrorMessage(rawBuf, {
+      contentEncoding: upRes.headers && upRes.headers['content-encoding'],
+      statusCode: upRes.statusCode,
+    });
     if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
       // Cloud->local rewrite first: if the failing model is :cloud-suffixed
       // (e.g. user has no Ollama subscription), swap in the configured
@@ -2445,15 +2437,22 @@ function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
       if (tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta)) {
         return;
       }
-      markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, message));
+      markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, decoded));
       const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
         reason: `upstream returned ${upRes.statusCode}`,
         statusCode: upRes.statusCode,
-        error: message.slice(0, 200),
+        error: safeMsg.slice(0, 200),
       });
       if (handled) return;
     }
-    sendAnthropicError(res, upRes.statusCode, message || `upstream returned ${upRes.statusCode}`);
+    if (!res.headersSent) {
+      sendAnthropicError(res, upRes.statusCode, safeMsg || `upstream returned ${upRes.statusCode}`, decoded);
+    }
+  }).catch((e) => {
+    if (!res.headersSent) {
+      sendAnthropicError(res, upRes.statusCode || 502,
+        `upstream returned ${upRes.statusCode}: failed to read error body (${e.message})`);
+    }
   });
 }
 
@@ -3089,6 +3088,19 @@ function geminiHttpRequest(backend, method, urlPath, body, extraHeaders) {
   });
 }
 
+// Safe user-visible prefix for Gemini Files API error bodies (may be compressed).
+function geminiFilesErrorMessage(prefix, result) {
+  const raw = result && result.body != null
+    ? (Buffer.isBuffer(result.body) ? result.body : Buffer.from(String(result.body)))
+    : Buffer.alloc(0);
+  const enc = result && result.headers && (result.headers['content-encoding'] || result.headers['Content-Encoding']);
+  const { message, decoded } = formatUpstreamErrorMessage(raw, {
+    contentEncoding: enc,
+    statusCode: result && result.statusCode,
+  });
+  return { text: `${prefix}: ${message}`, decoded };
+}
+
 async function handleFilesApi(req, res) {
   const backend = pickGeminiBackend(CONFIG);
   if (!backend) return sendAnthropicError(res, 503, 'no Gemini endpoint configured for /v1/files');
@@ -3110,7 +3122,8 @@ async function handleFilesApi(req, res) {
       'X-Goog-Upload-Protocol': 'raw',
     }).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
     if (result.statusCode >= 400) {
-      return sendAnthropicError(res, result.statusCode, `Gemini Files upload error: ${result.body.toString('utf8').slice(0, 500)}`);
+      const err = geminiFilesErrorMessage('Gemini Files upload error', result);
+      return sendAnthropicError(res, result.statusCode, err.text, err.decoded);
     }
     let parsed = null;
     try { parsed = JSON.parse(result.body.toString('utf8')); } catch {}
@@ -3124,7 +3137,10 @@ async function handleFilesApi(req, res) {
   // GET /v1/files — list
   if (req.method === 'GET' && (req.url === '/v1/files' || req.url === '/v1/files/' || req.url.startsWith('/v1/files?'))) {
     const result = await geminiHttpRequest(backend, 'GET', '/v1beta/files', null).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
-    if (result.statusCode >= 400) return sendAnthropicError(res, result.statusCode, `Gemini Files list error: ${result.body.toString('utf8').slice(0, 500)}`);
+    if (result.statusCode >= 400) {
+      const err = geminiFilesErrorMessage('Gemini Files list error', result);
+      return sendAnthropicError(res, result.statusCode, err.text, err.decoded);
+    }
     let parsed = null;
     try { parsed = JSON.parse(result.body.toString('utf8')); } catch {}
     const data = (parsed?.files || []).map(geminiFileToAnthropic).filter(Boolean);
@@ -3138,7 +3154,10 @@ async function handleFilesApi(req, res) {
     if (!geminiName) return sendAnthropicError(res, 400, `invalid file id: ${idMatch[1]}`);
     if (req.method === 'GET') {
       const result = await geminiHttpRequest(backend, 'GET', '/v1beta/' + geminiName, null).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
-      if (result.statusCode >= 400) return sendAnthropicError(res, result.statusCode, `Gemini Files get error: ${result.body.toString('utf8').slice(0, 500)}`);
+      if (result.statusCode >= 400) {
+        const err = geminiFilesErrorMessage('Gemini Files get error', result);
+        return sendAnthropicError(res, result.statusCode, err.text, err.decoded);
+      }
       let parsed = null;
       try { parsed = JSON.parse(result.body.toString('utf8')); } catch {}
       const anthropic = geminiFileToAnthropic(parsed);
@@ -3147,7 +3166,10 @@ async function handleFilesApi(req, res) {
     }
     if (req.method === 'DELETE') {
       const result = await geminiHttpRequest(backend, 'DELETE', '/v1beta/' + geminiName, null).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
-      if (result.statusCode >= 400) return sendAnthropicError(res, result.statusCode, `Gemini Files delete error: ${result.body.toString('utf8').slice(0, 500)}`);
+      if (result.statusCode >= 400) {
+        const err = geminiFilesErrorMessage('Gemini Files delete error', result);
+        return sendAnthropicError(res, result.statusCode, err.text, err.decoded);
+      }
       return send(res, 200, { id: idMatch[1], deleted: true });
     }
   }
@@ -3551,26 +3573,28 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
   const up = lib.request(options, (upRes) => {
     const statusCode = upRes.statusCode;
     if (statusCode >= 400) {
-      let errBody = '';
-      upRes.on('data', d => errBody += d);
-      upRes.on('end', async () => {
+      collectStreamBody(upRes).then(async (rawBuf) => {
+        const { decoded, message: safeMsg } = formatUpstreamErrorMessage(rawBuf, {
+          contentEncoding: upRes.headers && upRes.headers['content-encoding'],
+          statusCode,
+        });
         // G4: stale-cache retry. If we attached a cachedContent ref and the
         // upstream rejected (404 / cache-not-found), drop the entry and retry
         // once with a clean body. Costs an extra round-trip, only at the TTL
         // boundary.
-        if (cacheResult.status === 'hit' && (statusCode === 404 || /cached[_ ]?content|not found/i.test(errBody))) {
+        if (cacheResult.status === 'hit' && (statusCode === 404 || /cached[_ ]?content|not found/i.test(decoded))) {
           GEMINI_CACHE_STATS.stale_retry++;
           ctxLog(ctx, 'gemini.cache.stale', { statusCode, hash: cacheResult.hash });
           GEMINI_CACHE_MAP.delete(cacheResult.hash);
           body._geminiCacheRetried = true;
           return forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
-        ctxLog(ctx, 'gemini.error', { statusCode, body: errBody });
+        ctxLog(ctx, 'gemini.error', { statusCode, body: safeMsg });
         // Wave 2: parse Gemini gRPC status from body for an accurate Anthropic
         // error type (RESOURCE_EXHAUSTED->rate_limit_error etc.). Propagate
         // Retry-After verbatim, and synthesize anthropic-ratelimit-requests-
         // remaining: 0 on 429 so Claude Code's backoff sees a concrete signal.
-        const errType = anthropicErrorType(statusCode, errBody);
+        const errType = anthropicErrorType(statusCode, decoded);
         const extraHeaders = {};
         if (upRes.headers && upRes.headers['retry-after']) {
           extraHeaders['Retry-After'] = String(upRes.headers['retry-after']);
@@ -3580,14 +3604,10 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         }
         if (res.headersSent) return;
         // Backend-level fallback on retryable upstream errors. Mirrors the
-        // forwardAnthropic path (~line 1822): mark the backend as failed
-        // (puts it in cooldown if appropriate) and ALWAYS ask tryFallbackOrFail
-        // to walk the cascade. It self-noops when nothing applies, so gating on
-        // backend.fallback_to was wrong — it skipped capability-level
-        // fallback_chains, tryLocalTerminalFallback, and tryGlobalDefaultFallback
-        // (none of which require the failing backend to declare fallback_to).
-        // Only relay the raw error when the cascade didn't handle the request.
-        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(statusCode, errBody));
+        // forwardAnthropic path: mark the backend as failed and ALWAYS ask
+        // tryFallbackOrFail to walk the cascade. Only relay the sanitized
+        // error when the cascade didn't handle the request.
+        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(statusCode, decoded));
         const relayError = () => {
           if (res.headersSent) return;
           res.writeHead(statusCode, Object.assign(
@@ -3596,17 +3616,22 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           ));
           res.end(JSON.stringify({
             type: 'error',
-            error: { type: errType, message: `Gemini error: ${errBody}` },
+            error: { type: errType, message: sanitizeErrorMessage(`Gemini error: ${safeMsg}`) },
           }));
         };
         try {
           const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
-            reason: `gemini ${statusCode}: ${errBody.slice(0, 200)}`,
+            reason: `gemini ${statusCode}: ${safeMsg.slice(0, 200)}`,
             statusCode,
           });
           if (!handled) relayError();
         } catch {
           relayError();
+        }
+      }).catch((e) => {
+        if (!res.headersSent) {
+          sendAnthropicError(res, statusCode || 502,
+            `Gemini error: failed to read error body (${e.message})`);
         }
       });
       return;
@@ -5144,11 +5169,22 @@ const server = http.createServer((req, res) => {
           if (raw !== null) { const parsed = parseInt(raw, 10); if (!isNaN(parsed)) n = parsed; }
         } catch {}
         n = Math.max(1, Math.min(n, Math.max(RECENT_MAX, 1)));
+        // Round-5 B3: a request through the /s/<id> prefix is scoped to just
+        // that session's own entries — the trusted source is the path
+        // identity stripped at dispatch (REQUEST_SESSION_ID), never a
+        // query param, since this endpoint has no auth and a `?session=`
+        // selector would let any local client read another session's
+        // activity. The bare (unkeyed) endpoint is unchanged: all entries.
+        const scopedSessionId = REQUEST_SESSION_ID;
+        const pool = scopedSessionId
+          ? RECENT_REQUESTS.filter(r => r.session_id === scopedSessionId)
+          : RECENT_REQUESTS;
         return send(res, 200, {
           ok: true,
-          buffered: RECENT_REQUESTS.length,
+          session: scopedSessionId,
+          buffered: pool.length,
           cap: RECENT_MAX,
-          requests: RECENT_REQUESTS.slice(-n).reverse(),  // newest first
+          requests: pool.slice(-n).reverse(),  // newest first
         });
       }
 
@@ -5450,13 +5486,14 @@ const server = http.createServer((req, res) => {
         // Detection is cheapest-first and does NOT parse the payload (the JSON parse
         // above is needed for routing regardless; we add no structured walk):
         //   1. O(1) header check — well-known identifier, future-proof (empty today).
-        //   2. one raw-body byte-scan (indexOf) to LOCATE the marker — over the WHOLE
-        //      body (not a bounded prefix, so a long system prompt can't hide it) —
-        //      then a fixed <=50-byte window read to extract the name.
+        //   2. one raw-body lastIndexOf scan so the *newest* marker wins when multi-turn
+        //      history still carries older sentinels — then a fixed window extract.
+        // After routing, stripAgentSentinelFromBody removes all markers before forward.
         let sentinelAgent = null;
+        let agentIdentitySource = 'none'; // sentinel | header | none — for observability
         {
           // parseAgentSentinel (tools/agent-sentinel.js) does the cheapest-first
-          // detection: header check, then one raw-body byte-scan + fixed-window read.
+          // detection: header check, then lastIndexOf body scan + fixed-window read.
           // Kept as a pure, hermetically-tested unit (test/proxy-sentinel-detection.test.js).
           // Returns { name, tag, index } | null — tag is the optional HMAC stamp.
           const parsed = parseAgentSentinel(bodyText, req.headers['x-c-thru-agent']);
@@ -5492,13 +5529,18 @@ const server = http.createServer((req, res) => {
               }
             }
             if (trusted) {
-              if (resolveCapabilityAlias(agentName, CONFIG)) {
-                ctxLog(ctx, 'sentinel_override', { agent: agentName, from_model: body.model, signed: !!parsed.tag });
-                body.model = agentName;  // resolveBackend resolves agent → capability → model
-                sentinelAgent = agentName;
-              } else {
-                ctxLog(ctx, 'sentinel_unresolved', { agent: agentName });
-              }
+              // Opaque routing key: agent name, capability, concrete model tag,
+              // advisor: pin, etc. resolveBackend maps transparently — do not
+              // pre-gate on agent_to_capability only.
+              ctxLog(ctx, 'sentinel_override', {
+                agent: agentName,
+                from_model: body.model,
+                signed: !!parsed.tag,
+                source: fromHeader ? 'header' : 'sentinel',
+              });
+              body.model = agentName;
+              sentinelAgent = agentName;
+              agentIdentitySource = fromHeader ? 'header' : 'sentinel';
             }
           }
         }
@@ -5602,6 +5644,13 @@ const server = http.createServer((req, res) => {
         });
 
         body.model = effectiveModel;
+
+        // Routing is done — strip all [[c-thru-agent:…]] markers so upstream
+        // models never see routing metadata. Client history still has them for
+        // the next turn (re-parse last match, strip again).
+        stripAgentSentinelFromBody(body);
+        // Observability: how agent identity was obtained for this request.
+        res.setHeader('x-c-thru-agent-identity', agentIdentitySource);
 
         // ── Cooldown skip ──
         // If the primary resolved backend is in cooldown, jump directly to the

@@ -377,8 +377,9 @@ async function runAutoAuthTests() {
 // not the unknown-host "passthrough" path). So — like Phase 5.2 — we exercise
 // the gate by safely extracting the pure function + its host helpers.
 function loadApplyOutboundAuth() {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'claude-proxy'), 'utf8');
-  const extract = (name) => {
+  const proxySrc = fs.readFileSync(path.join(__dirname, '..', 'tools', 'claude-proxy'), 'utf8');
+  const resolveSrc = fs.readFileSync(path.join(__dirname, '..', 'tools', 'model-map-resolve.js'), 'utf8');
+  const extract = (src, name) => {
     const start = src.indexOf('function ' + name);
     if (start < 0) throw new Error('not found: ' + name);
     let depth = 0;
@@ -388,15 +389,15 @@ function loadApplyOutboundAuth() {
     }
     throw new Error('unbalanced braces: ' + name);
   };
-  const khStart = src.indexOf('const KNOWN_HOSTS =');
-  const khEnd = src.indexOf('];', khStart) + 2;
+  const khStart = resolveSrc.indexOf('const KNOWN_HOSTS =');
+  const khEnd = resolveSrc.indexOf('];', khStart) + 2;
   const logs = [];
   const code = [
-    src.slice(khStart, khEnd),
-    extract('backendHost'),
-    extract('deriveAuthProfile'),
+    resolveSrc.slice(khStart, khEnd),
+    extract(resolveSrc, 'backendHost'),
+    extract(resolveSrc, 'deriveAuthProfile'),
     'function proxyLog(ev, f) { __logs.push([ev, f]); }',
-    extract('applyOutboundAuth'),
+    extract(proxySrc, 'applyOutboundAuth'),
     'return applyOutboundAuth;',
   ].join('\n');
   const fn = new Function('__logs', code)(logs);

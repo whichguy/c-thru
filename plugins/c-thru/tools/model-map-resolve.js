@@ -21,7 +21,9 @@ const LLM_MODE_ENUM = new Set([
   'best-local-gov',   // USGov local: non-Chinese local models only
 ]);
 
-const DEFAULT_MODE = 'best-cloud';
+// Default: cloud-hosted open-source models (DeepSeek/Kimi/GLM via *:cloud).
+// Use --mode best-cloud or CLAUDE_LLM_MODE=best-cloud for Anthropic primary.
+const DEFAULT_MODE = 'best-cloud-oss';
 
 // validModes — the set of selectable mode names: the 5 built-ins (LLM_MODE_ENUM)
 // PLUS any user-declared custom modes (config.custom_modes keys). A custom mode is
@@ -93,6 +95,61 @@ function isChineseOrigin(model) {
     if (lower === v || lower.startsWith(v + '/') || lower.includes('/' + v + '/') || lower.includes('/' + v + ':') || lower.startsWith(v + ':')) return true;
   }
   return CHINESE_FAMILY_RE.test(lower);
+}
+
+// Auto-auth: derive default auth shape from endpoint URL host. First match wins.
+// Each profile encodes both the outbound header shape and (for bearer_priority)
+// the incoming-Bearer-promotion semantics. Endpoints with explicit `auth*` fields
+// still win — this is the default when no explicit declaration is present.
+//   bearer_priority — Anthropic-family. Incoming Bearer wins; otherwise fill from env (x-api-key).
+//   header_env      — fixed header from env var; no incoming-Bearer promotion (third-party).
+//                     Incoming Anthropic auth is stripped to prevent key leakage.
+//   none            — strip all auth (local/dummy backends; Ollama gets Bearer ollama injected later).
+const KNOWN_HOSTS = [
+  { match: /(^|\.)anthropic\.com$/,
+    profile: 'bearer_priority', header: 'x-api-key', env: 'ANTHROPIC_API_KEY' },
+  { match: /(^|\.)openrouter\.ai$/,
+    profile: 'header_env', header: 'Authorization', scheme: 'Bearer', env: 'OPENROUTER_API_KEY' },
+  { match: /(^|\.)generativelanguage\.googleapis\.com$/,
+    profile: 'header_env', header: 'x-goog-api-key', env: 'GOOGLE_API_KEY' },
+  { match: /(^|\.)aiplatform\.googleapis\.com$/,
+    profile: 'header_env', header: 'Authorization', scheme: 'Bearer', env: 'GOOGLE_CLOUD_TOKEN' },
+  { match: /^localhost(:\d+)?$|^127\.0\.0\.1(:\d+)?$/,
+    profile: 'none' },
+  { match: /(^|\.)ollama\.ai$/,
+    profile: 'none' },
+];
+
+// Resolve the host of a backend URL, expanding ${VAR} placeholders if present so
+// templated URLs (e.g. Vertex with ${GOOGLE_CLOUD_REGION}) can still be matched
+// against the host table.
+function backendHost(backend) {
+  if (!backend || !backend.url) return null;
+  let url = backend.url.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_, name) => process.env[name] || '');
+  try { return new URL(url).host; } catch (_) { return null; }
+}
+
+function deriveAuthProfile(backend) {
+  // TEST-ONLY override (inert in production): the integration harness binds every
+  // stub on 127.0.0.1, which KNOWN_HOSTS maps to profile 'none' (always-forward),
+  // so a spawned proxy can never structurally reach the unknown-host 'passthrough'
+  // (auth-STRIP) branch in applyOutboundAuth. When — and ONLY when — the env var
+  // CLAUDE_PROXY_TEST_UNKNOWN_HOST_BACKENDS is set, the listed backend ids
+  // (comma-separated) are forced to the unknown-host classification (return null),
+  // exactly as a genuine non-KNOWN_HOSTS host would derive. The env var is set
+  // NOWHERE in any real launch/config path, so this short-circuit is a no-op
+  // outside tests. The env is read inline (not a module-scope const) so the
+  // string-extraction harness in test/proxy-quality.test.js can eval this
+  // function standalone. See test/proxy-auth-strip-e2e.test.js (C12 coverage).
+  const _testUnknown = process.env.CLAUDE_PROXY_TEST_UNKNOWN_HOST_BACKENDS;
+  if (_testUnknown && backend && backend.id &&
+      _testUnknown.split(',').map(s => s.trim()).includes(backend.id)) {
+    return null;
+  }
+  const host = backendHost(backend);
+  if (!host) return null;
+  for (const entry of KNOWN_HOSTS) if (entry.match.test(host)) return entry;
+  return null;
 }
 
 function detectConnectivity() {
@@ -503,6 +560,10 @@ module.exports = {
   resolveModelRoute,
   LLM_MODE_ENUM,
   DEFAULT_MODE,
+  // Auth profile derivation
+  KNOWN_HOSTS,
+  backendHost,
+  deriveAuthProfile,
   // Gov filter
   isChineseOrigin,
   isGovMode,

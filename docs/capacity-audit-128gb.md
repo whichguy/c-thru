@@ -15,22 +15,22 @@
 | classifier | gemma4:26b-a4b | gemma4:26b-a4b | (none) | (none) | (none) | 1 |
 | explorer | gemma4:26b-a4b | gemma4:26b-a4b | (none) | (none) | (none) | 1 |
 | reviewer | devstral-2 | devstral-2 | (none) | (none) | local-review | 1 |
-| workhorse | qwen3.6:35b-a3b | qwen3.6:35b-a3b | claude-sonnet-4-6 | qwen3.6:35b-a3b | (none) | 1 |
+| workhorse | qwen3.6:35b-a3b | qwen3.6:35b-a3b | claude-sonnet-5 | qwen3.6:35b-a3b | (none) | 1 |
 | coder | qwen3-coder:30b | qwen3-coder:30b | (none) | (none) | (none) | 1 |
 | judge | claude-opus-4-6 | phi4-reasoning:latest | claude-opus-4-6 | phi4-reasoning:latest | 3 modes (semi-offload, cloud-judge-only, cloud-thinking) | 1 |
 | judge-strict | claude-opus-4-6 | devstral-2 | claude-opus-4-6 | devstral-2 | 3 modes (semi-offload, cloud-judge-only, cloud-thinking) | 2 |
-| orchestrator | qwen3.6:35b-a3b | qwen3.6:35b-a3b | claude-sonnet-4-6 | qwen3.6:35b-a3b | semi-offload → cloud | 1 |
+| orchestrator | qwen3.6:35b-a3b | qwen3.6:35b-a3b | claude-sonnet-5 | qwen3.6:35b-a3b | semi-offload → cloud | 1 |
 | code-analyst | devstral-2 | devstral-2 | (none) | (none) | local-review | 1 |
 | code-analyst-light | gemma4:26b-a4b | gemma4:26b-a4b | (none) | (none) | (none) | 1 |
 | deep-coder-precise | devstral-2 | devstral-2 | (none) | (none) | (none) | 1 |
 | fast-scout | qwen3.6:35b-a3b | qwen3.6:35b-a3b | (none) | (none) | (none) | 1 |
 | reasoner | deepseek-r1:32b | deepseek-r1:32b | (none) | (none) | (none) | 1 |
-| deep-coder | qwen3-coder:30b | qwen3-coder:30b | claude-sonnet-4-6 | devstral-2 | (none) | 2 |
+| deep-coder | qwen3-coder:30b | qwen3-coder:30b | claude-sonnet-5 | devstral-2 | (none) | 2 |
 | agentic-coder | devstral-2 | devstral-2 | (none) | (none) | (none) | 1 |
-| local-planner | qwen3.6:35b-a3b | qwen3.6:35b-a3b | claude-sonnet-4-6 | qwen3.6:35b-a3b | semi-offload → cloud | 1 |
+| local-planner | qwen3.6:35b-a3b | qwen3.6:35b-a3b | claude-sonnet-5 | qwen3.6:35b-a3b | semi-offload → cloud | 1 |
 | commit-message-generator | qwen3:1.7b | qwen3:1.7b | (none) | (none) | (none) | 1 |
-| deep-coder-cloud | claude-sonnet-4-6 | qwen3-coder:30b | claude-sonnet-4-6 | qwen3-coder:30b | (none) | 1 |
-| code-analyst-cloud | claude-sonnet-4-6 | gpt-oss:20b | claude-sonnet-4-6 | gpt-oss:20b | (none) | 1 |
+| deep-coder-cloud | claude-sonnet-5 | qwen3-coder:30b | claude-sonnet-5 | qwen3-coder:30b | (none) | 1 |
+| code-analyst-cloud | claude-sonnet-5 | gpt-oss:20b | claude-sonnet-5 | gpt-oss:20b | (none) | 1 |
 | pattern-coder | qwen3-coder:30b | qwen3-coder:30b | (none) | (none) | (none) | 1 |
 
 **Total Distinct Local Models in Profile:** 13 unique (all-local) models
@@ -213,10 +213,10 @@ Assuming `semi-offload` mode is enabled (cloud routing for expensive judges):
 "orchestrator": {
   "connected_model": "qwen3.6:35b-a3b",
   "disconnect_model": "qwen3.6:35b-a3b",
-  "cloud_best_model": "claude-sonnet-4-6",
+  "cloud_best_model": "claude-sonnet-5",
   "local_best_model": "qwen3.6:35b-a3b",
   "modes": {
-    "semi-offload": "claude-sonnet-4-6"
+    "semi-offload": "claude-sonnet-5"
   }
 }
 ```
@@ -224,12 +224,12 @@ Assuming `semi-offload` mode is enabled (cloud routing for expensive judges):
 **Change To:**
 ```json
 "orchestrator": {
-  "connected_model": "claude-sonnet-4-6",  // Prefer cloud
+  "connected_model": "claude-sonnet-5",  // Prefer cloud
   "disconnect_model": "devstral-small:2",  // 2.7B fallback, NOT devstral-2 (74GB)
-  "cloud_best_model": "claude-sonnet-4-6",
+  "cloud_best_model": "claude-sonnet-5",
   "local_best_model": "devstral-small:2",
   "modes": {
-    "semi-offload": "claude-sonnet-4-6"
+    "semi-offload": "claude-sonnet-5"
   }
 }
 ```

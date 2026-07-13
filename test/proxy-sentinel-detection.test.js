@@ -21,7 +21,11 @@
 // Run: node test/proxy-sentinel-detection.test.js
 
 const crypto = require('crypto');
-const { parseAgentSentinel, READ_WINDOW } = require('../tools/agent-sentinel.js');
+const {
+  parseAgentSentinel,
+  stripAgentSentinelFromBody,
+  stripSentinelFromString,
+} = require('../tools/agent-sentinel.js');
 
 let passed = 0;
 let failed = 0;
@@ -37,7 +41,7 @@ console.log('proxy sentinel detection (parseAgentSentinel) + C19 trust gate\n');
 
 // ── body marker → { name, tag } shape ───────────────────────────────────────────
 {
-  const r = parseAgentSentinel(body({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: '[[c-thru-agent:coder]]\nwrite add(a,b)' }] }), undefined);
+  const r = parseAgentSentinel(body({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: '[[c-thru-agent:coder]]\nwrite add(a,b)' }] }), undefined);
   assert(r && r.name === 'coder' && r.tag === null, 'unsigned marker in first user message → { name: coder, tag: null }');
 }
 
@@ -47,6 +51,30 @@ console.log('proxy sentinel detection (parseAgentSentinel) + C19 trust gate\n');
     { role: 'user', content: '[[c-thru-agent:fast-scout]] summarize' }] }), undefined);
   assert(r && r.name === 'fast-scout' && r.tag === null,
     'marker after a huge system prompt + later message → fast-scout (whole-body locate, nothing slips through)');
+}
+
+// ── last match wins (multi-turn history shadowing) ────────────────────────────
+{
+  const r = parseAgentSentinel(body({
+    model: 'sonnet',
+    messages: [
+      { role: 'user', content: '[[c-thru-agent:coder]]\nold task' },
+      { role: 'assistant', content: 'done' },
+      { role: 'user', content: '[[c-thru-agent:tester]]\nnew task' },
+    ],
+  }), undefined);
+  assert(r && r.name === 'tester' && r.tag === null,
+    'two markers in history → last match wins (tester, not coder)');
+}
+{
+  const r = parseAgentSentinel(body({
+    messages: [
+      { role: 'user', content: '[[c-thru-agent:coder:aaaaaaaaaaaaaaaa]] first' },
+      { role: 'user', content: '[[c-thru-agent:docs:bbbbbbbbbbbbbbbb]] second' },
+    ],
+  }), undefined);
+  assert(r && r.name === 'docs' && r.tag === 'bbbbbbbbbbbbbbbb',
+    'last signed marker → name+tag from last match');
 }
 
 {
@@ -67,7 +95,7 @@ console.log('proxy sentinel detection (parseAgentSentinel) + C19 trust gate\n');
 }
 
 // ── no marker → null ───────────────────────────────────────────────────────────────
-assert(parseAgentSentinel(body({ model: 'claude-sonnet-4-6', system: hugeSystem, messages: [{ role: 'user', content: 'a normal prompt with no marker' }] }), undefined) === null,
+assert(parseAgentSentinel(body({ model: 'claude-sonnet-5', system: hugeSystem, messages: [{ role: 'user', content: 'a normal prompt with no marker' }] }), undefined) === null,
   'no marker (main thread) → null');
 
 assert(parseAgentSentinel('[[c-thru-agent:coder', undefined) === null, 'unterminated marker → null');
@@ -83,8 +111,9 @@ assert(parseAgentSentinel('plain text', undefined) === null, 'unrelated text →
   assert(r && r.name === 'planner', 'valid header takes precedence over a body marker → planner');
 }
 {
+  // Header is opaque; non-empty wins even with punctuation (still no HMAC on header).
   const r = parseAgentSentinel(body({ messages: [{ role: 'user', content: '[[c-thru-agent:tester]] t' }] }), 'bad header!');
-  assert(r && r.name === 'tester', 'malformed header ignored → falls back to body marker → tester');
+  assert(r && r.name === 'bad header!', 'non-empty header takes precedence (opaque name)');
 }
 
 // ── defensive / bounds ───────────────────────────────────────────────────────────
@@ -95,9 +124,14 @@ assert(parseAgentSentinel(undefined, undefined) === null, 'undefined body → nu
   assert(r && r.name === 'edge', 'marker not at the start of a message is still found');
 }
 
-const longName = 'a'.repeat(90); // exceeds the READ_WINDOW once the prefix is counted
-assert(parseAgentSentinel(`[[c-thru-agent:${longName}]]`, undefined) === null,
-  `agent name longer than the ${READ_WINDOW}-byte read window → null (graceful, no false route)`);
+const longOk = 'org/model-' + 'x'.repeat(100) + ':cloud';
+{
+  const r = parseAgentSentinel(`[[c-thru-agent:${longOk}]]`, undefined);
+  assert(r && r.name === longOk, 'long arbitrary model-like name parses (no tight 80-byte window)');
+}
+const tooLong = 'a'.repeat(600);
+assert(parseAgentSentinel(`[[c-thru-agent:${tooLong}]]`, undefined) === null,
+  'interior longer than MAX_INTERIOR_LEN → null (sanity cap)');
 
 // ── C19 trust gate ────────────────────────────────────────────────────────────────
 // Replicates claude-proxy's trust decision so the contract is checked here:
@@ -156,6 +190,47 @@ const validTag = expectedTag(KEY, 'coder');
 {
   const parsed = parseAgentSentinel(body({ messages: [{ role: 'user', content: '[[c-thru-agent:coder:0123456789abcdef]] go' }] }), undefined);
   assert(trustBodyMarker(null, parsed) === true, 'C19: signed body marker + key ABSENT → fail-open ACCEPT');
+}
+
+// ── arbitrary names (OpenRouter-style, advisor pins) ──────────────────────────
+{
+  const r = parseAgentSentinel('[[c-thru-agent:deepseek/deepseek-chat-v3-0324:free]]', undefined);
+  assert(r && r.name === 'deepseek/deepseek-chat-v3-0324:free' && r.tag === null,
+    'slash + free suffix model id → full name, no false HMAC');
+}
+{
+  const r = parseAgentSentinel(body({ messages: [{ role: 'user', content: '[[c-thru-agent:advisor:deepseek-v4-pro:cloud]]\nhi' }] }), undefined);
+  assert(r && r.name === 'advisor:deepseek-v4-pro:cloud' && r.tag === null,
+    'advisor pin with colons → full name (HMAC only if last :hex16)');
+}
+{
+  const name = 'provider/model-name-with-plus+v2';
+  const r = parseAgentSentinel(`[[c-thru-agent:${name}]]`, undefined);
+  assert(r && r.name === name, 'plus and slash in model name accepted');
+}
+
+// ── stripAgentSentinelFromBody ────────────────────────────────────────────────
+{
+  assert(stripSentinelFromString('[[c-thru-agent:coder]]\nwrite add') === 'write add',
+    'stripSentinelFromString removes marker + trailing newline');
+  const b = {
+    model: 'sonnet',
+    system: '[[c-thru-agent:docs]] sys',
+    messages: [
+      { role: 'user', content: '[[c-thru-agent:coder]]\nold' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: [
+        { type: 'text', text: '[[c-thru-agent:tester]]\nnew task' },
+      ] },
+    ],
+  };
+  stripAgentSentinelFromBody(b);
+  assert(b.system === ' sys' || b.system === 'sys' || !b.system.includes('c-thru-agent'),
+    'strip removes sentinel from system string');
+  assert(!JSON.stringify(b).includes('[[c-thru-agent:'),
+    'strip removes all sentinels from structured body');
+  assert(b.messages[2].content[0].text.includes('new task'),
+    'strip preserves non-sentinel text in content blocks');
 }
 
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);

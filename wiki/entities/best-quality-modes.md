@@ -102,7 +102,7 @@ Quality ordering derived from `wiki/entities/moe-speed-capability-dual.md`, `qwe
 | Model | Quality | Speed | Notes |
 |---|---|---|---|
 | `claude-opus-4-6` | 100 | 50 | Top cloud, judge/judge-strict |
-| `claude-sonnet-4-6` | 88 | 70 | Cloud general, orchestrator/planner |
+| `claude-sonnet-5` | 88 | 70 | Cloud general, orchestrator/planner |
 | `qwen3-coder:30b` | 85 | 65 | 128gb deep-coder local best |
 | `qwen3.5:35b-a3b-coding-nvfp4` | 82 | 85 | MoE, code-specialized, fast |
 | `qwen3.6:35b` | 80 | 60 | Agentic coding, local judge/orch |

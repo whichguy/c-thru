@@ -116,9 +116,9 @@ schema change is still required:
     "auth_env": "AWS_BEARER_TOKEN_BEDROCK",   // used only when auth.mode == "bearer"
     "model_id_map": {                          // Anthropic model name → Bedrock modelId / inference-profile id
       "claude-opus-4-8":   "us.anthropic.claude-opus-4-8-v1:0",
-      "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6-v1:0"
+      "claude-sonnet-5": "us.anthropic.claude-sonnet-5-v1:0"
     },
-    "fallback_to": "claude-sonnet-4-6"         // existing field: cloud fallback on Bedrock failure
+    "fallback_to": "claude-sonnet-5"         // existing field: cloud fallback on Bedrock failure
   }
 }
 ```

@@ -483,7 +483,7 @@ Tournament quality scores and throughput for the model assigned to each c-thru c
 | `judge` | claude-opus-4-6 | -- | cloud | claude-opus-4-6 | -- | cloud | claude-opus-4-6 | -- | cloud | qwen3:1.7b | -- | -- |
 | `orchestrator` | qwen3.6:35b | -- | 58 | q3.6:27b-coding-nvfp4 | -- | -- | sonnet | -- | cloud | sonnet | -- | cloud |
 | `local-planner` | qwen3.6:35b | 5.0 | 58 | q3.6:27b-coding-nvfp4 | -- | -- | q3.6:27b-coding-nvfp4 | -- | -- | gpt-oss:20b | 3.8 | 112 |
-| `deep-coder` | qwen3-coder:30b | 4.5 | 123 | claude-sonnet-4-6 | -- | cloud | claude-sonnet-4-6 | -- | cloud | claude-sonnet-4-6 | -- | cloud |
+| `deep-coder` | qwen3-coder:30b | 4.5 | 123 | claude-sonnet-5 | -- | cloud | claude-sonnet-5 | -- | cloud | claude-sonnet-5 | -- | cloud |
 | `code-analyst` | gpt-oss:20b | 3.8 | 112 | gpt-oss:20b | 3.8 | 112 | gpt-oss:20b | 3.8 | 112 | gpt-oss:20b | 3.8 | 112 |
 | `pattern-coder` | qwen3-coder:30b | 4.5 | 123 | q3.6:27b-coding-nvfp4 | -- | -- | q3.6:27b-coding-nvfp4 | -- | -- | qwen3.5:9b | -- | -- |
 | `reasoner` † | deepseek-r1:14b | 3.5 | 51 | deepseek-r1:14b | 3.5 | 51 | deepseek-r1:14b | 3.5 | 51 | deepseek-r1:14b | 3.5 | 51 |
@@ -499,7 +499,7 @@ Tournament quality scores and throughput for the model assigned to each c-thru c
 
 **`orchestrator` (qwen3.6:35b at 128gb)** — Scored `--` because the orchestrator benchmark role only ran GLM cloud models. Qwen3.6:35b's 5.0 generalist score is evidence it can reason well, but orchestrator prompts test structured JSON dispatch (O1–O4) which requires different behavior. The 64gb/48gb tiers use unscored `q3.6:27b-coding-nvfp4`. Gap: run orchestrator prompts against all local candidates.
 
-**`deep-coder` at 64gb/48gb (claude-sonnet-4-6 cloud)** — Falls to cloud immediately when disconnected; no local `deep-coder` fallback below 128gb. If cloud is unavailable, implementer agents receive the local cascade, which falls to whatever the tier's cascade chain allows. This is the highest-risk gap for offline deployments.
+**`deep-coder` at 64gb/48gb (claude-sonnet-5 cloud)** — Falls to cloud immediately when disconnected; no local `deep-coder` fallback below 128gb. If cloud is unavailable, implementer agents receive the local cascade, which falls to whatever the tier's cascade chain allows. This is the highest-risk gap for offline deployments.
 
 **`deep-coder-precise` quantization inversion** — bf16 (full precision, 70GB) scores **lower** (q=3.5) than mxfp8 (q=4.5) and nvfp4 (q=4.5). Full precision is not better for this model family. The bf16 variant also runs at 69 t/s vs 123 t/s for nvfp4 — it is both slower and worse. Do not promote bf16 to `deep-coder-precise` on 128gb; use mxfp8 (38GB, 4.5 quality, 96 t/s) instead. The nvfp4 (22GB, 4.5, 123 t/s) is the correct offline fallback at 48gb+.
 

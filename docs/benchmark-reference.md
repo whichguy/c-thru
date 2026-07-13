@@ -264,7 +264,7 @@ If you have time to monitor only three benchmarks, these three cover 10 of 12 ag
 | Gemini 3.1 Pro Preview (02/26) | 67.42% |
 | GPT 5.3 Codex | 64.04% |
 | Muse Spark | 59.55% |
-| Claude Sonnet 4.6 | 59.55% |
+| Claude Sonnet 5 | 59.55% |
 | Claude Opus 4.5 (Nonthinking) | 58.43% |
 | Claude Opus 4.6 (Thinking) | 58.43% |
 | GPT 5.4 | 58.43% |

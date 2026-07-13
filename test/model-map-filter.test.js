@@ -24,7 +24,7 @@ const BACKENDS = {
 
 const MODEL_ROUTES = {
   'claude-opus-4-6':       'anthropic',
-  'claude-sonnet-4-6':     'anthropic',
+  'claude-sonnet-5':     'anthropic',
   're:^claude-.*$':        'anthropic',
   'deepseek/deepseek-v3':  'openrouter',
   'qwen3:1.7b':            'ollama_local',
@@ -38,7 +38,7 @@ const MODEL_ROUTES = {
 // ── isClaude ────────────────────────────────────────────────────────────────
 console.log('1. isClaude');
 assertEq(isClaude('claude-opus-4-6'),     true,  'claude-opus-4-6');
-assertEq(isClaude('claude-sonnet-4-6'),   true,  'claude-sonnet-4-6');
+assertEq(isClaude('claude-sonnet-5'),   true,  'claude-sonnet-5');
 assertEq(isClaude('claude-haiku-4-5-20251001'), true, 'claude-haiku with date suffix');
 assertEq(isClaude('qwen3:1.7b'),          false, 'qwen3:1.7b is not claude');
 assertEq(isClaude('Claude-opus'),         false, 'case-sensitive: Claude- (uppercase) does not match');
@@ -252,7 +252,7 @@ console.log('\nisChineseOrigin — provider-prefixed slugs + extended families')
     'ernie-4.5', 'hunyuan-large', 'stepfun/step-2', 'bytedance/doubao-pro',
   ];
   const allow = [
-    'claude-opus-4-8', 'claude-sonnet-4-6', 'gpt-4o', 'gemini-2.5-pro', 'gemma4:26b',
+    'claude-opus-4-8', 'claude-sonnet-5', 'gpt-4o', 'gemini-2.5-pro', 'gemma4:26b',
     'phi4-reasoning:plus', 'llama3.3:70b', 'mistral-large', 'command-r-plus', 'gpt-oss-120b',
     'devstral-small:2', 'nemotron-4', 'yarn-mistral', 'aya-23',
   ];

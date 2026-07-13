@@ -20,20 +20,20 @@
     "gemini_ai": {
       "url": "https://generativelanguage.googleapis.com",
       "format": "gemini",
-      "fallback_to": "claude-sonnet-4-6"
+      "fallback_to": "claude-sonnet-5"
     },
     "gemini_vertex": {
       "url": "https://${GOOGLE_CLOUD_REGION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_REGION}/publishers/google/models",
       "format": "gemini",
       "vertex": true,
-      "fallback_to": "claude-sonnet-4-6"
+      "fallback_to": "claude-sonnet-5"
     },
     "gemini_ai_compat": {
       "url": "https://generativelanguage.googleapis.com/v1beta/openai",
       "format": "anthropic",
       "call_style": "openai",
       "auth_env": "GOOGLE_API_KEY",
-      "fallback_to": "claude-sonnet-4-6"
+      "fallback_to": "claude-sonnet-5"
     },
     "anthropic_subscription": {
       "url": "https://api.anthropic.com",
@@ -42,7 +42,7 @@
     }
   },
   "llm_active_profile": "auto",
-  "llm_mode": "best-cloud",
+  "llm_mode": "best-cloud-oss",
   "custom_modes": {
     "deepseek-hybrid": {
       "base": "best-cloud-oss",
@@ -159,10 +159,10 @@
         "128gb": "qwen3.6:35b"
       },
       "best-cloud-gov": {
-        "16gb": "claude-sonnet-4-6",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
+        "16gb": "claude-sonnet-5",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
         "128gb": "gpt-oss-20b:TODO"
       },
       "best-local-gov": {
@@ -194,8 +194,8 @@
       "best-cloud-gov": {
         "16gb": "claude-haiku-4-5-20251001",
         "32gb": "claude-haiku-4-5-20251001",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
         "128gb": "gpt-oss-20b:TODO"
       },
       "best-local-gov": {
@@ -261,11 +261,11 @@
     },
     "code-reviewer": {
       "best-cloud": {
-        "16gb": "claude-sonnet-4-6",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-sonnet-4-6"
+        "16gb": "claude-sonnet-5",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
         "16gb": "kimi-k2.7-code:cloud",
@@ -282,10 +282,10 @@
         "128gb": "qwen3.6:35b"
       },
       "best-cloud-gov": {
-        "16gb": "claude-sonnet-4-6",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
+        "16gb": "claude-sonnet-5",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
         "128gb": "gpt-oss-20b:TODO"
       },
       "best-local-gov": {
@@ -347,10 +347,10 @@
         "128gb": "qwen3.6:35b"
       },
       "best-cloud-gov": {
-        "16gb": "claude-sonnet-4-6",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
+        "16gb": "claude-sonnet-5",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
         "128gb": "gpt-oss-20b:TODO"
       },
       "best-local-gov": {
@@ -385,10 +385,10 @@
         "128gb": "qwen3.6:35b"
       },
       "best-cloud-gov": {
-        "16gb": "claude-sonnet-4-6",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
+        "16gb": "claude-sonnet-5",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
         "128gb": "gpt-oss-20b:TODO"
       },
       "best-local-gov": {
@@ -429,15 +429,15 @@
     "vision": {
       "best-cloud": {
         "16gb": "phi4-reasoning:plus",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-sonnet-4-6"
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
         "16gb": "phi4-reasoning:plus",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
         "64gb": "qwen3.6:35b",
         "128gb": "deepseek-v4-flash:cloud"
       },
@@ -450,10 +450,10 @@
       },
       "best-cloud-gov": {
         "16gb": "phi4-mini:3.8b",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-sonnet-4-6"
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-local-gov": {
         "16gb": "phi4-mini:3.8b",
@@ -467,15 +467,15 @@
     "pdf": {
       "best-cloud": {
         "16gb": "phi4-reasoning:plus",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-sonnet-4-6"
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
         "16gb": "phi4-reasoning:plus",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
         "64gb": "qwen3.6:35b",
         "128gb": "deepseek-v4-flash:cloud"
       },
@@ -488,10 +488,10 @@
       },
       "best-cloud-gov": {
         "16gb": "phi4-mini:3.8b",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-sonnet-4-6"
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-local-gov": {
         "16gb": "phi4-mini:3.8b",
@@ -505,9 +505,9 @@
     "writer": {
       "best-cloud": {
         "16gb": "phi4-reasoning:plus",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
         "128gb": "claude-opus-4-8"
       },
       "best-cloud-oss": {
@@ -526,9 +526,9 @@
       },
       "best-cloud-gov": {
         "16gb": "phi4-mini:3.8b",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
         "128gb": "claude-opus-4-8"
       },
       "best-local-gov": {
@@ -551,10 +551,10 @@
     "generalist": {
       "best-cloud": {
         "16gb": "phi4-reasoning:plus",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-sonnet-4-6"
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
         "16gb": "deepseek-v4-flash:cloud",
@@ -572,10 +572,10 @@
       },
       "best-cloud-gov": {
         "16gb": "phi4-mini:3.8b",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-sonnet-4-6"
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-local-gov": {
         "16gb": "phi4-mini:3.8b",
@@ -635,10 +635,10 @@
     "long-context": {
       "best-cloud": {
         "16gb": "phi4-reasoning:plus",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-sonnet-4-6"
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
         "16gb": "phi4-reasoning:plus",
@@ -656,10 +656,10 @@
       },
       "best-cloud-gov": {
         "16gb": "phi4-mini:3.8b",
-        "32gb": "claude-sonnet-4-6",
-        "48gb": "claude-sonnet-4-6",
-        "64gb": "claude-sonnet-4-6",
-        "128gb": "claude-sonnet-4-6"
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-local-gov": {
         "16gb": "phi4-mini:3.8b",
@@ -699,7 +699,7 @@
     "Monitor": "fast-scout"
   },
   "model_routes": {
-    "claude-sonnet-4-6": "anthropic",
+    "claude-sonnet-5": "anthropic",
     "re:^claude-.*$": "anthropic",
     "gemini-latest": {
       "endpoint": "gemini_ai",
@@ -808,16 +808,40 @@
       "name": "claude-haiku-4-5-20251001"
     },
     "opus": {
-      "endpoint": "anthropic",
-      "name": "claude-opus-4-8"
+      "best-cloud": "claude-opus-4-8",
+      "best-cloud-oss": "deepseek-v4-pro:cloud",
+      "best-local-oss": "qwen3.6:35b",
+      "best-cloud-gov": "claude-opus-4-8",
+      "best-local-gov": "qwen3.6:35b",
+      "connected": "claude-opus-4-8",
+      "offline": "qwen3.6:35b"
     },
     "sonnet": {
-      "endpoint": "anthropic",
-      "name": "claude-sonnet-4-6"
+      "best-cloud": "claude-sonnet-5",
+      "best-cloud-oss": "deepseek-v4-flash:cloud",
+      "best-local-oss": "qwen3.6:35b",
+      "best-cloud-gov": "claude-sonnet-5",
+      "best-local-gov": "qwen3.6:35b",
+      "connected": "claude-sonnet-5",
+      "offline": "qwen3.6:35b"
     },
     "haiku": {
-      "endpoint": "anthropic",
-      "name": "claude-haiku-4-5-20251001"
+      "best-cloud": "claude-haiku-4-5-20251001",
+      "best-cloud-oss": "deepseek-v4-flash:cloud",
+      "best-local-oss": "phi4-mini:3.8b",
+      "best-cloud-gov": "claude-haiku-4-5-20251001",
+      "best-local-gov": "phi4-mini:3.8b",
+      "connected": "claude-haiku-4-5-20251001",
+      "offline": "phi4-mini:3.8b"
+    },
+    "fable": {
+      "best-cloud": "claude-sonnet-5",
+      "best-cloud-oss": "kimi-k2.7-code:cloud",
+      "best-local-oss": "qwen3.6:35b",
+      "best-cloud-gov": "claude-sonnet-5",
+      "best-local-gov": "qwen3.6:35b",
+      "connected": "claude-sonnet-5",
+      "offline": "qwen3.6:35b"
     },
     "qwen3:8b": {
       "endpoint": "ollama_local",
@@ -848,7 +872,8 @@
     "glm-5.2:cloud": "ollama_cloud",
     "kimi-k2.7-code:cloud": "ollama_cloud",
     "nemotron-3-super:cloud": "ollama_cloud",
-    "qwen3-coder:480b-cloud": "ollama_cloud"
+    "qwen3-coder:480b-cloud": "ollama_cloud",
+    "claude-sonnet-4-6": "claude-sonnet-5"
   },
   "routes": {
     "default": "generalist",
@@ -856,7 +881,7 @@
     "high-model": "planner",
     "background": "fast-scout",
     "think": "planner-hard",
-    "longContext": "claude-sonnet-4-6"
+    "longContext": "deepseek-v4-pro:cloud"
   },
   "llm_capabilities": {
     "classify_intent": {

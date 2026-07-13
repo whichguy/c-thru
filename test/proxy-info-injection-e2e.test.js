@@ -112,8 +112,8 @@ async function main() {
       const listConfig = path.join(listRoot, 'model-map.json');
       fs.writeFileSync(listConfig, JSON.stringify({
         backends: { anthropic: { kind: 'anthropic', url: 'https://anthropic.example' } },
-        routes: { default: 'claude-sonnet-4-6' },
-        model_routes: { 'claude-sonnet-4-6': 'anthropic', 're:^claude-.*$': 'anthropic' },
+        routes: { default: 'claude-sonnet-5' },
+        model_routes: { 'claude-sonnet-5': 'anthropic', 're:^claude-.*$': 'anthropic' },
       }));
 
       const listEnv = Object.assign({}, process.env, {

@@ -31,6 +31,9 @@ Environment variables that affect c-thru routing, proxy behavior, and Ollama int
 | `C_THRU_OLLAMA_AUTOSTART` | `1` (default) — start Ollama automatically when unreachable. Set to `0` to disable autostart (useful when Ollama is managed externally or in CI). |
 | `C_THRU_SKIP_PREPULL` | Set to `1` to skip bulk pre-pull of active-tier Ollama models on router startup. Intended for CI and scripting. |
 | `C_THRU_PLUGIN_PORT` | Fixed port for the plugin-mode proxy (default `10017`). Used when `c-thru-session-start.sh` seeds the first-run config and needs a stable `ANTHROPIC_BASE_URL`. |
+| `C_THRU_PLAN_PAGE=0` | Disable the PostToolUse/ExitPlanMode plan-visibility hook entirely. |
+| `C_THRU_PLAN_AUTOOPEN=0` | Continue spooling approved plans but never auto-open the local dashboard browser page. |
+| `C_THRU_PLAN_SPOOL` | Override the plan event/snapshot/narrative spool directory (primarily useful for isolated tests). |
 
 ## CI / Testing Variables
 

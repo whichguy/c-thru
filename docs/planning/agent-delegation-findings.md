@@ -28,7 +28,7 @@ agents → many models work concurrently in one session:
 Agent definitions are untouched. Validated end-to-end (proxy journal `served_by` + subagent
 self-report, distinguishing non-Anthropic models): OSS mode — `coder`→`qwen3.6:35b-a3b-coding-nvfp4`
 and `fast-scout`→`phi4-mini:3.8b` in one session; subscription mode (`C_THRU_PROXY_ALWAYS=1`) —
-main→`claude-sonnet-4-6` (auth/streaming intact) and `fast-scout`→`phi4-mini:3.8b`. Hook suite
+main→`claude-sonnet-5` (auth/streaming intact) and `fast-scout`→`phi4-mini:3.8b`. Hook suite
 38/38; `make test-fast` 107/107. Known limitation: the sentinel lives in `body.messages[0]`, which
 a long subagent run could compact away mid-task → graceful fallback to the alias model.
 

@@ -99,7 +99,7 @@ name, expand to the full tag registered in `model_routes`:
 | "deepseek v4", "ds v4" | `deepseek-v4-pro:cloud` |
 | "gemma 4", "gemma" | `gemma4:26b` |
 | "gemma e2b" | `gemma4:e2b` |
-| "sonnet", "claude sonnet" | `claude-sonnet-4-6` |
+| "sonnet", "claude sonnet" | `claude-sonnet-5` |
 | "opus", "claude opus" | `claude-opus-4-7` |
 | "haiku", "claude haiku" | `claude-haiku-4-5-20251001` |
 | "devstral", "devstral small" | `devstral-small-2:24b` |
@@ -290,7 +290,7 @@ On success the helper prints:
 - `/c-thru-config alias remove <pattern> [--reload]` — delete an alias
 
 Entry aliases are substring-matched against the incoming `model` field before route graph traversal.
-Use them to transparently redirect Claude model names (e.g. `claude-sonnet-4-6`) to a local capability
+Use them to transparently redirect Claude model names (e.g. `claude-sonnet-5`) to a local capability
 (e.g. `coder`) so Claude Code uses local models without any per-session configuration.
 
 Parse the verb (`list` / `set` / `remove`) from `$ARGUMENTS`. Delegate entirely to `c-thru-config-helpers.js`:

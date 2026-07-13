@@ -44,7 +44,7 @@ prints the resolution as a chain. Example:
 $ c-thru explain --capability workhorse --mode best-opensource --tier 64gb
 agent           : (any agent mapping to 'workhorse')
 capability      : workhorse              (via agent_to_capability)
-slot candidate  : claude-sonnet-4-6      (entry.connected_model)
+slot candidate  : claude-sonnet-5      (entry.connected_model)
 filter (best-opensource)
   → walk model_routes ranking by quality_per_role.generalist
   → qualifiers: gemma4:26b-a4b (q=5.0, 102 t/s), qwen3.6:35b-a3b (q=5.0, 60 t/s), …

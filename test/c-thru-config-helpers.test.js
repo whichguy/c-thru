@@ -50,7 +50,7 @@ function tmpClaudeDir(extraFiles = {}) {
       },
       'judge': {
         'best-cloud': {
-          '16gb': 'claude-sonnet-4-6'
+          '16gb': 'claude-sonnet-5'
         }
       },
     },

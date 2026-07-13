@@ -206,8 +206,8 @@
       },
       "notes": "Highest cloud judge tier."
     },
-    "claude-sonnet-4-6": {
-      "display_name": "Claude Sonnet 4.6",
+    "claude-sonnet-5": {
+      "display_name": "Claude Sonnet 5",
       "provider": "claude",
       "ram_gb": null,
       "tokens_per_sec": null,

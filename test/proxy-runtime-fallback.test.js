@@ -717,7 +717,7 @@ async function main() {
 
     // ── Test 12: gemini-pro → sonnet fallback (commit d9bc6d3) ──────────────
     // The shipped config (config/model-map.json:24) sets
-    //   endpoints.gemini_ai.fallback_to = "claude-sonnet-4-6"
+    //   endpoints.gemini_ai.fallback_to = "claude-sonnet-5"
     // so when the gemini endpoint fails (5xx, auth, quota), the proxy walks
     // the backend chain to anthropic and the client gets a Sonnet response
     // instead of the upstream error. Verify end-to-end with two stubs.
@@ -730,7 +730,7 @@ async function main() {
           type: 'message',
           role: 'assistant',
           content: [{ type: 'text', text: 'sonnet-fallback-served' }],
-          model: 'claude-sonnet-4-6',
+          model: 'claude-sonnet-5',
           stop_reason: 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -743,7 +743,7 @@ async function main() {
               format: 'gemini',
               url: `http://127.0.0.1:${gemini.port}`,
               auth: 'none',
-              fallback_to: 'claude-sonnet-4-6',
+              fallback_to: 'claude-sonnet-5',
             },
             anthropic: {
               kind: 'anthropic',
@@ -752,7 +752,7 @@ async function main() {
           },
           model_routes: {
             'gemini-pro':         { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
-            'claude-sonnet-4-6':  'anthropic',
+            'claude-sonnet-5':  'anthropic',
           },
         };
         const configPath = writeConfig(tmpDir, cfg);
@@ -790,7 +790,7 @@ async function main() {
           type: 'message',
           role: 'assistant',
           content: [{ type: 'text', text: 'sonnet-after-net-error' }],
-          model: 'claude-sonnet-4-6',
+          model: 'claude-sonnet-5',
           stop_reason: 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -804,7 +804,7 @@ async function main() {
               format: 'gemini',
               url: 'http://127.0.0.1:1',
               auth: 'none',
-              fallback_to: 'claude-sonnet-4-6',
+              fallback_to: 'claude-sonnet-5',
             },
             anthropic: {
               kind: 'anthropic',
@@ -813,7 +813,7 @@ async function main() {
           },
           model_routes: {
             'gemini-pro':         { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
-            'claude-sonnet-4-6':  'anthropic',
+            'claude-sonnet-5':  'anthropic',
           },
         };
         const configPath = writeConfig(tmpDir, cfg);
@@ -849,7 +849,7 @@ async function main() {
           type: 'message',
           role: 'assistant',
           content: [{ type: 'text', text: 'served-by-routes-default' }],
-          model: 'claude-sonnet-4-6',
+          model: 'claude-sonnet-5',
           stop_reason: 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -871,9 +871,9 @@ async function main() {
           },
           model_routes: {
             'gemini-pro':        { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
-            'claude-sonnet-4-6': 'anthropic',
+            'claude-sonnet-5': 'anthropic',
           },
-          routes: { default: 'claude-sonnet-4-6' },
+          routes: { default: 'claude-sonnet-5' },
         };
         const configPath = writeConfig(tmpDir, cfg);
         await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
@@ -947,7 +947,7 @@ async function main() {
           type: 'message',
           role: 'assistant',
           content: [{ type: 'text', text: 'served' }],
-          model: 'claude-sonnet-4-6',
+          model: 'claude-sonnet-5',
           stop_reason: 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -958,7 +958,7 @@ async function main() {
           endpoints: {
             anthropic: { kind: 'anthropic', url: `http://127.0.0.1:${anthropic.port}` },
           },
-          model_routes: { 'claude-sonnet-4-6': 'anthropic' },
+          model_routes: { 'claude-sonnet-5': 'anthropic' },
         };
         const configPath = writeConfig(tmpDir, cfg);
         await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {
@@ -1065,7 +1065,7 @@ async function main() {
           type: 'message',
           role: 'assistant',
           content: [{ type: 'text', text: 'served-by-cap-chain' }],
-          model: 'claude-sonnet-4-6',
+          model: 'claude-sonnet-5',
           stop_reason: 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -1134,7 +1134,7 @@ async function main() {
           type: 'message',
           role: 'assistant',
           content: [{ type: 'text', text: 'served-by-default-on-conn-error' }],
-          model: 'claude-sonnet-4-6',
+          model: 'claude-sonnet-5',
           stop_reason: 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -1156,9 +1156,9 @@ async function main() {
           },
           model_routes: {
             'gemini-pro':        { endpoint: 'gemini_ai', name: 'gemini-pro-latest' },
-            'claude-sonnet-4-6': 'anthropic',
+            'claude-sonnet-5': 'anthropic',
           },
-          routes: { default: 'claude-sonnet-4-6' },
+          routes: { default: 'claude-sonnet-5' },
         };
         const configPath = writeConfig(tmpDir, cfg);
         await withProxy({ configPath, profile: '128gb', mode: 'connected' }, async ({ port }) => {

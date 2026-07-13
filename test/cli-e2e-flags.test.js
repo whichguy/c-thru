@@ -39,9 +39,19 @@ if (si >= 0 && args[si + 1]) {
   // c-thru passes settings inline as a JSON string, not a file path.
   settings_content = args[si + 1];
 }
+const agents_occurrences = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--agents") {
+    agents_occurrences.push({ form: "space", value: i + 1 < args.length ? args[i + 1] : null });
+    i++;
+  } else if (args[i].startsWith("--agents=")) {
+    agents_occurrences.push({ form: "equals", value: args[i].slice("--agents=".length) });
+  }
+}
 console.log(JSON.stringify({
   args,
   settings_content,
+  agents_occurrences,
   anthropic_base_url:    process.env.ANTHROPIC_BASE_URL    || null,
   claude_llm_mode:       process.env.CLAUDE_LLM_MODE       || null,
   claude_llm_profile:    process.env.CLAUDE_LLM_PROFILE    || null,
@@ -81,11 +91,11 @@ function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
       anthropic: { kind: 'anthropic', url: 'https://anthropic.example' },
     },
     routes: {
-      default: 'claude-sonnet-4-6',
+      default: 'claude-sonnet-5',
       heavy:   'claude-opus-4-6',
     },
     model_routes: {
-      'claude-sonnet-4-6': 'anthropic',
+      'claude-sonnet-5': 'anthropic',
       'claude-opus-4-6':   'anthropic',
       're:^claude-.*$':    'anthropic',
     },
@@ -139,7 +149,7 @@ console.log('1. --route name → strips --route, forwards resolved model');
 // ── Test 2: --mode <value> sets CLAUDE_LLM_MODE and is stripped ────────────
 console.log('\n2. --mode offline → sets CLAUDE_LLM_MODE, strips flag');
 {
-  const r = runCthru(['--mode', 'offline', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--mode', 'offline', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.includes('--mode'), `--mode stripped (got: ${JSON.stringify(args)})`);
@@ -151,7 +161,7 @@ console.log('\n2. --mode offline → sets CLAUDE_LLM_MODE, strips flag');
 // ── Test 3: --mode=value (= form) also stripped ────────────────────────────
 console.log('\n3. --mode=connected (= form) → stripped, env set');
 {
-  const r = runCthru(['--mode=connected', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--mode=connected', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   // Tight check: --mode or --mode=, NOT --model (which has --mode as prefix).
@@ -164,7 +174,7 @@ console.log('\n3. --mode=connected (= form) → stripped, env set');
 // ── Test 4: --profile sets CLAUDE_LLM_PROFILE and is stripped ──────────────
 console.log('\n4. --profile 64gb → sets CLAUDE_LLM_PROFILE, strips flag');
 {
-  const r = runCthru(['--profile', '64gb', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--profile', '64gb', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.includes('--profile'), `--profile stripped`);
@@ -234,7 +244,7 @@ console.log('\n8. --profile without value → exit non-zero');
 // ── Test 9: --bypass-proxy ────────────────────────────────────────────────
 console.log('\n9. --bypass-proxy → CLAUDE_PROXY_BYPASS=1, stripped from args');
 {
-  const r = runCthru(['--bypass-proxy', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--bypass-proxy', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.includes('--bypass-proxy'), `--bypass-proxy stripped`);
@@ -244,7 +254,7 @@ console.log('\n9. --bypass-proxy → CLAUDE_PROXY_BYPASS=1, stripped from args')
 // ── Test 10: --journal ────────────────────────────────────────────────────
 console.log('\n10. --journal → CLAUDE_PROXY_JOURNAL=1, stripped from args');
 {
-  const r = runCthru(['--journal', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--journal', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.includes('--journal'), `--journal stripped`);
@@ -254,7 +264,7 @@ console.log('\n10. --journal → CLAUDE_PROXY_JOURNAL=1, stripped from args');
 // ── Test 11: --no-update ──────────────────────────────────────────────────
 console.log('\n11. --no-update → C_THRU_NO_UPDATE=1, stripped');
 {
-  const r = runCthru(['--no-update', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--no-update', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.includes('--no-update'), `--no-update stripped`);
@@ -264,7 +274,7 @@ console.log('\n11. --no-update → C_THRU_NO_UPDATE=1, stripped');
 // ── Test 12: --proxy-debug 2 ──────────────────────────────────────────────
 console.log('\n12. --proxy-debug 2 → CLAUDE_PROXY_DEBUG=2, both flag and value stripped');
 {
-  const r = runCthru(['--proxy-debug', '2', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--proxy-debug', '2', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.includes('--proxy-debug'), `--proxy-debug stripped`);
@@ -275,7 +285,7 @@ console.log('\n12. --proxy-debug 2 → CLAUDE_PROXY_DEBUG=2, both flag and value
 // ── Test 13: --proxy-debug (no value) defaults to 1 ───────────────────────
 console.log('\n13. --proxy-debug (no value) → CLAUDE_PROXY_DEBUG=1');
 {
-  const r = runCthru(['--proxy-debug', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--proxy-debug', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.includes('--proxy-debug'), `--proxy-debug stripped`);
@@ -285,7 +295,7 @@ console.log('\n13. --proxy-debug (no value) → CLAUDE_PROXY_DEBUG=1');
 // ── Test 14: --router-debug=2 (= form) ────────────────────────────────────
 console.log('\n14. --router-debug=2 → C_THRU_DEBUG=2');
 {
-  const r = runCthru(['--router-debug=2', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--router-debug=2', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.some(x => x.startsWith('--router-debug')), `--router-debug=... stripped`);
@@ -295,7 +305,7 @@ console.log('\n14. --router-debug=2 → C_THRU_DEBUG=2');
 // ── Test 15: --memory-gb 32 ───────────────────────────────────────────────
 console.log('\n15. --memory-gb 32 → CLAUDE_LLM_MEMORY_GB=32, stripped');
 {
-  const r = runCthru(['--memory-gb', '32', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--memory-gb', '32', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.includes('--memory-gb'), `--memory-gb stripped`);
@@ -314,7 +324,7 @@ console.log('\n16. --memory-gb foo → exit non-zero');
 // ── Test 17: combined --journal + --proxy-debug 1 + --no-update ───────────
 console.log('\n17. multiple flags combined');
 {
-  const r = runCthru(['--journal', '--proxy-debug', '1', '--no-update', '--model', 'claude-sonnet-4-6']);
+  const r = runCthru(['--journal', '--proxy-debug', '1', '--no-update', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0`);
   assert(r.json?.claude_proxy_journal === '1', 'journal env');
   assert(r.json?.claude_proxy_debug === '1', 'proxy-debug env');
@@ -392,7 +402,7 @@ console.log('\n18. (C1/C2) ollama-backed run: ephemeral --settings shape + syste
     'no endpoint enumeration (GET /c-thru/...) leaked in-band (drift guard)');
 
   // Injected claude options must stay before the first positional/subcommand.
-  const positionalRun = runCthru(['--model=claude-sonnet-4-6', 'agents']);
+  const positionalRun = runCthru(['--model=claude-sonnet-5', 'agents']);
   assert(positionalRun.code === 0,
     `positional run exits 0 (got ${positionalRun.code}, stderr: ${positionalRun.stderr.slice(0, 200)})`);
   const positionalArgs = positionalRun.json?.args || [];
@@ -416,7 +426,7 @@ console.log('\n18. (C1/C2) ollama-backed run: ephemeral --settings shape + syste
   assert(promptFlagIndex >= 0 && promptValueIndex === promptFlagIndex + 1,
     `-p prompt value remains adjacent to -p (got ${JSON.stringify(promptArgs)})`);
 
-  const explicitModel = 'claude-sonnet-4-6';
+  const explicitModel = 'claude-sonnet-5';
   const modelPromptText = 'cthru-ordering-regression-model-prompt-25b4';
   const modelPromptRun = runCthru(['--model', explicitModel, '-p', modelPromptText]);
   assert(modelPromptRun.code === 0,
@@ -437,7 +447,7 @@ console.log('\n18. (C1/C2) ollama-backed run: ephemeral --settings shape + syste
 console.log('\n19. inbound OLLAMA_URL honored (not clobbered by line 49)');
 {
   const inbound = 'http://127.0.0.1:1';   // closed port — distinctive, never the default
-  const r = runCthru(['--router-debug=2', '--model', 'claude-sonnet-4-6'], {}, { OLLAMA_URL: inbound });
+  const r = runCthru(['--router-debug=2', '--model', 'claude-sonnet-5'], {}, { OLLAMA_URL: inbound });
   assert(r.code === 0, `exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
   assert(r.stderr.includes(`OLLAMA_URL=${inbound}`),
     `--router-debug=2 dump echoes inbound OLLAMA_URL=${inbound} (got stderr: ${r.stderr.slice(-400)})`);
@@ -470,21 +480,21 @@ console.log('\n20. launch leaves durable ~/.claude/settings.json byte-identical 
 console.log('\n21. (F1) --dangerously-skip-permissions is opt-in (absent by default, deduped when passed)');
 {
   // 21a: absent by default
-  const r0 = runCthru(['--model', 'claude-sonnet-4-6']);
+  const r0 = runCthru(['--model', 'claude-sonnet-5']);
   assert(r0.code === 0, `21a exit 0 (got ${r0.code}, stderr: ${r0.stderr.slice(0, 200)})`);
   const a0 = r0.json?.args || [];
   const cnt0 = a0.filter(a => a === '--dangerously-skip-permissions').length;
   assert(cnt0 === 0, `21a flag absent by default (got ${cnt0} in ${JSON.stringify(a0)})`);
 
   // 21b: present exactly once when passed once
-  const r1 = runCthru(['--dangerously-skip-permissions', '--model', 'claude-sonnet-4-6']);
+  const r1 = runCthru(['--dangerously-skip-permissions', '--model', 'claude-sonnet-5']);
   assert(r1.code === 0, `21b exit 0 (got ${r1.code})`);
   const a1 = r1.json?.args || [];
   const cnt1 = a1.filter(a => a === '--dangerously-skip-permissions').length;
   assert(cnt1 === 1, `21b flag present exactly once when passed once (got ${cnt1} in ${JSON.stringify(a1)})`);
 
   // 21c: deduped when passed multiple times
-  const r2 = runCthru(['--dangerously-skip-permissions', '--dangerously-skip-permissions', '--dangerously-skip-permissions', '--model', 'claude-sonnet-4-6']);
+  const r2 = runCthru(['--dangerously-skip-permissions', '--dangerously-skip-permissions', '--dangerously-skip-permissions', '--model', 'claude-sonnet-5']);
   assert(r2.code === 0, `21c exit 0 (got ${r2.code})`);
   const a2 = r2.json?.args || [];
   const cnt2 = a2.filter(a => a === '--dangerously-skip-permissions').length;
@@ -554,7 +564,7 @@ console.log('\n24. (F4) bare --model/--route/--mode/--profile don\'t swallow a f
   const a0 = r0.json?.args || [];
   assert(a0.includes('--print'), `24a --print not swallowed as model value (got ${JSON.stringify(a0)})`);
   assert(a0.includes('hello'), `24a prompt text passes through (got ${JSON.stringify(a0)})`);
-  assert(a0.includes('claude-sonnet-4-6'),
+  assert(a0.includes('claude-sonnet-5'),
     `24a falls back to routes.default model, not '--print' (got ${JSON.stringify(a0)})`);
 
   // 24b: --route --print hello → falls back to routes.default, --print/hello pass through
@@ -567,18 +577,18 @@ console.log('\n24. (F4) bare --model/--route/--mode/--profile don\'t swallow a f
   // 24c: --mode --print hello → --mode requires a value and errors out (guard
   // treats --print as flag-like, so no value follows); asserts it does NOT
   // silently set CLAUDE_LLM_MODE=--print.
-  const r2 = runCthru(['--mode', '--print', 'hello', '--model', 'claude-sonnet-4-6']);
+  const r2 = runCthru(['--mode', '--print', 'hello', '--model', 'claude-sonnet-5']);
   assert(r2.code !== 0, `24c --mode with no value (flag-like next token) errors out (got exit ${r2.code})`);
   assert(!/CLAUDE_LLM_MODE=--print/.test(r2.stderr || ''),
     `24c CLAUDE_LLM_MODE never set to '--print' (got stderr: ${r2.stderr.slice(0, 200)})`);
 
   // 24d: --profile --print hello → same guard, same error-out contract
-  const r3 = runCthru(['--profile', '--print', 'hello', '--model', 'claude-sonnet-4-6']);
+  const r3 = runCthru(['--profile', '--print', 'hello', '--model', 'claude-sonnet-5']);
   assert(r3.code !== 0, `24d --profile with no value (flag-like next token) errors out (got exit ${r3.code})`);
 
   // 24e: --memory-gb --print hello → silently valueless (matches original
   // no-value behavior), --print/hello pass through untouched.
-  const r4 = runCthru(['--memory-gb', '--print', 'hello', '--model', 'claude-sonnet-4-6']);
+  const r4 = runCthru(['--memory-gb', '--print', 'hello', '--model', 'claude-sonnet-5']);
   assert(r4.code === 0, `24e exit 0 (got ${r4.code}, stderr: ${r4.stderr.slice(0, 200)})`);
   const a4 = r4.json?.args || [];
   assert(a4.includes('--print'), `24e --print not swallowed as memory-gb value (got ${JSON.stringify(a4)})`);
@@ -590,6 +600,67 @@ console.log('\n24. (F4) bare --model/--route/--mode/--profile don\'t swallow a f
   assert(r5.code === 0, `24f exit 0 (got ${r5.code}, stderr: ${r5.stderr.slice(0, 200)})`);
   assert(r5.json?.claude_llm_memory_gb === '64',
     `24f legitimate --memory-gb 64 still works (got ${JSON.stringify(r5.json?.claude_llm_memory_gb)})`);
+}
+
+// ── Test 25: caller --agents payloads reconcile with the ephemeral fleet ──
+console.log('\n25. caller --agents payloads merge with the c-thru fleet');
+{
+  const getAgents = r => r.json?.agents_occurrences || [];
+  const parse = occurrence => JSON.parse(occurrence.value);
+
+  const a = runCthru(['--agents', '{"myrev":{"description":"d","prompt":"p"}}', '-p', 'hi']);
+  const aa = getAgents(a);
+  assert(a.code === 0, `25a inline payload exit 0 (got ${a.code}, stderr: ${a.stderr.slice(0, 200)})`);
+  assert(aa.length === 1 && parse(aa[0]).myrev && parse(aa[0]).coder,
+    `25a merged inline agents contain caller and fleet (got ${JSON.stringify(aa)})`);
+
+  const b = runCthru(['--no-agents', '--agents', '{"myrev":{"description":"d","prompt":"p"}}']);
+  const ba = getAgents(b);
+  assert(b.code === 0, `25b --no-agents caller payload exit 0 (got ${b.code}, stderr: ${b.stderr.slice(0, 200)})`);
+  assert(ba.length === 1 && parse(ba[0]).myrev && !parse(ba[0]).coder,
+    `25b --no-agents suppresses fleet but preserves caller (got ${JSON.stringify(ba)})`);
+
+  const agentsFileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-agents-file-'));
+  const agentsFile = path.join(agentsFileDir, 'caller-agents.json');
+  fs.writeFileSync(agentsFile, JSON.stringify({ fromFile: { description: 'file' } }));
+  const c = runCthru(['--agents', agentsFile]);
+  const ca = getAgents(c);
+  assert(c.code === 0 && ca.length === 1 && parse(ca[0]).fromFile && parse(ca[0]).coder,
+    `25c absolute file --agents payload merges with fleet (got ${JSON.stringify(ca)})`);
+  fs.rmSync(agentsFileDir, { recursive: true, force: true });
+
+  const d = runCthru(['--agents', '{"rev":{"description":"A"}}', '--agents', '{"rev":{"description":"B"}}']);
+  const da = getAgents(d);
+  assert(d.code === 0 && da.length === 1 && parse(da[0]).rev?.description === 'B',
+    `25d later caller --agents payload wins (got ${JSON.stringify(da)})`);
+
+  const e = runCthru(['--agents', 'not-json']);
+  const ea = getAgents(e);
+  assert(e.code === 0 && ea.length === 2 && parse(ea[0]).coder && ea[1].value === 'not-json',
+    `25e invalid payload keeps fleet injection first and raw flag second (got ${JSON.stringify(ea)})`);
+
+  const eEquals = runCthru(['--agents=not-json']);
+  const eea = getAgents(eEquals);
+  assert(eEquals.code === 0 && eea.length === 2 && parse(eea[0]).coder &&
+    eea[1].form === 'equals' && eea[1].value === 'not-json',
+    `25e equals-form invalid payload keeps fleet injection and raw flag (got ${JSON.stringify(eea)})`);
+
+  const e2 = runCthru(['--agents', '{"myrev":{"description":"d"}}', '--agents', 'not-json']);
+  const e2a = getAgents(e2);
+  assert(e2.code === 0 && e2a.length === 2 && parse(e2a[0]).coder && parse(e2a[0]).myrev && e2a[1].value === 'not-json',
+    `25e2 mixed payload keeps merged caller/fleet first and raw invalid second (got ${JSON.stringify(e2a)})`);
+
+  const f = runCthru(['--bypass-proxy', '--agents', '{"x":{"description":"d"}}']);
+  const fa = getAgents(f);
+  assert(f.code === 0 && fa.length === 1 && fa[0].form === 'space' && fa[0].value === '{"x":{"description":"d"}}',
+    `25f bypass forwards caller --agents untouched (got ${JSON.stringify(fa)})`);
+
+  const g0 = runCthru(['--agents']);
+  assert(g0.code !== 0 && /c-thru: --agents requires a value/.test(g0.stderr),
+    `25g bare --agents is rejected as valueless (got exit ${g0.code}, stderr: ${g0.stderr.slice(0, 200)})`);
+  const g1 = runCthru(['--agents', '--print', 'hello']);
+  assert(g1.code !== 0 && /c-thru: --agents requires a value/.test(g1.stderr),
+    `25g --agents does not swallow --print as its value (got exit ${g1.code}, stderr: ${g1.stderr.slice(0, 200)})`);
 }
 
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);

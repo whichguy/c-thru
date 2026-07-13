@@ -46,7 +46,7 @@ async function main() {
 
       // Send a valid-but-unconfigured message request
       const r2 = await httpJson(port, 'POST', '/v1/messages', {
-        model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1,
+        model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1,
       });
       // 400/404/502/503 expected (no real upstream or backend configured); NOT a crash
       assert([400, 404, 502, 503, 500].includes(r2.status), `got a defined error status (${r2.status}), not a hang/crash`);

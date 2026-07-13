@@ -1701,7 +1701,7 @@ apply_background_model_overrides() {
   # apply_provider_block() sets ANTHROPIC_AUTH_TOKEN for proxy/Ollama backends
   # but leaves it unset for direct-Anthropic backends (kind: "anthropic" with
   # a real api_key). Clearing API_KEY there would 401 the request — see e.g.
-  # the longContext route → claude-sonnet-4-6 → anthropic backend chain.
+  # the longContext route → claude-sonnet-5 → anthropic backend chain.
   [[ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]] && export ANTHROPIC_API_KEY=""
 
   local llm_mode

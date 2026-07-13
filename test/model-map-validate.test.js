@@ -466,6 +466,67 @@ console.log('\n29. V3: endpoint URL with unset template var emits warning');
   );
 }
 
+// ── Auto-derived auth diagnostics ────────────────────────────────────────────
+console.log('\nAuto-derived auth diagnostics');
+{
+  const cfg = {
+    backends: {
+      anthropic_known_no_auth: { url: 'https://api.anthropic.com' },
+    },
+    model_routes: { 'test-model': 'anthropic_known_no_auth' },
+    llm_profiles: { workhorse: { 'best-cloud': 'test-model' } },
+    llm_mode: 'best-cloud',
+  };
+  const warnMessages = [];
+  const noteMessages = [];
+  const origWarn = console.warn;
+  const origError = console.error;
+  console.warn = msg => warnMessages.push(msg);
+  console.error = msg => noteMessages.push(msg);
+  let errs;
+  try {
+    errs = validate(cfg);
+  } finally {
+    console.warn = origWarn;
+    console.error = origError;
+  }
+  const expectedNote = "model-map-validate: note: endpoint 'anthropic_known_no_auth' auth auto-derived from host (bearer_priority); ensure $ANTHROPIC_API_KEY is set";
+  assert(errs.length === 0, `known host without explicit auth → no hard error (got: ${errs.join('; ') || 'none'})`);
+  assert(noteMessages.includes(expectedNote), `known host emits auto-derived auth note (got: ${noteMessages.join(' | ') || 'none'})`);
+  assert(!noteMessages.concat(warnMessages).some(m => m.includes('STRIPPED')),
+    `known host does not emit STRIPPED warning (got: ${noteMessages.concat(warnMessages).join(' | ') || 'none'})`);
+  assert(warnMessages.length === 0, `auth note leaves numeric warning count unchanged at 0 (got: ${warnMessages.length})`);
+}
+
+{
+  const cfg = {
+    backends: {
+      unknown_no_auth: { url: 'https://example.com' },
+    },
+    model_routes: { 'test-model': 'unknown_no_auth' },
+    llm_profiles: { workhorse: { 'best-cloud': 'test-model' } },
+    llm_mode: 'best-cloud',
+  };
+  const warnMessages = [];
+  const noteMessages = [];
+  const origWarn = console.warn;
+  const origError = console.error;
+  console.warn = msg => warnMessages.push(msg);
+  console.error = msg => noteMessages.push(msg);
+  let errs;
+  try {
+    errs = validate(cfg);
+  } finally {
+    console.warn = origWarn;
+    console.error = origError;
+  }
+  const expectedWarning = "model-map-validate: warning: endpoint 'unknown_no_auth' has no auth config and url 'https://example.com' is not localhost — incoming auth will be STRIPPED (no credentials sent); set auth_env/auth, or auth_passthrough:true to forward";
+  assert(errs.length === 0, `unknown host without explicit auth → no hard error (got: ${errs.join('; ') || 'none'})`);
+  assert(warnMessages.includes(expectedWarning), `unknown host keeps exact STRIPPED warning (got: ${warnMessages.join(' | ') || 'none'})`);
+  assert(warnMessages.length === 1, `unknown host warning count remains 1 (got: ${warnMessages.length})`);
+  assert(noteMessages.length === 0, `unknown host emits no auth note (got: ${noteMessages.join(' | ') || 'none'})`);
+}
+
 // ── Custom modes (user-declared named modes) ─────────────────────────────────
 console.log('\nCustom modes — accept, base validation, shadow guard, gov safety');
 {

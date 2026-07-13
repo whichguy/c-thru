@@ -8,7 +8,9 @@ WIKI: /wiki-load <search> or browse wiki/index.md before answering project-domai
 ## Model rewriting: proxy-only
 
 Model-field rewriting (logical → concrete, route aliasing, fallback
-remap) is the proxy's responsibility — see `wiki/entities/declared-rewrites.md`.
+remap) is the proxy's responsibility. `wiki/entities/declared-rewrites.md` is
+the single authoritative, current record of declared rewrites; do not duplicate
+or maintain that list here.
 Claude Code hooks may observe (log, inject context) or gate (refuse to
 proceed) but must not modify `tool_input.model` or `body.model`. A second
 rewriting path creates a silent source of drift from `config/model-map.json`.
@@ -35,10 +37,26 @@ make test-fast          # run proxy + model-map test suite (~2 min)
 make test               # full suite including smoke tests
 ```
 
-## Concurrent sessions
+## Sharp Edges
 
 Multiple Claude sessions may share this working tree. Stage **explicit paths only** — never `git add -A`/`-u`/`.` or other broad adds (they silently stage another session's uncommitted WIP; a past session needed a soft-reset salvage after exactly this). The equivalent danger at commit time: if another session already has files staged, a plain `git commit` (no pathspec) sweeps those in too — commit with `git commit -m "..." -- <exact-path>` instead, which builds the commit from only the named paths and leaves any other already-staged index entries untouched. Don't try to surgically separate your changes from another session's when they're line-interleaved in the same shared file (e.g. both editing the same variable-declaration or argv line) — a past session spent real effort attempting a scratch-file reconstruction to isolate a clean diff and abandoned it after repeated safety-classifier pushback; wait for the other session to commit first if a clean boundary isn't obvious, or as a last resort commit the file's full current state together with a message that's explicit about which parts are yours.
 Proxy e2e/smoke suites are port- and Ollama-contended: `make test-fast` is safe to run concurrently (unit proxy tests use random free ports), but full `test/run-all.sh` runs need exclusivity — full runs take an mkdir-lock for the whole run (proxy-e2e cross-fails on Ollama contention, observed empirically), so a second full run queues instead of cross-failing.
+
+**Don't commit unless explicitly asked to.** This applies to every worker reading this file, including delegated Codex/Grok sessions that don't inherit interactive-harness defaults.
+
+**Autonomous runs in this repo:** additionally opt into the Stop-hook integrity gate by creating `.claude/autonomous-gate.local.json` (see `tools/c-thru-autonomous-gate.sh`) — c-thru-specific, on top of the general autonomous-run quota rules in the global CLAUDE.md.
+
+### Bash sharp edges for contributors
+
+**`exec` silently skips all EXIT traps.** In bash, `exec <cmd>` replaces the current shell process and never fires the `trap ... EXIT` handler. Any path that `exec`s into the real `claude` binary must ensure proxy cleanup is complete beforehand, or that no proxy was spawned yet. The guard in `c-thru` (`if [[ -z "${ROUTER_STARTED_PROXY_PID:-}" ]]`) enforces this: `exec` is only used on the transparent (no-proxy) path. On the routing path (proxy running), the pattern is `foreground child + exit $?` so the EXIT trap fires and kills the proxy. Do not add new `exec` calls in `c-thru` without verifying no proxy PID is live.
+
+**`isolation: "worktree"` agents branch from the last pushed commit, not local HEAD.**
+When dispatching parallel agents with `isolation: "worktree"` (via the Agent tool), each
+worktree is created from `origin/main` HEAD — NOT from your local unpushed commits. Any
+work in local commits that hasn't been pushed will be invisible to the agents. Always run
+`git push` before dispatching worktree agents. If a worktree agent produces stale output
+or ignores recent changes, check `git log origin/main..HEAD` — any commits listed there
+were not available to the agent.
 
 ## Directory Layout and Path Invariants
 
@@ -46,8 +64,11 @@ The `tools/` + `config/` two-directory structure is **required**. `c-thru` and `
 
 ```
 tools/
-  c-thru                 # bash, 2300+ lines — the entrypoint
+  c-thru                 # bash, 5000+ lines — the largest bash file in the repo; entrypoint
   claude-proxy            # node, stdlib-only — Anthropic→provider translation layer
+  c-thru-contract-check.sh # validates agent/skill contracts before committing
+  c-thru-hygiene-check.sh  # reports working-tree hygiene issues before non-trivial work or PRs
+  sync-plugin-bundle.sh    # syncs mirrored source files into plugins/c-thru/
   model-map-layered.js    # merges 3-tier config stack; no external deps
   model-map-validate.js   # schema validator; called by router at startup
   model-map-sync.js       # pulls capability data into the map; calls layered.js
@@ -62,12 +83,15 @@ tools/
   c-thru-classify.sh      # UserPromptSubmit hook — fetches a static /hooks/context block (no classify_intent; proxy ignores prompt content)
   c-thru-ollama-gc.sh     # GC tool — tracks c-thru-pulled Ollama tags; sweeps unreferenced ones. Subcommands: init|record|sweep|purge
   c-thru-self-update.sh   # startup self-update: best-effort git ff-merge with 1s grace; opt-out via C_THRU_NO_UPDATE=1
-  hw-profile.js             # shared 5-tier hardware detection (tierForGb); used by router and proxy
+  hw-profile.js             # shared 5-tier (16gb…128gb) hardware detection (tierForGb); used by router and proxy
 config/
   model-map.json          # shipped defaults (standard JSON — no comments; parsed with JSON.parse)
 test/
   model-map-v12-adapter.test.js  # adapter fixture test; run with: node test/model-map-v12-adapter.test.js
 ```
+
+Some repo files are derived from `config/model-map.json` and `agents/*.md`; see
+`docs/derived-artifacts.md` before editing generated artifacts by hand.
 
 ### User Profile Files (`~/.claude/`)
 
@@ -76,6 +100,15 @@ test/
 | `model-map.system.json` | `install.sh` | Overwritten on every install — verbatim copy of `config/model-map.json`. Never edit manually. |
 | `model-map.overrides.json` | user | Created empty `{}` on first install. Never touched on upgrade. Edit here to customize over system defaults. |
 | `model-map.json` | derived | Effective merged result (system + overrides). Rewritten by router/proxy on startup. |
+
+**Filesystem footprint (self-contained audit):** `install.sh` writes only to `~/.claude/` and the shell rc file. Files written:
+
+- `~/.claude/tools/` — symlinks to `tools/` in the repo (never copies)
+- `~/.claude/commands/c-thru-status.md`, `commands/cplan.md` — vendor slash-command content, reinstalled on every run
+- `~/.claude/skills/c-thru/`, `~/.claude/agents/c-thru/` — legacy persistent symlinks; `install.sh`'s `cleanup_old_persistent_config()` actively removes these if present rather than creating them. Skills/agents now reach Claude Code via ephemeral `--agents`/`--settings` JSON injection per `c-thru` launch (see the "Injection layer" table in `docs/functionality-map.md`), not a persistent filesystem symlink.
+- `~/.claude/settings.json` — cleaned on install (old persistent hooks from ~/.claude/tools/ removed); no new global hooks written
+
+Outside `install.sh`'s footprint but part of the repo's own on-disk state: the project-level `.claude/settings.json` carries persistent project hooks (`SessionStart` → `c-thru-session-start.sh` (10s), `PreCompact` → `c-thru-postcompact-context.sh` (5s)) — version-controlled, never touched by `install.sh`. Runtime-only (not written by install): `.prepull-stamp-<tier>` (bulk pre-pull debounce, invalidated on model-map change), `proxy.*.log`, `proxy.pid`. `c-thru-self-update.sh` writes `.c-thru-update.log` inside the repo root only.
 
 ## Architecture
 
@@ -150,18 +183,6 @@ Only the profile graph is layered: `model-map.system.json` + `model-map.override
 
 MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including all `llm_capabilities` entries plus `ask_model` and `list_models`). Called by Claude Code as a local MCP server — injected ephemerally via `--settings` by `c-thru` at startup.
 
-### Bash sharp edges for contributors
-
-**`exec` silently skips all EXIT traps.** In bash, `exec <cmd>` replaces the current shell process and never fires the `trap ... EXIT` handler. Any path that `exec`s into the real `claude` binary must ensure proxy cleanup is complete beforehand, or that no proxy was spawned yet. The guard in `c-thru` (`if [[ -z "${ROUTER_STARTED_PROXY_PID:-}" ]]`) enforces this: `exec` is only used on the transparent (no-proxy) path. On the routing path (proxy running), the pattern is `foreground child + exit $?` so the EXIT trap fires and kills the proxy. Do not add new `exec` calls in `c-thru` without verifying no proxy PID is live.
-
-**`isolation: "worktree"` agents branch from the last pushed commit, not local HEAD.**
-When dispatching parallel agents with `isolation: "worktree"` (via the Agent tool), each
-worktree is created from `origin/main` HEAD — NOT from your local unpushed commits. Any
-work in local commits that hasn't been pushed will be invisible to the agents. Always run
-`git push` before dispatching worktree agents. If a worktree agent produces stale output
-or ignores recent changes, check `git log origin/main..HEAD` — any commits listed there
-were not available to the agent.
-
 ## Proxy CLI Flags
 
 `claude-proxy` accepts these flags in addition to env vars:
@@ -188,33 +209,14 @@ were not available to the agent.
 | `--router-debug [N]` | `C_THRU_DEBUG=N` | c-thru script verbose logs |
 | `--no-update` | `C_THRU_NO_UPDATE=1` | Skip git self-update |
 
-## Key Environment Variables
-
-See `docs/env-vars.md` for the full reference. Core vars: `CLAUDE_PROXY_BYPASS=1` (skip proxy),
-`C_THRU_DEBUG=1/2` (router logs), `CLAUDE_PROXY_DEBUG=1/2` (proxy logs), `CLAUDE_LLM_MODE`
-(routing mode), `CLAUDE_LLM_MEMORY_GB` (RAM override).
-
-## No External Node Dependencies
-
-`claude-proxy`, `llm-capabilities-mcp.js`, and all `model-map-*.js` helpers use Node.js stdlib only (`http`, `https`, `fs`, `path`, `crypto`, `child_process`). There is no `package.json` and no `node_modules/`. Do not add third-party deps.
-
-## Proxy Observability
-
-`claude-proxy` emits `x-c-thru-resolved-via` on capability responses (model alias requests): `{"capability": "workhorse", "profile": "workhorse", "served_by": "claude-sonnet-4-6", "tier": "64gb", "mode": "connected", "local_terminal_appended": false}`. Absent on non-capability requests. Consumed by hooks and statusline without log-parsing.
-
-Per-profile `on_failure` field in `llm_profiles[hw][profile]`: `"cascade"` (default) walks the fallback chain; `"hard_fail"` returns null immediately so the proxy returns a clean error instead of a non-equivalent substitute.
-
-**Response headers**: see `docs/headers.md` for the full `x-c-thru-*` reference (routing, cache, translation gaps, thinking observability, deprecation warnings). Key callouts:
-- Gemini 3 thinking is auto-enabled on Pro family via the `thinkingLevel` enum (Gemini 2.5 keeps legacy `thinkingBudget`); `output_tokens` includes thinking tokens for Anthropic parity. Streaming surfaces `thoughtsTokenCount` via a custom `c-thru-thinking-tokens` SSE event (since headers can't be set after writeHead); `message_delta.usage` stays spec-compliant.
-- `claude-via-<X>` aliases are auto-synthesized at `/v1/models` for routes whose endpoint is in `picker_alias_endpoints` (default `["gemini_ai", "gemini_vertex"]`). `claude-via-<X>` resolves the same as `<X>` at request time.
-- Deprecated model tags trigger `x-c-thru-deprecated-model` (built-in list covers `gemini-1.x-*` and other retired tags; user `deprecated_models` config extends or overrides — set to `false` to un-deprecate).
-- Endpoint-level `fallback_to: "<model_name>"` triggers transparent retry against another backend on any retryable upstream error (5xx, 429, network errors). The shipped config sets `endpoints.gemini_ai.fallback_to = "claude-sonnet-4-6"` so coding/debugging requests transparently retry against Sonnet when Gemini fails. Both forwardAnthropic AND forwardGemini honor this — earlier the Gemini path silently dropped HTTP-error fallbacks (fixed in commit ec8ad3b).
-
-Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3) auth headers (via `applyOutboundAuth` — strips or injects based on endpoint `auth`/`auth_env` config; absent = passthrough), (4) SSE `usage` injection, (5) protocol translation (gated on `format: "openai"` — 501 stub until implemented), (6) `x-c-thru-resolved-via` response header, (7) `model_overrides` unconditional name substitution before route graph traversal, (8) `@<backend>` sigil stripping — suffix stripped before forwarding so the provider only sees the base model name.
+For full routing-mode semantics, see `docs/connectivity-modes.md`. For journal format,
+storage, and privacy guidance, see `docs/journaling.md`.
 
 ## Proxy Lifecycle
 
 `claude-proxy` is a long-running HTTP server auto-spawned by `c-thru` when the backend needs it. The router coordinates via a `/ping` handshake on a dynamically-selected port. Logs land at `~/.claude/proxy.*.log`. Kill a stuck proxy with `pkill -f claude-proxy`.
+
+**After changing proxy JS** (`tools/claude-proxy`, `tools/upstream-error-body.js`, etc.), restart running proxies — Node loads the script once per process, so long-lived sessions keep old interpretation code until `pkill -f claude-proxy` (or a full c-thru exit). Response-body decode rules are documented in `docs/proxy-response-interpretation.md`.
 
 ## Runtime Control
 
@@ -223,7 +225,7 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 | `c-thru reload` | Sends SIGHUP to the running proxy, derives the actual listening port from `lsof`, waits up to 2s for `/ping` to confirm it's alive, prints new tier. Exits non-zero if proxy is not running or crashes. |
 | `c-thru restart` | SIGTERM + waits for listener to vanish, then re-spawns (port inherited from `CLAUDE_PROXY_PORT` env or auto-assigned). `--force` escalates to SIGKILL after timeout. |
 | `c-thru list` | Show active hw profile, configured routes, and local Ollama models. (Renamed from `--list`; both forms still accepted.) |
-| `c-thru explain --capability X --mode M [--tier T]` | Print resolution chain for a hypothetical request without sending one. Useful for "why did it pick that?" debugging. Pure JS — no proxy spawn. Also accepts `--agent <name>` to resolve through `agent_to_capability` first. |
+| `c-thru explain [--capability X] [--model <name>] [--mode M] [--tier T]` | Print resolution chain for a hypothetical request without sending one. Useful for "why did it pick that?" debugging. Pure JS — no proxy spawn. Also accepts `--agent <name>` to resolve through `agent_to_capability` first. |
 | `c-thru check-deps [--fix]` | Audit system dependencies (node, jq, curl, ollama, etc.); `--fix` runs `brew install` for missing optional tools on macOS. |
 | `/c-thru-config reload` | Skill equivalent of `c-thru reload` — usable from a Claude session. |
 | `/c-thru-status fix` | Apply recommended mappings, reload proxy, show current status. |
@@ -242,18 +244,29 @@ Declared rewrites: (1) request body `model` field, (2) request URL + `Host`, (3)
 3. When `c-thru` exits, the proxy child process exits with it. Ollama persists — it was detached (`nohup`) and is not a child of the proxy.
 4. Prefer running Ollama as a persistent system daemon (macOS app or `launchctl`). The `AUTOSTART` path is a convenience fallback, not a primary lifecycle mechanism.
 
-**Filesystem footprint (self-contained audit):** `install.sh` writes only to `~/.claude/` and the shell rc file. Files written:
-- `~/.claude/tools/` — symlinks to `tools/` in the repo (never copies)
-- `~/.claude/commands/c-thru-status.md`, `commands/cplan.md` — vendor slash-command content, reinstalled on every run
-- `~/.claude/skills/c-thru/`, `~/.claude/agents/c-thru/` — legacy persistent symlinks; `install.sh`'s `cleanup_old_persistent_config()` actively removes these if present rather than creating them. Skills/agents now reach Claude Code via ephemeral `--agents`/`--settings` JSON injection per `c-thru` launch (see the "Injection layer" table in `docs/functionality-map.md`), not a persistent filesystem symlink.
-- `~/.claude/model-map.system.json` — verbatim copy of `config/model-map.json`; overwritten on every install
-- `~/.claude/model-map.overrides.json` — created empty `{}` on first install; never overwritten on upgrade
-- `~/.claude/model-map.json` — derived merge; regenerated by the proxy and `--shell-env` on each run
-- `~/.claude/settings.json` — cleaned on install (old persistent hooks from ~/.claude/tools/ removed); no new global hooks written
-- `.claude/settings.json` (project-level) — persistent project hooks: `SessionStart` → `c-thru-session-start.sh` (10s), `PreCompact` → `c-thru-postcompact-context.sh` (5s). These are version-controlled and not touched by `install.sh`.
-Runtime-only (not written by install): `.prepull-stamp-<tier>` (bulk pre-pull debounce, invalidated on model-map change), `proxy.*.log`, `proxy.pid`. `c-thru-self-update.sh` writes `.c-thru-update.log` inside the repo root only.
-
 **`/map-model` is deprecated.** Use `/c-thru-config` for all model-map edits. `/map-model` now prints a migration table and exits without writing config.
+
+## Key Environment Variables
+
+See `docs/env-vars.md` for the full reference. Core vars: `CLAUDE_PROXY_BYPASS=1` (skip proxy),
+`C_THRU_DEBUG=1/2` (router logs), `CLAUDE_PROXY_DEBUG=1/2` (proxy logs), `CLAUDE_LLM_MODE`
+(routing mode), `CLAUDE_LLM_MEMORY_GB` (RAM override).
+
+## No External Node Dependencies
+
+`claude-proxy`, `llm-capabilities-mcp.js`, and all `model-map-*.js` helpers use Node.js stdlib only (`http`, `https`, `fs`, `path`, `crypto`, `child_process`). There is no `package.json` and no `node_modules/`. Do not add third-party deps.
+
+## Proxy Observability
+
+`claude-proxy` emits `x-c-thru-resolved-via` on capability responses (model alias requests): `{"capability": "workhorse", "profile": "workhorse", "served_by": "claude-sonnet-5", "tier": "64gb", "mode": "best-cloud", "local_terminal_appended": false}`. Absent on non-capability requests. Consumed by hooks and statusline without log-parsing.
+
+Per-capability `on_failure` field in `llm_profiles[<capability>]` (sibling to the mode×tier cells, e.g. `llm_profiles.reviewer-security.on_failure`): `"cascade"` (default) walks the fallback chain; `"hard_fail"` returns null immediately so the proxy returns a clean error instead of a non-equivalent substitute.
+
+**Response headers**: see `docs/headers.md` for the full `x-c-thru-*` reference (routing, cache, translation gaps, thinking observability, deprecation warnings). Key callouts:
+- Gemini 3 thinking is auto-enabled on Pro family via the `thinkingLevel` enum (Gemini 2.5 keeps legacy `thinkingBudget`); `output_tokens` includes thinking tokens for Anthropic parity. Streaming surfaces `thoughtsTokenCount` via a custom `c-thru-thinking-tokens` SSE event (since headers can't be set after writeHead); `message_delta.usage` stays spec-compliant.
+- `claude-via-<X>` aliases are auto-synthesized at `/v1/models` for routes whose endpoint is in `picker_alias_endpoints` (default `["gemini_ai", "gemini_vertex"]`). `claude-via-<X>` resolves the same as `<X>` at request time.
+- Deprecated model tags trigger `x-c-thru-deprecated-model` (built-in list covers `gemini-1.x-*` and other retired tags; user `deprecated_models` config extends or overrides — set to `false` to un-deprecate).
+- Endpoint-level `fallback_to: "<model_name>"` triggers transparent retry against another backend on any retryable upstream error (5xx, 429, network errors). The shipped config sets `endpoints.gemini_ai.fallback_to = "claude-sonnet-5"` so coding/debugging requests transparently retry against Sonnet when Gemini fails. Both forwardAnthropic AND forwardGemini honor this — earlier the Gemini path silently dropped HTTP-error fallbacks (fixed in commit ec8ad3b).
 
 ## Contract integrity
 
@@ -312,27 +325,31 @@ trackers; the two new docs are process/mechanics references.
 Invoke with `/c-thru-plan <intent>`. State in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/`. Completed plans archived to `~/.claude/c-thru-archive/`.
 Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`. When adding or editing an agent's `description` (its only discovery surface), follow `docs/agent-authoring.md` — enforced by `test/agent-description-quality.test.js`; dispatch edges enforced by `test/agent-dispatch-graph.test.js`.
 
-### Pipeline agents (12 + 8 utility)
+### Pipeline agents (13 + 9 utility)
 
-The agent fleet uses a flat identity mapping: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. No alias indirection.
+The agent fleet uses an identity mapping for most agents: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. Two exceptions alias to a different capability: `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist` (see `docs/agent-architecture.md` for the full list, including tool passthroughs).
+
+For full dispatch-graph and role detail, see `docs/agent-architecture.md`. That document defers to `config/model-map.json#agent_to_capability` and the generated README "Agent routing reference" table as canonical; if it disagrees with either, they win. For full tier-resolution detail, see `docs/hardware-profile-matrix.md`.
 
 **13 pipeline agents (planner → coder → tester → reviewer flow):**
 
-| Agent / Capability | Role | Tier budget |
-|---|---|---|
-| `planner` | High-stakes planning; Fable cloud, 27B local at 64+ GB | 999999 |
-| `planner-hard` | Hardest planning; always Fable / Kimi K2.6 | 999999 |
-| `explore` | Fast read-only exploration; Phi/Qwen small | 10000 |
-| `coder` | Primary coding; Sonnet/Devstral/QwenCoder | 50000 |
-| `coder-fallback` | Backup coder from different training distribution | 10000 |
-| `tester` | Test generation; same models as explore | 10000 |
-| `docs` | Documentation writing; Gemma E4B / Phi (gov) | 10000 |
-| `code-reviewer` | Routine code review; Sonnet/local-27B | 50000 |
-| `reviewer-plan` | Plan structural review (Phase 3 of c-thru-plan); Sonnet/local-27B | 50000 |
-| `reviewer-security` | Security review; always Opus / Kimi K2.6, hard_fail | 999999 |
-| `debugger-hypothesis` | Parallel hypothesis testing; Sonnet/local-27B | 50000 |
-| `debugger-investigate` | Investigation; same shape as coder | 50000 |
-| `debugger-hard` | Hard debugging; always Opus / Kimi K2.6 | 999999 |
+tier_budget values are hand-copied from each `agents/*.md` frontmatter — update here when an agent's `tier_budget:` changes.
+
+| Agent / Capability | Tier budget |
+|---|---|
+| `planner` | 999999 |
+| `planner-hard` | 999999 |
+| `explore` | 10000 |
+| `coder` | 50000 |
+| `coder-fallback` | 10000 |
+| `tester` | 10000 |
+| `docs` | 10000 |
+| `code-reviewer` | 50000 |
+| `reviewer-plan` | 50000 |
+| `reviewer-security` | 999999 |
+| `debugger-hypothesis` | 50000 |
+| `debugger-investigate` | 50000 |
+| `debugger-hard` | 999999 |
 
 **9 retained utility agents:**
 

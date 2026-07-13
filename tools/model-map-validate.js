@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 // Single source of truth for the gov-mode Chinese-origin filter (custom_modes gov safety).
-const { isChineseOrigin } = require('./model-map-resolve.js');
+const { deriveAuthProfile, isChineseOrigin } = require('./model-map-resolve.js');
 
 // Per-c-thru-session warning dedupe. When C_THRU_SESSION_ID is set (exported by
 // tools/c-thru as $$), each warning string is fingerprinted and recorded in a
@@ -666,6 +666,7 @@ function validateConfig(config, _errors, options) {
     trustedJs: process.env[TRUSTED_JS_FLAG] === '1',
   }, options || {});
   const warn = (msg) => { if (shouldEmitWarning(msg)) console.warn(msg); };
+  const note = (msg) => console.error(`model-map-validate: note: ${msg}`);
 
   if (!isObject(config)) { report('top-level config must be an object'); return; }
 
@@ -784,13 +785,18 @@ function validateConfig(config, _errors, options) {
         const url = entry.url || '';
         if (url && !/localhost|127\.0\.0\.1/.test(url)) {
           if (!reachable || reachable.reachableEndpoints.has(id)) {
-            // With the C12 hardening the proxy STRIPS incoming Anthropic auth for an
-            // unknown, non-Anthropic host that has no auth config (unless kind:"anthropic"
-            // or auth_passthrough:true). So this endpoint will receive NO credentials.
-            const escapeHatch = entry.kind === 'anthropic' || entry.auth_passthrough === true;
-            warn(escapeHatch
-              ? `model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming Anthropic auth will be forwarded verbatim (kind:"anthropic"/auth_passthrough)`
-              : `model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming auth will be STRIPPED (no credentials sent); set auth_env/auth, or auth_passthrough:true to forward`);
+            const derivedAuth = deriveAuthProfile(entry);
+            if (derivedAuth && derivedAuth.profile !== 'none') {
+              note(`endpoint '${id}' auth auto-derived from host (${derivedAuth.profile}); ensure $${derivedAuth.env} is set`);
+            } else if (!derivedAuth) {
+              // With the C12 hardening the proxy STRIPS incoming Anthropic auth for an
+              // unknown, non-Anthropic host that has no auth config (unless kind:"anthropic"
+              // or auth_passthrough:true). So this endpoint will receive NO credentials.
+              const escapeHatch = entry.kind === 'anthropic' || entry.auth_passthrough === true;
+              warn(escapeHatch
+                ? `model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming Anthropic auth will be forwarded verbatim (kind:"anthropic"/auth_passthrough)`
+                : `model-map-validate: warning: endpoint '${id}' has no auth config and url '${url}' is not localhost — incoming auth will be STRIPPED (no credentials sent); set auth_env/auth, or auth_passthrough:true to forward`);
+            }
           }
         }
       }
@@ -930,12 +936,15 @@ function validateConfig(config, _errors, options) {
       }
       // Resolution rule (matches resolveBackend in claude-proxy):
       //   1. If target matches a declared backend id → terminal, valid.
-      //   2. Else if target looks like a model name (contains '@', '.', or ':')
+      //   2. Else if target is itself a model_routes key → recursive hop (e.g.
+      //      sonnet@best-cloud → claude-sonnet-5 → anthropic).
+      //   3. Else if target looks like a model name (contains '@', '.', or ':')
       //      → recursive resolution will handle it; can't validate without
       //      simulating the full route graph, so we accept it here.
-      //   3. Else → bare identifier that's neither a backend nor model-name-shaped.
+      //   4. Else → bare identifier that's neither a backend nor model-name-shaped.
       //      Almost certainly a typo (e.g. 'anthropi' for 'anthropic'). Report.
       if (endpointsOrBackends[target]) return;
+      if (Object.prototype.hasOwnProperty.call(config.model_routes, target)) return;
       if (/[@.:]/.test(target)) return;
       report(`model_routes['${ctx}'] references unknown backend '${target}'`);
     };

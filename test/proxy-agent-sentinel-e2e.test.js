@@ -132,6 +132,13 @@ async function main() {
       assert(agentStub.requests.length === 1, `signed marker: agent stub hit once (got ${agentStub.requests.length})`);
       assert(defaultStub.requests.length === 0, `signed marker: default stub NOT hit (got ${defaultStub.requests.length})`);
 
+      // Upstream body must not contain the routing sentinel (stripped after route).
+      const fwd = agentStub.requests[0] && agentStub.requests[0].body;
+      assert(fwd && !JSON.stringify(fwd).includes('[[c-thru-agent:'),
+        'signed marker: upstream body has no [[c-thru-agent:…]] (stripped for LLM)');
+      assertEq(r.headers['x-c-thru-agent-identity'], 'sentinel',
+        'signed marker: x-c-thru-agent-identity === sentinel');
+
       // /c-thru/status by_agent attributes usage to the agent NAME (not just the capability/model).
       const status = await httpJson(port, 'GET', '/c-thru/status');
       assertEq(status.status, 200, 'signed marker: /c-thru/status reachable (200)');
@@ -234,6 +241,50 @@ async function main() {
         `mid-body unsigned marker: served-by === '${DEFAULT_MODEL}' (rejected)`);
       assert(defaultStub.requests.length === 1, `mid-body unsigned marker: default stub hit (got ${defaultStub.requests.length})`);
       assert(agentStub.requests.length === 0, `mid-body unsigned marker: agent stub NOT hit (got ${agentStub.requests.length})`);
+    });
+
+    // ── 6. Multi-sentinel history → last match wins + clean upstream body ──────
+    console.log('\n6. two sentinels in history → last match routes; upstream body clean');
+    await withSentinelProxy({ keyFile }, async ({ port, agentStub, defaultStub }) => {
+      const tagAgent = expectedTag(KEY, AGENT);
+      // Older marker for a non-agent string that won't resolve — then the real agent.
+      // Both signed so HMAC path accepts the last one.
+      const body = {
+        model: DEFAULT_MODEL,
+        max_tokens: 5,
+        messages: [
+          { role: 'user', content: `${marker('coder', expectedTag(KEY, 'coder'))}\nold task` },
+          { role: 'assistant', content: 'ok' },
+          { role: 'user', content: `${marker(AGENT, tagAgent)}\nnew task` },
+        ],
+      };
+      const r = await httpJson(port, 'POST', '/v1/messages', body);
+      assertEq(r.status, 200, 'last-match: request succeeds (200)');
+      assertEq(r.headers['x-c-thru-served-by'], AGENT_MODEL,
+        `last-match: served-by === '${AGENT_MODEL}' (last sentinel wins, not older coder)`);
+      assert(agentStub.requests.length === 1, `last-match: agent stub hit (got ${agentStub.requests.length})`);
+      const fwd = agentStub.requests[0] && agentStub.requests[0].body;
+      assert(fwd && !JSON.stringify(fwd).includes('[[c-thru-agent:'),
+        'last-match: upstream body has no sentinels after strip');
+      // Task text preserved
+      const blob = JSON.stringify(fwd);
+      assert(blob.includes('new task') || blob.includes('old task'),
+        'last-match: non-sentinel user text preserved in upstream body');
+    });
+
+    // ── 7. Arbitrary model id as sentinel name → transparent resolveBackend ────
+    console.log('\n7. concrete model id in sentinel (fail-open) → routes via model_routes, not agent map');
+    await withSentinelProxy({ keyFile: null }, async ({ port, agentStub, defaultStub }) => {
+      // AGENT_MODEL is on agentBackend; stamp it as opaque name (not in agent_to_capability).
+      const r = await httpJson(port, 'POST', '/v1/messages', bodyWith(`${marker(AGENT_MODEL)}\npin this model`));
+      assertEq(r.status, 200, 'model-id sentinel: request succeeds (200)');
+      assertEq(r.headers['x-c-thru-served-by'], AGENT_MODEL,
+        `model-id sentinel: served-by === '${AGENT_MODEL}' (transparent model_routes mapping)`);
+      assert(agentStub.requests.length === 1, `model-id sentinel: agent stub hit (got ${agentStub.requests.length})`);
+      assert(defaultStub.requests.length === 0, `model-id sentinel: default stub not hit`);
+      const fwd = agentStub.requests[0] && agentStub.requests[0].body;
+      assert(fwd && !JSON.stringify(fwd).includes('[[c-thru-agent:'),
+        'model-id sentinel: stripped from upstream body');
     });
   } finally {
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}

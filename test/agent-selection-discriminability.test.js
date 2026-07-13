@@ -89,7 +89,7 @@ function jaccard(aSet, bSet) {
 
 // The "Routes to <model/capability> ..." tail of a description is plumbing
 // metadata, not selection signal — and it shares vocabulary across many agents
-// ("claude-sonnet-4-6 connected", "local", "tiers"), so leaving it in would
+// ("claude-sonnet-5 connected", "local", "tiers"), so leaving it in would
 // manufacture spurious overlap. Strip it before scoring.
 function selectionText(desc) {
   return desc.replace(/Routes to[^.]*\.?/gi, ' ');

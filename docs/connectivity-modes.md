@@ -53,8 +53,8 @@ A flat string value (no per-tier object) is also accepted and applies to every t
 
 | Mode | Intent |
 |---|---|
-| `best-cloud` | Anthropic (Opus/Sonnet) + Gemini cloud; local fallback at 64gb+. Default. |
-| `best-cloud-oss` | OSS cloud via OpenRouter (DeepSeek, Kimi, Qwen) primary; Anthropic fallback |
+| `best-cloud` | Anthropic (Opus/Sonnet) + Gemini cloud; local fallback at 64gb+. |
+| `best-cloud-oss` | **Default.** Cloud-hosted OSS (DeepSeek, Kimi, GLM via `*:cloud` / OpenRouter); Anthropic fallback |
 | `best-local-oss` | Fully local inference (Phi, Qwen, Devstral, Llama); no cloud egress |
 | `best-cloud-gov` | USGov-compliant cloud — Anthropic + non-Chinese-origin OSS only; Chinese-origin models blocked |
 | `best-local-gov` | USGov-compliant local — non-Chinese-origin local models only |
@@ -67,14 +67,15 @@ resolution): `connected` → `best-cloud`; `offline` / `disconnect` → `best-lo
 ## What each mode is useful for
 
 ### `best-cloud`
-Default. Use when you have internet, API keys/subscription configured, and want the
-highest-quality routing decisions regardless of cost. Falls back to local models at 64gb+
-hardware tiers when a cloud capability has no better option configured.
+Anthropic-primary. Use when you have Claude subscription/API credits and want highest-quality
+routing regardless of cost. Falls back to local models at 64gb+ hardware tiers when a cloud
+capability has no better option configured. Select with `--mode best-cloud` or
+`CLAUDE_LLM_MODE=best-cloud`.
 
 ### `best-cloud-oss`
-Cost-optimized cloud: routes through OpenRouter to OSS-hosted models (DeepSeek, Kimi, Qwen)
-instead of Anthropic, with Anthropic as the fallback when an OSS option isn't configured for
-a capability.
+**Default.** Cloud-hosted open-source models (DeepSeek, Kimi, GLM, etc. — often via Ollama
+cloud tags `*:cloud` or OpenRouter). Use Claude Code without spending Anthropic model credits.
+Anthropic remains a cascade fallback when an OSS option fails unless you override `on_failure`.
 
 ### `best-local-oss`
 Fully local — no cloud egress. Use for privacy-sensitive sessions, cost control, air-gapped

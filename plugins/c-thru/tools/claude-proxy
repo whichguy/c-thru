@@ -30,8 +30,17 @@ const {
   filterFor,
   validModes,
   isGovMode,
+  KNOWN_HOSTS,
+  backendHost,
+  deriveAuthProfile,
 } = require('./model-map-resolve.js');
-const { parseAgentSentinel } = require('./agent-sentinel.js');
+const { parseAgentSentinel, stripAgentSentinelFromBody } = require('./agent-sentinel.js');
+const {
+  collectStreamBody,
+  formatUpstreamErrorMessage,
+  sanitizeErrorMessage,
+  isCompressedEncoding,
+} = require('./upstream-error-body.js');
 
 // CLI flag parsing — flags are aliases for env vars, set before any consumers
 // read them. Documented in CLAUDE.md ("Proxy CLI Flags"). Supported forms:
@@ -119,6 +128,20 @@ const OLLAMA_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_TIMEOUT_MS
 // upstream timeout so a hermetic test can drive the C32 'timeout'→destroy path
 // without a 60s stall (see test/proxy-gemini-timeout.test.js).
 const GEMINI_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_GEMINI_TIMEOUT_MS', 60000);
+// Anthropic-shape upstream socket timeout. forwardAnthropic is the dispatch
+// target for real Anthropic, OpenRouter, AND default/modern local-Ollama
+// /v1/messages passthrough — none of those previously had any timeout at all,
+// so a backend that accepted the TCP connection but never responded hung the
+// client request forever with none of the fallback/cooldown machinery ever
+// triggering. Idle-inactivity semantics (like OLLAMA_UPSTREAM_TIMEOUT_MS):
+// rearms on socket activity, so it never cuts off a legitimate long
+// generation that is still streaming bytes.
+const ANTHROPIC_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_ANTHROPIC_TIMEOUT_MS', 300000);
+// Cap for fully-buffered (non-streaming) upstream response bodies on the
+// translated paths (Gemini, Ollama-legacy) — those handlers accumulate the
+// whole body before translating, so an unbounded upstream would grow proxy
+// memory without limit. 64 MB comfortably covers any real completion body.
+const UPSTREAM_NONSTREAM_BODY_CAP = numberFromEnv('CLAUDE_PROXY_NONSTREAM_BODY_CAP', 64 * 1024 * 1024);
 const STREAM_STALL_HARDFAIL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_STALL_MS', 300000);
 const STREAM_WALL_MS = numberFromEnv('CLAUDE_PROXY_STREAM_WALL_MS', 2100000);
 const SSE_PING_INTERVAL_MS = numberFromEnv('CLAUDE_PROXY_PING_INTERVAL_MS', 15000);
@@ -240,6 +263,136 @@ Object.defineProperty(global, 'CONFIG', {
   configurable: true,
 });
 
+// ── Per-request session identity + mode isolation ───────────────────────────
+// A shared (fixed-port/plugin) proxy serves multiple Claude Code sessions.
+// c-thru launches with ANTHROPIC_BASE_URL=http://host:port/s/<session-id> when
+// the client preserves URL path prefixes (verified live: a real Claude Code
+// client's actual /v1/messages traffic keeps a `/s/<id>` prefix intact; only
+// some auxiliary hook scripts reconstruct a root URL and lose it — those are
+// migrated separately, see tools/c-thru-session-start.sh et al). The prefix
+// is stripped from req.url before any dispatch (below), so every existing
+// `req.url === '/xyz'` check keeps working unchanged; the extracted session
+// id is pinned here, in a SEPARATE AsyncLocalStorage from `configStorage`, so
+// it's available to standalone handler functions (handleProbeLlm, forward*)
+// without threading a new parameter through every call site.
+const requestContextStorage = new AsyncLocalStorage();
+Object.defineProperty(global, 'REQUEST_SESSION_ID', {
+  get: () => (requestContextStorage.getStore() || {}).sessionId || null,
+  configurable: true,
+});
+// The mode resolved ONCE at request start and frozen for the request's
+// lifetime — this is what fixes the in-flight race (a mode switch mid-request
+// no longer changes routing for a request already in progress), independent
+// of whether it's a per-session or the proxy-wide mode that's in play.
+Object.defineProperty(global, 'REQUEST_MODE', {
+  get: () => (requestContextStorage.getStore() || {}).mode || resolveLlmMode(CONFIG),
+  configurable: true,
+});
+
+// sessionId -> { mode, expiresAt }. FIFO eviction cap + TTL sweep mirror the
+// existing failedBackendUntil cooldown-map idiom (see markBackendFailed
+// above) — same shape, same reasoning: unbounded session churn (e.g. many
+// short-lived ephemeral sessions over a proxy's lifetime) must not leak
+// memory.
+const SESSION_MODE_MAX = 500;
+const SESSION_MODE_TTL_MS = numberFromEnv('CLAUDE_PROXY_SESSION_MODE_TTL_MS', 24 * 3600 * 1000);
+const SESSION_MODES = new Map();
+// Set by a bare (unkeyed) POST /c-thru/mode — the proxy-wide default for
+// clients that carry no session identity (old launchers, plugin mode, curl).
+// Replaces the old `process.env.CLAUDE_LLM_MODE = mode` mutation: that made
+// the switch invisible to session-scoped requests and unpinned mid-flight
+// ones. resolveLlmMode's own env-reading is now purely the CLI/offline
+// fallback path, consulted only when neither override is set.
+let GLOBAL_MODE_OVERRIDE = null;
+
+function setSessionMode(sessionId, mode) {
+  if (!SESSION_MODES.has(sessionId) && SESSION_MODES.size >= SESSION_MODE_MAX) {
+    const oldest = SESSION_MODES.keys().next().value;
+    if (oldest !== undefined) SESSION_MODES.delete(oldest);
+  }
+  SESSION_MODES.set(sessionId, { mode, expiresAt: Date.now() + SESSION_MODE_TTL_MS });
+}
+
+function getSessionMode(sessionId) {
+  if (!sessionId) return null;
+  const entry = SESSION_MODES.get(sessionId);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { SESSION_MODES.delete(sessionId); return null; }
+  return entry.mode;
+}
+
+// Precedence: per-session override -> proxy-wide override -> resolveLlmMode's
+// own env/config precedence (unkeyed clients, or no override set at all).
+function resolveActiveModeForRequest(sessionId) {
+  const sessionMode = getSessionMode(sessionId);
+  if (sessionMode) return sessionMode;
+  if (GLOBAL_MODE_OVERRIDE) return GLOBAL_MODE_OVERRIDE;
+  return resolveLlmMode(CONFIG);
+}
+
+// C48 reload-invalidation, generalized to every mode in play (not just the
+// legacy env-based global): a config reload that drops a custom/gov mode
+// currently held by a session or the global override must degrade that
+// specific holder loudly, not silently fall through to best-cloud.
+// Per-session parallel to the global MODE_DEGRADED slot (declared below with
+// its original C48 comment) — sessionId -> { was_mode, now, was_gov, detected_at }.
+const SESSION_MODE_DEGRADED = new Map();
+
+function invalidateOrphanedModes(prevConfig, nextConfig) {
+  const wasGov = m => isGovMode(m, prevConfig);
+  const stillValid = m => validModes(nextConfig).has(m);
+
+  // Env-based mode (CLI/offline launch, e.g. `c-thru --mode secure-gov`) —
+  // this is the original (pre-B2) C48 check, preserved as-is. resolveLlmMode
+  // itself already self-corrects silently on the next call (falls back to
+  // best-cloud when the env mode isn't in validModes); this block exists
+  // purely so /c-thru/status can surface that a silent degrade happened.
+  // Skipped when GLOBAL_MODE_OVERRIDE is set — that takes precedence over
+  // the env mode in resolveActiveModeForRequest, so the override case below
+  // is the one that actually governs resolution.
+  const envMode = process.env.CLAUDE_LLM_MODE;
+  if (envMode && !GLOBAL_MODE_OVERRIDE) {
+    const envWasValid = validModes(prevConfig).has(envMode);
+    const envStillValid = stillValid(envMode);
+    if (envWasValid && !envStillValid) {
+      const wasGovMode = wasGov(envMode);
+      MODE_DEGRADED = { was_mode: envMode, now: 'best-cloud', was_gov: wasGovMode, detected_at: nowIso() };
+      proxyLog('mode.orphaned_gov_degrade', {
+        scope: 'global-env', was_mode: envMode, now: 'best-cloud', was_gov: wasGovMode,
+        message: wasGovMode
+          ? `WARN: active gov mode '${envMode}' was removed by config reload — DEGRADING to best-cloud. Gov egress restrictions are NO LONGER ENFORCED until a valid gov mode is restored.`
+          : `WARN: active mode '${envMode}' was removed by config reload — degrading to best-cloud.`,
+      });
+    } else if (envStillValid && MODE_DEGRADED && MODE_DEGRADED.was_mode === envMode) {
+      proxyLog('mode.degrade_cleared', { mode: envMode });
+      MODE_DEGRADED = null;
+    }
+  }
+
+  if (GLOBAL_MODE_OVERRIDE && validModes(prevConfig).has(GLOBAL_MODE_OVERRIDE) && !stillValid(GLOBAL_MODE_OVERRIDE)) {
+    const wasGovMode = wasGov(GLOBAL_MODE_OVERRIDE);
+    MODE_DEGRADED = { was_mode: GLOBAL_MODE_OVERRIDE, now: 'best-cloud', was_gov: wasGovMode, detected_at: nowIso() };
+    proxyLog('mode.orphaned_gov_degrade', {
+      scope: 'global', was_mode: GLOBAL_MODE_OVERRIDE, now: 'best-cloud', was_gov: wasGovMode,
+      message: `WARN: proxy-wide mode '${GLOBAL_MODE_OVERRIDE}' was removed by config reload — degrading to best-cloud.`,
+    });
+    GLOBAL_MODE_OVERRIDE = null;
+  }
+  for (const [sessionId, entry] of SESSION_MODES) {
+    if (validModes(prevConfig).has(entry.mode) && !stillValid(entry.mode)) {
+      const wasGovMode = wasGov(entry.mode);
+      SESSION_MODE_DEGRADED.set(sessionId, { was_mode: entry.mode, now: 'best-cloud', was_gov: wasGovMode, detected_at: nowIso() });
+      proxyLog('mode.orphaned_gov_degrade', {
+        scope: 'session', session: sessionId, was_mode: entry.mode, now: 'best-cloud', was_gov: wasGovMode,
+        message: wasGovMode
+          ? `WARN: session '${sessionId}' gov mode '${entry.mode}' was removed by config reload — DEGRADING to best-cloud. Gov egress restrictions are NO LONGER ENFORCED for this session until a valid gov mode is restored.`
+          : `WARN: session '${sessionId}' mode '${entry.mode}' was removed by config reload — degrading to best-cloud.`,
+      });
+      SESSION_MODES.delete(sessionId);
+    }
+  }
+}
+
 function debugLog(event, fields = {}) {
   if (!DEBUG) return;
   console.error(`c-thru debug ${JSON.stringify({
@@ -297,7 +450,13 @@ function traceLog(ctx, direction, method, url, headers, body) {
     method,
     url,
     headers: scrubbed,
-    body_snippet: body ? (typeof body === 'string' ? body.slice(0, 1000) : body.toString('utf8').slice(0, 1000)) : null
+    // Never log raw binary / control-heavy snippets (debug only, but keep clean).
+    body_snippet: body
+      ? sanitizeErrorMessage(
+          typeof body === 'string' ? body.slice(0, 1000) : body.toString('utf8').slice(0, 1000),
+          { cap: 1000 }
+        )
+      : null,
   });
 }
 
@@ -314,7 +473,14 @@ function numberFromEnv(key, def) {
 const PROXY_LOG_FILE = process.env.CLAUDE_PROXY_LOG_FILE || path.join(os.homedir(), '.claude', 'proxy.log');
 const PROXY_LOG_MAX_SIZE = 10 * 1024 * 1024;
 const USAGE_STATS_FILE = process.env.CLAUDE_PROXY_USAGE_STATS_FILE || path.join(os.homedir(), '.claude', 'usage-stats.json');
-const PID_FILE = path.join(os.homedir(), '.claude', 'proxy.pid');
+// Every reader of proxy.pid (c-thru cmd_reload/cmd_restart, c-thru-lib.sh)
+// looks in $CLAUDE_PROFILE_DIR — which c-thru shadows per launch for
+// ephemeral/named profiles. Writing only to ~/.claude broke reload/restart
+// for those profiles and let concurrent proxies clobber (and on exit,
+// delete) one another's pid file. Honor the profile dir like every sibling
+// path constant above.
+const PID_FILE = process.env.CLAUDE_PROXY_PID_FILE
+  || path.join(process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude'), 'proxy.pid');
 const PROXY_STARTED_AT = nowIso();
 
 // ── Per-user shared secrets (C19 agent-HMAC + C23 control token) ───────────
@@ -499,11 +665,18 @@ function atomicWriteUsage(obj) {
 // callers include the SIGTERM flush. Best-effort by design: on budget
 // exhaustion the caller proceeds unlocked, shrinking the residual race from
 // lifetime-clobber to at most one <=5s delta in a sub-millisecond window.
+// CAUTION: sleepSyncMs uses Atomics.wait, which blocks Node's entire
+// single-threaded event loop (not just this flush) — new connections, active
+// SSE ping/stall timers, and streaming writes all freeze for the duration.
+// The retry budget below is kept deliberately small so worst-case contention
+// (two proxy instances, or a /c-thru/stats/clear request racing a debounced
+// flush) can only stall the whole process briefly, not for the full 200ms a
+// larger budget would allow.
 const USAGE_LOCK_DIR = `${USAGE_STATS_FILE}.lock`;
 function sleepSyncMs(ms) {
   try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch {}
 }
-function acquireUsageLock(budgetMs = 200) {
+function acquireUsageLock(budgetMs = 50) {
   const deadline = Date.now() + budgetMs;
   try { fs.mkdirSync(path.dirname(USAGE_LOCK_DIR), { recursive: true }); } catch {}
   for (;;) {
@@ -615,7 +788,7 @@ function flushUsageCore() {
     const snapshot = usageDelta;
     if (snapshot.last_recorded === null) return;  // nothing recorded since last flush
     usageDelta = emptyUsage();
-    const locked = acquireUsageLock(200);
+    const locked = acquireUsageLock(50);
     try {
       const disk = readUsageFileFresh();
       const toMerge = reconcileClearIfNeeded(disk) ? emptyUsage() : snapshot;
@@ -684,6 +857,11 @@ function pushRecentRequest(ctx, req, res, aborted) {
     tier: m.hwTier || null,
     mode: m.activeMode || null,
     user_id: m.userId || null,
+    // Round-5 B3: session identity from the /s/<id> path prefix (null for
+    // unkeyed clients) — lets GET /s/<id>/c-thru/recent scope to just this
+    // session's requests, the data source for the rebuilt fallback-badge
+    // hooks (was_fallback derives from fallback_from, no separate ring).
+    session_id: REQUEST_SESSION_ID,
   });
   if (RECENT_REQUESTS.length > RECENT_MAX) RECENT_REQUESTS.splice(0, RECENT_REQUESTS.length - RECENT_MAX);
 }
@@ -896,61 +1074,6 @@ function injectSamplingDefaults(body, effectiveModel, capability, backend) {
   return out;
 }
 
-// Auto-auth: derive default auth shape from endpoint URL host. First match wins.
-// Each profile encodes both the outbound header shape and (for bearer_priority)
-// the incoming-Bearer-promotion semantics. Endpoints with explicit `auth*` fields
-// still win — this is the default when no explicit declaration is present.
-//   bearer_priority — Anthropic-family. Incoming Bearer wins; otherwise fill from env (x-api-key).
-//   header_env      — fixed header from env var; no incoming-Bearer promotion (third-party).
-//                     Incoming Anthropic auth is stripped to prevent key leakage.
-//   none            — strip all auth (local/dummy backends; Ollama gets Bearer ollama injected later).
-const KNOWN_HOSTS = [
-  { match: /(^|\.)anthropic\.com$/,
-    profile: 'bearer_priority', header: 'x-api-key', env: 'ANTHROPIC_API_KEY' },
-  { match: /(^|\.)openrouter\.ai$/,
-    profile: 'header_env', header: 'Authorization', scheme: 'Bearer', env: 'OPENROUTER_API_KEY' },
-  { match: /(^|\.)generativelanguage\.googleapis\.com$/,
-    profile: 'header_env', header: 'x-goog-api-key', env: 'GOOGLE_API_KEY' },
-  { match: /(^|\.)aiplatform\.googleapis\.com$/,
-    profile: 'header_env', header: 'Authorization', scheme: 'Bearer', env: 'GOOGLE_CLOUD_TOKEN' },
-  { match: /^localhost(:\d+)?$|^127\.0\.0\.1(:\d+)?$/,
-    profile: 'none' },
-  { match: /(^|\.)ollama\.ai$/,
-    profile: 'none' },
-];
-
-// Resolve the host of a backend URL, expanding ${VAR} placeholders if present so
-// templated URLs (e.g. Vertex with ${GOOGLE_CLOUD_REGION}) can still be matched
-// against the host table.
-function backendHost(backend) {
-  if (!backend || !backend.url) return null;
-  let url = backend.url.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_, name) => process.env[name] || '');
-  try { return new URL(url).host; } catch (_) { return null; }
-}
-
-function deriveAuthProfile(backend) {
-  // TEST-ONLY override (inert in production): the integration harness binds every
-  // stub on 127.0.0.1, which KNOWN_HOSTS maps to profile 'none' (always-forward),
-  // so a spawned proxy can never structurally reach the unknown-host 'passthrough'
-  // (auth-STRIP) branch in applyOutboundAuth. When — and ONLY when — the env var
-  // CLAUDE_PROXY_TEST_UNKNOWN_HOST_BACKENDS is set, the listed backend ids
-  // (comma-separated) are forced to the unknown-host classification (return null),
-  // exactly as a genuine non-KNOWN_HOSTS host would derive. The env var is set
-  // NOWHERE in any real launch/config path, so this short-circuit is a no-op
-  // outside tests. The env is read inline (not a module-scope const) so the
-  // string-extraction harness in test/proxy-quality.test.js can eval this
-  // function standalone. See test/proxy-auth-strip-e2e.test.js (C12 coverage).
-  const _testUnknown = process.env.CLAUDE_PROXY_TEST_UNKNOWN_HOST_BACKENDS;
-  if (_testUnknown && backend && backend.id &&
-      _testUnknown.split(',').map(s => s.trim()).includes(backend.id)) {
-    return null;
-  }
-  const host = backendHost(backend);
-  if (!host) return null;
-  for (const entry of KNOWN_HOSTS) if (entry.match.test(host)) return entry;
-  return null;
-}
-
 // Returns true when auth is needed (env or derived) but the env var is unset/empty.
 // Used to set x-c-thru-auth-missing on the response header.
 // auth:"subscription" / auth:"none" are intentionally keyless — never flagged as missing.
@@ -984,17 +1107,27 @@ function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders, meta) {
   }
   function setProfile(p) { if (meta) meta.authDerivedProfile = p; }
 
-  // Layer 1a: explicit auth:"none" — passthrough incoming headers verbatim. The
-  // intent is "don't inject anything from config." Ollama-default Bearer-ollama
-  // injection at the end still takes the Authorization slot if it's empty.
-  // (Historical behavior — preserved so existing configs that rely on x-api-key
-  // passthrough on local Ollama keep working.)
+  // Layer 1a: explicit auth:"none". Documented contract (CLAUDE.md) is "strip
+  // all auth" — but for genuinely local/test backends (loopback, kind:"ollama")
+  // the historical behavior is passthrough, so existing configs that rely on
+  // x-api-key passthrough on local Ollama keep working. Gate on isLocalBackend
+  // so that guarantee only applies to backends that are actually local: an
+  // endpoint pointed at a real remote host with auth:"none" must not silently
+  // forward the client's real Anthropic subscription OAuth token / API key to
+  // it. Ollama-default Bearer-ollama injection at the end still takes the
+  // Authorization slot if it's empty.
   if (backend.auth === 'none') {
-    if (incomingAuth && !outgoingHeaders['authorization']) {
-      outgoingHeaders['authorization'] = incomingAuth;
-    }
-    if (incomingKey && !outgoingHeaders['x-api-key']) {
-      outgoingHeaders['x-api-key'] = incomingKey;
+    if (isLocalBackend(backend)) {
+      if (incomingAuth && !outgoingHeaders['authorization']) {
+        outgoingHeaders['authorization'] = incomingAuth;
+      }
+      if (incomingKey && !outgoingHeaders['x-api-key']) {
+        outgoingHeaders['x-api-key'] = incomingKey;
+      }
+    } else {
+      delete outgoingHeaders['authorization'];
+      delete outgoingHeaders['Authorization'];
+      dropApiKey(outgoingHeaders);
     }
     setProfile('none');
     // fall through to Ollama-default at end
@@ -1373,10 +1506,19 @@ function anthropicErrorType(statusCode, errBody) {
 
 // Send an Anthropic-shaped error response on a non-streaming connection.
 // Wraps `send()` so we get the same logging + headers-sent guard.
-function sendAnthropicError(res, code, message) {
+//
+// message is always sanitized: raw gzip/br error bodies must never reach the
+// Claude TUI (they render as mojibake and look like "garbled keystrokes").
+// Optional errBodyForType is the *decoded* upstream text used only for
+// anthropicErrorType's Gemini gRPC status mapping.
+function sendAnthropicError(res, code, message, errBodyForType) {
+  const safe = sanitizeErrorMessage(message);
   send(res, code, {
     type: 'error',
-    error: { type: anthropicErrorType(code), message },
+    error: {
+      type: anthropicErrorType(code, errBodyForType != null ? errBodyForType : safe),
+      message: safe || `upstream returned ${code}`,
+    },
   });
 }
 
@@ -1558,6 +1700,32 @@ function forwardToAnthropicCatchAll(req, res) {
 function sseWrite(res, event, data) {
   if (!res.writable) return;
   res.write(`event: ${event}\ndata: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`);
+}
+
+// ── Post-commitment upstream-failure termination ─────────────────────────────
+// Once response headers (and possibly body bytes) have reached the client,
+// fallback dispatch is impossible and the only correct moves are:
+//   - SSE response:  emit one Anthropic-shape terminal `error` frame, end.
+//   - JSON response: destroy the connection — appending anything to a
+//     partially-written JSON body would corrupt it; a truncated body plus
+//     socket close is the least-wrong signal a JSON client can receive.
+// Idempotent per response (guard symbol) so 'error'+'aborted' double-fire and
+// multi-handler wiring (upRes + up) can never emit two terminal frames.
+// Only for POST-commitment failures — pre-commitment failures must keep
+// taking the backend-failure path (markBackendFailed + tryFallbackOrFail).
+const RES_TERMINATED = Symbol('cthruCommittedResponseTerminated');
+function terminateCommittedResponse(ctx, res, isSse, logEvent, message) {
+  if (res[RES_TERMINATED]) return;
+  res[RES_TERMINATED] = true;
+  ctxLog(ctx, logEvent, { message });
+  try {
+    if (isSse) {
+      sseWrite(res, 'error', { type: 'error', error: { type: 'api_error', message } });
+      if (res.writable) res.end();
+    } else {
+      res.destroy();
+    }
+  } catch { /* client already gone */ }
 }
 
 const MAX_BODY_BYTES = 100 * 1024 * 1024; // 100 MB
@@ -1965,31 +2133,47 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     port: targetUrl.port || (isHttps ? 443 : 80),
     path: forwardedPath,
     method: req.method,
-    headers
+    headers,
+    timeout: ANTHROPIC_UPSTREAM_TIMEOUT_MS,
   };
   ctxDebug(ctx, 'anthropic.request.path', { backend: backend.id, target: `${targetUrl.origin}${forwardedPath}` });
   const backendStartedAt = Date.now();
   if (requestMeta) requestMeta.backendStartedAt = backendStartedAt;
 
+  // Set once headers are committed (in the upRes callback); read by the
+  // post-commitment failure paths in both upRes and up error handlers.
+  let responseIsSse = false;
+
   const up = lib.request(options, upRes => {
     const backendLatencyMs = Date.now() - backendStartedAt;
     ctxLog(ctx, 'backend_response', { backend: backend.id, statusCode: upRes.statusCode });
     if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
-      // Buffer the upstream error body for the log, then attempt fallback. If
-      // fallback isn't configured or fails to resolve, we fall through to
-      // piping the original error to the client.
-      let errBody = '';
-      upRes.on('data', c => errBody += c.toString());
-      upRes.on('end', async () => {
-        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, errBody));
+      // Buffer the upstream error body, decode (gzip/br), extract a clean
+      // message — never embed raw compressed bytes (TUI mojibake). Then
+      // attempt fallback; if none fires, surface the sanitized Anthropic error.
+      collectStreamBody(upRes).then(async (rawBuf) => {
+        const { decoded, message: safeMsg } = formatUpstreamErrorMessage(rawBuf, {
+          contentEncoding: upRes.headers && upRes.headers['content-encoding'],
+          statusCode: upRes.statusCode,
+        });
+        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, decoded));
         const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
           reason: `upstream returned ${upRes.statusCode}`,
           statusCode: upRes.statusCode,
-          error: errBody.slice(0, 200),
+          error: safeMsg.slice(0, 200),
         });
         if (!handled && !res.headersSent) {
-          // Fallback didn't fire — surface the original error in Anthropic shape.
-          sendAnthropicError(res, upRes.statusCode, `backend ${backend.id} returned ${upRes.statusCode}: ${errBody.slice(0, 200)}`);
+          sendAnthropicError(
+            res,
+            upRes.statusCode,
+            `backend ${backend.id} returned ${upRes.statusCode}: ${safeMsg}`,
+            decoded
+          );
+        }
+      }).catch(async (e) => {
+        if (!res.headersSent) {
+          sendAnthropicError(res, upRes.statusCode || 502,
+            `backend ${backend.id} returned ${upRes.statusCode}: failed to read error body (${e.message})`);
         }
       });
       return;
@@ -2029,17 +2213,69 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     const usageBuf = [];
     let usageBytes = 0;
     const USAGE_BUF_CAP = 256 * 1024;
+    // message_delta (usage.output_tokens) is always the LAST frame Anthropic
+    // emits, after all content — so once a stream's total bytes exceed
+    // USAGE_BUF_CAP, the head-capped usageBuf above never contains it and
+    // outputTokens silently stays 0 for a fully-successful response. Keep an
+    // independent rolling tail window (small: a single message_delta frame is
+    // one short line of JSON) so it's always available regardless of total
+    // stream length, without growing the head-cap memory bound.
+    const TAIL_BUF_CAP = 32 * 1024;
+    let tailBuf = Buffer.alloc(0);
+    // When upstream compresses the body, the client still gets a correct pipe
+    // (headers + compressed bytes). The stats/journal tee must NOT UTF-8-parse
+    // those bytes — that would fail or mis-read. Fail open: skip usage extract.
+    const upstreamCompressed = isCompressedEncoding(upRes.headers && upRes.headers['content-encoding']);
     upRes.on('data', chunk => {
+      if (upstreamCompressed) return; // client pipe still gets every byte via upRes.pipe(res)
       if (usageBytes < USAGE_BUF_CAP) {
         usageBuf.push(chunk);
         usageBytes += chunk.length;
       }
+      tailBuf = Buffer.concat([tailBuf, chunk]);
+      if (tailBuf.length > TAIL_BUF_CAP) tailBuf = tailBuf.subarray(tailBuf.length - TAIL_BUF_CAP);
     });
+    // Post-commitment transport failure: headers are already sent, so no
+    // fallback is possible — terminate coherently instead of leaving the
+    // client on a truncated response (or worse, letting the unhandled
+    // 'error' reach uncaughtException and kill the whole proxy). 'aborted'
+    // is wired alongside 'error' (older Node emits it first / instead);
+    // terminateCommittedResponse is idempotent so double-fire is safe.
+    responseIsSse = (upRes.headers['content-type'] || '').includes('text/event-stream');
+    const onUpstreamMidstreamFailure = e => {
+      if (!upstreamCancelled) {
+        // Genuine backend failure (not our own client-disconnect teardown):
+        // cool it down like any other connection error, and record what
+        // usage we can — message_start (input_tokens) may already be in the
+        // tee buffer even though message_delta never arrived.
+        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+        if (!upstreamCompressed) {
+          try {
+            const startFrame = Buffer.concat(usageBuf).toString('utf8')
+              .match(/event:\s*message_start\s*\n\s*data:\s*({[^\n]+})/);
+            if (startFrame) {
+              const inTok = JSON.parse(startFrame[1]).message?.usage?.input_tokens || 0;
+              if (inTok) recordUsageAndStamp(requestMeta, effectiveModel, backend.id, inTok, 0,
+                Date.now() - (requestMeta.startedAt || Date.now()), requestMeta.capability || null);
+            }
+          } catch { /* best-effort only */ }
+        }
+      }
+      terminateCommittedResponse(ctx, res, responseIsSse, 'anthropic.upstream.midstream_error',
+        `upstream ${backend.id} failed mid-response: ${e.message}`);
+    };
+    upRes.on('error', onUpstreamMidstreamFailure);
+    upRes.on('aborted', () => onUpstreamMidstreamFailure(new Error('upstream aborted')));
     upRes.on('end', () => {
       if (upRes.statusCode !== 200) return;
+      if (upstreamCompressed) {
+        // Pipe already delivered compressed bytes + Content-Encoding to client.
+        clearBackendCooldown(backend.id);
+        return;
+      }
       try {
         const txt = Buffer.concat(usageBuf).toString('utf8');
-        const isSse = (upRes.headers['content-type'] || '').includes('text/event-stream');
+        const isSse = responseIsSse;
         let inputTokens = 0, outputTokens = 0;
         if (isSse) {
           // Locate the message_start frame and pull data: line; parse as JSON.
@@ -2052,9 +2288,13 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
           if (startFrame) {
             try { inputTokens = JSON.parse(startFrame[1]).message?.usage?.input_tokens || 0; } catch {}
           }
-          const deltaFrame = txt.match(/event:\s*message_delta\s*\n\s*data:\s*({[^\n]+})/);
-          if (deltaFrame) {
-            try { outputTokens = JSON.parse(deltaFrame[1]).usage?.output_tokens || 0; } catch {}
+          // Try the head-capped buffer first (unchanged behavior for streams
+          // that fit within USAGE_BUF_CAP); fall back to the tail window when
+          // the frame was truncated away because the stream ran long.
+          const deltaMatch = txt.match(/event:\s*message_delta\s*\n\s*data:\s*({[^\n]+})/)
+            || tailBuf.toString('utf8').match(/event:\s*message_delta\s*\n\s*data:\s*({[^\n]+})/);
+          if (deltaMatch) {
+            try { outputTokens = JSON.parse(deltaMatch[1]).usage?.output_tokens || 0; } catch {}
           }
         } else {
           const obj = JSON.parse(txt);
@@ -2102,13 +2342,30 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     socket.on('connect', () => ctxDebug(ctx, 'upstream.socket.connected', { backend: backend.id }));
     socket.on('close', hadError => ctxDebug(ctx, 'upstream.socket.closed', { backend: backend.id, had_error: hadError }));
   });
+  // options.timeout arms socket.setTimeout but does NOT destroy the socket on
+  // its own (identical C32 fix already applied to forwardGemini) — without a
+  // 'timeout' listener a wedged backend never aborts. Destroying here funnels
+  // into the up.on('error') handler below, which already runs
+  // markBackendFailed + tryFallbackOrFail (cascade or 502, never a silent hang).
+  up.on('timeout', () => up.destroy(new Error(`anthropic upstream timeout after ${ANTHROPIC_UPSTREAM_TIMEOUT_MS}ms`)));
   up.on('error', async e => {
+    // Our own client-disconnect teardown (cancelUpstream -> up.destroy) also
+    // surfaces here — that's not a backend failure; don't cool the backend
+    // down or emit anything (the client is already gone).
+    if (upstreamCancelled) return;
     ctxLog(ctx, 'backend_error', { backend: backend.id, kind: 'anthropic', error: e.message });
     // Connection-error path — no HTTP status to read. classifyFailure
     // inspects the error string for ECONNREFUSED/timeout markers; result
     // is 'transient' (we want to cooldown wedged backends so retries skip
     // them quickly).
     markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+    if (res.headersSent) {
+      // Post-commitment: fallback is impossible (bytes already reached the
+      // client) — terminate coherently instead of hanging the response.
+      terminateCommittedResponse(ctx, res, responseIsSse, 'anthropic.upstream.midstream_error',
+        `upstream ${backend.id} failed mid-response: ${e.message}`);
+      return;
+    }
     const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
       reason: 'connection error',
       error: e.message,
@@ -2117,6 +2374,20 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       sendAnthropicError(res, 502, `backend anthropic at ${targetUrl.origin} error: ${e.message}`);
     }
   });
+  // Client-disconnect cancellation, mirroring forwardGemini's cancelUpstream
+  // and setupOllamaStream's res.on('close') teardown: when the Claude Code
+  // client closes mid-flight (Ctrl-C, network drop) we must tear down the
+  // upstream request so it stops streaming/billing tokens no client will
+  // read. Guarded so the normal completion path (up already ended/destroyed)
+  // never double-fires.
+  let upstreamCancelled = false;
+  const cancelUpstream = () => {
+    if (upstreamCancelled) return;
+    upstreamCancelled = true;
+    try { if (!up.destroyed) up.destroy(new Error('client disconnected mid-stream')); } catch {}
+  };
+  req.on('close', cancelUpstream);
+  res.on('close', cancelUpstream);
   const outBody = injectSamplingDefaults(body, effectiveModel, requestMeta.capability, backend);
   if (outBody) up.write(JSON.stringify(outBody));
   up.end();
@@ -2153,16 +2424,11 @@ function buildOllamaRequestBody(body, effectiveModel) {
 // ARCH: 400 is excluded from fallback (shouldFallbackOnStatus guard) so
 //       caller-malformed requests don't loop through the fallback chain.
 function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
-  let errBody = '';
-  upRes.on('data', c => errBody += c.toString());
-  upRes.on('end', async () => {
-    let message = errBody;
-    try {
-      const parsed = JSON.parse(errBody);
-      if (parsed.error) {
-        message = typeof parsed.error === 'string' ? parsed.error : (parsed.error.message || JSON.stringify(parsed.error));
-      }
-    } catch {}
+  collectStreamBody(upRes).then(async (rawBuf) => {
+    const { decoded, message: safeMsg } = formatUpstreamErrorMessage(rawBuf, {
+      contentEncoding: upRes.headers && upRes.headers['content-encoding'],
+      statusCode: upRes.statusCode,
+    });
     if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
       // Cloud->local rewrite first: if the failing model is :cloud-suffixed
       // (e.g. user has no Ollama subscription), swap in the configured
@@ -2171,15 +2437,22 @@ function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
       if (tryOllamaCloudLocalFallback(ctx, req, res, body, backend, requestMeta)) {
         return;
       }
-      markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, message));
+      markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, decoded));
       const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
         reason: `upstream returned ${upRes.statusCode}`,
         statusCode: upRes.statusCode,
-        error: message.slice(0, 200),
+        error: safeMsg.slice(0, 200),
       });
       if (handled) return;
     }
-    sendAnthropicError(res, upRes.statusCode, message || `upstream returned ${upRes.statusCode}`);
+    if (!res.headersSent) {
+      sendAnthropicError(res, upRes.statusCode, safeMsg || `upstream returned ${upRes.statusCode}`, decoded);
+    }
+  }).catch((e) => {
+    if (!res.headersSent) {
+      sendAnthropicError(res, upRes.statusCode || 502,
+        `upstream returned ${upRes.statusCode}: failed to read error body (${e.message})`);
+    }
   });
 }
 
@@ -2495,7 +2768,7 @@ const PROBE_QUESTION = 'What is your model name, where were you born, model id a
 
 async function handleProbeLlm(req, res) {
   const tier = resolveActiveTier(CONFIG);
-  const mode = resolveLlmMode(CONFIG);
+  const mode = REQUEST_MODE;
 
   let modelParam = null;
   try { modelParam = new URL(req.url, 'http://x').searchParams.get('model') || null; } catch {}
@@ -2573,9 +2846,36 @@ async function handleProbeLlm(req, res) {
 function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, requestMeta, upRes) {
   let fullBody = '';
   let bytesOut = 0;
+  let nonStreamAborted = false;
   const nonStreamStart = Date.now();
-  upRes.on('data', chunk => { bytesOut += chunk.length; fullBody += chunk.toString(); });
+  // Headers are only written on 'end', so failures here are pre-commitment:
+  // a clean 502 is always deliverable (send() guards headersSent). Buffer is
+  // capped so an unbounded upstream body can't exhaust proxy memory. The
+  // finalize-hook recent-requests ring records these failures (status 502);
+  // recordUsage is skipped by design — no tokens were delivered.
+  upRes.on('data', chunk => {
+    if (nonStreamAborted) return;
+    bytesOut += chunk.length;
+    if (bytesOut > UPSTREAM_NONSTREAM_BODY_CAP) {
+      nonStreamAborted = true;
+      ctxLog(ctx, 'ollama.nonstream.body_cap_exceeded', { cap_bytes: UPSTREAM_NONSTREAM_BODY_CAP, backend: backend.id });
+      try { upRes.destroy(); } catch {}
+      sendAnthropicError(res, 502, `Ollama non-stream response exceeded ${UPSTREAM_NONSTREAM_BODY_CAP} bytes`);
+      return;
+    }
+    fullBody += chunk.toString();
+  });
+  const onOllamaNonStreamFailure = e => {
+    if (nonStreamAborted) return;
+    nonStreamAborted = true;
+    ctxLog(ctx, 'ollama.nonstream.upstream_error', { error: e.message, backend: backend.id });
+    markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+    sendAnthropicError(res, 502, `upstream ${backend.id} failed mid-response: ${e.message}`);
+  };
+  upRes.on('error', onOllamaNonStreamFailure);
+  upRes.on('aborted', () => onOllamaNonStreamFailure(new Error('upstream aborted')));
   upRes.on('end', () => {
+    if (nonStreamAborted) return;
     try {
       const ollamaJson = JSON.parse(fullBody);
       const promptTokens = ollamaJson.prompt_eval_count || 0;
@@ -2788,6 +3088,19 @@ function geminiHttpRequest(backend, method, urlPath, body, extraHeaders) {
   });
 }
 
+// Safe user-visible prefix for Gemini Files API error bodies (may be compressed).
+function geminiFilesErrorMessage(prefix, result) {
+  const raw = result && result.body != null
+    ? (Buffer.isBuffer(result.body) ? result.body : Buffer.from(String(result.body)))
+    : Buffer.alloc(0);
+  const enc = result && result.headers && (result.headers['content-encoding'] || result.headers['Content-Encoding']);
+  const { message, decoded } = formatUpstreamErrorMessage(raw, {
+    contentEncoding: enc,
+    statusCode: result && result.statusCode,
+  });
+  return { text: `${prefix}: ${message}`, decoded };
+}
+
 async function handleFilesApi(req, res) {
   const backend = pickGeminiBackend(CONFIG);
   if (!backend) return sendAnthropicError(res, 503, 'no Gemini endpoint configured for /v1/files');
@@ -2809,7 +3122,8 @@ async function handleFilesApi(req, res) {
       'X-Goog-Upload-Protocol': 'raw',
     }).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
     if (result.statusCode >= 400) {
-      return sendAnthropicError(res, result.statusCode, `Gemini Files upload error: ${result.body.toString('utf8').slice(0, 500)}`);
+      const err = geminiFilesErrorMessage('Gemini Files upload error', result);
+      return sendAnthropicError(res, result.statusCode, err.text, err.decoded);
     }
     let parsed = null;
     try { parsed = JSON.parse(result.body.toString('utf8')); } catch {}
@@ -2823,7 +3137,10 @@ async function handleFilesApi(req, res) {
   // GET /v1/files — list
   if (req.method === 'GET' && (req.url === '/v1/files' || req.url === '/v1/files/' || req.url.startsWith('/v1/files?'))) {
     const result = await geminiHttpRequest(backend, 'GET', '/v1beta/files', null).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
-    if (result.statusCode >= 400) return sendAnthropicError(res, result.statusCode, `Gemini Files list error: ${result.body.toString('utf8').slice(0, 500)}`);
+    if (result.statusCode >= 400) {
+      const err = geminiFilesErrorMessage('Gemini Files list error', result);
+      return sendAnthropicError(res, result.statusCode, err.text, err.decoded);
+    }
     let parsed = null;
     try { parsed = JSON.parse(result.body.toString('utf8')); } catch {}
     const data = (parsed?.files || []).map(geminiFileToAnthropic).filter(Boolean);
@@ -2837,7 +3154,10 @@ async function handleFilesApi(req, res) {
     if (!geminiName) return sendAnthropicError(res, 400, `invalid file id: ${idMatch[1]}`);
     if (req.method === 'GET') {
       const result = await geminiHttpRequest(backend, 'GET', '/v1beta/' + geminiName, null).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
-      if (result.statusCode >= 400) return sendAnthropicError(res, result.statusCode, `Gemini Files get error: ${result.body.toString('utf8').slice(0, 500)}`);
+      if (result.statusCode >= 400) {
+        const err = geminiFilesErrorMessage('Gemini Files get error', result);
+        return sendAnthropicError(res, result.statusCode, err.text, err.decoded);
+      }
       let parsed = null;
       try { parsed = JSON.parse(result.body.toString('utf8')); } catch {}
       const anthropic = geminiFileToAnthropic(parsed);
@@ -2846,7 +3166,10 @@ async function handleFilesApi(req, res) {
     }
     if (req.method === 'DELETE') {
       const result = await geminiHttpRequest(backend, 'DELETE', '/v1beta/' + geminiName, null).catch(e => ({ statusCode: 502, headers: {}, body: Buffer.from(e.message) }));
-      if (result.statusCode >= 400) return sendAnthropicError(res, result.statusCode, `Gemini Files delete error: ${result.body.toString('utf8').slice(0, 500)}`);
+      if (result.statusCode >= 400) {
+        const err = geminiFilesErrorMessage('Gemini Files delete error', result);
+        return sendAnthropicError(res, result.statusCode, err.text, err.decoded);
+      }
       return send(res, 200, { id: idMatch[1], deleted: true });
     }
   }
@@ -3250,26 +3573,28 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
   const up = lib.request(options, (upRes) => {
     const statusCode = upRes.statusCode;
     if (statusCode >= 400) {
-      let errBody = '';
-      upRes.on('data', d => errBody += d);
-      upRes.on('end', async () => {
+      collectStreamBody(upRes).then(async (rawBuf) => {
+        const { decoded, message: safeMsg } = formatUpstreamErrorMessage(rawBuf, {
+          contentEncoding: upRes.headers && upRes.headers['content-encoding'],
+          statusCode,
+        });
         // G4: stale-cache retry. If we attached a cachedContent ref and the
         // upstream rejected (404 / cache-not-found), drop the entry and retry
         // once with a clean body. Costs an extra round-trip, only at the TTL
         // boundary.
-        if (cacheResult.status === 'hit' && (statusCode === 404 || /cached[_ ]?content|not found/i.test(errBody))) {
+        if (cacheResult.status === 'hit' && (statusCode === 404 || /cached[_ ]?content|not found/i.test(decoded))) {
           GEMINI_CACHE_STATS.stale_retry++;
           ctxLog(ctx, 'gemini.cache.stale', { statusCode, hash: cacheResult.hash });
           GEMINI_CACHE_MAP.delete(cacheResult.hash);
           body._geminiCacheRetried = true;
           return forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
-        ctxLog(ctx, 'gemini.error', { statusCode, body: errBody });
+        ctxLog(ctx, 'gemini.error', { statusCode, body: safeMsg });
         // Wave 2: parse Gemini gRPC status from body for an accurate Anthropic
         // error type (RESOURCE_EXHAUSTED->rate_limit_error etc.). Propagate
         // Retry-After verbatim, and synthesize anthropic-ratelimit-requests-
         // remaining: 0 on 429 so Claude Code's backoff sees a concrete signal.
-        const errType = anthropicErrorType(statusCode, errBody);
+        const errType = anthropicErrorType(statusCode, decoded);
         const extraHeaders = {};
         if (upRes.headers && upRes.headers['retry-after']) {
           extraHeaders['Retry-After'] = String(upRes.headers['retry-after']);
@@ -3279,14 +3604,10 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         }
         if (res.headersSent) return;
         // Backend-level fallback on retryable upstream errors. Mirrors the
-        // forwardAnthropic path (~line 1822): mark the backend as failed
-        // (puts it in cooldown if appropriate) and ALWAYS ask tryFallbackOrFail
-        // to walk the cascade. It self-noops when nothing applies, so gating on
-        // backend.fallback_to was wrong — it skipped capability-level
-        // fallback_chains, tryLocalTerminalFallback, and tryGlobalDefaultFallback
-        // (none of which require the failing backend to declare fallback_to).
-        // Only relay the raw error when the cascade didn't handle the request.
-        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(statusCode, errBody));
+        // forwardAnthropic path: mark the backend as failed and ALWAYS ask
+        // tryFallbackOrFail to walk the cascade. Only relay the sanitized
+        // error when the cascade didn't handle the request.
+        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(statusCode, decoded));
         const relayError = () => {
           if (res.headersSent) return;
           res.writeHead(statusCode, Object.assign(
@@ -3295,17 +3616,22 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           ));
           res.end(JSON.stringify({
             type: 'error',
-            error: { type: errType, message: `Gemini error: ${errBody}` },
+            error: { type: errType, message: sanitizeErrorMessage(`Gemini error: ${safeMsg}`) },
           }));
         };
         try {
           const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
-            reason: `gemini ${statusCode}: ${errBody.slice(0, 200)}`,
+            reason: `gemini ${statusCode}: ${safeMsg.slice(0, 200)}`,
             statusCode,
           });
           if (!handled) relayError();
         } catch {
           relayError();
+        }
+      }).catch((e) => {
+        if (!res.headersSent) {
+          sendAnthropicError(res, statusCode || 502,
+            `Gemini error: failed to read error body (${e.message})`);
         }
       });
       return;
@@ -3552,16 +3878,57 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         clearBackendCooldown(backend.id);
         scheduleCacheCreate();
       });
-      upRes.on('error', stopGeminiPing);
+      // Post-commitment transport failure: the SSE stream is already
+      // committed, so emit one terminal Anthropic-shape error frame and end
+      // instead of leaving the client on a truncated stream with no
+      // message_stop (or crashing on an unhandled 'error').
+      const onGeminiStreamFailure = e => {
+        stopGeminiPing();
+        if (!upstreamCancelled) {
+          markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+        }
+        terminateCommittedResponse(ctx, res, true, 'gemini.upstream.midstream_error',
+          `upstream ${backend.id} failed mid-stream: ${e.message}`);
+      };
+      upRes.on('error', onGeminiStreamFailure);
+      upRes.on('aborted', () => onGeminiStreamFailure(new Error('upstream aborted')));
       // Note: client-disconnect handling is wired at the function level via
       // cancelUpstream (req/res 'close' -> up.destroy() + stopGeminiPing).
       // This branch's old `res.on('close', stopGeminiPing)` was removed in
       // Wave 1 to consolidate cleanup into the single cancelUpstream path.
     } else {
-      // Non-streaming
+      // Non-streaming. Headers are only written on 'end', so failures here
+      // are pre-commitment: surface a clean 502 (send() guards headersSent).
+      // The buffer is capped so a runaway/looping upstream can't exhaust
+      // proxy memory — past the cap we abort rather than truncate-and-parse.
       let respBody = '';
-      upRes.on('data', d => respBody += d);
+      let respBytes = 0;
+      let nonStreamAborted = false;
+      upRes.on('data', d => {
+        if (nonStreamAborted) return;
+        respBytes += d.length;
+        if (respBytes > UPSTREAM_NONSTREAM_BODY_CAP) {
+          nonStreamAborted = true;
+          ctxLog(ctx, 'gemini.nonstream.body_cap_exceeded', { cap_bytes: UPSTREAM_NONSTREAM_BODY_CAP });
+          try { upRes.destroy(); } catch {}
+          sendAnthropicError(res, 502, `Gemini non-stream response exceeded ${UPSTREAM_NONSTREAM_BODY_CAP} bytes`);
+          return;
+        }
+        respBody += d;
+      });
+      const onGeminiNonStreamFailure = e => {
+        if (nonStreamAborted) return;
+        nonStreamAborted = true;
+        if (!upstreamCancelled) {
+          markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+        }
+        ctxLog(ctx, 'gemini.nonstream.upstream_error', { error: e.message, backend: backend.id });
+        sendAnthropicError(res, 502, `upstream ${backend.id} failed mid-response: ${e.message}`);
+      };
+      upRes.on('error', onGeminiNonStreamFailure);
+      upRes.on('aborted', () => onGeminiNonStreamFailure(new Error('upstream aborted')));
       upRes.on('end', () => {
+        if (nonStreamAborted) return;
         try {
           const geminiData = JSON.parse(respBody);
           if (isCountTokens) {
@@ -4526,38 +4893,10 @@ function maybeRegenerateMergedConfig() {
   } catch {}
 }
 
-// C48 — fail-OPEN advisory: a reload that removes the active custom (gov-based)
-// mode must not silently degrade to best-cloud. We compare the active
-// CLAUDE_LLM_MODE's validity under the outgoing vs incoming config. The env var
-// is the active mode set by POST /c-thru/mode (resolveLlmMode's top precedence).
-function detectOrphanedGovDegrade(prevConfig, nextConfig) {
-  const activeMode = process.env.CLAUDE_LLM_MODE;
-  if (!activeMode) return;  // no explicit env mode → nothing to orphan
-  const wasValid = validModes(prevConfig).has(activeMode);
-  const stillValid = validModes(nextConfig).has(activeMode);
-  if (wasValid && !stillValid) {
-    // Was the orphaned mode a gov (or gov-based) mode under the outgoing config?
-    const wasGov = isGovMode(activeMode, prevConfig);
-    MODE_DEGRADED = {
-      was_mode: activeMode,
-      now: 'best-cloud',          // resolveLlmMode's fallback for an unknown env mode
-      was_gov: wasGov,
-      detected_at: nowIso(),
-    };
-    proxyLog('mode.orphaned_gov_degrade', {
-      message: wasGov
-        ? `WARN: active gov mode '${activeMode}' was removed by config reload — DEGRADING to best-cloud. Gov egress restrictions are NO LONGER ENFORCED until a valid gov mode is restored.`
-        : `WARN: active mode '${activeMode}' was removed by config reload — degrading to best-cloud.`,
-      was_mode: activeMode,
-      now: 'best-cloud',
-      was_gov: wasGov,
-    });
-  } else if (stillValid && MODE_DEGRADED && MODE_DEGRADED.was_mode === activeMode) {
-    // The mode was restored by a later reload — clear the degraded flag.
-    proxyLog('mode.degrade_cleared', { mode: activeMode });
-    MODE_DEGRADED = null;
-  }
-}
+// C48 orphan-degrade detection now lives in invalidateOrphanedModes() (near
+// the SESSION_MODES declaration above), generalized to cover every mode in
+// play — the proxy-wide GLOBAL_MODE_OVERRIDE and every per-session override
+// — not just the legacy single env-based mode this function used to check.
 
 function reloadConfigFromDisk() {
   try {
@@ -4573,7 +4912,7 @@ function reloadConfigFromDisk() {
     // (prevConfig) vs the incoming one (nextConfig). If it was a valid gov mode
     // before and is gone now, resolveLlmMode will silently degrade to best-cloud
     // — make that LOUD (proxyLog advisory + status flag), but keep serving.
-    detectOrphanedGovDegrade(GLOBAL_CONFIG, nextConfig);
+    invalidateOrphanedModes(GLOBAL_CONFIG, nextConfig);
     GLOBAL_CONFIG = nextConfig;
     CONFIG_PATH = resolved.path;
     CONFIG_SOURCE = resolved.source;
@@ -4627,7 +4966,7 @@ function armConfigWatcher(configPath) {
     });
     configWatchHandle = configPath;
   } catch (e) {
-    proxyLog('warn', 'configWatcherFailed', { path: configPath, err: String(e) });
+    proxyLog('configWatcherFailed', { path: configPath, err: String(e) });
   }
 }
 
@@ -4645,11 +4984,26 @@ const server = http.createServer((req, res) => {
   const snapshot = GLOBAL_CONFIG;
   configStorage.run(snapshot, async () => {
     const ctx = newRequestContext();
+    // Session-identity path prefix: c-thru launches with
+    // ANTHROPIC_BASE_URL=http://host:port/s/<session-id> for shared
+    // (fixed-port/plugin) proxies. Stripped here, before ANY dispatch, so
+    // every existing `req.url === '/xyz'` / `startsWith` check below keeps
+    // working unchanged against the un-prefixed path. Unkeyed clients (no
+    // prefix — old launchers, plugin mode, curl) see identical behavior to
+    // before this feature existed.
+    const rawUrl = req.url;
+    const sessionMatch = rawUrl.match(/^\/s\/([A-Za-z0-9_.-]{1,128})(\/.*)?$/);
+    const sessionId = sessionMatch ? sessionMatch[1] : null;
+    if (sessionMatch) req.url = sessionMatch[2] || '/';
+    const requestMode = resolveActiveModeForRequest(sessionId);
+    return requestContextStorage.run({ sessionId, mode: requestMode }, async () => {
     try {
       refreshConfigIfChanged();
       ctxLog(ctx, 'request', {
         method: req.method,
         url: req.url,
+        raw_url: sessionMatch ? rawUrl : undefined,
+        session: sessionId,
         bytes_in: Number(req.headers['content-length']) || 0,
         client: req.headers['user-agent'] || '',
       });
@@ -4678,8 +5032,9 @@ const server = http.createServer((req, res) => {
 
       if (req.url === '/ping') return send(res, 200, {
         ok: true, pid: process.pid, config_path: CONFIG_PATH,
-        active_tier: resolveActiveTier(CONFIG), active_mode: resolveLlmMode(CONFIG),
+        active_tier: resolveActiveTier(CONFIG), active_mode: REQUEST_MODE,
         bind_address: server.address().address,
+        plan_dashboard: DASHBOARD_URL ? DASHBOARD_URL.replace('/c-thru/dashboard', '/c-thru/plan/dashboard') : '',
         gemini_cache: { ...GEMINI_CACHE_STATS, entries: GEMINI_CACHE_MAP.size },
         vertex_env_ok: !!(process.env.GOOGLE_CLOUD_REGION && process.env.GOOGLE_CLOUD_PROJECT),
       });
@@ -4699,7 +5054,7 @@ const server = http.createServer((req, res) => {
         // Write the cleared file under the lock; the cleared_at stamp is how
         // other live instances learn to drop their pre-clear deltas (clear-wins
         // check in flushUsageCore / the status view).
-        const locked = acquireUsageLock(200);
+        const locked = acquireUsageLock(50);
         try {
           atomicWriteUsage(Object.assign(emptyUsage(), { cleared_at: clearedAt }));
         } catch (e) {
@@ -4715,7 +5070,7 @@ const server = http.createServer((req, res) => {
 
       if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/' || req.url.startsWith('/c-thru/status?'))) {
         const tier = resolveActiveTier(CONFIG);
-        const mode = resolveLlmMode(CONFIG);
+        const mode = REQUEST_MODE;
         const baseMode = baseModeFor(mode, CONFIG);
         // New schema: llm_profiles[capability] (capability-outer, not tier-outer)
         const allProfiles = CONFIG.llm_profiles || {};
@@ -4797,9 +5152,13 @@ const server = http.createServer((req, res) => {
           // Global default-route resolution — ultimate last-resort target.
           default_route: CONFIG.routes && CONFIG.routes.default ? CONFIG.routes.default : null,
           // C48 — fail-open degrade advisory. true when a reload orphaned the
-          // active (gov-based) mode and the proxy silently fell back to best-cloud.
+          // proxy-wide (gov-based) mode and the proxy silently fell back to
+          // best-cloud. session_mode_degraded* is scoped to THIS request's
+          // session (null when the request carries no session identity).
           mode_degraded: !!MODE_DEGRADED,
           mode_degraded_detail: MODE_DEGRADED || null,
+          session_mode_degraded: REQUEST_SESSION_ID ? SESSION_MODE_DEGRADED.has(REQUEST_SESSION_ID) : null,
+          session_mode_degraded_detail: REQUEST_SESSION_ID ? (SESSION_MODE_DEGRADED.get(REQUEST_SESSION_ID) || null) : null,
         });
       }
 
@@ -4810,11 +5169,22 @@ const server = http.createServer((req, res) => {
           if (raw !== null) { const parsed = parseInt(raw, 10); if (!isNaN(parsed)) n = parsed; }
         } catch {}
         n = Math.max(1, Math.min(n, Math.max(RECENT_MAX, 1)));
+        // Round-5 B3: a request through the /s/<id> prefix is scoped to just
+        // that session's own entries — the trusted source is the path
+        // identity stripped at dispatch (REQUEST_SESSION_ID), never a
+        // query param, since this endpoint has no auth and a `?session=`
+        // selector would let any local client read another session's
+        // activity. The bare (unkeyed) endpoint is unchanged: all entries.
+        const scopedSessionId = REQUEST_SESSION_ID;
+        const pool = scopedSessionId
+          ? RECENT_REQUESTS.filter(r => r.session_id === scopedSessionId)
+          : RECENT_REQUESTS;
         return send(res, 200, {
           ok: true,
-          buffered: RECENT_REQUESTS.length,
+          session: scopedSessionId,
+          buffered: pool.length,
           cap: RECENT_MAX,
-          requests: RECENT_REQUESTS.slice(-n).reverse(),  // newest first
+          requests: pool.slice(-n).reverse(),  // newest first
         });
       }
 
@@ -4833,9 +5203,20 @@ const server = http.createServer((req, res) => {
           return sendAnthropicError(res, 400,
             `invalid mode '${requested}': valid modes are ${validList} (legacy aliases also accepted: offline, disconnect, connected)`);
         }
-        process.env.CLAUDE_LLM_MODE = mode;
-        proxyLog('mode-switch', { new_mode: mode, requested_mode: requested, source: 'control-channel' });
-        return send(res, 200, { ok: true, new_mode: mode, message: `Mode switched to ${mode}` });
+        // Session-scoped when the request carries a /s/<id> identity (this
+        // session's own switch, isolated from every other session sharing
+        // the proxy); a bare/unkeyed request sets the proxy-wide default for
+        // clients with no session identity (old launchers, plugin mode,
+        // curl) — never mutates process.env, which would leak across every
+        // session instantly, including requests already in flight.
+        const modeSessionId = REQUEST_SESSION_ID;
+        if (modeSessionId) { setSessionMode(modeSessionId, mode); SESSION_MODE_DEGRADED.delete(modeSessionId); }
+        else { GLOBAL_MODE_OVERRIDE = mode; MODE_DEGRADED = null; }
+        proxyLog('mode-switch', {
+          new_mode: mode, requested_mode: requested, source: 'control-channel',
+          scope: modeSessionId ? 'session' : 'global', session: modeSessionId || null,
+        });
+        return send(res, 200, { ok: true, new_mode: mode, scope: modeSessionId ? 'session' : 'global', message: `Mode switched to ${mode}` });
       }
 
       if (req.method === 'POST' && (req.url === '/c-thru/reload' || req.url === '/c-thru/reload/')) {
@@ -4857,9 +5238,27 @@ const server = http.createServer((req, res) => {
         }
       }
 
+      if (req.method === 'GET' && (req.url === '/c-thru/plan/dashboard' || req.url === '/c-thru/plan/dashboard/')) {
+        try {
+          const html = fs.readFileSync(path.join(__dirname, 'plan-dashboard.html'), 'utf8');
+          return sendHtml(res, 200, html);
+        } catch (e) {
+          return send(res, 503, { ok: false, error: `plan dashboard asset unavailable: ${e.message}` });
+        }
+      }
+
+      if (req.method === 'GET' && (req.url === '/c-thru/plan' || req.url === '/c-thru/plan/')) {
+        try {
+          const lib = require(path.join(__dirname, 'plan-state-lib.js'));
+          return send(res, 200, lib.aggregatePlanState({}));
+        } catch (e) {
+          return send(res, 503, { ok: false, error: `plan state unavailable: ${e.message}` });
+        }
+      }
+
       if (req.method === 'POST' && req.url === '/hooks/context') {
         const tier = resolveActiveTier(CONFIG);
-        const mode = resolveLlmMode(CONFIG);
+        const mode = REQUEST_MODE;
         proxyLog('hook_injection', { tier, mode });
         // Canonical control-plane block — the single source of the proxy URL +
         // endpoint list handed to a session. Built from this instance's own live
@@ -4982,7 +5381,7 @@ const server = http.createServer((req, res) => {
 
       if (req.method === 'GET' && (req.url === '/v1/active-models' || req.url === '/v1/active-models/')) {
         const tier = resolveActiveTier(CONFIG);
-        const mode = resolveLlmMode(CONFIG);
+        const mode = REQUEST_MODE;
         const baseMode2 = baseModeFor(mode, CONFIG);
         // New schema: llm_profiles[capability] (capability-outer)
         const allProfiles2 = CONFIG.llm_profiles || {};
@@ -5046,7 +5445,7 @@ const server = http.createServer((req, res) => {
           return sendAnthropicError(res, 400, `invalid JSON in request body: ${e.message}`);
         }
         const hwTier = resolveActiveTier(CONFIG);
-        const activeMode = resolveLlmMode(CONFIG);
+        const activeMode = REQUEST_MODE;
         const requestStartedAt = Date.now();
 
         if (!body || typeof body.model !== 'string' || !body.model) {
@@ -5087,13 +5486,14 @@ const server = http.createServer((req, res) => {
         // Detection is cheapest-first and does NOT parse the payload (the JSON parse
         // above is needed for routing regardless; we add no structured walk):
         //   1. O(1) header check — well-known identifier, future-proof (empty today).
-        //   2. one raw-body byte-scan (indexOf) to LOCATE the marker — over the WHOLE
-        //      body (not a bounded prefix, so a long system prompt can't hide it) —
-        //      then a fixed <=50-byte window read to extract the name.
+        //   2. one raw-body lastIndexOf scan so the *newest* marker wins when multi-turn
+        //      history still carries older sentinels — then a fixed window extract.
+        // After routing, stripAgentSentinelFromBody removes all markers before forward.
         let sentinelAgent = null;
+        let agentIdentitySource = 'none'; // sentinel | header | none — for observability
         {
           // parseAgentSentinel (tools/agent-sentinel.js) does the cheapest-first
-          // detection: header check, then one raw-body byte-scan + fixed-window read.
+          // detection: header check, then lastIndexOf body scan + fixed-window read.
           // Kept as a pure, hermetically-tested unit (test/proxy-sentinel-detection.test.js).
           // Returns { name, tag, index } | null — tag is the optional HMAC stamp.
           const parsed = parseAgentSentinel(bodyText, req.headers['x-c-thru-agent']);
@@ -5129,13 +5529,18 @@ const server = http.createServer((req, res) => {
               }
             }
             if (trusted) {
-              if (resolveCapabilityAlias(agentName, CONFIG)) {
-                ctxLog(ctx, 'sentinel_override', { agent: agentName, from_model: body.model, signed: !!parsed.tag });
-                body.model = agentName;  // resolveBackend resolves agent → capability → model
-                sentinelAgent = agentName;
-              } else {
-                ctxLog(ctx, 'sentinel_unresolved', { agent: agentName });
-              }
+              // Opaque routing key: agent name, capability, concrete model tag,
+              // advisor: pin, etc. resolveBackend maps transparently — do not
+              // pre-gate on agent_to_capability only.
+              ctxLog(ctx, 'sentinel_override', {
+                agent: agentName,
+                from_model: body.model,
+                signed: !!parsed.tag,
+                source: fromHeader ? 'header' : 'sentinel',
+              });
+              body.model = agentName;
+              sentinelAgent = agentName;
+              agentIdentitySource = fromHeader ? 'header' : 'sentinel';
             }
           }
         }
@@ -5166,8 +5571,11 @@ const server = http.createServer((req, res) => {
           );
           if (filteredModel === null) {
             ctxLog(ctx, 'mode_filter.reject_all', { mode: activeMode, capability: capKey });
+            const suggestion = isGovMode(activeMode, CONFIG)
+              ? `Suggestion: add a ${activeMode}-compliant model to fallback_chains['${hwTier}']['${capKey}'] in model-map.json — relaxing the mode would break compliance.`
+              : `Suggestion: try a less restrictive --mode (e.g. best-cloud) or add a compliant model to fallback_chains['${hwTier}']['${capKey}'].`;
             return sendAnthropicError(res, 502,
-              `No ${activeMode} model available for capability '${capKey}': all candidates rejected by mode filter`);
+              `No ${activeMode} model available for capability '${capKey}': all candidates rejected by mode filter. ${suggestion}`);
           }
           if (filteredModel !== effectiveModel) {
             const swapped = resolveBackend(filteredModel, CONFIG, hwTier, activeMode);
@@ -5186,8 +5594,11 @@ const server = http.createServer((req, res) => {
         const modeFilterPred = filterFor(activeMode, CONFIG);
         if (modeFilterPred && !modeFilterPred(effectiveModel, CONFIG.model_routes || {}, CONFIG.endpoints || CONFIG.backends || {})) {
           ctxLog(ctx, 'mode_filter.reject_primary', { mode: activeMode, capability: capKey, model: effectiveModel });
+          const suggestion = isGovMode(activeMode, CONFIG)
+            ? `Suggestion: configure a ${activeMode}-compliant model for '${capKey || effectiveModel}' in llm_profiles or fallback_chains — relaxing the mode would break compliance.`
+            : `Suggestion: try --mode best-cloud (unblocks all models) or configure a ${activeMode}-compliant fallback for '${capKey || effectiveModel}' in llm_profiles.`;
           return sendAnthropicError(res, 502,
-            `No ${activeMode}-compliant model for '${capKey || effectiveModel}': '${effectiveModel}' is blocked by the ${activeMode} filter and no compliant fallback is configured`);
+            `No ${activeMode}-compliant model for '${capKey || effectiveModel}': '${effectiveModel}' is blocked by the ${activeMode} filter and no compliant fallback is configured. ${suggestion}`);
         }
 
         const { tierForGb } = require('./hw-profile.js');
@@ -5233,6 +5644,13 @@ const server = http.createServer((req, res) => {
         });
 
         body.model = effectiveModel;
+
+        // Routing is done — strip all [[c-thru-agent:…]] markers so upstream
+        // models never see routing metadata. Client history still has them for
+        // the next turn (re-parse last match, strip again).
+        stripAgentSentinelFromBody(body);
+        // Observability: how agent identity was obtained for this request.
+        res.setHeader('x-c-thru-agent-identity', agentIdentitySource);
 
         // ── Cooldown skip ──
         // If the primary resolved backend is in cooldown, jump directly to the
@@ -5291,6 +5709,7 @@ const server = http.createServer((req, res) => {
       proxyLog('fatal_error', { error: err.message, stack: err.stack });
       sendAnthropicError(res, 500, 'internal error');
     }
+    });
   });
 });
 
@@ -5346,5 +5765,5 @@ process.on('uncaughtException', err => {
 });
 
 process.on('unhandledRejection', (reason) => {
-  proxyLog('error', 'unhandledRejection', { reason: String(reason) });
+  proxyLog('unhandledRejection', { reason: String(reason) });
 });

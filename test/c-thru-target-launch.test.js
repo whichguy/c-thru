@@ -83,7 +83,7 @@ async function main() {
   console.log('1. Unmatched labels ignore targets.default during launcher backend selection');
   {
     const result = runCthru({
-      modelArg: 'claude-sonnet-4-6',
+      modelArg: 'claude-sonnet-5',
       // This case checks BACKEND SELECTION (legacy claude label → the anthropic
       // backend, not targets.default). The selected backend is only observable via
       // the direct base URL, so opt out of the default proxy-always (C_THRU_PROXY_ALWAYS,
@@ -101,7 +101,7 @@ async function main() {
     assert(result.code === 0, `launcher exits 0 for unmatched legacy label (got ${result.code})`);
     assert(result.json?.anthropic_base_url === 'https://anthropic.example',
       `legacy anthropic autodetect wins over targets.default, direct mode (got ${JSON.stringify(result.json?.anthropic_base_url)})`);
-    assert((result.json?.args || []).some(arg => arg === '--model=claude-sonnet-4-6' || arg === 'claude-sonnet-4-6'),
+    assert((result.json?.args || []).some(arg => arg === '--model=claude-sonnet-5' || arg === 'claude-sonnet-5'),
       'forwarded args preserve unmatched model label');
     assert((result.json?.args || []).includes('--append-system-prompt'),
       'normal launch still receives injected session flags');

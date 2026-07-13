@@ -150,7 +150,7 @@ for (const file of AGENT_FILES) {
 // whole file carries routing claims, and they drifted (8 bodies found stale
 // 2026-06-12, e.g. writer.md claiming mistral-small3.1:24b local and
 // claude-opus-4-6). Descriptions are selector-visible and carry the same
-// concrete model ids (vision.md "Routes to claude-sonnet-4-6 connected"), so
+// concrete model ids (vision.md "Routes to claude-sonnet-5 connected"), so
 // the scan covers the FULL file — frontmatter included — not just the body.
 // Every model-id token must be in THAT AGENT'S own resolution set: cap =
 // agent_to_capability[agent] || agent, resolved over 5 modes × 5 tiers with the

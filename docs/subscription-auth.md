@@ -46,7 +46,7 @@ API key billing on that endpoint:
 {
   "routes": {
     "default": {
-      "model": "claude-sonnet-4-6",
+      "model": "claude-sonnet-5",
       "backend": "anthropic_subscription"
     }
   }
@@ -194,7 +194,7 @@ Every successful response includes `x-c-thru-auth-derived: <profile>`. Use it to
 ```sh
 curl -sI http://127.0.0.1:$CLAUDE_PROXY_PORT/v1/messages -X POST \
   -H 'content-type: application/json' \
-  -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}' \
+  -d '{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hi"}]}' \
   | grep -i x-c-thru-auth-derived
 ```
 
