@@ -1,3 +1,5 @@
+> **ARCHIVE / historical.** Not current product guidance. Superseded by `docs/connectivity-modes.md`, `docs/functionality-map.md`, and live code. Kept for archaeology only.
+
 # Dynamic Classifier — Phase A (observe-only)
 
 Status: **proposed / not yet implemented** — this documents the intended Phase-A design. `CLAUDE_PROXY_CLASSIFY` and `classifyRole()` are **not present in `tools/claude-proxy`**; the only consumer is `test/proxy-classify.test.js`, which `test/run-all.sh` explicitly excludes ("feature not implemented in proxy"). Treat the rest of this doc as a design sketch, not shipped behavior.

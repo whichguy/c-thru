@@ -95,7 +95,7 @@ complete.
 **Verdict: cannot HOLD/not-HOLD — there is no Bedrock backend to govern. Premise verified live: yes.**
 
 - No bedrock endpoint in `config/model-map.json` (endpoints are `anthropic`, `openrouter`, `ollama_local`,
-  `ollama_cloud`, `gemini_ai`, `gemini_vertex`, `gemini_ai_compat`, `anthropic_subscription`).
+  `ollama_cloud`, `gemini_ai`, `gemini_vertex`, `anthropic_subscription`).
 - No `CLAUDE_CODE_USE_BEDROCK` / `USE_BEDROCK` / `AWS_REGION` / `AWS_BEARER_TOKEN_BEDROCK` /
   `bedrock-runtime` / `amazonaws` anywhere in `tools/` or `config/`.
 - Bedrock appears only as an aspirational doc-comment at `tools/c-thru:14`.

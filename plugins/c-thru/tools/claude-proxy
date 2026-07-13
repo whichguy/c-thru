@@ -483,14 +483,13 @@ const PID_FILE = process.env.CLAUDE_PROXY_PID_FILE
   || path.join(process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude'), 'proxy.pid');
 const PROXY_STARTED_AT = nowIso();
 
-// ── Per-user shared secrets (C19 agent-HMAC + C23 control token) ───────────
-// The proxy is a SHARED daemon reused across parallel c-thru sessions, so both
-// secrets are STABLE PER-USER files (0600 under ~/.claude) that tools/c-thru
-// generates once at launch — NOT per-session env (a per-session key would make a
-// later session's HMAC fail against a proxy an earlier session started). The
-// proxy only READS them, once, at startup. Two distinct files for clarity.
-// Env overrides exist purely so the test harness can point at fixtures.
-const AGENT_HMAC_FILE = process.env.CLAUDE_PROXY_AGENT_HMAC_FILE || path.join(os.homedir(), '.claude', 'agent-hmac.key');
+// ── Per-user control token (C23) ───────────────────────────────────────────
+// Mutating control routes share one STABLE PER-USER file (0600 under ~/.claude)
+// that tools/c-thru generates once at launch. The proxy only READS it at startup.
+// Env overrides exist so the test harness can point at fixtures.
+//
+// Agent-sentinel trust is loopback-client-only (no shared HMAC key). Default bind
+// is 127.0.0.1; remote clients cannot force routing via body markers.
 const CONTROL_TOKEN_FILE = process.env.CLAUDE_PROXY_CONTROL_TOKEN_FILE || path.join(os.homedir(), '.claude', 'proxy.control-token');
 
 function readSecretFileOnce(filePath) {
@@ -500,25 +499,35 @@ function readSecretFileOnce(filePath) {
   } catch { return null; }
 }
 
-// C19 — per-user HMAC key for agent-sentinel verification. Read once.
-// When null (file absent), the proxy FAILS OPEN: it honors unsigned markers but
-// emits a one-time warning. When present, a body marker is honored ONLY if its
-// tag verifies via timingSafeEqual against HMAC(name).
-const AGENT_HMAC_KEY = readSecretFileOnce(AGENT_HMAC_FILE);
-let _sentinelFailOpenWarned = false;
-
-function expectedAgentTag(name) {
-  // 16 hex chars = first 8 bytes of HMAC-SHA256(key, name). Mirrors the hook.
-  return crypto.createHmac('sha256', AGENT_HMAC_KEY).update(name).digest('hex').slice(0, 16);
+/** True when the TCP peer is on the loopback adapter (IPv4/IPv6/mapped). */
+function isLoopbackClient(req) {
+  const raw = (req && req.socket && req.socket.remoteAddress) || '';
+  let a = String(raw).toLowerCase();
+  if (a.startsWith('::ffff:')) a = a.slice(7);
+  if (a === '::1' || a === '[::1]') return true;
+  if (a === '127.0.0.1' || a === 'localhost') return true;
+  return LOOPBACK_ADDRS.has(a) || LOOPBACK_ADDRS.has(String(raw));
 }
 
-function verifyAgentTag(name, tag) {
-  if (typeof tag !== 'string' || !tag) return false;
-  const expected = expectedAgentTag(name);
-  const a = Buffer.from(expected, 'utf8');
-  const b = Buffer.from(tag.toLowerCase(), 'utf8');
-  if (a.length !== b.length) return false;
-  try { return crypto.timingSafeEqual(a, b); } catch { return false; }
+// Scoreboard / journal agent key: prefer explicit sentinel identity, else capability.
+function attributionName(requestMeta) {
+  if (!requestMeta) return null;
+  return requestMeta.agent || requestMeta.capability || null;
+}
+
+// x-c-thru-resolved-via JSON. capability is always the logical profile key;
+// agent is set only when a trusted sentinel/header identified the subagent.
+function buildResolvedViaJson(requestMeta, effectiveModel) {
+  const o = {
+    capability: requestMeta.capability,
+    served_by: effectiveModel,
+    tier: requestMeta.hwTier,
+    mode: requestMeta.activeMode,
+    latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
+    local_terminal_appended: requestMeta._localTerminalAppended || false,
+  };
+  if (requestMeta.agent) o.agent = requestMeta.agent;
+  return JSON.stringify(o);
 }
 
 // C23 — per-user control token. Direct-value env override (CLAUDE_PROXY_CONTROL_TOKEN)
@@ -2180,14 +2189,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     }
     const outHeaders = Object.assign({}, upRes.headers);
     if (requestMeta.capability) {
-      outHeaders['x-c-thru-resolved-via'] = JSON.stringify({
-        capability: requestMeta.capability,
-        served_by: effectiveModel,
-        tier: requestMeta.hwTier,
-        mode: requestMeta.activeMode,
-        latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
-        local_terminal_appended: requestMeta._localTerminalAppended || false,
-      });
+      outHeaders['x-c-thru-resolved-via'] = buildResolvedViaJson(requestMeta, effectiveModel);
     }
     outHeaders['x-c-thru-served-by'] = effectiveModel || '';
     outHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
@@ -2256,7 +2258,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
             if (startFrame) {
               const inTok = JSON.parse(startFrame[1]).message?.usage?.input_tokens || 0;
               if (inTok) recordUsageAndStamp(requestMeta, effectiveModel, backend.id, inTok, 0,
-                Date.now() - (requestMeta.startedAt || Date.now()), requestMeta.capability || null);
+                Date.now() - (requestMeta.startedAt || Date.now()), attributionName(requestMeta));
             }
           } catch { /* best-effort only */ }
         }
@@ -2302,8 +2304,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
           outputTokens = obj.usage?.output_tokens || 0;
         }
         recordUsageAndStamp(requestMeta, effectiveModel, backend.id, inputTokens, outputTokens,
-          Date.now() - (requestMeta.startedAt || Date.now()),
-          requestMeta.capability || null);
+          Date.now() - (requestMeta.startedAt || Date.now()), attributionName(requestMeta));
         clearBackendCooldown(backend.id);
         if (shouldJournal(requestMeta.capability)) {
           const rawBuf = Buffer.concat(usageBuf);
@@ -2476,14 +2477,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
     'X-Accel-Buffering': 'no',
   };
   if (requestMeta.capability) {
-    streamHeaders['x-c-thru-resolved-via'] = JSON.stringify({
-      capability: requestMeta.capability,
-      served_by: effectiveModel,
-      tier: requestMeta.hwTier,
-      mode: requestMeta.activeMode,
-      latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
-      local_terminal_appended: requestMeta._localTerminalAppended || false,
-    });
+    streamHeaders['x-c-thru-resolved-via'] = buildResolvedViaJson(requestMeta, effectiveModel);
   }
   streamHeaders['x-c-thru-served-by'] = effectiveModel || '';
   streamHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
@@ -2726,8 +2720,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
       stop_reason: stopReason,
     });
     recordUsageAndStamp(requestMeta, effectiveModel, backend.id, promptTokens, outputTokens,
-      Date.now() - (requestMeta.startedAt || Date.now()),
-      requestMeta.capability || null);
+      Date.now() - (requestMeta.startedAt || Date.now()), attributionName(requestMeta));
     clearBackendCooldown(backend.id);
     if (shouldJournal(requestMeta.capability)) {
       writeJournalEntry({
@@ -2908,14 +2901,7 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
         'Content-Length': Buffer.byteLength(respBody),
       };
       if (requestMeta.capability) {
-        nonStreamHeaders['x-c-thru-resolved-via'] = JSON.stringify({
-          capability: requestMeta.capability,
-          served_by: effectiveModel,
-          tier: requestMeta.hwTier,
-          mode: requestMeta.activeMode,
-          latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
-          local_terminal_appended: requestMeta._localTerminalAppended || false,
-        });
+        nonStreamHeaders['x-c-thru-resolved-via'] = buildResolvedViaJson(requestMeta, effectiveModel);
       }
       nonStreamHeaders['x-c-thru-served-by'] = effectiveModel || '';
       nonStreamHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
@@ -2940,8 +2926,7 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
         stop_reason: stopReason,
       });
       recordUsageAndStamp(requestMeta, effectiveModel, backend.id, promptTokens, outputTokens,
-        Date.now() - (requestMeta.startedAt || Date.now()),
-        requestMeta.capability || null);
+        Date.now() - (requestMeta.startedAt || Date.now()), attributionName(requestMeta));
       clearBackendCooldown(backend.id);
       if (shouldJournal(requestMeta.capability)) {
         let parsedResponse = null;
@@ -3841,8 +3826,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
                 const promptCount = (geminiData.usageMetadata || {}).promptTokenCount || 0;
                 lastPromptTokens = promptCount;
                 recordUsageAndStamp(requestMeta, effectiveModel, backend.id, promptCount, candidatesCount + thoughtsCount,
-                  Date.now() - ((requestMeta && requestMeta.startedAt) || startedAt),
-                  (requestMeta && requestMeta.capability) || null);
+                  Date.now() - ((requestMeta && requestMeta.startedAt) || startedAt), attributionName(requestMeta));
                 // Terminal frames emitted (content_block_stop already done via
                 // closeOpenBlock above; message_delta just sent). Mark closed so
                 // the 'end' handler doesn't re-close a well-formed stream.
@@ -4050,8 +4034,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           // (output = candidates + thoughts).
           recordUsageAndStamp(requestMeta, effectiveModel, backend.id,
             anthropicRes.usage.input_tokens, anthropicRes.usage.output_tokens,
-            Date.now() - ((requestMeta && requestMeta.startedAt) || startedAt),
-            (requestMeta && requestMeta.capability) || null);
+            Date.now() - ((requestMeta && requestMeta.startedAt) || startedAt), attributionName(requestMeta));
           clearBackendCooldown(backend.id);
           scheduleCacheCreate();
         } catch (e) {
@@ -5499,33 +5482,16 @@ const server = http.createServer((req, res) => {
           const parsed = parseAgentSentinel(bodyText, req.headers['x-c-thru-agent']);
           const agentName = parsed && parsed.name;
           if (agentName) {
-            // C19 anti-spoof gate. The header path (x-c-thru-agent) is trusted as
-            // today (a deliberate out-of-band channel; empty in practice). For the
-            // BODY marker — which forgeable content (tool results, pasted text,
-            // fetched pages) can contain when C_THRU_PROXY_ALWAYS routes main-thread
-            // traffic — require an HMAC tag that verifies against the per-user key.
-            const fromHeader = parsed.tag === null && req.headers['x-c-thru-agent'] === agentName;
+            // Trust gate: header is an intentional OOB channel; body markers are
+            // honored only for loopback clients (default bind 127.0.0.1). No HMAC.
+            const fromHeader = typeof req.headers['x-c-thru-agent'] === 'string'
+              && req.headers['x-c-thru-agent'].trim() === agentName;
             let trusted = fromHeader;
             if (!fromHeader) {
-              if (AGENT_HMAC_KEY) {
-                // Key present → STRICT: honor only a marker whose tag verifies.
-                // Position pre-filter is cheap defense-in-depth but NOT trust on
-                // its own — the HMAC is the gate.
-                if (verifyAgentTag(agentName, parsed.tag)) {
-                  trusted = true;
-                } else {
-                  ctxLog(ctx, 'sentinel_rejected', { agent: agentName, reason: parsed.tag ? 'hmac_mismatch' : 'unsigned' });
-                }
-              } else {
-                // Key absent → FAIL OPEN: honor the marker as before, warn once.
+              if (isLoopbackClient(req)) {
                 trusted = true;
-                if (!_sentinelFailOpenWarned) {
-                  _sentinelFailOpenWarned = true;
-                  proxyLog('sentinel.auth_disabled', {
-                    message: 'WARN: agent-hmac key absent (' + AGENT_HMAC_FILE +
-                      ') — agent-sentinel markers are UNVERIFIED and spoofable. Run tools/c-thru to generate one.',
-                  });
-                }
+              } else {
+                ctxLog(ctx, 'sentinel_rejected', { agent: agentName, reason: 'non_loopback' });
               }
             }
             if (trusted) {
@@ -5535,7 +5501,6 @@ const server = http.createServer((req, res) => {
               ctxLog(ctx, 'sentinel_override', {
                 agent: agentName,
                 from_model: body.model,
-                signed: !!parsed.tag,
                 source: fromHeader ? 'header' : 'sentinel',
               });
               body.model = agentName;
@@ -5623,11 +5588,10 @@ const server = http.createServer((req, res) => {
           // sends metadata.user_id on every Messages call.
           userId: (body.metadata && typeof body.metadata.user_id === 'string') ? body.metadata.user_id : null,
         };
-        // When a sentinel identified the agent, attribute usage to the AGENT (not
-        // just its capability) so by_agent / the journal become a true per-agent
-        // scoreboard — distinguishing e.g. reviewer-plan from code-reviewer, which
-        // share a capability and are otherwise indistinguishable to the proxy.
-        if (sentinelAgent) requestMeta.capability = sentinelAgent;
+        // Keep capability = logical profile key for sampling / fallback / journal
+        // filters. Store agent identity separately for by_agent scoreboard and
+        // resolved-via.agent (reviewer-plan vs code-reviewer share a capability).
+        if (sentinelAgent) requestMeta.agent = sentinelAgent;
         // Ring-buffer hook: finalize() reads ctx.meta. count_tokens shares the
         // /v1/messages URL prefix but never invokes a model — zero-token
         // bookkeeping noise, so it stays out of the recent ring.

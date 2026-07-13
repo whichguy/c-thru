@@ -157,12 +157,9 @@ is correctly documented elsewhere (`docs/functionality-map.md` §7) as an intent
 "semi-orphan (symlinked, not auto-registered)" — the dashed arrow above reflects that
 deliberately, not a bug.
 
-**Known open item** (tracked separately, not a diagram bug): `c-thru-stop-hook.sh` and
-`c-thru-statusline-overlay.sh` both watch `proxy.log` for event tags
-(`[fallback.candidate_success]`, `[fallback.chain_start]`) confirmed via git history to be from
-an old, since-rewritten fallback architecture (commit `10e88d4`) — neither tag is emitted by the
-current `tools/claude-proxy`. Both hooks are wired correctly per this diagram; what they watch
-for is stale. See the open task tracking this.
+**Stop-hook signal (updated Round-5):** `c-thru-stop-hook.sh` and `c-thru-statusline-overlay.sh`
+read `GET /c-thru/recent` for `fallback_from` / `served_by` (session-scoped via `/s/<id>`), not
+raw `proxy.log` tags. They remain optional / not auto-registered in hooks.json.
 
 ---
 

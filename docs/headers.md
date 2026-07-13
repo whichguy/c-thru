@@ -128,13 +128,12 @@ When absent, `call_style` is inferred from `format`.
 - Documenting future `call_style:"openai"` intent on an endpoint without changing current dispatch
 - Overriding translation independently of auth/wire format (e.g. passthrough to a Gemini-URL endpoint)
 
-**Example — `gemini_ai_compat`** uses `format:"anthropic"` (passthrough auth) but `call_style:"openai"` to
-document that its `/v1beta/openai` URL speaks OpenAI protocol. Once `forwardOpenAI` is implemented,
-it will dispatch correctly without any config change.
+**Supported translation styles today:** `anthropic` (passthrough) and `gemini`. `call_style:"openai"`
+returns 501 until an OpenAI translator is built — do not ship endpoints that only 501 in the default
+`config/model-map.json`.
 
-**Backward compatibility:** all existing configs work unchanged. `format:"gemini"` infers
-`call_style:"gemini"`, `format:"anthropic"` infers `call_style:"anthropic"`, `format:"openai"` infers
-`call_style:"openai"` (still 501 — no behavior change).
+**Backward compatibility:** `format:"gemini"` infers `call_style:"gemini"`, `format:"anthropic"`
+infers `call_style:"anthropic"`, `format:"openai"` infers `call_style:"openai"` (still 501).
 
 ## See also
 

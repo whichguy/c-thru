@@ -1,3 +1,5 @@
+> **ARCHIVE / historical.** Not current product guidance. Superseded by `docs/connectivity-modes.md`, `docs/functionality-map.md`, and live code. Kept for archaeology only.
+
 # c-thru UX cohesion audit (2026-04-26)
 
 A holistic look at how the product's surfaces compose, where the user's mental model

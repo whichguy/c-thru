@@ -73,11 +73,11 @@ const BACKEND_SIGIL_RE = /^(.+)@([A-Za-z0-9_-]+)$/;
 const LLM_MODES = new Set([
   'best-cloud', 'best-cloud-oss', 'best-local-oss', 'best-cloud-gov', 'best-local-gov',
 ]);
-// Legacy mode names accepted in llm_mode field for backward compat (auto-converted by resolveLlmMode).
+// Short aliases accepted in llm_mode (normalized by resolveLlmMode). Retired
+// slot-era names (semi-offload, cloud-judge-only, fastest-possible, …) are NOT
+// accepted — use a built-in mode or declare custom_modes.
 const LEGACY_LLM_MODES = new Set([
-  'connected', 'offline', 'semi-offload', 'cloud-judge-only', 'local-only',
-  'cloud-best-quality', 'local-best-quality', 'cloud-thinking', 'local-review',
-  'cloud-only', 'claude-only', 'opensource-only',
+  'connected', 'offline', 'disconnect', 'local-only',
   'best-opensource', 'best-opensource-cloud', 'best-opensource-local',
 ]);
 const HARDWARE_TIERS = new Set(['16gb', '32gb', '48gb', '64gb', '128gb']);
@@ -842,7 +842,7 @@ function validateConfig(config, _errors, options) {
       report("'llm_connectivity_mode' must be 'connected' or 'disconnect'");
     } else if (config.llm_mode == null) {
       // Non-fatal migration hint: only warn when llm_mode is absent (both present = silent coexistence; llm_mode wins)
-      warn("model-map-validate: warning: 'llm_connectivity_mode' is deprecated; migrate to 'llm_mode' (connected|semi-offload|cloud-judge-only|offline)");
+      warn("model-map-validate: warning: 'llm_connectivity_mode' is deprecated; migrate to 'llm_mode' (best-cloud|best-cloud-oss|best-local-oss|…; aliases: connected|offline)");
     }
     // else: both fields present — llm_mode takes precedence; no warning needed
   }

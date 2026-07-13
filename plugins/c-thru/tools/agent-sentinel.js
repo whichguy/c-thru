@@ -7,7 +7,7 @@
 // an `x-c-thru-agent` header. This returns the candidate routing NAME the request is
 // tagged with, or null. The name is an opaque string fed into resolveBackend
 // (agent → capability → model, concrete tags, advisor: pins, etc.) — not limited to
-// agent_to_capability keys. Trust (HMAC / header) lives in claude-proxy.
+// agent_to_capability keys. Trust is loopback-client-only in claude-proxy (no HMAC).
 //
 // Detection is cheapest-first and does NOT parse the JSON structure:
 //   1. O(1) header check (any non-empty trimmed string; empty today, future-proof).
@@ -16,7 +16,8 @@
 //      arbitrary length / charset (OpenRouter slugs, advisor:org/model, …).
 //
 // After routing, stripAgentSentinelFromBody() removes all markers from the structured
-// body so upstream LLMs never see routing metadata.
+// body so upstream LLMs never see routing metadata. Strip walks nested tool_result
+// content arrays and thinking fields so multi-turn history cannot retain markers.
 
 const SENTINEL_PREFIX = '[[c-thru-agent:';
 // Optional trailing HMAC: exactly 16 hex chars after the final colon of the interior.
@@ -79,15 +80,28 @@ function stripSentinelFromContent(content) {
   let changed = false;
   const out = content.map((block) => {
     if (!block || typeof block !== 'object') return block;
-    if (typeof block.text === 'string' && block.text.indexOf(SENTINEL_PREFIX) >= 0) {
-      changed = true;
-      return Object.assign({}, block, { text: stripSentinelFromString(block.text) });
+    let next = block;
+    let local = false;
+    if (typeof next.text === 'string' && next.text.indexOf(SENTINEL_PREFIX) >= 0) {
+      local = true;
+      next = Object.assign({}, next, { text: stripSentinelFromString(next.text) });
     }
-    if (typeof block.content === 'string' && block.content.indexOf(SENTINEL_PREFIX) >= 0) {
-      changed = true;
-      return Object.assign({}, block, { content: stripSentinelFromString(block.content) });
+    if (typeof next.thinking === 'string' && next.thinking.indexOf(SENTINEL_PREFIX) >= 0) {
+      local = true;
+      next = Object.assign({}, next, { thinking: stripSentinelFromString(next.thinking) });
     }
-    return block;
+    if (typeof next.content === 'string' && next.content.indexOf(SENTINEL_PREFIX) >= 0) {
+      local = true;
+      next = Object.assign({}, next, { content: stripSentinelFromString(next.content) });
+    } else if (Array.isArray(next.content)) {
+      const nested = stripSentinelFromContent(next.content);
+      if (nested !== next.content) {
+        local = true;
+        next = Object.assign({}, next, { content: nested });
+      }
+    }
+    if (local) changed = true;
+    return next;
   });
   return changed ? out : content;
 }

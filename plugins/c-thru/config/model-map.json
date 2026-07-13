@@ -28,13 +28,6 @@
       "vertex": true,
       "fallback_to": "claude-sonnet-5"
     },
-    "gemini_ai_compat": {
-      "url": "https://generativelanguage.googleapis.com/v1beta/openai",
-      "format": "anthropic",
-      "call_style": "openai",
-      "auth_env": "GOOGLE_API_KEY",
-      "fallback_to": "claude-sonnet-5"
-    },
     "anthropic_subscription": {
       "url": "https://api.anthropic.com",
       "format": "anthropic",

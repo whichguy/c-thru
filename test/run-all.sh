@@ -423,14 +423,13 @@ run_suite "proxy-quality (mapping, fallback cascade, v1 passthrough)" \
 run_suite "proxy-ollama-fallback-url (OLLAMA_URL honored in not-in-routes fallback)" \
   node "$REPO_DIR/test/proxy-ollama-fallback-url.test.js"
 
-# EXCLUDED (tests for features not yet implemented in the proxy):
-# proxy-classify.test.js:  CLAUDE_PROXY_CLASSIFY dynamic in-proxy classifier not implemented
+# EXCLUDED (tests for features not yet implemented / low value):
 # proxy-targets.test.js:   targets{} config section (request_defaults per model) not implemented
 # benchmark-coverage.test.js: passes now, but low value (0 cells checked since modes not in fixture)
 # proxy-autodetect.test.sh: machine-RAM-dependent wrapper (asserts against the host's
 #   physical memory tier); the hermetic .js variant is registered above
+# proxy-classify.test.js: removed — in-proxy dynamic classifier was never implemented
 skip_suite "benchmark-coverage (excluded — 0 cells checked, mode fixture not populated)"
-skip_suite "proxy-classify (excluded — CLAUDE_PROXY_CLASSIFY feature not implemented in proxy)"
 skip_suite "proxy-targets (excluded — targets{} config feature not implemented in proxy)"
 skip_suite "proxy-autodetect.test.sh (excluded — machine-RAM-dependent; .js variant registered)"
 

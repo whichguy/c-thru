@@ -1,3 +1,5 @@
+> **ARCHIVE / historical.** Not current product guidance. Superseded by `docs/connectivity-modes.md`, `docs/functionality-map.md`, and live code. Kept for archaeology only.
+
 # Design: dynamic prompt classification → quality-aware routing
 
 Status: **proposed** (design doc; not implemented).

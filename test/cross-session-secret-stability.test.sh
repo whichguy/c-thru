@@ -1,21 +1,11 @@
 #!/usr/bin/env bash
-# P2 — cross-session secret stability (HMAC continuity across sessions).
+# P2 — cross-session control-token stability (shared proxy daemon).
 #
-# The proxy is a per-user shared daemon: a marker SIGNED by an early session's
-# hook must verify in a proxy that a LATER session started. That only holds if
-# ensure_per_user_secrets is byte-STABLE across sessions (same CLAUDE_PROFILE_DIR
-# → same agent-hmac.key + proxy.control-token), NOT per-session regenerated.
+# Agent-sentinel trust is loopback-only (no agent-hmac.key). An unsigned marker
+# stamped by session A must still route in a proxy session B started later —
+# that requires loopback honor (always true for local clients) and a STABLE
+# control-token across sessions.
 #
-# This complements launcher-secret-gen-proxy-enforcement.test.sh (which proves a
-# FORGED tag is rejected): here we prove the POSITIVE continuity path —
-#   Session A: ensure_per_user_secrets, then sign [[c-thru-agent:<name>:<hmac>]]
-#              using the persisted agent-hmac.key (hmac = HMAC-SHA256(key,name)
-#              hex, first 16 chars — matching claude-proxy's agentTag()).
-#   Session B: ensure_per_user_secrets AGAIN (must be a no-op), then spawn the
-#              proxy against the SAME key file. The session-A-signed marker is
-#              ACCEPTED (routed to the agent's model), proving the key is shared.
-#
-# Mirrors the awk-source pattern of launcher-secret-gen-proxy-enforcement.test.sh.
 # Run: bash test/cross-session-secret-stability.test.sh
 
 set -uo pipefail
@@ -46,44 +36,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ── Source the launcher's secret-gen functions in isolation ───────────────────
 eval "$(awk '/^gen_secret_hex\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^ensure_per_user_secrets\(\) \{/,/^\}$/' "$CTHRU")"
 type ensure_per_user_secrets >/dev/null 2>&1 || { echo "fatal: ensure_per_user_secrets not sourced" >&2; exit 1; }
-type gen_secret_hex >/dev/null 2>&1 || { echo "fatal: gen_secret_hex not sourced" >&2; exit 1; }
 
 PROFILE="$BASE/profile"
-KEY_FILE="$PROFILE/agent-hmac.key"
+HMAC_FILE="$PROFILE/agent-hmac.key"
 TOKEN_FILE="$PROFILE/proxy.control-token"
+AGENT_NAME="reviewer-plan"
 
-# ── Session A: generate, capture, sign a marker ───────────────────────────────
-echo "A. Session A: ensure_per_user_secrets + sign a sentinel with the persisted key"
+echo "A. Session A: ensure_per_user_secrets (control-token only)"
 CLAUDE_PROFILE_DIR="$PROFILE" ensure_per_user_secrets
-assert "[[ -s '$KEY_FILE' ]]" "session A created agent-hmac.key"
+assert "[[ ! -e '$HMAC_FILE' ]]" "session A did NOT create agent-hmac.key"
 assert "[[ -s '$TOKEN_FILE' ]]" "session A created proxy.control-token"
-KEY_A="$(cat "$KEY_FILE")"
 TOKEN_A="$(cat "$TOKEN_FILE")"
 
-AGENT_NAME="reviewer-plan"
-# agentTag() in claude-proxy: HMAC-SHA256(key, name) hex, first 16 chars.
-HMAC_TAG="$(node -e '
-  const crypto=require("crypto");
-  const key=process.argv[1], name=process.argv[2];
-  process.stdout.write(crypto.createHmac("sha256",key).update(name).digest("hex").slice(0,16));
-' "$KEY_A" "$AGENT_NAME")"
-assert "[[ \${#HMAC_TAG} -eq 16 ]]" "computed 16-char HMAC tag for '$AGENT_NAME' (got '$HMAC_TAG')"
+# Session-A "stamped" marker (unsigned — hook no longer HMAC-signs).
+MARKER="[[c-thru-agent:${AGENT_NAME}]] go"
 
-# ── Session B: re-run secret-gen, assert STABLE, then start the proxy ──────────
 echo
-echo "B. Session B: ensure_per_user_secrets again → STABLE (no rotation)"
-CLAUDE_PROFILE_DIR="$PROFILE" ensure_per_user_secrets   # second simulated session
-KEY_B="$(cat "$KEY_FILE")"
+echo "B. Session B: ensure_per_user_secrets again → control-token STABLE"
+CLAUDE_PROFILE_DIR="$PROFILE" ensure_per_user_secrets
 TOKEN_B="$(cat "$TOKEN_FILE")"
-assert "[[ '$KEY_A' == '$KEY_B' ]]" "agent-hmac.key STABLE across sessions"
 assert "[[ '$TOKEN_A' == '$TOKEN_B' ]]" "proxy.control-token STABLE across sessions"
+assert "[[ ! -e '$HMAC_FILE' ]]" "still no agent-hmac.key after session B"
 
-# Two distinguishable stub backends.
-start_stub() {  # $1 = out-port-file
+start_stub() {
   node -e '
     const http=require("http");
     const s=http.createServer((req,res)=>{
@@ -107,7 +85,7 @@ for pf in "$AGENT_PORT_FILE" "$DEFAULT_PORT_FILE"; do
 done
 AGENT_PORT="$(cat "$AGENT_PORT_FILE" 2>/dev/null)"
 DEFAULT_PORT="$(cat "$DEFAULT_PORT_FILE" 2>/dev/null)"
-assert "[[ -n '$AGENT_PORT' && -n '$DEFAULT_PORT' ]]" "stub backends bound (agent=$AGENT_PORT default=$DEFAULT_PORT)"
+assert "[[ -n '$AGENT_PORT' && -n '$DEFAULT_PORT' ]]" "stub backends bound"
 
 CONFIG="$BASE/model-map.json"
 cat > "$CONFIG" <<EOF
@@ -122,17 +100,16 @@ cat > "$CONFIG" <<EOF
 }
 EOF
 
-# Proxy started by "session B" reads session A's persisted key file.
 PROXY_OUT="$BASE/proxy.out"
 PROXY_HOME="$BASE/proxy-home"; mkdir -p "$PROXY_HOME"
 HOME="$PROXY_HOME" \
   CLAUDE_LLM_MODE=best-cloud \
-  CLAUDE_PROXY_AGENT_HMAC_FILE="$KEY_FILE" \
   CLAUDE_PROXY_CONTROL_TOKEN_FILE="$TOKEN_FILE" \
   CLAUDE_PROXY_STARTUP_PROBE=0 \
   CLAUDE_PROXY_SKIP_OLLAMA_WARMUP=1 \
   node "$PROXY" --config "$CONFIG" --profile 16gb --mode best-cloud >"$PROXY_OUT" 2>"$BASE/proxy.err" &
 PROXY_PID=$!
+
 PROXY_PORT=""
 for _ in $(seq 1 80); do
   PROXY_PORT="$(sed -n 's/^READY \([0-9][0-9]*\)$/\1/p' "$PROXY_OUT" 2>/dev/null | head -1)"
@@ -140,38 +117,33 @@ for _ in $(seq 1 80); do
   kill -0 "$PROXY_PID" 2>/dev/null || break
   sleep 0.1
 done
-assert "[[ -n '$PROXY_PORT' ]]" "session B proxy emitted READY <port> (got '$PROXY_PORT')"
-[[ -z "$PROXY_PORT" ]] && { echo "proxy stderr:"; sed 's/^/    /' "$BASE/proxy.err"; }
+assert "[[ -n '$PROXY_PORT' ]]" "proxy READY (got '$PROXY_PORT')"
 
-post_messages_header() {  # $1=marker-content $2=header-name
-  node -e '
+if [[ -n "$PROXY_PORT" ]]; then
+  served="$(node -e '
     const http=require("http");
-    const port=+process.argv[1], content=process.argv[2], hdr=process.argv[3].toLowerCase();
+    const port=+process.argv[1], content=process.argv[2];
     const body=JSON.stringify({model:"default-model",max_tokens:5,
       messages:[{role:"user",content:content}]});
     const req=http.request({hostname:"127.0.0.1",port,path:"/v1/messages",method:"POST",
       headers:{"Content-Type":"application/json","Content-Length":Buffer.byteLength(body)}},
-      res=>{res.resume();res.on("end",()=>process.stdout.write(String(res.headers[hdr]||"")));});
+      res=>{res.resume();res.on("end",()=>process.stdout.write(String(res.headers["x-c-thru-served-by"]||"")));});
     req.on("error",()=>process.stdout.write(""));req.write(body);req.end();
-  ' "$PROXY_PORT" "$1" "$2"
-}
+  ' "$PROXY_PORT" "$MARKER")"
+  assert "[[ '$served' == 'agent-model' ]]" \
+    "session-A unsigned marker still honored by session-B proxy → served-by=agent-model (got '$served')"
 
-echo
-echo "C. session-A-signed marker is ACCEPTED by session-B's proxy (HMAC continuity)"
-if [[ -n "$PROXY_PORT" ]]; then
-  # VALID marker signed with the persisted key → routed to the agent's model.
-  VALID="[[c-thru-agent:$AGENT_NAME:$HMAC_TAG]] go"
-  served_valid="$(post_messages_header "$VALID" "x-c-thru-served-by")"
-  assert "[[ '$served_valid' == 'agent-model' ]]" \
-    "session-A marker VERIFIES in session-B proxy → served-by='agent-model' (got '$served_valid')"
-
-  # Counter-case: a tag computed from a DIFFERENT key must be rejected (proves
-  # acceptance above is genuine HMAC verification, not fail-open).
-  WRONG_TAG="$(node -e 'const c=require("crypto");process.stdout.write(c.createHmac("sha256","not-the-real-key").update(process.argv[1]).digest("hex").slice(0,16))' "$AGENT_NAME")"
-  WRONG="[[c-thru-agent:$AGENT_NAME:$WRONG_TAG]] go"
-  served_wrong="$(post_messages_header "$WRONG" "x-c-thru-served-by")"
-  assert "[[ '$served_wrong' == 'default-model' ]]" \
-    "marker signed with a DIFFERENT key is REJECTED → served-by='default-model' (got '$served_wrong')"
+  st="$(node -e '
+    const http=require("http");
+    const port=+process.argv[1], tok=process.argv[2];
+    const body=JSON.stringify({mode:"best-cloud"});
+    const headers={"Content-Type":"application/json","Content-Length":Buffer.byteLength(body),
+      "X-C-Thru-Control":tok};
+    const req=http.request({hostname:"127.0.0.1",port,path:"/c-thru/mode",method:"POST",headers},
+      res=>{res.resume();res.on("end",()=>process.stdout.write(String(res.statusCode)));});
+    req.on("error",()=>process.stdout.write("ERR"));req.write(body);req.end();
+  ' "$PROXY_PORT" "$TOKEN_A")"
+  assert "[[ '$st' == '200' ]]" "session-A control-token still works in session B (got '$st')"
 fi
 
 echo

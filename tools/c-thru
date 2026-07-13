@@ -843,8 +843,6 @@ cmd_help() {
   echo "  --best-opensource-cloud   synonym for --mode best-cloud-oss"
   echo "  --best-opensource-local   synonym for --mode best-local-oss"
   echo "  --best-opensource         synonym for --mode best-cloud-oss"
-  echo "  --fastest                 synonym for --mode best-local-oss"
-  echo "  --smallest                synonym for --mode best-local-oss"
   echo -e "  --mode <mode>             set LLM routing mode for this invocation"
   echo -e "  ${GRAY}    Modes:${NC}             best-cloud | best-cloud-oss | best-local-oss | best-cloud-gov | best-local-gov"
   echo -e "  ${GRAY}    best-cloud:${NC}        Anthropic/cloud models (Claude Opus/Sonnet); local at 64+ GB"
@@ -877,8 +875,6 @@ cmd_help() {
   echo "  CLAUDE_LLM_MEMORY_GB=<n>      override RAM detection for hw tier selection"
   echo "  C_THRU_NO_UPDATE=1     disable git self-update at startup"
   echo "  CLAUDE_PROXY_JOURNAL=1        record every request/response to ~/.claude/journal/"
-  echo "  CLAUDE_PROXY_CLASSIFY=1       run small classifier on prompts (Phase A: observe-only)"
-  echo "  CLAUDE_PROXY_CLASSIFY_MODEL   classifier model tag (default gemma4:e2b)"
   echo "  NO_COLOR=1                    disable colored output"
   echo ""
   echo -e "${BOLD}Thinking & reasoning models:${NC}"
@@ -1707,7 +1703,7 @@ apply_background_model_overrides() {
   local llm_mode
   llm_mode="$(resolve_llm_mode)"
   case "$llm_mode" in
-    best-local-oss|best-local-gov|offline|local-only|best-opensource-local|best-opensource|opensource-only|local-best-quality|semi-offload|cloud-judge-only)
+    best-local-oss|best-local-gov|offline|local-only|best-opensource-local|best-opensource)
       # fast-generalist → small local model — appropriate for Haiku-tier background work
       if [[ -z "${ANTHROPIC_SMALL_FAST_MODEL:-}" || "${ANTHROPIC_SMALL_FAST_MODEL:-}" == claude-* ]]; then
         export ANTHROPIC_SMALL_FAST_MODEL="fast-generalist"
@@ -2291,12 +2287,10 @@ describe_proxy_log_target() {
   printf ' — see %s' "$path"
 }
 
-# ARCH: ensure_per_user_secrets — generate the per-user shared secrets ONCE.
-#   The proxy is a shared daemon reused across parallel sessions; both secrets must
-#   be STABLE PER-USER (0600 files under ~/.claude that the proxy and every session's
-#   hook read), NOT per-session — a per-session key would make a later session's HMAC
-#   fail against a proxy an earlier session started. Generate iff absent (idempotent).
-#     - agent-hmac.key       (C19) — HMAC key for agent-sentinel signing/verification.
+# ARCH: ensure_per_user_secrets — generate the per-user control token ONCE.
+#   The proxy is a shared daemon reused across parallel sessions; the control
+#   token must be STABLE PER-USER (0600 under ~/.claude), NOT per-session.
+#   Agent-sentinel trust is loopback-client-only (no shared HMAC key).
 #     - proxy.control-token  (C23) — bearer token for mutating control routes.
 gen_secret_hex() {
   if command -v openssl >/dev/null 2>&1; then
@@ -2310,7 +2304,7 @@ gen_secret_hex() {
 ensure_per_user_secrets() {
   local dir="$CLAUDE_PROFILE_DIR" f
   mkdir -p "$dir" 2>/dev/null || true
-  for f in agent-hmac.key proxy.control-token; do
+  for f in proxy.control-token; do
     local path="$dir/$f"
     if [[ ! -s "$path" ]]; then
       local secret; secret="$(gen_secret_hex)"
@@ -4255,7 +4249,7 @@ build_forwarded_args() {
         ;;
       --bypass-proxy | --journal | --no-update | --no-agents | --debug | --thinking | \
       --local-only | --best-cloud | --best-opensource-cloud | --best-opensource-local | \
-      --best-opensource | --fastest | --smallest | --offline)
+      --best-opensource | --offline)
         i=$((i + 1))
         continue
         ;;
@@ -4998,8 +4992,6 @@ while [[ $i -lt $n ]]; do
     --best-opensource-cloud)   export CLAUDE_LLM_MODE="best-cloud-oss"; i=$((i + 1)) ;;
     --best-opensource-local)   export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
     --best-opensource)         export CLAUDE_LLM_MODE="best-cloud-oss"; i=$((i + 1)) ;;
-    --fastest)                 export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
-    --smallest)                export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
     --offline)                 export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
     --print-routing | --dry-run)  print_routing_only=1; i=$((i + 1)) ;;

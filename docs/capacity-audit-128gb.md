@@ -1,3 +1,5 @@
+> **ARCHIVE / historical.** Not current product guidance. Superseded by `docs/connectivity-modes.md`, `docs/functionality-map.md`, and live code. Kept for archaeology only.
+
 # 128GB Unified Memory VRAM Capacity Audit
 
 **Date:** 2026-04-26  

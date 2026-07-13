@@ -164,7 +164,7 @@ Detail: `docs/model-map.md`, `docs/hardware-profile-matrix.md`.
 | Pollution detect/clean (project entries leaked into profile) | `--detect-pollution`/`--clean-pollution` | full | `tools/model-map-config.js:260` |
 | apply-recommendations (inject `recommended-mappings.json`) | — | **removed/retired** (was a permanent no-op; see verification) | n/a |
 | `/hooks/context` prompt-submit injection (static control-plane block) | `c-thru-classify.sh` → proxy | full *(misnamed: no classification)* | `tools/claude-proxy:4533` |
-| Dynamic role classifier (`CLAUDE_PROXY_CLASSIFY`) | — | **absent** (doc says shipped) | n/a — `docs/dynamic-classification-phase-a.md` |
+| Dynamic role classifier (`CLAUDE_PROXY_CLASSIFY`) | — | **absent (retired surface)** | never implemented; design docs under ARCHIVE banner |
 
 ---
 
@@ -203,15 +203,11 @@ guarded by `test/hooks-declaration-parity.test.js`. Visual event→hook view:
 | postcompact-context | PreCompact | Re-inject routing context | `c-thru-postcompact-context.sh` | hooks.json + ephemeral |
 | agent-router | PreToolUse `Agent` | subagent_type → capability model rewrite | `c-thru-agent-router-hook.sh` | **CLI-only** |
 | enter-plan | PreToolUse `EnterPlanMode` | Advisory `/c-thru-plan` hint (never blocks) | `c-thru-enter-plan-hook.sh` | CLI-only + skill-managed |
-| stop | Stop | One systemMessage per new fallback event¹ | `c-thru-stop-hook.sh` | **manual/ephemeral** (semi-orphan — symlinked, not auto-registered) |
+| stop | Stop | One systemMessage per new fallback event via `GET /c-thru/recent` (`fallback_from`) | `c-thru-stop-hook.sh` | **manual/ephemeral** (semi-orphan — symlinked, not auto-registered) |
 
-¹ **Known gap:** `stop` (and the sibling `c-thru-statusline-overlay.sh`, not itself a registered
-hook) watch `proxy.log` for event tags confirmed via git history to be from an old, since-rewritten
-fallback architecture (commit `10e88d4`) — neither tag is emitted by the current
-`tools/claude-proxy`, so this hook has likely never fired a real systemMessage since that
-rewrite. The registration/wiring described above is accurate; what it watches *for* is stale. Not
-yet fixed — the correct replacement signal needs tracing current success-path logging rather than
-a guess. See `docs/architecture-diagrams.md` § 4's "Known open item" note.
+¹ **Round-5 rewrite:** stop-hook and statusline-overlay read the recent-requests ring
+(`fallback_from` / `served_by`) rather than grepping dead `proxy.log` tags. Still not
+auto-registered in hooks.json — operators opt in via ephemeral settings.
 
 ---
 

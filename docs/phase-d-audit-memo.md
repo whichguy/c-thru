@@ -1,3 +1,5 @@
+> **ARCHIVE / historical.** Not current product guidance. Superseded by `docs/connectivity-modes.md`, `docs/functionality-map.md`, and live code. Kept for archaeology only.
+
 # Phase D — Anthropic-Protocol Coverage Audit
 
 **Scope:** Static-only audit of `tools/claude-proxy` after the Phase A–C2 refactor that

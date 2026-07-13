@@ -92,12 +92,12 @@ else
 fi
 
 # 6. Control Channel: Mode Restore (sequential after 5 — restores connected mode)
-echo -n "6. Testing mode switch (legacy 'connected' -> best-cloud)... "
+echo -n "6. Testing mode switch (legacy 'connected' -> best-cloud-oss)... "
 if ! tools/c-thru /c-thru-control back online > /dev/null; then
   STEP_FAILED=1
 fi
 status_final=$(tools/c-thru /c-thru-control status 2>&1) || true
-if echo "$status_final" | grep -q "\[best-cloud\]"; then
+if echo "$status_final" | grep -q "\[best-cloud-oss\]"; then
   echo "✅ OK"
 else
   echo "❌ FAILED"
