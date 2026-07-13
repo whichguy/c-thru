@@ -261,3 +261,8 @@ One deliberately-filed-not-guessed open item remains: `docs/planning/TODO-plan-v
 loop's scope, left for a future round or a dedicated task). Two genuinely minor items remain undocumented
 by design (both confirmed non-blocking across 2 independent reviews): the SKILL.md opt-out ordering
 nuance and the dead dashboard match-arm code.
+
+## Completion artifact (Phase 9)
+Published: https://claude.ai/code/artifact/71d0379e-f870-49b7-a3b6-a321168c9332
+Explains the loop mechanism (9 phases, 5 review dimensions, material/minor rule) and this run's
+results (4 rounds, 14 findings surfaced, 8 fixed, 2 correctly declined, 1 filed open, 4 commits).
