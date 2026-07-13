@@ -1268,7 +1268,14 @@ function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders, meta) {
     }
 
     // Layer 3: explicit `auth: {header, scheme, env, literal}` object — final override.
+    // Always strip inbound Anthropic credentials first. Without this, profile
+    // "explicit_object" (set when auth is an object and KNOWN_HOSTS misses the
+    // host) would leave the client's x-api-key / Bearer on the outbound request
+    // while also adding the third-party key — leaking sk-ant-* to e.g. api.x.ai.
     if (typeof backend.auth === 'object' && backend.auth) {
+      delete outgoingHeaders['authorization'];
+      delete outgoingHeaders['Authorization'];
+      dropApiKey(outgoingHeaders);
       const a = backend.auth;
       const isGeminiShape = backend.format === 'gemini' || backend.kind === 'gemini' || backend.call_style === 'gemini';
       const defaultHeader = (isGeminiShape && !backend.vertex) ? 'x-goog-api-key' : 'Authorization';
@@ -2124,13 +2131,19 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   // Ollama's /v1/messages adapter does not implement /v1/messages/count_tokens
   // (returns 404). Gemini maps it to :countTokens; Ollama has no equivalent, so
   // short-circuit with a proxy-side heuristic estimate instead of forwarding.
-  // Gated on isLocalBackend (catches kind:"ollama" and localhost anthropic-format
-  // endpoints like ollama_cloud) so real Anthropic backends still forward natively.
-  if (typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens') && isLocalBackend(backend)) {
-    const estimate = estimateInputTokens(body);
-    ctxLog(ctx, 'count_tokens.estimated', { backend: backend.id, input_tokens: estimate });
-    res.setHeader('x-c-thru-count-tokens', 'estimate');
-    return send(res, 200, { input_tokens: estimate });
+  // Same for xAI (Anthropic Messages is legacy/compat; count_tokens not reliable).
+  // Real Anthropic backends still forward natively.
+  if (typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens')) {
+    const host = backendHost(backend) || '';
+    const estimateCountTokens = isLocalBackend(backend)
+      || backend.id === 'xai'
+      || /(^|\.)api\.x\.ai$/.test(host);
+    if (estimateCountTokens) {
+      const estimate = estimateInputTokens(body);
+      ctxLog(ctx, 'count_tokens.estimated', { backend: backend.id, input_tokens: estimate });
+      res.setHeader('x-c-thru-count-tokens', 'estimate');
+      return send(res, 200, { input_tokens: estimate });
+    }
   }
 
   const targetUrl = new URL(backend.url);
