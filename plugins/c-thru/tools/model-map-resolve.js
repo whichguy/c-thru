@@ -110,6 +110,10 @@ const KNOWN_HOSTS = [
     profile: 'bearer_priority', header: 'x-api-key', env: 'ANTHROPIC_API_KEY' },
   { match: /(^|\.)openrouter\.ai$/,
     profile: 'header_env', header: 'Authorization', scheme: 'Bearer', env: 'OPENROUTER_API_KEY' },
+  // xAI Grok commercial API — third-party; strip Anthropic client auth, inject XAI_API_KEY.
+  // Host must match before explicit auth alone is relied upon (see applyOutboundAuth explicit_object strip).
+  { match: /(^|\.)api\.x\.ai$/,
+    profile: 'header_env', header: 'Authorization', scheme: 'Bearer', env: 'XAI_API_KEY' },
   { match: /(^|\.)generativelanguage\.googleapis\.com$/,
     profile: 'header_env', header: 'x-goog-api-key', env: 'GOOGLE_API_KEY' },
   { match: /(^|\.)aiplatform\.googleapis\.com$/,

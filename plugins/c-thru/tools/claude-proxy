@@ -1268,7 +1268,14 @@ function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders, meta) {
     }
 
     // Layer 3: explicit `auth: {header, scheme, env, literal}` object — final override.
+    // Always strip inbound Anthropic credentials first. Without this, profile
+    // "explicit_object" (set when auth is an object and KNOWN_HOSTS misses the
+    // host) would leave the client's x-api-key / Bearer on the outbound request
+    // while also adding the third-party key — leaking sk-ant-* to e.g. api.x.ai.
     if (typeof backend.auth === 'object' && backend.auth) {
+      delete outgoingHeaders['authorization'];
+      delete outgoingHeaders['Authorization'];
+      dropApiKey(outgoingHeaders);
       const a = backend.auth;
       const isGeminiShape = backend.format === 'gemini' || backend.kind === 'gemini' || backend.call_style === 'gemini';
       const defaultHeader = (isGeminiShape && !backend.vertex) ? 'x-goog-api-key' : 'Authorization';
@@ -1798,8 +1805,11 @@ function scrubCthruHeaders(headers) {
   // and usage tees parse bodies as UTF-8 text; forwarding client Accept-Encoding
   // gzip/br can yield binary frames the proxy cannot toString safely.
   // Case-insensitive delete (Node lowercases most incoming headers but not always).
+  // Also drop transfer-encoding: after we rewrite the body we set an explicit
+  // Content-Length; forwarding the client's chunked TE would desync the body.
   for (const k of Object.keys(out)) {
-    if (k.toLowerCase() === 'accept-encoding') delete out[k];
+    const lk = k.toLowerCase();
+    if (lk === 'accept-encoding' || lk === 'transfer-encoding') delete out[k];
   }
   out['accept-encoding'] = 'identity';
   return out;
@@ -2105,17 +2115,114 @@ function shouldFallbackOnStatus(code) {
 //   - kind: "ollama"     — Ollama 0.4+ Anthropic adapter at /v1/messages
 //                          (auth: Authorization: Bearer ollama, hardcoded)
 //
-// Body is forwarded VERBATIM — no flattening, no tool-block stripping, no
-// re-serialization. The only mutation made by callers is body.model (rewritten
-// to the resolved concrete model upstream of dispatch). Ollama and Anthropic
-// both consume the same dialect at /v1/messages: tool_use / tool_result /
-// thinking blocks all roundtrip natively.
+// Body is forwarded VERBATIM for true Anthropic-family backends. Callers rewrite
+// body.model. Ollama/Anthropic share /v1/messages dialect (tool_use, thinking).
+//
+// xAI exception: api.x.ai rejects role:"system"|"developer"|"tool" inside
+// messages[] (400 invalid-argument "Invalid message role"). Claude Code agents
+// often put the subagent system prompt as messages[{role:system}]. Fold those
+// into top-level `system` (accepted by xAI) via sanitizeXaiAnthropicBody.
 //
 // For older Ollama installs or LM Studio's Ollama-compat shim that lack
 // /v1/messages, opt the backend into forwardOllamaLegacy() with
 // `legacy_ollama_chat: true` in model-map.json — that path uses Ollama's
 // native /api/chat with the (lossy) flattenMessagesForOllama translation.
 // =============================================================================
+
+function isXaiBackend(backend) {
+  if (!backend) return false;
+  if (backend.id === 'xai') return true;
+  const host = backendHost(backend) || '';
+  return /(^|\.)api\.x\.ai$/i.test(host);
+}
+
+// Flatten Anthropic content (string | content-block[]) to plain text.
+function anthropicContentToText(content) {
+  if (content == null) return '';
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map(block => {
+      if (block == null) return '';
+      if (typeof block === 'string') return block;
+      if (typeof block === 'object' && block.type === 'text' && block.text != null) return String(block.text);
+      return '';
+    }).filter(Boolean).join('\n');
+  }
+  return '';
+}
+
+// Pure: rewrite body so xAI Messages accepts it. Does not mutate input.
+// - role system/developer in messages[] → top-level system (joined)
+//   (Claude Code agent pins inject the agent prompt as messages[{role:system}];
+//   api.x.ai returns 400 "Invalid message role" for those.)
+// - role tool / unknown → user text (best-effort; avoids hard 400)
+// - tools[].input_schema.required: null/missing → [] (xAI schema validation:
+//   "required: null is not of type array")
+// - keeps user/assistant (and their content blocks) intact
+function sanitizeXaiAnthropicBody(body) {
+  if (!body || typeof body !== 'object') return body;
+
+  let changed = false;
+  let messages = body.messages;
+  let systemOut = body.system;
+
+  if (Array.isArray(body.messages)) {
+    const systemChunks = [];
+    const topSys = anthropicContentToText(body.system);
+    if (topSys) systemChunks.push(topSys);
+
+    const next = [];
+    let stripped = 0;
+    for (const msg of body.messages) {
+      if (!msg || typeof msg !== 'object') continue;
+      const role = msg.role;
+      if (role === 'system' || role === 'developer') {
+        const t = anthropicContentToText(msg.content);
+        if (t) systemChunks.push(t);
+        stripped++;
+        continue;
+      }
+      if (role === 'user' || role === 'assistant') {
+        next.push(msg);
+        continue;
+      }
+      // role:"tool" and other non-compat roles → user text
+      const t = anthropicContentToText(msg.content);
+      next.push({ role: 'user', content: t || '[omitted non-user/assistant content]' });
+      stripped++;
+    }
+
+    if (stripped > 0) {
+      changed = true;
+      messages = next;
+      if (systemChunks.length) systemOut = systemChunks.join('\n\n');
+    }
+  }
+
+  // Fix tools schemas for xAI JSON Schema strictness.
+  let toolsOut = body.tools;
+  if (Array.isArray(body.tools)) {
+    let toolsChanged = false;
+    toolsOut = body.tools.map(tool => {
+      if (!tool || typeof tool !== 'object') return tool;
+      const schema = tool.input_schema;
+      if (!schema || typeof schema !== 'object') return tool;
+      if (schema.required != null && Array.isArray(schema.required)) return tool;
+      toolsChanged = true;
+      return Object.assign({}, tool, {
+        input_schema: Object.assign({}, schema, { required: Array.isArray(schema.required) ? schema.required : [] }),
+      });
+    });
+    if (toolsChanged) changed = true;
+  }
+
+  if (!changed) return body;
+  const out = Object.assign({}, body, { messages });
+  if (systemOut !== undefined) out.system = systemOut;
+  if (toolsOut !== body.tools) out.tools = toolsOut;
+  return out;
+}
+
 async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   // Final-dispatch attribution for the recent-requests ring — fallback
   // re-dispatch re-enters here, so the last write is the pair that served.
@@ -2124,13 +2231,41 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   // Ollama's /v1/messages adapter does not implement /v1/messages/count_tokens
   // (returns 404). Gemini maps it to :countTokens; Ollama has no equivalent, so
   // short-circuit with a proxy-side heuristic estimate instead of forwarding.
-  // Gated on isLocalBackend (catches kind:"ollama" and localhost anthropic-format
-  // endpoints like ollama_cloud) so real Anthropic backends still forward natively.
-  if (typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens') && isLocalBackend(backend)) {
-    const estimate = estimateInputTokens(body);
-    ctxLog(ctx, 'count_tokens.estimated', { backend: backend.id, input_tokens: estimate });
-    res.setHeader('x-c-thru-count-tokens', 'estimate');
-    return send(res, 200, { input_tokens: estimate });
+  // Same for xAI (Anthropic Messages is legacy/compat; count_tokens not reliable).
+  // Real Anthropic backends still forward natively.
+  if (typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens')) {
+    const host = backendHost(backend) || '';
+    const estimateCountTokens = isLocalBackend(backend)
+      || backend.id === 'xai'
+      || /(^|\.)api\.x\.ai$/.test(host);
+    if (estimateCountTokens) {
+      const estimate = estimateInputTokens(body);
+      ctxLog(ctx, 'count_tokens.estimated', { backend: backend.id, input_tokens: estimate });
+      res.setHeader('x-c-thru-count-tokens', 'estimate');
+      return send(res, 200, { input_tokens: estimate });
+    }
+  }
+
+  // xAI: sanitize BEFORE building the outbound request so Content-Length and
+  // the wire body always match. Agent pins inject role:system into messages[];
+  // tools often omit input_schema.required — both 400 on api.x.ai.
+  let wireBody = body;
+  if (isXaiBackend(backend)) {
+    const sanitized = sanitizeXaiAnthropicBody(body);
+    const changed = sanitized !== body;
+    if (changed) {
+      wireBody = sanitized;
+      if (requestMeta) requestMeta.xaiSanitized = true;
+    }
+    ctxLog(ctx, 'xai.sanitize_messages', {
+      backend: backend.id,
+      changed,
+      messages_in: Array.isArray(body.messages) ? body.messages.length : 0,
+      messages_out: Array.isArray(wireBody.messages) ? wireBody.messages.length : 0,
+      has_system: wireBody.system != null,
+      tools_in: Array.isArray(body.tools) ? body.tools.length : 0,
+      tools_out: Array.isArray(wireBody.tools) ? wireBody.tools.length : 0,
+    });
   }
 
   const targetUrl = new URL(backend.url);
@@ -2153,6 +2288,14 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   // Treating backend.url as origin+optional-prefix (rather than full endpoint) handles both cases.
   const basePrefix = (targetUrl.pathname === '/' ? '' : targetUrl.pathname.replace(/\/$/, ''));
   const forwardedPath = basePrefix + req.url;
+  // Serialize once so Content-Length matches the exact bytes we write (model
+  // rewrite + xAI sanitize both change the body after the client Content-Length).
+  const outBody = injectSamplingDefaults(wireBody, effectiveModel, requestMeta.capability, backend);
+  const payload = outBody ? JSON.stringify(outBody) : '';
+  if (payload) {
+    headers['content-length'] = Buffer.byteLength(payload);
+    headers['content-type'] = headers['content-type'] || 'application/json';
+  }
   const options = {
     hostname: targetUrl.hostname,
     port: targetUrl.port || (isHttps ? 443 : 80),
@@ -2405,8 +2548,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   };
   req.on('close', cancelUpstream);
   res.on('close', cancelUpstream);
-  const outBody = injectSamplingDefaults(body, effectiveModel, requestMeta.capability, backend);
-  if (outBody) up.write(JSON.stringify(outBody));
+  // Body was sanitized + serialized above (payload); write those exact bytes.
+  if (payload) up.write(payload);
   up.end();
 }
 
