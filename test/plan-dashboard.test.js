@@ -33,11 +33,14 @@ function loadRealSelectRenderer() {
   const end = scriptMatch[1].indexOf('function activityPanel');
   if (start < 0 || end < start) throw new Error('dashboard select renderer extraction anchor is missing');
 
+  const decodeAttribute = value => value
+    .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
   const select = {
     options: [], _value: '',
     set innerHTML(markup) {
       this.options = [...markup.matchAll(/<option value="([^"]*)" data-native-key="([^"]*)" data-wave-key="([^"]*)">/g)]
-        .map(match => ({ value: match[1], dataset: { nativeKey: match[2], waveKey: match[3] } }));
+        .map(match => ({ value: decodeAttribute(match[1]), dataset: { nativeKey: decodeAttribute(match[2]), waveKey: decodeAttribute(match[3]) } }));
       this._value = this.options[0] ? this.options[0].value : '';
     },
     get value() { return this._value; },
@@ -59,7 +62,7 @@ function runSelectionRegression() {
     native: { snapshot_path: '/spool/beta.md' }, wave: null };
 
   renderSelect([alpha, beta]);
-  select.value = 'native:alpha';
+  select.value = JSON.stringify(['native', 'alpha', 'alpha']);
   renderSelect([beta, alpha]);
   assertEq([beta, alpha][select.selectedIndex].native.snapshot_path, '/spool/alpha.md', 'reordered dashboard plans preserve native selection identity');
 
@@ -72,12 +75,23 @@ function runSelectionRegression() {
   const nativeCollision = { repo: 'native', cwd: '/work/native', last_activity_ts: '2026-01-04T00:00:00.000Z', joined: false,
     native: { snapshot_path: '/spool/shared-id.md' }, wave: null };
   renderSelect([waveCollision, nativeCollision]);
-  select.value = 'native:shared-id';
+  select.value = JSON.stringify(['native', 'native', 'shared-id']);
   renderSelect([nativeCollision, waveCollision]);
   assertEq([nativeCollision, waveCollision][select.selectedIndex].native.snapshot_path, '/spool/shared-id.md', 'namespaced native key does not cross-select a colliding wave slug');
-  select.value = 'wave:shared-id';
+  select.value = JSON.stringify(['wave', 'wave', 'shared-id']);
   renderSelect([nativeCollision, waveCollision]);
   assertEq([nativeCollision, waveCollision][select.selectedIndex].wave.slug, 'shared-id', 'namespaced wave key does not cross-select a colliding native id');
+
+  const repoA = { repo: 'repo-a', cwd: '/work/repo-a', last_activity_ts: '2026-01-05T00:00:00.000Z', joined: false,
+    native: null, wave: { slug: 'dup-slug' } };
+  const repoB = { repo: 'repo-b', cwd: '/work/repo-b', last_activity_ts: '2026-01-06T00:00:00.000Z', joined: false,
+    native: null, wave: { slug: 'dup-slug' } };
+  const repoBKey = JSON.stringify(['wave', 'repo-b', 'dup-slug']);
+  renderSelect([repoA, repoB]);
+  select.value = repoBKey;
+  assertEq(select.value, repoBKey, 'repo-scoped wave key selects the requested colliding repo');
+  renderSelect([repoB, repoA]);
+  assertEq([repoB, repoA][select.selectedIndex].repo, 'repo-b', 'cross-repo colliding wave slug preserves the selected repo after reordering');
 }
 
 async function main() {

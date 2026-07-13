@@ -10,14 +10,23 @@ trap 'chmod -R u+w "$DIR" 2>/dev/null || true; rm -rf "$DIR"' EXIT
 HOME_DIR="$DIR/home"
 spool="$DIR/spool"
 shim="$DIR/shim"
+jq_less_shim="$DIR/jq-less-shim"
 open_log="$DIR/open.log"
 curl_log="$DIR/curl.log"
-mkdir -p "$HOME_DIR" "$spool" "$shim"
+mkdir -p "$HOME_DIR" "$spool" "$shim" "$jq_less_shim"
 
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$OPEN_LOG"\n' > "$shim/open"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$CURL_LOG"\nexit 0\n' > "$shim/curl"
 printf '#!/usr/bin/env bash\nprintf "Darwin\\n"\n' > "$shim/uname"
 chmod +x "$shim/open" "$shim/curl" "$shim/uname"
+
+# Keep the hook runnable with jq genuinely absent: jq, node, and bash may all
+# live in one bin directory, so PATH cannot safely exclude jq's directory.
+for bin in bash node sh cat ls awk grep sed date stat mkdir rm rmdir chmod basename dirname printf sort wc tr mktemp env id uname touch mv cut head readlink; do
+  bin_path=$(command -v "$bin")
+  [ -x "$bin_path" ] || bin_path=$(type -P "$bin")
+  ln -s "$bin_path" "$jq_less_shim/$bin"
+done
 
 FAIL=0
 pass() { echo "  PASS  $1"; }
@@ -33,6 +42,14 @@ run_hook() {
   shift
   printf '%s' "$input" | env -u CLAUDE_PROXY_PORT -u PROXY_PORT -u CLAUDE_PROXY_USE_OLLAMA_PORT -u C_THRU_PLUGIN_PORT \
     HOME="$HOME_DIR" C_THRU_PLAN_SPOOL="$spool" PATH="$shim:$PATH" OPEN_LOG="$open_log" CURL_LOG="$curl_log" \
+    ANTHROPIC_BASE_URL="http://127.0.0.1:45678" "$@" bash "$HOOK" >/dev/null
+}
+
+run_hook_without_jq() {
+  local input="$1"
+  shift
+  printf '%s' "$input" | env -u CLAUDE_PROXY_PORT -u PROXY_PORT -u CLAUDE_PROXY_USE_OLLAMA_PORT -u C_THRU_PLUGIN_PORT \
+    HOME="$HOME_DIR" C_THRU_PLAN_SPOOL="$spool" PATH="$jq_less_shim" OPEN_LOG="$open_log" CURL_LOG="$curl_log" \
     ANTHROPIC_BASE_URL="http://127.0.0.1:45678" "$@" bash "$HOOK" >/dev/null
 }
 
@@ -125,6 +142,26 @@ expect_file "$spool/rotated-referenced.md" "rotated-event referenced old snapsho
 expect_file "$spool/live-referenced.md" "live-event referenced old snapshot survives prune"
 expect_no_file "$spool/unreferenced-old.md" "old unreferenced snapshot is pruned"
 expect_file "$spool/young-unreferenced.md" "young unreferenced snapshot survives grace window"
+
+# The node fallback must parse every NDJSON line when jq is unavailable. The
+# referenced target is older than the newest-50 cutoff, so it reaches deletion.
+spool="$DIR/prune-without-jq-spool"
+mkdir -p "$spool"
+for i in $(seq 1 51); do
+  printf '# old filler %s\n' "$i" > "$spool/jq-less-filler-$i.md"
+  touch -t 200101010101 "$spool/jq-less-filler-$i.md"
+done
+printf '# referenced old target\n' > "$spool/jq-less-referenced.md"
+touch -t 200001010101 "$spool/jq-less-referenced.md"
+printf '# unreferenced old target\n' > "$spool/jq-less-unreferenced.md"
+touch -t 200001010100 "$spool/jq-less-unreferenced.md"
+printf '%s\n%s\n' \
+  "$(jq -cn --arg snapshot 'decoy.md' '{event:"plan_approved",snapshot:$snapshot}')" \
+  "$(jq -cn --arg snapshot 'jq-less-referenced.md' '{event:"plan_approved",snapshot:$snapshot}')" \
+  > "$spool/events.ndjson"
+run_hook_without_jq "$approval" C_THRU_PLAN_AUTOOPEN=0
+expect_file "$spool/jq-less-referenced.md" "jq-absent multiline event reference preserves old snapshot"
+expect_no_file "$spool/jq-less-unreferenced.md" "jq-absent prune still deletes old unreferenced snapshot"
 
 # Two appends race with a forced rotation. Seed records intentionally carry no
 # snapshot field, so the final referenced-snapshot assertion concerns every

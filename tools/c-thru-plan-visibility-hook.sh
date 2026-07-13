@@ -155,7 +155,7 @@ if mkdir "$spool/.prune.lock" 2>/dev/null; then
         case "$referenced_snapshot" in ''|*/*|*'..'*) ;; *) printf '%s\n' "$referenced_snapshot" >> "$referenced" ;; esac
       done < <(node -e '
         const fs = require("fs");
-        for (const line of fs.readFileSync(process.argv[1], "utf8").split("\\n")) {
+        for (const line of fs.readFileSync(process.argv[1], "utf8").split("\n")) {
           try { const event = JSON.parse(line); if (event && typeof event.snapshot === "string") console.log(event.snapshot); } catch (_) {}
         }
       ' "$event_file" 2>/dev/null)

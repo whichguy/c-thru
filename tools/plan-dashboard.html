@@ -89,11 +89,12 @@ function nativeKey(plan) {
   const snapshot = plan && plan.native && plan.native.snapshot_path;
   if (!snapshot) return '';
   const name = String(snapshot).split('/').pop().replace(/\.md$/i, '');
-  return `native:${name}`;
+  return JSON.stringify(['native', (plan && plan.repo) || 'unknown', name]);
 }
 function waveKey(plan) {
   const slug = plan && plan.wave && plan.wave.slug;
-  return slug ? `wave:${slug}` : '';
+  if (!slug) return '';
+  return JSON.stringify(['wave', (plan && plan.repo) || 'unknown', slug]);
 }
 function renderSelect(plans) {
   const select = $('plan-select');

@@ -2,7 +2,7 @@
 
 **Test command:** `node test/plan-state-lib.test.js && node test/plan-dashboard.test.js && bash test/c-thru-plan-visibility-hook.test.sh && bash tools/sync-plugin-bundle.sh --check`
 **Started:** 2026-07-12          **Status:** active
-**Round counter:** 1          <!-- derived; must match Log -->
+**Round counter:** 2          <!-- derived; must match Log -->
 **Consecutive clean rounds:** 0
 
 ## Scope note
@@ -107,3 +107,74 @@ numeric-string rejection, readTail UTF-8 boundary split, single-generation event
 lower-risk since F2b protects both event files' refs), outer-catch silent all-plans loss (intended
 fail-open). Codex attempt #1 wedged (task-mriphs0s-fb5mjf, pid 16668 died silently while status stayed
 "running" ~15min) — retried fresh per policy, retry succeeded in ~2min with a tighter, file-scoped prompt.
+### Round 2 — 2026-07-12
+**Review (Grok):** 3 material, 5 minor, against the post-Round-1 state (commit 696c52f).
+**Material findings:**
+- G1: jq-absent prune fallback silently defeats reference-aware retention — a Round-1-introduced
+  regression [`tools/c-thru-plan-visibility-hook.sh:158`] — code correctness / logic-flow / corner case
+- G2: no test forces the jq-absent prune path, so G1 shipped uncaught — test coverage
+- G3: dashboard selection keys not repo-scoped; two different repos sharing a wave slug can
+  cross-select [`tools/plan-dashboard.html:88-112`] — corner case
+**Git-history check:** first review of the post-Round-1 state (`git log --grep="grok-review-converge:"`
+shows only Round 1, `696c52f`). G1 is explicitly a regression introduced BY Round 1's own F2b fix —
+prioritized accordingly per the loop's "a fix that introduced a new defect is a regression, not just
+an open item" rule.
+**Plan:** G1 — fix the doubled-backslash `.split("\\n")` → `.split("\n")` in the jq-absent node
+fallback (verified by direct reproduction: buggy form prints nothing against a 2-line NDJSON fixture,
+fixed form prints both entries). G2 — add a jq-masked, multi-line-NDJSON prune regression test. G3 —
+repo-scope the dashboard selection keys.
+**Plan review (Grok + Grok + Codex, 3 critics):** Resumed Grok: confirmed G1 fix correct, found no other
+double-escape instance, flagged two execution-hygiene reminders (fix the plugin mirror too; G2's test
+needs ≥2 NDJSON lines to avoid tautology) — both already in scope. Fresh independent Grok: confirmed G1
+independently via its own reproduction; caught a MATERIAL ERROR in the original plan's own wording — it
+falsely claimed existing dashboard-selection tests would "pass unmodified" under G3, when in fact 3
+hardcoded `select.value` assertions (`test/plan-dashboard.test.js:62,75,78`) directly encode the
+pre-G3 key format and would break; also flagged G3 needs its own dedicated cross-repo-collision
+regression test, not just updated old assertions. Codex (fresh dispatch, no wedge this round):
+independently confirmed G1 via its own quoting trace; flagged the same G3 delimiter-collision risk as
+fresh Grok but went further — recommended replacing raw colon-concatenation with
+`JSON.stringify([kind, repo, id])` to eliminate the ambiguity outright rather than accept it as residual
+risk; independently flagged the same missing G3 regression test fresh Grok caught. Two independent
+critics converging on the same stronger fix (JSON-encoded keys over colon-concat) was incorporated —
+upgraded from "accept low residual risk" to "eliminate the risk," since the cost was trivial.
+**Implementation:** codex-worker, bounded brief scoped to 4 files (2 edited + 2 test files, + 2 plugin
+mirrors via sync-plugin-bundle.sh). Applied G1 (one-character fix: `.split("\\n")` → `.split("\n")` in
+the jq-absent node fallback), G2 (jq-masked, multi-line-NDJSON prune regression test with 51 fillers +
+a referenced-and-survives case + an unreferenced-and-pruned case, proving the node path both preserves
+references AND still deletes correctly), G3 (dashboard selection keys upgraded from raw colon-concat to
+`JSON.stringify([kind, repo, id])`, eliminating the delimiter-collision risk outright per the
+Codex+fresh-Grok-recommended stronger fix, plus updated the 3 pre-existing hardcoded key assertions and
+added a genuine cross-repo-slug-collision regression test).
+**Test result:** PASS — re-ran natively (not just trusting the worker's report):
+`node test/plan-state-lib.test.js` 20/20, `node test/plan-dashboard.test.js` 18/18 (incl. both new G3
+assertions), `bash test/c-thru-plan-visibility-hook.test.sh` all pass (incl. both new G2 assertions),
+`bash tools/sync-plugin-bundle.sh --check` clean. Independently traced the G1 fix diff (one-character
+change, `\\n`→`\n`) and reasoned through the G3 test mock's `findIndex`-based `selectedIndex` semantics
+to confirm the new collision test genuinely fails pre-fix (pre-fix keys are plain `wave:dup-slug`
+strings that never match the JSON-encoded `repoBKey`, so the value-setter silently no-ops and the
+assertion mismatches) rather than just trusting the worker's self-report.
+**Outcome:** fixed
+**Error signature:** none
+**Learnings:** This round's most notable finding is that Round 1's OWN fix (F2b's reference-aware
+prune) shipped with a latent, silent-failure regression: a doubled backslash (`.split("\\n")` instead
+of `.split("\n")`) inside a bash-single-quoted `node -e` heredoc, which — because of how bash
+single-quotes interact with JS string-literal escape parsing — silently defeated the entire
+jq-absent fallback path without ever throwing a visible error (the catch swallowed the JSON.parse
+failure). No test forced that code path in Round 1, so it shipped clean-looking. This is exactly the
+scenario the loop's own G2 test now exists to prevent — coverage for a fallback branch is not optional
+just because the primary (jq-present) path is well tested. Second notable pattern: the original Round 2
+plan itself had a real error (claiming existing dashboard tests would "pass unmodified" under the G3
+key-format change), caught by the fresh independent Grok reviewer re-deriving from the actual test file
+rather than trusting the plan's framing — reinforcing that "independent" critics must read source, not
+just react to the plan's own claims. Third: two independent critics (fresh Grok and Codex) converged
+unprompted on the same stronger fix for G3 (JSON-encode the identity components instead of accepting a
+low-probability colon-delimiter collision as residual risk) — when two differently-trained models
+independently recommend the same upgrade over the "good enough" original, that convergence itself is a
+signal worth acting on, since it filters out any single model's idiosyncratic bias.
+**Consecutive clean rounds after this entry:** 0
+**Committed:** yes
+**Notes:** Deferred (minor, Grok round 2): docs opt-out check-ordering wording nuance; dead/unreachable
+cross-namespace match arms from Round 1's selection code (harmless noise post-G3); degenerate
+no-identity-plan index fallback can still swap on reorder (no known real occurrence); proxy 503-on-throw
+undocumented (lives in Round-5-excluded claude-proxy); test selection-mock doesn't HTML-unescape
+attributes (not a real risk for current alnum-safe ids).
