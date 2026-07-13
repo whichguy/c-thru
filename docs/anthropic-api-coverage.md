@@ -269,7 +269,7 @@ non-loopback) for the full ambient-key safety net.
 End-to-end smoke (manual):
 
 - `node --check tools/claude-proxy` and `bash -n tools/c-thru` pass.
-- `make test-fast` passes (includes `test/anthropic-api-coverage.test.js`).
+- `make test` passes (includes `test/anthropic-api-coverage.test.js`).
 - With proxy running, `CLAUDE_LLM_MODE=best-local-oss`, **no Anthropic auth**:
   ```
   curl -is localhost:$PORT/v1/messages/batches -d '{}'

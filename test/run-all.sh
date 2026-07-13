@@ -2,14 +2,21 @@
 # Run the full c-thru test suite.
 # Exit 0 = all tests passed.  Exit 1 = one or more suites failed.
 #
-# Usage: bash test/run-all.sh [--fast]
-#   --fast  skip slow/optional suites (e2e, smoke-check)
+# Usage: bash test/run-all.sh [--skip-smoke | --fast]
+#   (default)       full suite including smoke-check and long e2e (exclusive lock)
+#   --skip-smoke    hermetic CI/pre-push suite — skip slow smoke & long e2e
+#   --fast          deprecated synonym for --skip-smoke (kept for back-compat)
+# Prefer: make test (skip-smoke) | make test-all (full)
 
 set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FAST=0
-[[ "${1:-}" == "--fast" ]] && FAST=1
+# FAST=1 means skip smoke/long-e2e (the hermetic suite). Preferred flag is
+# --skip-smoke; --fast remains accepted as a deprecated synonym.
+case "${1:-}" in
+  --skip-smoke|--fast) FAST=1 ;;
+esac
 
 PASS=0
 FAIL=0
@@ -19,7 +26,7 @@ SKIP=0
 # Two concurrent full runs cross-fail: proxy-e2e talks to the live Ollama backend
 # (timeouts under contention — observed empirically) and smoke-check exercises the
 # shared proxy lifecycle. Most unit suites bind random free ports and are safe,
-# so --fast runs skip the lock; full runs hold it for the whole run.
+# so --skip-smoke/--fast runs skip the lock; full runs hold it for the whole run.
 # mkdir-lock with a stale-pid check — NOT flock(1), which is absent on stock
 # macOS (this repo's primary dev machine); flock may be added as a parenthetical
 # fast-path for Linux CI only.
@@ -60,14 +67,14 @@ acquire_lock() {
   trap release_lock EXIT
 }
 
-# Full runs are exclusive; --fast runs are concurrency-safe and skip the lock.
+# Full runs are exclusive; hermetic (--skip-smoke) runs are concurrency-safe and skip the lock.
 if [[ $FAST -eq 0 ]]; then
   acquire_lock
 fi
 
 # ── Proxy-spawn serialization (assessed, intentionally NOT forced) ──────────────
 # An assessment recommended running the ~54 proxy-spawn suites (those invoking
-# withProxy/spawnProxy) SERIALLY even in --fast, so waitForPing ECONNRESET timer
+# withProxy/spawnProxy) SERIALLY even in the hermetic suite, so waitForPing ECONNRESET timer
 # races can't make green/red untrustworthy. We assessed this and did NOT add a
 # parallel-then-serial split, because:
 #   1. run-all.sh ALREADY runs every suite strictly sequentially — run_suite uses
@@ -75,7 +82,7 @@ fi
 #      / job-control anywhere. So within one run-all invocation the spawn suites
 #      are already serialized; there is nothing to "make serial."
 #   2. The only concurrency is ACROSS run-all invocations, and that is already
-#      gated: full runs hold the exclusive mkdir-lock above; --fast runs skip it
+#      gated: full runs hold the exclusive mkdir-lock above; hermetic runs skip it
 #      precisely because their suites bind random free ports (getFreePort) and are
 #      port-isolated, so two --fast runs don't contend on a fixed port.
 #   3. The waitForPing ECONNRESET flake the assessment cites is load-dependent
@@ -534,7 +541,7 @@ run_suite "gate-coverage (every pre-commit artifact registered in this suite)" \
 
 if [[ $FAST -eq 0 ]]; then
   echo ""
-  echo "Smoke tests (slow — skip with --fast):"
+  echo "Smoke tests (slow — skip with --skip-smoke / make test):"
   if [[ -f "$REPO_DIR/test/smoke-check.sh" ]]; then
     run_suite "smoke-check (proxy start, control channel)" \
       bash "$REPO_DIR/test/smoke-check.sh"
@@ -560,11 +567,11 @@ if [[ $FAST -eq 0 ]]; then
     skip_suite "run-hierarchy-e2e (set C_THRU_E2E=1 to enable)"
   fi
 else
-  skip_suite "smoke-check (--fast mode)"
-  skip_suite "e2e-plan-execution (--fast mode)"
-  skip_suite "e2e-programming-assignment (--fast mode)"
-  skip_suite "agent-scenarios-e2e (--fast mode)"
-  skip_suite "run-hierarchy-e2e (--fast mode)"
+  skip_suite "smoke-check (skipped in hermetic suite — use make test-all)"
+  skip_suite "e2e-plan-execution (skipped in hermetic suite — use make test-all)"
+  skip_suite "e2e-programming-assignment (skipped in hermetic suite — use make test-all)"
+  skip_suite "agent-scenarios-e2e (skipped in hermetic suite — use make test-all)"
+  skip_suite "run-hierarchy-e2e (skipped in hermetic suite — use make test-all)"
 fi
 
 echo ""

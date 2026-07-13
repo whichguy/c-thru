@@ -33,14 +33,15 @@ node tools/model-map-validate.js config/model-map.json   # validate shipped conf
 node test/model-map-v12-adapter.test.js                  # adapter regression test
 bash test/c-thru-bootstrap-auth-env.test.sh              # interactive auth bootstrap (TTY-mocked)
 ~/.claude/tools/c-thru list      # runtime smoke-test (requires install; --list also accepted)
-make test-fast          # run proxy + model-map test suite (~2 min)
-make test               # full suite including smoke tests
+make test               # hermetic suite (proxy + model-map; skip slow smoke) (~2 min)
+make test-all           # full suite including smoke / long e2e
+make test-fast          # deprecated alias for `make test`
 ```
 
 ## Sharp Edges
 
 Multiple Claude sessions may share this working tree. Stage **explicit paths only** — never `git add -A`/`-u`/`.` or other broad adds (they silently stage another session's uncommitted WIP; a past session needed a soft-reset salvage after exactly this). The equivalent danger at commit time: if another session already has files staged, a plain `git commit` (no pathspec) sweeps those in too — commit with `git commit -m "..." -- <exact-path>` instead, which builds the commit from only the named paths and leaves any other already-staged index entries untouched. Don't try to surgically separate your changes from another session's when they're line-interleaved in the same shared file (e.g. both editing the same variable-declaration or argv line) — a past session spent real effort attempting a scratch-file reconstruction to isolate a clean diff and abandoned it after repeated safety-classifier pushback; wait for the other session to commit first if a clean boundary isn't obvious, or as a last resort commit the file's full current state together with a message that's explicit about which parts are yours.
-Proxy e2e/smoke suites are port- and Ollama-contended: `make test-fast` is safe to run concurrently (unit proxy tests use random free ports), but full `test/run-all.sh` runs need exclusivity — full runs take an mkdir-lock for the whole run (proxy-e2e cross-fails on Ollama contention, observed empirically), so a second full run queues instead of cross-failing.
+Proxy e2e/smoke suites are port- and Ollama-contended: `make test` (hermetic, skips smoke) is safe to run concurrently (unit proxy tests use random free ports), but full `make test-all` / `test/run-all.sh` runs need exclusivity — full runs take an mkdir-lock for the whole run (proxy-e2e cross-fails on Ollama contention, observed empirically), so a second full run queues instead of cross-failing.
 
 **Don't commit unless explicitly asked to.** This applies to every worker reading this file, including delegated Codex/Grok sessions that don't inherit interactive-harness defaults.
 

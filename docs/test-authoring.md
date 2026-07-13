@@ -98,9 +98,10 @@ the same claim.
 
 ## Concurrency and locking
 
-Per `CLAUDE.md`'s "Concurrent sessions" note: `make test-fast` is safe to run concurrently across
-sessions (unit/proxy tests bind random free ports, no shared fixed state) — prefer it while
-iterating. A full `test/run-all.sh` (no `--fast`) run takes an exclusive `mkdir`-based lock for
-its whole duration, because the e2e/smoke suites talk to a real Ollama instance and can cross-fail
-under contention; a second concurrent full run queues rather than racing. Don't add a suite that
-assumes it has the machine to itself unless it's already behind the full-run-only gate.
+Per `CLAUDE.md`'s "Concurrent sessions" note: `make test` (hermetic / `--skip-smoke`) is safe to
+run concurrently across sessions (unit/proxy tests bind random free ports, no shared fixed state)
+— prefer it while iterating. A full `make test-all` / `test/run-all.sh` run takes an exclusive
+`mkdir`-based lock for its whole duration, because the e2e/smoke suites talk to a real Ollama
+instance and can cross-fail under contention; a second concurrent full run queues rather than
+racing. Don't add a suite that assumes it has the machine to itself unless it's already behind
+the full-run-only gate.

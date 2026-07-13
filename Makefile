@@ -1,12 +1,18 @@
-.PHONY: test test-fast test-live test-live-all check lint docs regen
+.PHONY: test test-all test-fast test-live test-live-all check lint docs regen
 
-# Run the full test suite (including slow smoke tests)
+# Default hermetic suite (CI / pre-push / everyday): skips slow smoke & long e2e.
+# Concurrent-safe (proxy unit tests use random free ports).
+# Prefer this over the deprecated alias `test-fast`.
 test:
+	bash test/run-all.sh --skip-smoke
+
+# Full suite including smoke-check and long e2e (exclusive Ollama/port lock).
+test-all:
 	bash test/run-all.sh
 
-# Run the test suite without slow smoke tests
-test-fast:
-	bash test/run-all.sh --fast
+# Deprecated alias — same as `make test`. Kept so old muscle memory / scripts
+# keep working; new docs and CI should use `make test`.
+test-fast: test
 
 # Opt-in live verification against api.anthropic.com (requires ANTHROPIC_API_KEY)
 test-live:
@@ -15,7 +21,7 @@ test-live:
 # Single entrypoint for ALL live / opt-in suites — the same command the scheduled
 # CI workflow (.github/workflows/live-suites.yml) runs and a human runs locally.
 # Exports every live/opt-in gate read by test/run-all.sh, then runs the FULL suite
-# (not --fast) so the live blocks register. Each gated suite self-skips when its
+# so the live blocks register. Each gated suite self-skips when its
 # API key / creds are absent, so this stays green-but-skipping until secrets are
 # present. Gate names are kept in sync with the `if [[ "${...:-0}" == "1" ]]`
 # branches in test/run-all.sh.
@@ -32,7 +38,7 @@ test-live-all:
 	C_THRU_LIVE_SELECTION=1 \
 	bash test/run-all.sh
 
-# Run baseline syntax and schema checks only (fast, no proxy spawn needed)
+# Run baseline syntax and schema checks only (no proxy spawn needed)
 check:
 	bash -n tools/c-thru
 	node --check tools/claude-proxy
