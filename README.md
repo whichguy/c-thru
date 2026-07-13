@@ -190,27 +190,27 @@ The full mapping, all the way through the implementation: **agent → capability
 | Agent | Capability | `best-cloud` | `best-cloud-oss` | `best-local-oss` | Endpoint (`best-cloud`) |
 |---|---|---|---|---|---|
 | `code-reviewer` | `code-reviewer` | `claude-sonnet-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
-| `coder` | `coder` | `gemini-pro` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `gemini_ai` |
-| `coder-fallback` | `coder-fallback` | `gemini-pro-latest` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `gemini_ai` |
-| `debugger-hard` | `debugger-hard` | `claude-opus-4-8` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
-| `debugger-hypothesis` | `debugger-hypothesis` | `gemini-pro` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `gemini_ai` |
-| `debugger-investigate` | `debugger-investigate` | `gemini-pro` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `gemini_ai` |
+| `coder` | `coder` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
+| `coder-fallback` | `coder-fallback` | `gemini-pro-latest` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
+| `debugger-hard` | `debugger-hard` | `claude-opus-4-8` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
+| `debugger-hypothesis` | `debugger-hypothesis` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
+| `debugger-investigate` | `debugger-investigate` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
 | `docs` | `docs` | `gemma4:26b` | `gemma4:26b` | `qwen3.6:35b` | `ollama_local` |
 | `edge` | `edge` | `gemma4:e4b` | `gemma4:e4b` | `gemma4:e4b` | `ollama_local` |
 | `explore` | `explore` | `gemini-pro-latest` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `gemini_ai` |
 | `fast-generalist` | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
 | `fast-scout` | `fast-scout` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `ollama_local` |
-| `generalist` | `generalist` | `claude-sonnet-5` | `deepseek-v4-flash:cloud` | `qwen3.6:35b` | `anthropic` |
+| `generalist` | `generalist` | `claude-sonnet-5` | `glm-5.2:cloud` | `qwen3.6:35b` | `anthropic` |
 | `long-context` | `long-context` | `claude-sonnet-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `pdf` | `pdf` | `claude-sonnet-5` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |
 | `plan-scheduler` &nbsp;⚠ | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
-| `planner` | `planner` | `claude-fable-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
-| `planner-hard` | `planner-hard` | `claude-fable-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
+| `planner` | `planner` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
+| `planner-hard` | `planner-hard` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `reviewer-plan` &nbsp;⚠ | `code-reviewer` | `claude-sonnet-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
-| `reviewer-security` | `reviewer-security` | `claude-opus-4-8` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
+| `reviewer-security` | `reviewer-security` | `claude-opus-4-8` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `tester` | `tester` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `ollama_local` |
 | `vision` | `vision` | `claude-sonnet-5` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |
-| `writer` | `writer` | `claude-sonnet-5` | `deepseek-v4-flash:cloud` | `qwen3.6:35b` | `anthropic` |
+| `writer` | `writer` | `claude-sonnet-5` | `glm-5.2:cloud` | `qwen3.6:35b` | `anthropic` |
 <!-- END routing-table -->
 
 **⚠ Non-1:1 rows.** Two agents intentionally route to a *different* capability than their own name:

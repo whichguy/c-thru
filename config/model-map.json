@@ -32,6 +32,15 @@
       "url": "https://api.anthropic.com",
       "format": "anthropic",
       "auth": "subscription"
+    },
+    "xai": {
+      "url": "https://api.x.ai",
+      "format": "anthropic",
+      "auth": {
+        "header": "Authorization",
+        "scheme": "Bearer",
+        "env": "XAI_API_KEY"
+      }
     }
   },
   "llm_active_profile": "auto",
@@ -46,11 +55,11 @@
     "planner": {
       "best-cloud": "claude-fable-5",
       "best-cloud-oss": {
-        "16gb": "kimi-k2.7-code:cloud",
-        "32gb": "kimi-k2.7-code:cloud",
-        "48gb": "kimi-k2.7-code:cloud",
-        "64gb": "kimi-k2.7-code:cloud",
-        "128gb": "kimi-k2.7-code:cloud"
+        "16gb": "deepseek-v4-pro:cloud",
+        "32gb": "deepseek-v4-pro:cloud",
+        "48gb": "deepseek-v4-pro:cloud",
+        "64gb": "deepseek-v4-pro:cloud",
+        "128gb": "deepseek-v4-pro:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -79,11 +88,11 @@
     "planner-hard": {
       "best-cloud": "claude-fable-5",
       "best-cloud-oss": {
-        "16gb": "kimi-k2.7-code:cloud",
-        "32gb": "kimi-k2.7-code:cloud",
-        "48gb": "kimi-k2.7-code:cloud",
-        "64gb": "kimi-k2.7-code:cloud",
-        "128gb": "kimi-k2.7-code:cloud"
+        "16gb": "deepseek-v4-pro:cloud",
+        "32gb": "deepseek-v4-pro:cloud",
+        "48gb": "deepseek-v4-pro:cloud",
+        "64gb": "deepseek-v4-pro:cloud",
+        "128gb": "deepseek-v4-pro:cloud"
       },
       "deepseek-hybrid": "claude-opus-4-8",
       "best-local-oss": {
@@ -116,7 +125,7 @@
         "32gb": "devstral-small-2:24b",
         "48gb": "devstral-small-2:24b",
         "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
-        "128gb": "deepseek-v4-flash:cloud"
+        "128gb": "kimi-k2.7-code:cloud"
       },
       "best-local-oss": {
         "16gb": "gemma4:e4b",
@@ -138,11 +147,11 @@
         "128gb": "gemini-pro"
       },
       "best-cloud-oss": {
-        "16gb": "deepseek-v4-pro:cloud",
-        "32gb": "deepseek-v4-pro:cloud",
-        "48gb": "deepseek-v4-pro:cloud",
-        "64gb": "deepseek-v4-pro:cloud",
-        "128gb": "deepseek-v4-pro:cloud"
+        "16gb": "kimi-k2.7-code:cloud",
+        "32gb": "kimi-k2.7-code:cloud",
+        "48gb": "kimi-k2.7-code:cloud",
+        "64gb": "kimi-k2.7-code:cloud",
+        "128gb": "kimi-k2.7-code:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -171,11 +180,11 @@
     "coder-fallback": {
       "best-cloud": "gemini-pro-latest",
       "best-cloud-oss": {
-        "16gb": "deepseek-v4-pro:cloud",
-        "32gb": "deepseek-v4-pro:cloud",
-        "48gb": "deepseek-v4-pro:cloud",
-        "64gb": "deepseek-v4-pro:cloud",
-        "128gb": "deepseek-v4-pro:cloud"
+        "16gb": "kimi-k2.7-code:cloud",
+        "32gb": "kimi-k2.7-code:cloud",
+        "48gb": "kimi-k2.7-code:cloud",
+        "64gb": "kimi-k2.7-code:cloud",
+        "128gb": "kimi-k2.7-code:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -213,7 +222,7 @@
         "32gb": "qwen3-coder:30b",
         "48gb": "qwen3-coder:30b",
         "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
-        "128gb": "deepseek-v4-flash:cloud"
+        "128gb": "kimi-k2.7-code:cloud"
       },
       "best-local-oss": {
         "16gb": "gemma4:e4b",
@@ -239,7 +248,7 @@
         "32gb": "gemma4:26b",
         "48gb": "gemma4:26b",
         "64gb": "gemma4:26b",
-        "128gb": "deepseek-v4-flash:cloud"
+        "128gb": "glm-5.2:cloud"
       },
       "best-local-oss": {
         "16gb": "gemma4:e4b",
@@ -293,11 +302,11 @@
     "reviewer-security": {
       "best-cloud": "claude-opus-4-8",
       "best-cloud-oss": {
-        "16gb": "kimi-k2.7-code:cloud",
-        "32gb": "kimi-k2.7-code:cloud",
-        "48gb": "kimi-k2.7-code:cloud",
-        "64gb": "kimi-k2.7-code:cloud",
-        "128gb": "kimi-k2.7-code:cloud"
+        "16gb": "deepseek-v4-pro:cloud",
+        "32gb": "deepseek-v4-pro:cloud",
+        "48gb": "deepseek-v4-pro:cloud",
+        "64gb": "deepseek-v4-pro:cloud",
+        "128gb": "deepseek-v4-pro:cloud"
       },
       "deepseek-hybrid": "claude-opus-4-8",
       "best-local-oss": {
@@ -326,11 +335,11 @@
         "128gb": "gemini-pro"
       },
       "best-cloud-oss": {
-        "16gb": "deepseek-v4-pro:cloud",
-        "32gb": "deepseek-v4-pro:cloud",
-        "48gb": "deepseek-v4-pro:cloud",
-        "64gb": "deepseek-v4-pro:cloud",
-        "128gb": "deepseek-v4-pro:cloud"
+        "16gb": "kimi-k2.7-code:cloud",
+        "32gb": "kimi-k2.7-code:cloud",
+        "48gb": "kimi-k2.7-code:cloud",
+        "64gb": "kimi-k2.7-code:cloud",
+        "128gb": "kimi-k2.7-code:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -364,11 +373,11 @@
         "128gb": "gemini-pro"
       },
       "best-cloud-oss": {
-        "16gb": "deepseek-v4-pro:cloud",
-        "32gb": "deepseek-v4-pro:cloud",
-        "48gb": "deepseek-v4-pro:cloud",
-        "64gb": "deepseek-v4-pro:cloud",
-        "128gb": "deepseek-v4-pro:cloud"
+        "16gb": "kimi-k2.7-code:cloud",
+        "32gb": "kimi-k2.7-code:cloud",
+        "48gb": "kimi-k2.7-code:cloud",
+        "64gb": "kimi-k2.7-code:cloud",
+        "128gb": "kimi-k2.7-code:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -396,11 +405,11 @@
     "debugger-hard": {
       "best-cloud": "claude-opus-4-8",
       "best-cloud-oss": {
-        "16gb": "deepseek-v4-pro:cloud",
-        "32gb": "deepseek-v4-pro:cloud",
-        "48gb": "deepseek-v4-pro:cloud",
-        "64gb": "deepseek-v4-pro:cloud",
-        "128gb": "deepseek-v4-pro:cloud"
+        "16gb": "kimi-k2.7-code:cloud",
+        "32gb": "kimi-k2.7-code:cloud",
+        "48gb": "kimi-k2.7-code:cloud",
+        "64gb": "kimi-k2.7-code:cloud",
+        "128gb": "kimi-k2.7-code:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -432,7 +441,7 @@
         "32gb": "claude-sonnet-5",
         "48gb": "claude-sonnet-5",
         "64gb": "qwen3.6:35b",
-        "128gb": "deepseek-v4-flash:cloud"
+        "128gb": "glm-5.2:cloud"
       },
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
@@ -470,7 +479,7 @@
         "32gb": "claude-sonnet-5",
         "48gb": "claude-sonnet-5",
         "64gb": "qwen3.6:35b",
-        "128gb": "deepseek-v4-flash:cloud"
+        "128gb": "glm-5.2:cloud"
       },
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
@@ -504,11 +513,11 @@
         "128gb": "claude-opus-4-8"
       },
       "best-cloud-oss": {
-        "16gb": "deepseek-v4-flash:cloud",
-        "32gb": "deepseek-v4-flash:cloud",
-        "48gb": "deepseek-v4-flash:cloud",
-        "64gb": "deepseek-v4-flash:cloud",
-        "128gb": "deepseek-v4-flash:cloud"
+        "16gb": "glm-5.2:cloud",
+        "32gb": "glm-5.2:cloud",
+        "48gb": "glm-5.2:cloud",
+        "64gb": "glm-5.2:cloud",
+        "128gb": "glm-5.2:cloud"
       },
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
@@ -550,11 +559,11 @@
         "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
-        "16gb": "deepseek-v4-flash:cloud",
-        "32gb": "deepseek-v4-flash:cloud",
-        "48gb": "deepseek-v4-flash:cloud",
-        "64gb": "deepseek-v4-flash:cloud",
-        "128gb": "deepseek-v4-flash:cloud"
+        "16gb": "glm-5.2:cloud",
+        "32gb": "glm-5.2:cloud",
+        "48gb": "glm-5.2:cloud",
+        "64gb": "glm-5.2:cloud",
+        "128gb": "glm-5.2:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -592,7 +601,7 @@
         "32gb": "gemma4:e4b",
         "48gb": "gemma4:e4b",
         "64gb": "qwen3.6:35b",
-        "128gb": "deepseek-v4-flash:cloud"
+        "128gb": "glm-5.2:cloud"
       },
       "best-local-oss": {
         "16gb": "gemma4:e4b",
@@ -638,7 +647,7 @@
         "32gb": "deepseek-v4-pro:cloud",
         "48gb": "deepseek-v4-pro:cloud",
         "64gb": "deepseek-v4-pro:cloud",
-        "128gb": "deepseek-v4-flash:cloud"
+        "128gb": "deepseek-v4-pro:cloud"
       },
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
@@ -689,9 +698,24 @@
     "long-context": "long-context",
     "WebSearch": "fast-scout",
     "WebFetch": "fast-scout",
-    "Monitor": "fast-scout"
+    "Monitor": "fast-scout",
+    "grok": "model:grok",
+    "deepseek": "model:deepseek-v4-pro:cloud",
+    "qwen": "model:qwen3.6:35b",
+    "kimi": "model:kimi-k2.7-code:cloud",
+    "gemini": "model:gemini-pro"
   },
   "model_routes": {
+    "grok": {
+      "endpoint": "xai",
+      "name": "grok-4.5"
+    },
+    "grok-4.5": "xai",
+    "grok-4.5-latest": {
+      "endpoint": "xai",
+      "name": "grok-4.5"
+    },
+    "re:^grok-.*$": "xai",
     "claude-sonnet-5": "anthropic",
     "re:^claude-.*$": "anthropic",
     "gemini-latest": {
@@ -799,7 +823,7 @@
     },
     "sonnet": {
       "best-cloud": "claude-sonnet-5",
-      "best-cloud-oss": "deepseek-v4-flash:cloud",
+      "best-cloud-oss": "kimi-k2.7-code:cloud",
       "best-local-oss": "qwen3.6:35b",
       "best-cloud-gov": "claude-sonnet-5",
       "best-local-gov": "qwen3.6:35b",
@@ -808,7 +832,7 @@
     },
     "haiku": {
       "best-cloud": "claude-haiku-4-5-20251001",
-      "best-cloud-oss": "deepseek-v4-flash:cloud",
+      "best-cloud-oss": "glm-5.2:cloud",
       "best-local-oss": "phi4-mini:3.8b",
       "best-cloud-gov": "claude-haiku-4-5-20251001",
       "best-local-gov": "phi4-mini:3.8b",
@@ -817,7 +841,7 @@
     },
     "fable": {
       "best-cloud": "claude-sonnet-5",
-      "best-cloud-oss": "kimi-k2.7-code:cloud",
+      "best-cloud-oss": "deepseek-v4-pro:cloud",
       "best-local-oss": "qwen3.6:35b",
       "best-cloud-gov": "claude-sonnet-5",
       "best-local-gov": "qwen3.6:35b",
