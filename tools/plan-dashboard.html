@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>c-thru plan dashboard</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171a21; --border:#262b36; --text:#d7dce3;
+    --dim:#8a93a3; --accent:#5fb3f0; --ok:#4cc38a; --warn:#e5b454;
+    --err:#e0635f; --chip:#232936;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:16px 20px 40px; background:var(--bg); color:var(--text); font:13px/1.45 "SF Mono",SFMono-Regular,Menlo,Consolas,monospace; }
+  body.stale { opacity:.62; }
+  h1 { margin:0; font-size:16px; } h1 span { color:var(--accent); }
+  h2 { margin:22px 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
+  #topbar { display:flex; flex-wrap:wrap; align-items:center; gap:9px 18px; }
+  .kv { color:var(--dim); } .kv b { color:var(--text); } .dim { color:var(--dim); }
+  #conn { margin-left:auto; } #conn.ok { color:var(--ok); } #conn.err { color:var(--err); }
+  select { max-width:520px; border:1px solid var(--border); border-radius:4px; background:var(--chip); color:var(--text); padding:5px 7px; font:inherit; }
+  .grid { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(300px,.8fr); gap:18px; }
+  @media(max-width:900px) { .grid { grid-template-columns:1fr; } #conn { margin-left:0; } }
+  .panel { min-width:0; border:1px solid var(--border); border-radius:7px; background:var(--panel); padding:12px; }
+  .empty { color:var(--dim); font-style:italic; padding:8px 0; }
+  pre { overflow:auto; margin:7px 0; padding:9px; border-radius:4px; background:#0d0f13; border:1px solid var(--border); white-space:pre-wrap; }
+  code { color:#c7dcff; } p { margin:7px 0; } .md h1,.md h2,.md h3,.md h4 { color:var(--text); text-transform:none; letter-spacing:0; margin:16px 0 5px; }
+  .md h1 { font-size:17px; } .md h2 { font-size:15px; } .md h3,.md h4 { font-size:13px; }
+  .md ul { margin:7px 0; padding-left:23px; } .md li { margin:3px 0; }
+  table { width:100%; border-collapse:collapse; } th,td { padding:6px 8px; text-align:left; vertical-align:top; border-bottom:1px solid var(--border); } th { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  tr:last-child td { border-bottom:0; } tr.status-done td,tr.status-complete td { color:var(--ok); } tr.status-in_progress td { color:var(--warn); } tr.status-blocked td { color:var(--err); } tr.status-extend td { color:var(--accent); } tr.active td { background:rgba(95,179,240,.12); }
+  .marker { display:inline-block; width:24px; font-weight:bold; } .chip { display:inline-block; margin:1px 4px 1px 0; padding:1px 7px; border:1px solid var(--border); border-radius:9px; color:var(--dim); background:var(--chip); }
+  .feed { margin:0; padding:0; list-style:none; } .feed li { padding:7px 0; border-bottom:1px solid var(--border); } .feed li:last-child { border-bottom:0; }
+  .tool { color:var(--accent); } .meta { margin-top:5px; font-size:11px; color:var(--dim); }
+  .todo { padding:7px 0; border-bottom:1px solid var(--border); } .todo:last-child { border-bottom:0; } .todo.done { color:var(--ok); }
+</style>
+</head>
+<body>
+  <div id="topbar">
+    <h1>c-thru <span>plan dashboard</span></h1>
+    <label class="kv">plan <select id="plan-select" aria-label="plan"></select></label>
+    <span class="kv">updated <b id="generated">–</b></span>
+    <span id="conn" class="kv">connecting…</span>
+  </div>
+  <div id="content" class="empty">Waiting for plan state…</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtTime = value => { try { return value ? new Date(value).toLocaleString() : '–'; } catch (_) { return esc(value || '–'); } };
+const shortCwd = cwd => { const text = String(cwd || 'unknown'); const parts = text.split('/').filter(Boolean); return parts.slice(-2).join('/') || text; };
+
+// Every branch begins from escaped source text. The renderer intentionally
+// recognizes only the dashboard's small markdown subset; untrusted markdown
+// never reaches innerHTML unescaped.
+function inline(text) {
+  return text.replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+}
+function markdown(source) {
+  const lines = esc(source || '').replace(/\r/g, '').split('\n');
+  const out = []; let inCode = false; let inList = false;
+  const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+  for (const line of lines) {
+    if (/^```/.test(line)) { closeList(); out.push(inCode ? '</code></pre>' : '<pre><code>'); inCode = !inCode; continue; }
+    if (inCode) { out.push(line + '\n'); continue; }
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) { closeList(); const level = heading[1].length; out.push(`<h${level}>${inline(heading[2])}</h${level}>`); continue; }
+    const item = line.match(/^[-*]\s+(.+)$/);
+    if (item) { if (!inList) { out.push('<ul>'); inList = true; } out.push('<li>' + inline(item[1]) + '</li>'); continue; }
+    closeList();
+    if (!line.trim()) continue;
+    out.push('<p>' + inline(line) + '</p>');
+  }
+  closeList(); if (inCode) out.push('</code></pre>');
+  return out.join('');
+}
+function marker(status) {
+  return ({ pending:'[ ]', in_progress:'[~]', done:'[x]', complete:'[x]', blocked:'[!]', extend:'[+]' })[status] || '[ ]';
+}
+function rowFor(item, active) {
+  const status = item && item.status || 'pending';
+  return `<tr class="status-${esc(status)}${active ? ' active' : ''}"><td class="marker">${marker(status)}</td><td>${esc(item && item.id || '–')}</td><td>${esc(item && item.description || '')}</td><td>${esc(item && item.agent || '–')}</td></tr>`;
+}
+function planLabel(plan) {
+  return `${plan.repo || 'unknown'} · ${shortCwd(plan.cwd)} · ${fmtTime(plan.last_activity_ts)}`;
+}
+function renderSelect(plans) {
+  const select = $('plan-select'); const prior = select.value;
+  select.innerHTML = plans.map((plan, index) => `<option value="${index}">${esc(planLabel(plan))}</option>`).join('');
+  select.value = prior && Number(prior) < plans.length ? prior : '0';
+}
+function activityPanel(activity) {
+  if (!activity) return '<div class="empty">No readable transcript for this plan.</div>';
+  const rows = [...(activity.recent || [])].reverse().map(event => `<li><span class="tool">${esc(event.name || 'tool')}</span> ${esc(event.detail || '')}<div class="meta">${esc(fmtTime(event.ts))}</div></li>`).join('');
+  return rows ? `<ul class="feed">${rows}</ul>` : '<div class="empty">No recent tool activity.</div>';
+}
+function todosPanel(activity) {
+  const todos = activity && activity.todos || [];
+  if (!todos.length) return '<div class="empty">No current todos.</div>';
+  return todos.map(todo => { const done = /complete|done/i.test(todo.status || ''); return `<div class="todo${done ? ' done' : ''}"><span class="marker">${done ? '[x]' : '[ ]'}</span>${esc(todo.activeForm || todo.content || '')}<div class="meta">${esc(todo.status || 'pending')}</div></div>`; }).join('');
+}
+function wavePanel(wave) {
+  if (!wave) return '<div class="empty">No c-thru wave state found.</div>';
+  const activeIds = new Set((wave.current_wave && wave.current_wave.steps || []).map(step => step.id));
+  const items = wave.items || [];
+  const rows = items.map(item => rowFor(item, activeIds.has(item.id))).join('');
+  const current = wave.current_wave ? `<div class="meta">current wave ${esc(wave.current_wave.id)}</div>` : '';
+  const journal = (wave.journal_tail || []).length ? `<details><summary class="meta">journal tail</summary><pre>${esc(wave.journal_tail.join('\n'))}</pre></details>` : '';
+  return `<div><span class="chip">${esc(wave.slug)}</span><span class="chip">${esc(wave.status || 'unknown')}</span><span class="chip">waves ${esc(wave.wave_count == null ? '–' : wave.wave_count)}</span><span class="chip">revisions ${esc(wave.revision_rounds == null ? '–' : wave.revision_rounds)}</span>${current}</div>${wave.outcome ? `<p>${esc(wave.outcome)}</p>` : ''}<table><thead><tr><th></th><th>item</th><th>description</th><th>agent</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">No current items.</td></tr>'}</tbody></table>${journal}`;
+}
+function render(plan) {
+  if (!plan) { $('content').innerHTML = '<div class="empty">No approved plans or wave state found.</div>'; return; }
+  const native = plan.native;
+  const notes = (plan.notes || []).map(note => `<article class="panel"><div class="meta">${esc(note.author || 'unknown')} · ${esc(fmtTime(note.ts))}</div><div class="md">${markdown(note.md)}</div></article>`).join('');
+  $('content').innerHTML = `
+    <div class="grid">
+      <section><h2>Plan document</h2><div class="panel"><div class="meta">repo ${esc(plan.repo)} · cwd ${esc(plan.cwd || 'unknown')} · ${plan.joined ? 'joined native + wave' : 'history entry'}</div>${native && native.title ? `<h3>${esc(native.title)}</h3>` : ''}${native && native.plan_md ? `<div class="md">${markdown(native.plan_md)}</div>` : '<div class="empty">No native approved-plan snapshot.</div>'}</div></section>
+      <section><h2>Wave board</h2><div class="panel">${wavePanel(plan.wave)}</div></section>
+    </div>
+    <div class="grid">
+      <section><h2>Activity feed</h2><div class="panel">${activityPanel(plan.activity)}</div></section>
+      <section><h2>Todos</h2><div class="panel">${todosPanel(plan.activity)}</div></section>
+    </div>
+    <h2>Narrative</h2><div class="grid">${notes || '<div class="panel empty">No narrative notes yet. Use /plan-page to add context.</div>'}</div>`;
+}
+let last = null;
+async function poll() {
+  try {
+    const response = await fetch('/c-thru/plan');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    if (!data || !data.ok || !Array.isArray(data.plans)) throw new Error('invalid plan state');
+    last = data; renderSelect(data.plans); render(data.plans[Number($('plan-select').value) || 0]);
+    $('generated').textContent = fmtTime(data.generated_at); $('conn').textContent = 'live'; $('conn').className = 'kv ok'; document.body.classList.remove('stale');
+  } catch (error) {
+    $('conn').textContent = `disconnected — ${error.message}`; $('conn').className = 'kv err'; document.body.classList.add('stale');
+    if (!last) $('content').innerHTML = '<div class="empty">Unable to fetch plan state.</div>';
+  }
+}
+$('plan-select').addEventListener('change', () => { if (last) render(last.plans[Number($('plan-select').value) || 0]); });
+poll(); setInterval(poll, 2000);
+</script>
+</body>
+</html>
