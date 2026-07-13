@@ -210,33 +210,30 @@ function resolveLocalFallback(entry, tier, activeMode, config) {
 
 // Resolve the active connectivity mode.
 // Precedence: CLAUDE_LLM_MODE → CLAUDE_CONNECTIVITY_MODE (legacy) → config.llm_mode → auto → DEFAULT_MODE
+// Legacy vocabulary (offline/disconnect/connected) is normalized via normalizeLlmMode so
+// `c-thru --mode offline` (exports CLAUDE_LLM_MODE=offline) is not treated as unknown.
 function resolveLlmMode(config) {
-  const valid = validModes(config);
   const envMode = process.env.CLAUDE_LLM_MODE;
   if (envMode) {
-    if (!valid.has(envMode)) {
-      process.stderr.write(`model-map-resolve: unknown CLAUDE_LLM_MODE '${envMode}', falling back to ${DEFAULT_MODE}\n`);
-    } else {
-      return envMode;
-    }
+    const normalized = normalizeLlmMode(envMode, config);
+    if (normalized) return normalized;
+    process.stderr.write(`model-map-resolve: unknown CLAUDE_LLM_MODE '${envMode}', falling back to ${DEFAULT_MODE}\n`);
   }
   // Legacy env aliases: treat 'connected' as best-cloud, 'offline'/'disconnect' as best-local-oss
   const legacyEnvName = process.env.CLAUDE_CONNECTIVITY_MODE ? 'CLAUDE_CONNECTIVITY_MODE' : (process.env.CLAUDE_LLM_CONNECTIVITY_MODE ? 'CLAUDE_LLM_CONNECTIVITY_MODE' : null);
   const legacyEnv = legacyEnvName ? process.env[legacyEnvName] : null;
   if (legacyEnv) {
     process.stderr.write(`model-map-resolve: ${legacyEnvName} is deprecated, use CLAUDE_LLM_MODE instead\n`);
-    if (legacyEnv === 'disconnect' || legacyEnv === 'offline') return 'best-local-oss';
+    const normalized = normalizeLlmMode(legacyEnv, config);
+    if (normalized) return normalized;
     return DEFAULT_MODE; // 'connected' or anything else → best-cloud
   }
 
   let configMode = DEFAULT_MODE;
   if (config && config.llm_mode) {
-    if (valid.has(config.llm_mode)) {
-      configMode = config.llm_mode;
-    } else if (config.llm_mode === 'connected') {
-      configMode = DEFAULT_MODE;
-    } else if (config.llm_mode === 'offline') {
-      configMode = 'best-local-oss';
+    const normalized = normalizeLlmMode(config.llm_mode, config);
+    if (normalized) {
+      configMode = normalized;
     }
     // Other old mode names fall through to DEFAULT_MODE
   } else if (config && config.llm_connectivity_mode) {

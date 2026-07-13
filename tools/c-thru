@@ -4979,10 +4979,19 @@ while [[ $i -lt $n ]]; do
       else
         echo "c-thru: --agents requires a value" >&2; exit 1
       fi ;;
-    --mode=*)           export CLAUDE_LLM_MODE="${a#--mode=}"; i=$((i + 1)) ;;
+    --mode=*)
+      # Normalize legacy aliases at export so CLAUDE_LLM_MODE is always a
+      # selectable mode name for the proxy (offline → best-local-oss, etc.).
+      _m="${a#--mode=}"
+      case "$_m" in offline|disconnect) _m=best-local-oss ;; connected) _m=best-cloud-oss ;; esac
+      export CLAUDE_LLM_MODE="$_m"; i=$((i + 1)) ;;
     --mode)
       if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
-      if [[ "$_w" == "2" ]]; then export CLAUDE_LLM_MODE="${ORIG_ARGS[i+1]}"; i=$((i + _w)); else echo "c-thru: --mode requires a value" >&2; exit 1; fi ;;
+      if [[ "$_w" == "2" ]]; then
+        _m="${ORIG_ARGS[i+1]}"
+        case "$_m" in offline|disconnect) _m=best-local-oss ;; connected) _m=best-cloud-oss ;; esac
+        export CLAUDE_LLM_MODE="$_m"; i=$((i + _w))
+      else echo "c-thru: --mode requires a value" >&2; exit 1; fi ;;
     --profile=*)        export CLAUDE_LLM_PROFILE="${a#--profile=}"; i=$((i + 1)) ;;
     --profile)
       if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi

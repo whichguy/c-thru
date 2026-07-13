@@ -139,6 +139,19 @@ console.log('\n6. resolveLlmMode — env overrides config; legacy env aliases st
     `CLAUDE_LLM_MODE wins over config.llm_mode`);
   delete process.env.CLAUDE_LLM_MODE;
 
+  // CLAUDE_LLM_MODE=offline (what c-thru --mode offline used to export literally)
+  // must normalize to best-local-oss — NOT fall through to config default.
+  process.env.CLAUDE_LLM_MODE = 'offline';
+  assert(resolveLlmMode({ llm_mode: 'best-cloud-oss' }) === 'best-local-oss',
+    `CLAUDE_LLM_MODE=offline normalizes to best-local-oss (not ignored as unknown)`);
+  process.env.CLAUDE_LLM_MODE = 'disconnect';
+  assert(resolveLlmMode({ llm_mode: 'best-cloud-oss' }) === 'best-local-oss',
+    `CLAUDE_LLM_MODE=disconnect normalizes to best-local-oss`);
+  process.env.CLAUDE_LLM_MODE = 'connected';
+  assert(resolveLlmMode({ llm_mode: 'best-local-oss' }) === 'best-cloud-oss',
+    `CLAUDE_LLM_MODE=connected normalizes to best-cloud-oss`);
+  delete process.env.CLAUDE_LLM_MODE;
+
   // Invalid CLAUDE_LLM_MODE is silently ignored; config fallback used
   process.env.CLAUDE_LLM_MODE = 'bogus-mode';
   assert(resolveLlmMode({ llm_mode: 'best-cloud-gov' }) === 'best-cloud-gov',

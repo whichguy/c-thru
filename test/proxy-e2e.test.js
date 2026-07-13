@@ -57,7 +57,15 @@ function runCThru(model, extraArgs = []) {
       '--model', model,
       '-p', IDENTITY_PROMPT,
     ];
-    const proc = execFile(C_THRU, args, { timeout: E2E_TIMEOUT_MS }, (err, stdout, stderr) => {
+    // Skip bulk pre-pull AND preflight fleet pulls — e2e only needs the
+    // explicit --model tag. Offline mode otherwise blocks on ollama pull of
+    // every missing local_models entry from /v1/active-models (e.g. qwen3.6:35b).
+    const env = Object.assign({}, process.env, {
+      C_THRU_NO_UPDATE: '1',
+      C_THRU_SKIP_PREPULL: '1',
+      C_THRU_SKIP_PREFLIGHT: '1',
+    });
+    const proc = execFile(C_THRU, args, { timeout: E2E_TIMEOUT_MS, env }, (err, stdout, stderr) => {
       if (err && err.killed) {
         reject(new Error(`c-thru timed out after ${E2E_TIMEOUT_MS}ms.\nstderr: ${stderr.slice(0, 500)}`));
         return;
