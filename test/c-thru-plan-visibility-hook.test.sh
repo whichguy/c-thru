@@ -6,7 +6,7 @@ set -uo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOK="$REPO_DIR/tools/c-thru-plan-visibility-hook.sh"
 DIR="$(mktemp -d "${TMPDIR:-/tmp}/c-thru-plan-hook.XXXXXX")"
-trap 'rm -rf "$DIR"' EXIT
+trap 'chmod -R u+w "$DIR" 2>/dev/null || true; rm -rf "$DIR"' EXIT
 HOME_DIR="$DIR/home"
 spool="$DIR/spool"
 shim="$DIR/shim"
@@ -23,7 +23,9 @@ FAIL=0
 pass() { echo "  PASS  $1"; }
 fail() { echo "  FAIL  $1" >&2; FAIL=$((FAIL + 1)); }
 expect_file() { [ -f "$1" ] && pass "$2" || fail "$2"; }
+expect_no_file() { [ ! -e "$1" ] && pass "$2" || fail "$2"; }
 expect_eq() { [ "$1" = "$2" ] && pass "$3" || fail "$3 (got '$1', expected '$2')"; }
+expect_lt() { [ "$1" -lt "$2" ] && pass "$3" || fail "$3 (got '$1', expected < '$2')"; }
 event_count() { cat "$spool"/events.ndjson "$spool"/events.1.ndjson 2>/dev/null | wc -l | tr -d ' '; }
 
 run_hook() {
@@ -82,6 +84,47 @@ expect_eq "$(wc -l < "$open_log" | tr -d ' ')" "1" "per-session stamp prevents r
 expect_file "$spool/.opened-stampxxx" "auto-open writes its session stamp"
 stamp_snapshots=$(tail -n 2 "$spool/events.ndjson" | jq -r '.snapshot' | sort -u | wc -l | tr -d ' ')
 expect_eq "$stamp_snapshots" "2" "repeat approvals in one session receive distinct snapshots"
+
+# A permanently unwritable spool must fail open promptly instead of consuming
+# the hook timeout in the collision loop. The pre-fix loop never terminates.
+spool="$DIR/read-only-spool"
+mkdir -p "$spool"
+chmod 555 "$spool"
+started_ms=$(node -e 'process.stdout.write(String(Date.now()))')
+run_hook "$approval" C_THRU_PLAN_AUTOOPEN=0
+readonly_status=$?
+finished_ms=$(node -e 'process.stdout.write(String(Date.now()))')
+chmod 755 "$spool"
+expect_eq "$readonly_status" "0" "read-only spool exits fail-open"
+expect_lt "$((finished_ms - started_ms))" "2000" "read-only spool stops before the hook timeout"
+expect_eq "$(find "$spool" -maxdepth 1 -name '*.md' -type f | wc -l | tr -d ' ')" "0" "read-only spool leaves no snapshot"
+expect_eq "$(event_count)" "0" "read-only spool appends no event"
+
+# Retention must preserve references from both event generations and a fresh
+# lock-free writer candidate, while deleting an old unreferenced snapshot.
+# The 51 older unreferenced files ensure the old target reaches the pre-fix
+# newest-50 deletion path (where the pre-fix implementation removes it and
+# both referenced snapshots).
+spool="$DIR/prune-spool"
+mkdir -p "$spool"
+for i in $(seq 1 51); do
+  printf '# old %s\n' "$i" > "$spool/unreferenced-filler-$i.md"
+  touch -t 200101010101 "$spool/unreferenced-filler-$i.md"
+done
+printf '# old target\n' > "$spool/unreferenced-old.md"
+touch -t 200002010101 "$spool/unreferenced-old.md"
+printf '# rotated reference\n' > "$spool/rotated-referenced.md"
+touch -t 200001010101 "$spool/rotated-referenced.md"
+printf '# live reference\n' > "$spool/live-referenced.md"
+touch -t 200001010102 "$spool/live-referenced.md"
+printf '# young unreferenced\n' > "$spool/young-unreferenced.md"
+printf '%s\n' "$(jq -cn --arg snapshot 'rotated-referenced.md' '{event:"plan_approved",snapshot:$snapshot}')" > "$spool/events.1.ndjson"
+printf '%s\n' "$(jq -cn --arg snapshot 'live-referenced.md' '{event:"plan_approved",snapshot:$snapshot}')" > "$spool/events.ndjson"
+run_hook "$approval" C_THRU_PLAN_AUTOOPEN=0
+expect_file "$spool/rotated-referenced.md" "rotated-event referenced old snapshot survives prune"
+expect_file "$spool/live-referenced.md" "live-event referenced old snapshot survives prune"
+expect_no_file "$spool/unreferenced-old.md" "old unreferenced snapshot is pruned"
+expect_file "$spool/young-unreferenced.md" "young unreferenced snapshot survives grace window"
 
 # Two appends race with a forced rotation. Seed records intentionally carry no
 # snapshot field, so the final referenced-snapshot assertion concerns every

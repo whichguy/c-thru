@@ -85,10 +85,31 @@ function rowFor(item, active) {
 function planLabel(plan) {
   return `${plan.repo || 'unknown'} · ${shortCwd(plan.cwd)} · ${fmtTime(plan.last_activity_ts)}`;
 }
+function nativeKey(plan) {
+  const snapshot = plan && plan.native && plan.native.snapshot_path;
+  if (!snapshot) return '';
+  const name = String(snapshot).split('/').pop().replace(/\.md$/i, '');
+  return `native:${name}`;
+}
+function waveKey(plan) {
+  const slug = plan && plan.wave && plan.wave.slug;
+  return slug ? `wave:${slug}` : '';
+}
 function renderSelect(plans) {
-  const select = $('plan-select'); const prior = select.value;
-  select.innerHTML = plans.map((plan, index) => `<option value="${index}">${esc(planLabel(plan))}</option>`).join('');
-  select.value = prior && Number(prior) < plans.length ? prior : '0';
+  const select = $('plan-select');
+  const prior = select.selectedOptions && select.selectedOptions[0];
+  const priorNativeKey = prior && prior.dataset.nativeKey || '';
+  const priorWaveKey = prior && prior.dataset.waveKey || '';
+  select.innerHTML = plans.map((plan, index) => {
+    const currentNativeKey = nativeKey(plan);
+    const currentWaveKey = waveKey(plan);
+    const value = currentNativeKey || currentWaveKey || String(index);
+    return `<option value="${esc(value)}" data-native-key="${esc(currentNativeKey)}" data-wave-key="${esc(currentWaveKey)}">${esc(planLabel(plan))}</option>`;
+  }).join('');
+  const matched = [...select.options].find(option =>
+    (priorNativeKey && (option.dataset.nativeKey === priorNativeKey || option.dataset.waveKey === priorNativeKey)) ||
+    (priorWaveKey && (option.dataset.nativeKey === priorWaveKey || option.dataset.waveKey === priorWaveKey)));
+  select.value = matched ? matched.value : (select.options[0] ? select.options[0].value : '');
 }
 function activityPanel(activity) {
   if (!activity) return '<div class="empty">No readable transcript for this plan.</div>';
@@ -131,14 +152,14 @@ async function poll() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (!data || !data.ok || !Array.isArray(data.plans)) throw new Error('invalid plan state');
-    last = data; renderSelect(data.plans); render(data.plans[Number($('plan-select').value) || 0]);
+    last = data; renderSelect(data.plans); render(data.plans[$('plan-select').selectedIndex]);
     $('generated').textContent = fmtTime(data.generated_at); $('conn').textContent = 'live'; $('conn').className = 'kv ok'; document.body.classList.remove('stale');
   } catch (error) {
     $('conn').textContent = `disconnected — ${error.message}`; $('conn').className = 'kv err'; document.body.classList.add('stale');
     if (!last) $('content').innerHTML = '<div class="empty">Unable to fetch plan state.</div>';
   }
 }
-$('plan-select').addEventListener('change', () => { if (last) render(last.plans[Number($('plan-select').value) || 0]); });
+$('plan-select').addEventListener('change', () => { if (last) render(last.plans[$('plan-select').selectedIndex]); });
 poll(); setInterval(poll, 2000);
 </script>
 </body>

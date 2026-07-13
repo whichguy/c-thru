@@ -20,11 +20,18 @@ only the useful human narrative that cannot be derived from those files.
 Resolve the proxy control-plane URL before acting:
 
 1. If `$ANTHROPIC_BASE_URL` is set, `curl -sf "$ANTHROPIC_BASE_URL/ping"`.
-2. Otherwise curl `http://127.0.0.1:${CLAUDE_PROXY_PORT:-10017}/ping`.
-3. Parse the returned JSON. Its `plan_dashboard` field is the canonical URL.
+2. If `$ANTHROPIC_BASE_URL` is unset and the operator has exported
+   `$CLAUDE_PROXY_PORT`, curl `http://127.0.0.1:$CLAUDE_PROXY_PORT/ping`.
+   Otherwise the port is unknown; do not invent a default port number.
+3. Parse a successful response's JSON. Its `plan_dashboard` field is the
+   canonical URL.
 
-If neither probe works, say plainly that no local proxy is running. You may
-still explain the expected local URL, but do not claim the dashboard is live.
+If no probe can be made or neither works, say plainly that no local proxy is
+running or its port is unknown. Do not claim the dashboard is live.
+
+To opt the hook out entirely, set the boolean JSON key `"plan_page": false`
+in `~/.claude/model-map.overrides.json`. The hook checks this before reading any
+`C_THRU_PLAN_*` environment variables.
 
 ## Default action and `--plan`
 
@@ -41,9 +48,13 @@ Write one short narrative note to:
 ${C_THRU_PLAN_SPOOL:-$HOME/.claude/c-thru/plan-events}/notes/<plan-key>/<epoch>.md
 ```
 
-Use the wave slug as `<plan-key>` when a wave is present, otherwise the native
-snapshot id. Create the directory if needed. The file must begin exactly with
-YAML frontmatter followed by markdown:
+`<plan-key>` must exactly match `tools/plan-state-lib.js`'s `makePlan()` key:
+use the wave slug when a wave is present, else the native snapshot id with the
+`.md` suffix removed. This exact-match key is how the aggregator's
+`readNotes()`/`makePlan()` pairing attaches notes; leaving `.md` on or using the
+full snapshot path silently produces a note that never attaches to a plan.
+Create the directory if needed. The file must begin exactly with YAML
+frontmatter followed by markdown:
 
 ```markdown
 ---

@@ -58,6 +58,8 @@ function main() {
       JSON.stringify(event(other, 'repo-beta', 'sessionbbbb', otherSnapshot, path.join(tmp, 'missing.jsonl'), 'Other native')),
     ].join('\n') + '\n');
     write(path.join(spool, 'notes', 'new-sessiona', '1.md'), '---\nts: 2026-01-01T00:00:00.000Z\nauthor: test-model\nsession_id: sessionaaaa\n---\nKept the state reader fail-open.\n');
+    write(path.join(spool, 'notes', 'new-sessiona', '3.md'), '---\nts: 2026-01-03T00:00:00.000Z\nauthor: exact-key-model\nsession_id: sessionaaaa\n---\nThis key is the snapshot id without .md.\n');
+    write(path.join(spool, 'notes', 'new-sessiona.md', '2.md'), '---\nts: 2026-01-02T00:00:00.000Z\nauthor: wrong-key-model\nsession_id: sessionaaaa\n---\nThis must not attach.\n');
 
     const alpha = path.join(tmpRoot, 'c-thru', 'repo-alpha', 'wave-new');
     write(path.join(alpha, 'current.md'), current());
@@ -83,7 +85,9 @@ function main() {
     assertEq(joined.wave.items.length, 2, 'current.md items serialize from parser map');
     assertEq(joined.wave.current_wave.id, 1, 'current wave is parsed through harness export');
     assert(joined.wave.journal_tail.includes('started implementation'), 'journal tail is exposed');
-    assertEq(joined.notes[0].author, 'test-model', 'snapshot-key narrative notes attach');
+    assert(joined.notes.some(note => note.author === 'test-model'), 'existing snapshot-key narrative notes attach');
+    assert(joined.notes.some(note => note.author === 'exact-key-model'), 'note under the exact snapshot-id key attaches to its plan');
+    assert(!state.plans.some(plan => plan.notes.some(note => note.author === 'wrong-key-model')), 'snapshot id retaining .md does not attach a narrative note');
     assertEq(joined.activity.recent.length, 3, 'assistant tool uses become recent activity');
     assert(joined.activity.recent.some(r => r.detail.includes('plan-state-lib')), 'activity detail uses a supported input field');
     assertEq(joined.activity.todos[0].content, 'wire dashboard', 'latest toolUseResult todos win over TodoWrite fallback');

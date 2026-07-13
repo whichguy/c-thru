@@ -4,6 +4,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('vm');
 const {
   assert, assertEq, summary,
   stubBackend, writeConfig, httpJson, spawnProxy, waitForPing,
@@ -24,7 +25,63 @@ function stop(child) {
   });
 }
 
+function loadRealSelectRenderer() {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'tools', 'plan-dashboard.html'), 'utf8');
+  const scriptMatch = html.match(/<script>\s*([\s\S]*?)<\/script>/);
+  if (!scriptMatch) throw new Error('dashboard script extraction anchor is missing');
+  const start = scriptMatch[1].indexOf("const $ =");
+  const end = scriptMatch[1].indexOf('function activityPanel');
+  if (start < 0 || end < start) throw new Error('dashboard select renderer extraction anchor is missing');
+
+  const select = {
+    options: [], _value: '',
+    set innerHTML(markup) {
+      this.options = [...markup.matchAll(/<option value="([^"]*)" data-native-key="([^"]*)" data-wave-key="([^"]*)">/g)]
+        .map(match => ({ value: match[1], dataset: { nativeKey: match[2], waveKey: match[3] } }));
+      this._value = this.options[0] ? this.options[0].value : '';
+    },
+    get value() { return this._value; },
+    set value(value) { if (this.options.some(option => option.value === value)) this._value = value; },
+    get selectedIndex() { return this.options.findIndex(option => option.value === this._value); },
+    get selectedOptions() { const option = this.options[this.selectedIndex]; return option ? [option] : []; },
+  };
+  const context = { document: { getElementById: id => id === 'plan-select' ? select : null } };
+  vm.runInNewContext(scriptMatch[1].slice(start, end), context, { filename: 'plan-dashboard-select.js' });
+  if (typeof context.renderSelect !== 'function') throw new Error('dashboard renderSelect was not extracted');
+  return { select, renderSelect: context.renderSelect };
+}
+
+function runSelectionRegression() {
+  const { select, renderSelect } = loadRealSelectRenderer();
+  const alpha = { repo: 'alpha', cwd: '/work/alpha', last_activity_ts: '2026-01-01T00:00:00.000Z', joined: true,
+    native: { snapshot_path: '/spool/alpha.md' }, wave: { slug: 'alpha-wave' } };
+  const beta = { repo: 'beta', cwd: '/work/beta', last_activity_ts: '2026-01-02T00:00:00.000Z', joined: false,
+    native: { snapshot_path: '/spool/beta.md' }, wave: null };
+
+  renderSelect([alpha, beta]);
+  select.value = 'native:alpha';
+  renderSelect([beta, alpha]);
+  assertEq([beta, alpha][select.selectedIndex].native.snapshot_path, '/spool/alpha.md', 'reordered dashboard plans preserve native selection identity');
+
+  const alphaUnjoined = { ...alpha, joined: false, wave: null };
+  renderSelect([beta, alphaUnjoined]);
+  assertEq([beta, alphaUnjoined][select.selectedIndex].native.snapshot_path, '/spool/alpha.md', 'joined flip preserves the selected native plan');
+
+  const waveCollision = { repo: 'wave', cwd: null, last_activity_ts: '2026-01-03T00:00:00.000Z', joined: false,
+    native: null, wave: { slug: 'shared-id' } };
+  const nativeCollision = { repo: 'native', cwd: '/work/native', last_activity_ts: '2026-01-04T00:00:00.000Z', joined: false,
+    native: { snapshot_path: '/spool/shared-id.md' }, wave: null };
+  renderSelect([waveCollision, nativeCollision]);
+  select.value = 'native:shared-id';
+  renderSelect([nativeCollision, waveCollision]);
+  assertEq([nativeCollision, waveCollision][select.selectedIndex].native.snapshot_path, '/spool/shared-id.md', 'namespaced native key does not cross-select a colliding wave slug');
+  select.value = 'wave:shared-id';
+  renderSelect([nativeCollision, waveCollision]);
+  assertEq([nativeCollision, waveCollision][select.selectedIndex].wave.slug, 'shared-id', 'namespaced wave key does not cross-select a colliding native id');
+}
+
 async function main() {
+  runSelectionRegression();
   const stub = await stubBackend();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-plan-dash-'));
   let child = null;

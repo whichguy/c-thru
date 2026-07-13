@@ -73,12 +73,15 @@ else
 fi
 session8=$(printf '%s' "$session_id" | tr -cd '[:alnum:]_-' | cut -c1-8)
 [ -n "$session8" ] || session8="unknown"
-while :; do
+snapshot_attempt=0
+while [ "$snapshot_attempt" -lt 50 ]; do
   snapshot="${epoch}-${session8}.md"
   snapshot_path="$spool/$snapshot"
   ( set -C; : > "$snapshot_path" ) 2>/dev/null && break
   epoch=$((epoch + 1))
+  snapshot_attempt=$((snapshot_attempt + 1))
 done
+[ "$snapshot_attempt" -lt 50 ] || exit 0
 printf '%s\n' "$plan" > "$snapshot_path" 2>/dev/null || exit 0
 title=$(printf '%s\n' "$plan" | sed -n 's/^[[:space:]]*#\{1,\}[[:space:]]*//p' | head -n 1)
 if [ -n "$cwd" ]; then repo=$(basename "$cwd" 2>/dev/null || printf 'unknown'); else repo="unknown"; fi
@@ -133,9 +136,42 @@ if mkdir "$spool/.prune.lock" 2>/dev/null; then
   if [ "${line_count:-0}" -gt 1000 ]; then
     mv -f "$events" "$spool/events.1.ndjson" 2>/dev/null || true
   fi
+  # Keep snapshots named by either live or rotated events.  A 30-second grace
+  # window also protects a concurrent writer that created a snapshot before
+  # its lock-free event append became visible.
+  referenced="$spool/.prune.referenced.$$"
+  if ! : > "$referenced" 2>/dev/null; then
+    rmdir "$spool/.prune.lock" 2>/dev/null || true
+    exit 0
+  fi
+  for event_file in "$spool/events.ndjson" "$spool/events.1.ndjson"; do
+    [ -f "$event_file" ] || continue
+    if command -v jq >/dev/null 2>&1; then
+      while IFS= read -r referenced_snapshot; do
+        case "$referenced_snapshot" in ''|*/*|*'..'*) ;; *) printf '%s\n' "$referenced_snapshot" >> "$referenced" ;; esac
+      done < <(jq -r 'select(type == "object") | .snapshot // empty' "$event_file" 2>/dev/null)
+    elif command -v node >/dev/null 2>&1; then
+      while IFS= read -r referenced_snapshot; do
+        case "$referenced_snapshot" in ''|*/*|*'..'*) ;; *) printf '%s\n' "$referenced_snapshot" >> "$referenced" ;; esac
+      done < <(node -e '
+        const fs = require("fs");
+        for (const line of fs.readFileSync(process.argv[1], "utf8").split("\\n")) {
+          try { const event = JSON.parse(line); if (event && typeof event.snapshot === "string") console.log(event.snapshot); } catch (_) {}
+        }
+      ' "$event_file" 2>/dev/null)
+    fi
+  done
+  grace_cutoff=$(($(date +%s 2>/dev/null || printf '0') - 30))
   ls -1t "$spool"/*.md 2>/dev/null | awk 'NR > 50' | while IFS= read -r old_snapshot; do
+    snapshot_name=$(basename "$old_snapshot")
+    grep -Fqx -- "$snapshot_name" "$referenced" 2>/dev/null && continue
+    snapshot_mtime=$(stat -f %m "$old_snapshot" 2>/dev/null)
+    case "$snapshot_mtime" in *[!0-9]*|'') snapshot_mtime=$(stat -c %Y "$old_snapshot" 2>/dev/null) ;; esac
+    case "$snapshot_mtime" in *[!0-9]*|'') continue ;; esac
+    [ "$snapshot_mtime" -gt "$grace_cutoff" ] && continue
     rm -f "$old_snapshot" 2>/dev/null || true
   done
+  rm -f "$referenced" 2>/dev/null || true
   rmdir "$spool/.prune.lock" 2>/dev/null || true
 fi
 exit 0
