@@ -431,6 +431,8 @@ run_suite "proxy-xai-routing (xAI endpoint, named model pins, auth strip, path)"
   node "$REPO_DIR/test/proxy-xai-routing.test.js"
 run_suite "proxy-xai-sanitize (fold role:system out of messages for xAI)" \
   node "$REPO_DIR/test/proxy-xai-sanitize.test.js"
+run_suite "proxy-brand-agent-routing (agent name → concrete model + correct API path)" \
+  node "$REPO_DIR/test/proxy-brand-agent-routing.test.js"
 # EXCLUDED unless live: proxy-xai-live.test.js — needs C_THRU_LIVE_XAI=1 + XAI_API_KEY
 # (Anthropic Messages + stream dialect smoke against api.x.ai; skip-by-default).
 run_suite "proxy-ollama-fallback-url (OLLAMA_URL honored in not-in-routes fallback)" \

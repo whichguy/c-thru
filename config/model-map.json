@@ -699,7 +699,7 @@
     "WebSearch": "fast-scout",
     "WebFetch": "fast-scout",
     "Monitor": "fast-scout",
-    "grok": "model:grok",
+    "grok": "model:grok-4.5",
     "deepseek": "model:deepseek-v4-pro:cloud",
     "qwen": "model:qwen3.6:35b",
     "kimi": "model:kimi-k2.7-code:cloud",
