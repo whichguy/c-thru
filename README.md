@@ -4,7 +4,7 @@
 
 `c-thru` slots between an unmodified Claude Code binary and your chosen backend(s). It selects models per hardware tier, translates Anthropic's Messages API to other wire protocols where needed, and forwards everything else verbatim. A single session can run a planner against cloud Sonnet and a coder against a local Qwen3.6.
 
-> **Intent.** c-thru is a transparent LLM router for Claude Code: it proxies the Anthropic Messages API and re-routes each request — by **capability**, **hardware tier**, and **connectivity mode** — to local Ollama, OSS cloud (OpenRouter), Gemini, Bedrock, or Anthropic, translating wire formats and orchestrating a **22-agent fleet**, with no change to the Claude Code binary. See [Use cases](#use-cases) for what that buys you and [Agent routing reference](#agent-routing-reference) for the full agent→model→endpoint mapping.
+> **Intent.** c-thru is a transparent LLM router for Claude Code: it proxies the Anthropic Messages API and re-routes each request — by **capability**, **hardware tier**, and **connectivity mode** — to local Ollama, OSS cloud (OpenRouter), Gemini, Bedrock, or Anthropic, translating wire formats and orchestrating a **27-agent fleet** (22 pipeline/utility + 5 brand-name model pins), with no change to the Claude Code binary. See [Use cases](#use-cases) for what that buys you and [Agent routing reference](#agent-routing-reference) for the full agent→model→endpoint mapping.
 
 ---
 
@@ -28,7 +28,7 @@ Restart Claude Code. The `SessionStart` hook spawns the proxy on a fixed port an
 
 You should see the active routing profile, proxy URL, configured routes, and (if reachable) local Ollama models. If the proxy isn't reachable or the model-map is missing, run `/c-thru-status fix` to apply recommended mappings and reload.
 
-> **The marketplace plugin gives you proxy + routing, not the full agentic workflow.** `/cplan` and the 22-agent fleet depend on the agent files being injected via `--agents`, which only happens on the CLI install path. If you want the planner/coder/reviewer pipeline, see [Appendix A](#appendix-a-cli-install-for-contributors-and-advanced-users).
+> **The marketplace plugin gives you proxy + routing, not the full agentic workflow.** `/cplan` and the 27-agent fleet depend on the agent files being injected via `--agents`, which only happens on the CLI install path. If you want the planner/coder/reviewer pipeline, see [Appendix A](#appendix-a-cli-install-for-contributors-and-advanced-users).
 
 ### Cloud backends
 
@@ -40,7 +40,10 @@ Otherwise, export keys for whichever cloud providers you want to route to. None 
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENROUTER_API_KEY="sk-or-..."
 export GOOGLE_API_KEY="..."               # Gemini AI Studio
+export XAI_API_KEY="xai-..."              # Grok (brand agent: ask agent grok)
 ```
+
+**Brand-name agents** (CLI install / `c-thru` only): say *“ask agent grok …”*, *“ask deepseek …”*, *“use qwen …”*, *“ask kimi …”*, *“use gemini …”*. Definitions live in repo `agents/*.md` and are **runtime-injected** each launch via ephemeral `--agents` JSON — they are **not** installed into Claude’s durable agent store (`~/.claude/agents/`). Plain `claude` without `c-thru` does not load them. Each is a leaf agent whose `model:` pin resolves to that vendor’s concrete model (Grok needs `XAI_API_KEY`). Chinese-origin brands (deepseek/qwen/kimi) are filtered under `best-cloud-gov` / `best-local-gov`.
 
 ---
 
@@ -60,7 +63,7 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | `c-thru` binary on PATH | — | ✓ |
 | Control subcommands (`list`, `reload`, `restart`, `explain`, `stats`, `check-deps`) | — | ✓ |
 | Flags (`--mode`, `--profile`, `--bypass-proxy`, `--journal`, `--router-debug`) | (use env vars) | ✓ |
-| Agent fleet (22 agents) injected via `--agents` | — | ✓ |
+| Agent fleet (27 agents) injected via `--agents` | — | ✓ |
 | `llm-capabilities` MCP server injected via `--settings` | — | ✓ |
 | Contributor checks (`c-thru-contract-check`, `c-thru-hygiene-check`) | — | ✓ |
 
@@ -164,7 +167,7 @@ Schema reference, route/endpoint/profile structure, and the full `model_override
 
 ## Agents
 
-22 agents declare `model: <agent-name>` in frontmatter. The proxy resolves
+27 agents declare `model: <agent-name>` in frontmatter (brand agents pin via `model:` to a concrete model). The proxy resolves
 `agent-name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model`
 at request time. Agent files are never edited when you remap models.
 
@@ -195,17 +198,22 @@ The full mapping, all the way through the implementation: **agent → capability
 | `debugger-hard` | `debugger-hard` | `claude-opus-4-8` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
 | `debugger-hypothesis` | `debugger-hypothesis` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
 | `debugger-investigate` | `debugger-investigate` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
+| `deepseek` &nbsp;⚠ | `model:deepseek-v4-pro:cloud` | `—` | `—` | `—` | `—` |
 | `docs` | `docs` | `gemma4:26b` | `gemma4:26b` | `qwen3.6:35b` | `ollama_local` |
 | `edge` | `edge` | `gemma4:e4b` | `gemma4:e4b` | `gemma4:e4b` | `ollama_local` |
 | `explore` | `explore` | `gemini-pro-latest` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `gemini_ai` |
 | `fast-generalist` | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
 | `fast-scout` | `fast-scout` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `ollama_local` |
+| `gemini` &nbsp;⚠ | `model:gemini-pro` | `—` | `—` | `—` | `—` |
 | `generalist` | `generalist` | `claude-sonnet-5` | `glm-5.2:cloud` | `qwen3.6:35b` | `anthropic` |
+| `grok` &nbsp;⚠ | `model:grok` | `—` | `—` | `—` | `—` |
+| `kimi` &nbsp;⚠ | `model:kimi-k2.7-code:cloud` | `—` | `—` | `—` | `—` |
 | `long-context` | `long-context` | `claude-sonnet-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `pdf` | `pdf` | `claude-sonnet-5` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |
 | `plan-scheduler` &nbsp;⚠ | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
 | `planner` | `planner` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `planner-hard` | `planner-hard` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
+| `qwen` &nbsp;⚠ | `model:qwen3.6:35b` | `—` | `—` | `—` | `—` |
 | `reviewer-plan` &nbsp;⚠ | `code-reviewer` | `claude-sonnet-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
 | `reviewer-security` | `reviewer-security` | `claude-opus-4-8` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `tester` | `tester` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `ollama_local` |

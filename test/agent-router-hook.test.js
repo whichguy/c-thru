@@ -118,7 +118,7 @@ for (const agent of agents) {
     check(`Agent(${agent}) → passthrough (no capability mapping)`, '', hookModel(agentPayload(agent)));
   }
 }
-check('fleet roster is 22 agents', '22', String(agents.length));
+check('fleet roster is 27 agents', '27', String(agents.length));
 
 // ── 2. The injected alias is a VALID enum value, and is overridable ───────────────
 console.log('');

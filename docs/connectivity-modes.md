@@ -88,6 +88,14 @@ is identified as Chinese-origin (`isChineseOrigin` — matches Qwen, DeepSeek, K
 GLM/Zhipu, MiniMax, and others by family/vendor token) is blocked at both config-validation
 time and runtime, even if a fallback chain would otherwise reach one.
 
+**Commercial US cloud (not FedRAMP ATO by itself).** Selected capabilities (currently
+`generalist` and `writer` at 32gb+) route to **Grok** (`grok-4.5` via `endpoints.xai`,
+`XAI_API_KEY`) under `best-cloud-gov`. That is a US commercial path (GSA OneGov / xAI for
+Government framing); operators must confirm agency ATO before CUI. High-stakes capabilities
+(`planner-hard`, `reviewer-security`, `coder`, `tester`, `code-reviewer`, …) stay on Claude.
+Named agents `deepseek` / `qwen` / `kimi` pin Chinese-origin models and are unsuitable in
+gov modes — use `grok` or Claude instead.
+
 ---
 
 ## Verifying the mode worked

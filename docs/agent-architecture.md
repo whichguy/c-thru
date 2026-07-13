@@ -13,11 +13,21 @@ request time.
 
 ## Agent roster
 
-The fleet is **22 agents**, each declaring `model: <its-own-name>` in frontmatter. The proxy
-resolves `name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model` at
-request time. All map 1:1 (capability == name) **except** the two ⚠ rows. The **Dispatches →**
+The fleet is **27 agents**: 22 pipeline/utility roles plus **5 brand-name agents**
+(`grok`, `deepseek`, `qwen`, `kimi`, `gemini`). Each declares `model: <its-own-name>` in
+frontmatter. The proxy resolves
+`name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model` at
+request time (or a `model:` pin for brand agents). Pipeline agents map 1:1 (capability == name)
+**except** the two ⚠ rows. Brand agents pin to concrete models. The **Dispatches →**
 column is the inter-agent dispatch/escalation graph, parsed from each agent's `UNBLOCKED_TASKS`
-block (self-loops are continuation, `↑` marks an escalation to a harder tier).
+block (self-loops are continuation, `↑` marks an escalation to a harder tier). Brand agents are
+always leaves.
+
+**Delivery (hard constraint).** Fleet definitions are **not** default-stored for the Claude CLI.
+`tools/c-thru` builds JSON from repo `agents/*.md` and passes it as ephemeral
+`--agents <json>` on each launch. `install.sh` actively removes legacy
+`~/.claude/agents/c-thru` links. Plain `claude` / marketplace-plugin-only sessions do not load
+this fleet.
 
 | Agent | Capability | Role | Dispatches → |
 |---|---|---|---|
@@ -43,9 +53,15 @@ block (self-loops are continuation, `↑` marks an escalation to a harder tier).
 | `edge` | `edge` | Tiny-model tasks (classify, summarize, transform) | (leaf) |
 | `vision` | `vision` | Screenshots, diagrams, image OCR | (leaf) |
 | `pdf` | `pdf` | PDF parsing (tables, multi-column, figures) | (leaf) |
+| `grok` 📌 | `model:grok` | Brand: xAI Grok commercial cloud | (leaf) |
+| `deepseek` 📌 | `model:deepseek-v4-pro:cloud` | Brand: DeepSeek cloud OSS | (leaf) |
+| `qwen` 📌 | `model:qwen3.6:35b` | Brand: local Qwen | (leaf) |
+| `kimi` 📌 | `model:kimi-k2.7-code:cloud` | Brand: Kimi cloud OSS | (leaf) |
+| `gemini` 📌 | `model:gemini-pro` | Brand: Google Gemini | (leaf) |
 
-**⚠ Non-1:1 rows.** `reviewer-plan` → `code-reviewer` and `plan-scheduler` → `fast-generalist`;
-every other agent maps to its own name. **Utility passthroughs** `WebSearch` / `WebFetch` /
+**⚠ Non-1:1 rows.** `reviewer-plan` → `code-reviewer` and `plan-scheduler` → `fast-generalist`.
+**📌 Brand pins** map via `model:<concrete>` (always that model, not hardware-tier profiles).
+**Utility passthroughs** `WebSearch` / `WebFetch` /
 `Monitor` are tool calls mapped to `fast-scout` in `agent_to_capability` for observability only —
 they are not agent files and the router does not override their model.
 

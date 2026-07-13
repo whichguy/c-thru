@@ -438,6 +438,37 @@ function runOutboundAuthLeakTests() {
   console.log('6.5 localhost (derived "none") → FORWARD (local stub, intended)');
   r = call({ id: 'l', url: 'http://127.0.0.1:5000' });
   assertEq(r.out['authorization'], 'Bearer sk-ant-oat01-USER', 'incoming auth preserved on derived none');
+
+  console.log('6.6 xAI host (KNOWN_HOSTS header_env) → strip Anthropic + inject XAI_API_KEY');
+  const prevXai = process.env.XAI_API_KEY;
+  process.env.XAI_API_KEY = 'xai-test-key-from-env';
+  try {
+    r = call({ id: 'xai', url: 'https://api.x.ai', format: 'anthropic' });
+    assertEq(r.out['authorization'], 'Bearer xai-test-key-from-env', 'xAI Bearer from XAI_API_KEY');
+    assertEq(r.out['x-api-key'], undefined, 'Anthropic x-api-key not leaked to api.x.ai');
+    assertEq(r.meta.authDerivedProfile, 'header_env', 'xAI derived as header_env');
+  } finally {
+    if (prevXai === undefined) delete process.env.XAI_API_KEY;
+    else process.env.XAI_API_KEY = prevXai;
+  }
+
+  console.log('6.7 explicit auth object on unknown host → strip Anthropic + set env key (no leak)');
+  const prevLit = process.env.XAI_API_KEY;
+  process.env.XAI_API_KEY = 'xai-explicit-only';
+  try {
+    r = call({
+      id: 'xai-alias',
+      url: 'https://xai-gateway.example.com',  // not in KNOWN_HOSTS
+      format: 'anthropic',
+      auth: { header: 'Authorization', scheme: 'Bearer', env: 'XAI_API_KEY' },
+    });
+    assertEq(r.out['authorization'], 'Bearer xai-explicit-only', 'explicit auth injects env key');
+    assertEq(r.out['x-api-key'], undefined, 'explicit_object must not leave sk-ant x-api-key');
+    assertEq(r.meta.authDerivedProfile, 'explicit_object', 'profile is explicit_object');
+  } finally {
+    if (prevLit === undefined) delete process.env.XAI_API_KEY;
+    else process.env.XAI_API_KEY = prevLit;
+  }
 }
 
 async function main() {

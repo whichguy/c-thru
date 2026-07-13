@@ -326,9 +326,11 @@ trackers; the two new docs are process/mechanics references.
 Invoke with `/c-thru-plan <intent>`. State in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/`. Completed plans archived to `~/.claude/c-thru-archive/`.
 Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`. When adding or editing an agent's `description` (its only discovery surface), follow `docs/agent-authoring.md` — enforced by `test/agent-description-quality.test.js`; dispatch edges enforced by `test/agent-dispatch-graph.test.js`.
 
-### Pipeline agents (13 + 9 utility)
+### Pipeline agents (13 + 9 utility + 5 named model pins)
 
-The agent fleet uses an identity mapping for most agents: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. Two exceptions alias to a different capability: `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist` (see `docs/agent-architecture.md` for the full list, including tool passthroughs).
+The agent fleet uses an identity mapping for most agents: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. Two exceptions alias to a different capability: `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`. Five named agents pin directly to vendor models via `model:` pins: `grok`, `deepseek`, `qwen`, `kimi`, `gemini` (see `docs/agent-architecture.md`).
+
+**Delivery:** fleet definitions are repo `agents/*.md`, runtime-injected each `c-thru` launch as ephemeral `--agents` JSON — never installed into Claude's durable agent store (`~/.claude/agents/`).
 
 For full dispatch-graph and role detail, see `docs/agent-architecture.md`. That document defers to `config/model-map.json#agent_to_capability` and the generated README "Agent routing reference" table as canonical; if it disagrees with either, they win. For full tier-resolution detail, see `docs/hardware-profile-matrix.md`.
 
@@ -365,6 +367,16 @@ tier_budget values are hand-copied from each `agents/*.md` frontmatter — updat
 | `fast-scout` | Latency-optimized search |
 | `long-context` | Large context window tasks |
 | `plan-scheduler` | Dispatches wave READY_ITEMS to worker agents via /schedule-plan-tasks |
+
+**5 named model-pin agents** (leaf; invoke by name — “ask agent grok …”; require vendor keys where applicable):
+
+| Agent | Pin target |
+|---|---|
+| `grok` | `grok-4.5` @ `xai` (`XAI_API_KEY`) |
+| `deepseek` | `deepseek-v4-pro:cloud` |
+| `qwen` | `qwen3.6:35b` |
+| `kimi` | `kimi-k2.7-code:cloud` |
+| `gemini` | `gemini-pro` → Gemini |
 
 ### Pipeline orchestration
 

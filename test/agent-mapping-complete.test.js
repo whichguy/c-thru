@@ -71,8 +71,11 @@ function routeEndpointId(model) {
 
 console.log(`agent-mapping-complete: ${AGENTS.length} agents × ${MODES.length} modes × ${TIERS.length} tiers\n`);
 
-// ── 0. Roster sanity — exactly the documented 22-agent fleet ─────────────────
-assert(AGENTS.length === 22, `agents/*.md roster has 22 files (got ${AGENTS.length})`);
+// ── 0. Roster sanity — pipeline fleet + brand-name model-pin agents ──────────
+// 22 pipeline/utility + 5 brand agents (grok, deepseek, qwen, kimi, gemini).
+const EXPECTED_ROSTER = 27;
+assert(AGENTS.length === EXPECTED_ROSTER,
+  `agents/*.md roster has ${EXPECTED_ROSTER} files (got ${AGENTS.length})`);
 
 // ── 1. Every agent has an agent_to_capability entry ──────────────────────────
 console.log('\n1. Every agent → agent_to_capability entry');
@@ -135,16 +138,28 @@ console.log('\n2. Full chain: agent → capability → model → route → endpo
   }
 }
 
-// ── 3. The two documented non-1:1 remaps are exactly as the README claims ─────
-console.log('\n3. Documented non-1:1 remaps hold (guards the README "⚠" rows)');
+// ── 3. Documented non-1:1 remaps + brand model: pins ─────────────────────────
+console.log('\n3. Documented non-1:1 remaps hold (guards the README "⚠" rows + brand pins)');
 {
   const a2c = CONFIG.agent_to_capability || {};
   assert(a2c['reviewer-plan'] === 'code-reviewer',
     `reviewer-plan → code-reviewer (got ${JSON.stringify(a2c['reviewer-plan'])})`);
   assert(a2c['plan-scheduler'] === 'fast-generalist',
     `plan-scheduler → fast-generalist (got ${JSON.stringify(a2c['plan-scheduler'])})`);
+  // Brand agents pin directly to concrete models (not llm_profiles capabilities).
+  const brandPins = {
+    grok: 'model:grok',
+    deepseek: 'model:deepseek-v4-pro:cloud',
+    qwen: 'model:qwen3.6:35b',
+    kimi: 'model:kimi-k2.7-code:cloud',
+    gemini: 'model:gemini-pro',
+  };
+  for (const [agent, pin] of Object.entries(brandPins)) {
+    assert(a2c[agent] === pin,
+      `${agent} → brand pin ${pin} (got ${JSON.stringify(a2c[agent])})`);
+  }
   // Every OTHER agent maps 1:1 to its own name.
-  const remapped = new Set(['reviewer-plan', 'plan-scheduler']);
+  const remapped = new Set(['reviewer-plan', 'plan-scheduler', ...Object.keys(brandPins)]);
   for (const agent of AGENTS) {
     if (remapped.has(agent)) continue;
     assert(a2c[agent] === agent,

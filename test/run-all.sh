@@ -427,6 +427,12 @@ run_suite "lineage-update-roundtrip (--update no-op/update/corrupt behaviors)" \
   node "$REPO_DIR/test/lineage-update-roundtrip.test.js"
 run_suite "proxy-quality (mapping, fallback cascade, v1 passthrough)" \
   node "$REPO_DIR/test/proxy-quality.test.js"
+run_suite "proxy-xai-routing (xAI endpoint, named model pins, auth strip, path)" \
+  node "$REPO_DIR/test/proxy-xai-routing.test.js"
+run_suite "proxy-xai-sanitize (fold role:system out of messages for xAI)" \
+  node "$REPO_DIR/test/proxy-xai-sanitize.test.js"
+# EXCLUDED unless live: proxy-xai-live.test.js — needs C_THRU_LIVE_XAI=1 + XAI_API_KEY
+# (Anthropic Messages + stream dialect smoke against api.x.ai; skip-by-default).
 run_suite "proxy-ollama-fallback-url (OLLAMA_URL honored in not-in-routes fallback)" \
   node "$REPO_DIR/test/proxy-ollama-fallback-url.test.js"
 

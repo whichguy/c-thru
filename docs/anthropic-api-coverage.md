@@ -39,7 +39,8 @@ catch-all even when a Gemini backend is present).
 | **Anthropic** | `call_style: "anthropic"` (default), `endpoints.anthropic`, OpenRouter, etc. |
 | **Gemini** | `call_style: "gemini"` (Google AI Studio + Vertex). Translated by `forwardGemini`. |
 | **Ollama** | `kind: "ollama"` or `localhost:11434`. Default path is `forwardAnthropic` to Ollama's `/v1/messages` adapter (Ollama 0.4+); `legacy_ollama_chat: true` opts into `forwardOllamaLegacy` (`/api/chat`). |
-| **OpenAI** | `call_style: "openai"` — currently a hard 501 stub (see Tier 3d). |
+| **xAI (Grok)** | `endpoints.xai` — `format: "anthropic"` passthrough to `https://api.x.ai/v1/messages` (legacy Anthropic SDK compat on xAI; prefer verifying tools+SSE with `C_THRU_LIVE_XAI=1`). Auth: `XAI_API_KEY` via `header_env` (never Anthropic client keys). |
+| **OpenAI** | `call_style: "openai"` — currently a hard 501 stub (see Tier 3d). Durable Chat Completions path for Grok if Anthropic compat is dropped. |
 
 ---
 

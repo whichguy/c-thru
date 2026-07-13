@@ -160,8 +160,8 @@ for (const file of AGENT_FILES) {
 // Token regex is deliberately conservative: ollama families require a `:tag`,
 // claude- requires the version digit, lowercase only — validated against the
 // corpus (13 hits, all genuine model ids, no prose false positives).
-const { resolveProfileModel, LLM_MODE_ENUM } = require('../tools/model-map-resolve.js');
-const MODEL_TOKEN_RE = /(?:claude-(?:opus|sonnet|haiku)-[0-9][\w.-]*|gemini-[\w.-]+|gpt-oss-[\w:.-]+|(?:qwen[\w.-]*|gemma\d+|phi4[\w.-]*|devstral[\w.-]*|mistral[\w.-]*|deepseek[\w.-]*|llama[\w.-]*):[\w.-]+)/g;
+const { resolveProfileModel, LLM_MODE_ENUM, MODEL_PIN_PREFIX } = require('../tools/model-map-resolve.js');
+const MODEL_TOKEN_RE = /(?:claude-(?:opus|sonnet|haiku)-[0-9][\w.-]*|gemini-[\w.-]+|gpt-oss-[\w:.-]+|grok-[\w.-]+|(?:qwen[\w.-]*|gemma\d+|phi4[\w.-]*|devstral[\w.-]*|mistral[\w.-]*|deepseek[\w.-]*|kimi[\w.-]*|llama[\w.-]*):[\w.-]+)/g;
 
 console.log('\nModel-id staleness (frontmatter+body tokens must be in the agent\'s own resolution set)');
 {
@@ -188,7 +188,17 @@ console.log('\nModel-id staleness (frontmatter+body tokens must be in the agent\
     const name = file.replace(/\.md$/, '');
     const text = fs.readFileSync(path.join(AGENTS_DIR, file), 'utf8'); // full file — frontmatter too
     const cap = a2c[name] || name;
-    const own = capSets[cap] || new Set();
+    // model: pins resolve to a single concrete model, not an llm_profiles key.
+    let own;
+    if (typeof cap === 'string' && cap.startsWith(MODEL_PIN_PREFIX)) {
+      const pinned = cap.slice(MODEL_PIN_PREFIX.length).replace(/@[a-zA-Z0-9_-]+$/, '');
+      own = new Set([pinned]);
+      // Alias keys in model_routes (e.g. grok → grok-4.5) are also allowed in prose.
+      const route = (cfg.model_routes || {})[pinned];
+      if (route && typeof route === 'object' && route.name) own.add(route.name);
+    } else {
+      own = capSets[cap] || new Set();
+    }
     const tokens = [...new Set(text.match(MODEL_TOKEN_RE) || [])];
     const stale = tokens.filter(t => !own.has(t));
     const detail = stale.map(t => {

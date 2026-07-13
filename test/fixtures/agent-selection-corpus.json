@@ -51,6 +51,17 @@
     { "id": "longctx-needle", "prompt": "Search across all of these very large log files and find the one request id that triggered the 500.", "expect": ["long-context", "explore"], "note": "needle-in-haystack over huge spans" },
     { "id": "longctx-bigdoc", "prompt": "Summarize this single 200-page specification document end to end.", "expect": ["long-context", "writer"], "note": "oversized single-doc retrieval/summary" },
 
+    { "id": "grok-second", "prompt": "ask grok / xai for a grok critique of whether this rate-limiter is sound.", "expect": ["grok", "generalist"], "note": "user wants Grok by name" },
+    { "id": "grok-named", "prompt": "ask agent grok to critique this architecture before we commit.", "expect": ["grok"], "note": "explicit ask agent grok" },
+    { "id": "deepseek-named", "prompt": "ask deepseek to run this trade-off analysis instead of Claude.", "expect": ["deepseek", "generalist"], "note": "explicit DeepSeek by name" },
+    { "id": "deepseek-opinion", "prompt": "use deepseek — what would deepseek say about a ring buffer for the journal?", "expect": ["deepseek", "generalist"], "note": "DeepSeek by name" },
+    { "id": "qwen-named", "prompt": "ask qwen to summarize the fallback cascade for me.", "expect": ["qwen", "generalist"], "note": "explicit Qwen by name" },
+    { "id": "qwen-local", "prompt": "use qwen — I want the local qwen model for this explanation.", "expect": ["qwen", "generalist"], "note": "Qwen local preference" },
+    { "id": "kimi-named", "prompt": "ask agent kimi — moonshot kimi opinion on error handling patterns.", "expect": ["kimi", "generalist"], "note": "explicit Kimi by name" },
+    { "id": "kimi-moonshot", "prompt": "use kimi — ask the moonshot kimi model how it would structure this module.", "expect": ["kimi", "generalist"], "note": "Kimi/Moonshot by name" },
+    { "id": "gemini-named", "prompt": "ask gemini to answer this instead of Anthropic.", "expect": ["gemini", "generalist"], "note": "explicit Gemini by name" },
+    { "id": "gemini-compare", "prompt": "ask agent gemini — use the google gemini model to compare these two API designs.", "expect": ["gemini", "generalist"], "note": "Gemini by name" },
+
     { "id": "amb-greeting", "prompt": "Thanks, that's helpful — what should we look at next?", "expect": [], "ambiguous": true, "note": "conversational; no specialized agent" },
     { "id": "amb-trivial-q", "prompt": "What does the acronym TTL stand for in this context?", "expect": ["fast-generalist", "generalist"], "inline_ok": true, "note": "quick factual one-liner — fast-generalist's stated purpose; answering inline is also fine" },
     { "id": "amb-tiny-edit", "prompt": "Rename the local variable x to count on this one line.", "expect": [], "ambiguous": true, "note": "too trivial to delegate; main thread handles" },

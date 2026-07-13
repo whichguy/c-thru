@@ -136,7 +136,7 @@ const SNAPSHOT = {
     "best-cloud": { "16gb": "phi4-reasoning:plus", "32gb": "claude-sonnet-5", "48gb": "claude-sonnet-5", "64gb": "claude-sonnet-5", "128gb": "claude-opus-4-8" },
     "best-cloud-oss": { "16gb": "glm-5.2:cloud", "32gb": "glm-5.2:cloud", "48gb": "glm-5.2:cloud", "64gb": "glm-5.2:cloud", "128gb": "glm-5.2:cloud" },
     "best-local-oss": { "16gb": "phi4-reasoning:plus", "32gb": "qwen3.6:27b", "48gb": "qwen3.6:27b", "64gb": "qwen3.6:35b", "128gb": "qwen3.6:35b-a3b-q8_0" },
-    "best-cloud-gov": { "16gb": "phi4-mini:3.8b", "32gb": "claude-sonnet-5", "48gb": "claude-sonnet-5", "64gb": "claude-sonnet-5", "128gb": "claude-opus-4-8" },
+    "best-cloud-gov": { "16gb": "phi4-mini:3.8b", "32gb": "grok-4.5", "48gb": "grok-4.5", "64gb": "grok-4.5", "128gb": "grok-4.5" },
     "best-local-gov": { "16gb": "phi4-mini:3.8b", "32gb": "phi4-reasoning:plus", "48gb": "phi4-reasoning:plus", "64gb": "phi4-reasoning:plus", "128gb": "phi4-reasoning:plus" },
   },
   "edge": {
@@ -150,7 +150,7 @@ const SNAPSHOT = {
     "best-cloud": { "16gb": "phi4-reasoning:plus", "32gb": "claude-sonnet-5", "48gb": "claude-sonnet-5", "64gb": "claude-sonnet-5", "128gb": "claude-sonnet-5" },
     "best-cloud-oss": { "16gb": "glm-5.2:cloud", "32gb": "glm-5.2:cloud", "48gb": "glm-5.2:cloud", "64gb": "glm-5.2:cloud", "128gb": "glm-5.2:cloud" },
     "best-local-oss": { "16gb": "qwen3.6:35b", "32gb": "qwen3.6:35b", "48gb": "qwen3.6:35b", "64gb": "qwen3.6:35b", "128gb": "qwen3.6:35b" },
-    "best-cloud-gov": { "16gb": "phi4-mini:3.8b", "32gb": "claude-sonnet-5", "48gb": "claude-sonnet-5", "64gb": "claude-sonnet-5", "128gb": "claude-sonnet-5" },
+    "best-cloud-gov": { "16gb": "phi4-mini:3.8b", "32gb": "grok-4.5", "48gb": "grok-4.5", "64gb": "grok-4.5", "128gb": "grok-4.5" },
     "best-local-gov": { "16gb": "phi4-mini:3.8b", "32gb": "phi4-reasoning:plus", "48gb": "phi4-reasoning:plus", "64gb": "phi4-reasoning:plus", "128gb": "phi4-reasoning:plus" },
   },
   "fast-generalist": {
