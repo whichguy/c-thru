@@ -1,9 +1,9 @@
 # Grok Review Converge: c-thru plan-visibility subsystem (code, tests, docs, logic flows, corner cases)
 
 **Test command:** `node test/plan-state-lib.test.js && node test/plan-dashboard.test.js && bash test/c-thru-plan-visibility-hook.test.sh && bash tools/sync-plugin-bundle.sh --check`
-**Started:** 2026-07-12          **Status:** active
-**Round counter:** 3          <!-- derived; must match Log -->
-**Consecutive clean rounds:** 1
+**Started:** 2026-07-12          **Status:** complete
+**Round counter:** 4          <!-- derived; must match Log -->
+**Consecutive clean rounds:** 2
 
 ## Scope note
 Narrowed target = the plan-visibility subsystem landed at baseline commit `fa51501`:
@@ -219,3 +219,45 @@ reviewer's assessment before deciding not to act on it is a cheap, valuable habi
 **Notes:** One clean round short of the 2-consecutive-clean convergence goal. The unstable first Grok
 attempt's session id (019f59e8-37e4-7761-97b9-75134ebf93ec) is not resumed further — its output was
 discarded as unreliable, not incorporated.
+### Round 4 — 2026-07-12
+**Review (Grok):** 0 material, 2 minor — against the post-Round-3 state (commit 6a7eaf4). CLEAN ROUND,
+completed cleanly on the first attempt this time (tight file/line-scoped prompt from the start,
+`stopReason: "EndTurn"`, ~53s) — no instability this round.
+**Material findings:** none.
+**Minor findings (not blocking):** `skills/plan-page/SKILL.md:32-34` states the `plan_page:false`
+overrides check happens before the `C_THRU_PLAN_*` env checks; the actual hook order is reversed
+(`C_THRU_PLAN_PAGE` checked first, at `tools/c-thru-plan-visibility-hook.sh:9`, then the overrides file
+at lines 11-16) — independently verified: doc-ordering inaccuracy only, no behavioral impact since
+either opt-out short-circuits independently regardless of which is checked first. Dead cross-namespace
+match arms in the dashboard selection code (`tools/plan-dashboard.html:110-112`, now unreachable given
+namespaced keys) — style noise, not a defect, already noted in Round 2's Notes.
+**Git-history check:** `git log --grep="grok-review-converge:"` shows rounds 1-3. Nothing to build on
+this round — no fix plan needed.
+**Plan / Plan review / Implementation:** N/A — second consecutive clean round, Phases 3-6 skipped.
+**Test result:** N/A (clean round).
+**Outcome:** clean
+**Error signature:** none
+**Learnings:** Two consecutive independent Grok reviews (round 3's tight-scope retry and round 4's
+tight-scope-from-the-start run) both converged on "no material findings" for the same subsystem state,
+giving real confidence this isn't one lucky pass — the loop's own 2-consecutive-clean design is doing
+its job here: a single clean round could be a fluke (a reviewer having an off pass, or missing
+something a differently-framed prompt would catch), but two independent passes agreeing is a much
+stronger signal. Across all 4 rounds: 3 real regressions/gaps were found and fixed (2 in round 1 — the
+retry busy-loop and the join-selection instability plus prune correctness; 1 in round 2 — a silent
+regression Round 1's OWN fix had introduced), 2 findings were investigated and correctly NOT
+implemented because the "fix" would have been worse than the problem (F1a no-op, F1b's naive guard
+breaking the green baseline — filed as an honest open TODO instead of guessed), and cross-model plan
+review (2 Grok + Codex per round) caught something the original reviewer missed in every single round
+that reached the plan stage. The tight-scope-retry pattern, discovered rescuing a wedged Codex in round
+1, generalized cleanly to a Grok instability in round 3 — the fix for an unreliable agent run isn't
+model-specific, it's "narrow the scope, cap the length, retry," regardless of which model backs it.
+**Consecutive clean rounds after this entry:** 2 — CONVERGED. Loop goal reached: no remaining material
+improvement identified in 2 consecutive rounds.
+**Committed:** yes
+**Notes:** Loop complete. Total across 4 rounds: 3 commits with material fixes/findings-recorded
+(696c52f, 838bf7d — code fixes; 6a7eaf4 — clean-round ledger) + this round's commit (clean, converged).
+One deliberately-filed-not-guessed open item remains: `docs/planning/TODO-plan-visibility-join-identity.md`
+(native/wave join mispairing on repo-basename collision — needs a wave-schema change, out of this
+loop's scope, left for a future round or a dedicated task). Two genuinely minor items remain undocumented
+by design (both confirmed non-blocking across 2 independent reviews): the SKILL.md opt-out ordering
+nuance and the dead dashboard match-arm code.
