@@ -154,8 +154,9 @@ console.log('\n2. --mode offline → sets CLAUDE_LLM_MODE, strips flag');
   const args = r.json?.args || [];
   assert(!args.includes('--mode'), `--mode stripped (got: ${JSON.stringify(args)})`);
   assert(!args.includes('offline'), `'offline' value stripped from args`);
-  assert(r.json?.claude_llm_mode === 'offline',
-    `CLAUDE_LLM_MODE=offline reaches claude env (got ${JSON.stringify(r.json?.claude_llm_mode)})`);
+  // --mode offline is normalized at export to best-local-oss (selectable mode name).
+  assert(r.json?.claude_llm_mode === 'best-local-oss',
+    `CLAUDE_LLM_MODE=best-local-oss after offline normalize (got ${JSON.stringify(r.json?.claude_llm_mode)})`);
 }
 
 // ── Test 3: --mode=value (= form) also stripped ────────────────────────────
@@ -167,8 +168,9 @@ console.log('\n3. --mode=connected (= form) → stripped, env set');
   // Tight check: --mode or --mode=, NOT --model (which has --mode as prefix).
   assert(!args.some(a => a === '--mode' || a.startsWith('--mode=')),
     `--mode=... stripped (got: ${JSON.stringify(args)})`);
-  assert(r.json?.claude_llm_mode === 'connected',
-    `CLAUDE_LLM_MODE=connected (got ${JSON.stringify(r.json?.claude_llm_mode)})`);
+  // --mode connected normalizes to best-cloud-oss (DEFAULT_MODE).
+  assert(r.json?.claude_llm_mode === 'best-cloud-oss',
+    `CLAUDE_LLM_MODE=best-cloud-oss after connected normalize (got ${JSON.stringify(r.json?.claude_llm_mode)})`);
 }
 
 // ── Test 4: --profile sets CLAUDE_LLM_PROFILE and is stripped ──────────────
@@ -192,7 +194,7 @@ console.log('\n5. --mode + --profile + --route together');
   assert(!args.includes('--mode'), '--mode stripped');
   assert(!args.includes('--profile'), '--profile stripped');
   assert(!args.includes('--route'), '--route stripped');
-  assert(r.json?.claude_llm_mode === 'offline', 'CLAUDE_LLM_MODE=offline');
+  assert(r.json?.claude_llm_mode === 'best-local-oss', 'CLAUDE_LLM_MODE=best-local-oss (offline normalized)');
   assert(r.json?.claude_llm_profile === '128gb', 'CLAUDE_LLM_PROFILE=128gb');
   assert(args.some(a => a === '--model=claude-opus-4-6' || a === 'claude-opus-4-6'),
     `route resolved to opus (got ${JSON.stringify(args)})`);
