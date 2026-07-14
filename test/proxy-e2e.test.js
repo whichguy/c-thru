@@ -21,9 +21,13 @@ console.log('proxy-e2e integration tests (c-thru -p)\n');
 const REPO_ROOT      = path.join(__dirname, '..');
 const C_THRU         = path.join(REPO_ROOT, 'tools', 'c-thru');
 const E2E_MODEL      = 'qwen3:1.7b';    // smallest available; already pulled
-const E2E_TIMEOUT_MS = 60_000;          // real inference can take up to 60s
+// Full-suite load + cold Ollama resident models can exceed 60s on a single
+// -p turn (observed under make test). Keep headroom without masking hangs.
+const E2E_TIMEOUT_MS = 120_000;
 
-const IDENTITY_PROMPT = 'what is your model name, where were you born, model id and who is your maker?';
+// Short prompt: e2e only needs a non-empty model reply. Long identity prompts
+// inflate local-model latency and flaked under concurrent suite pressure.
+const IDENTITY_PROMPT = 'Reply with one word: ok';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
