@@ -463,8 +463,16 @@ echo "11. Agent color frontmatter parses, normalizes, validates, and rides only 
 # Use fresh names so they never collide with the §10 collision/profile fixtures.
 write_color_fixture() {
   local file="$1" color_line="$2"
-  printf '%s\n' "---" "description: color fixture agent that does useful work for matching" \
-    "model: $file" "tier_budget: 999999" "$color_line" "---" "fixture prompt body" > "$AGENT_FLEET_DIR/$file.md"
+  {
+    printf '%s\n' "---" "description: color fixture agent that does useful work for matching" \
+      "model: $file" "tier_budget: 999999"
+    # Emit the color line only when present so the no-color (color-none) fixture has
+    # the same frontmatter shape as a real agent without color — no blank line between
+    # tier_budget and the closing ---. A blank line is benign under the current regex
+    # parser but would mask a future blank-line-sensitive regression (false pass).
+    [[ -n "$color_line" ]] && printf '%s\n' "$color_line"
+    printf '%s\n' "---" "fixture prompt body"
+  } > "$AGENT_FLEET_DIR/$file.md"
 }
 write_color_fixture color-ok       'color: purple'
 write_color_fixture color-mixed    'color: Purple'
@@ -472,6 +480,11 @@ write_color_fixture color-upper    'color: RED'
 write_color_fixture color-bad      'color: teal'
 write_color_fixture color-empty    'color: '
 write_color_fixture color-none     ''
+# Fidelity invariant: the no-color fixture must match a real agent's frontmatter
+# shape — no blank line between tier_budget and the closing --- (regression guard
+# for the write_color_fixture conditional-emit fix).
+COLOR_NONE_NONE_BLANK=$(awk '/^---$/{c++; next} c==1 && /^$/{print "BLANK"}' "$AGENT_FLEET_DIR/color-none.md")
+assert "no-color fixture has no blank line in frontmatter (production shape)" test -z "$COLOR_NONE_NONE_BLANK"
 rm -rf "$SESSION_DIR/agents"; rm -rf "$PROFILE_DIR/agents"; mkdir -p "$PROFILE_DIR/agents"
 NO_AGENTS=0
 RUN_PAYLOADS=()
