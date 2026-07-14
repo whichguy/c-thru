@@ -49,7 +49,7 @@ Proxy e2e/smoke suites are port- and Ollama-contended: `make test` (hermetic, sk
 
 ### Bash sharp edges for contributors
 
-**`exec` silently skips all EXIT traps.** In bash, `exec <cmd>` replaces the current shell process and never fires the `trap ... EXIT` handler. Any path that `exec`s into the real `claude` binary must ensure proxy cleanup is complete beforehand, or that no proxy was spawned yet. The guard in `c-thru` (`if [[ -z "${ROUTER_STARTED_PROXY_PID:-}" ]]`) enforces this: `exec` is only used on the transparent (no-proxy) path. On the routing path (proxy running), the pattern is `foreground child + exit $?` so the EXIT trap fires and kills the proxy. Do not add new `exec` calls in `c-thru` without verifying no proxy PID is live.
+**`exec` silently skips all EXIT traps.** In bash, `exec <cmd>` replaces the current shell process and never fires the `trap ... EXIT` handler. Any path that `exec`s into the real `claude` binary must ensure proxy cleanup is complete beforehand, or that no proxy was spawned yet. The guard in `c-thru` (`if [[ -z "${PROXY_STARTED_PID:-}" ]]`) enforces this: `exec` is only used when this shell did not start the proxy. On the routing path (proxy running), the pattern is `foreground child + exit $?` so the EXIT trap fires and kills the proxy. Do not add new `exec` calls in `c-thru` without verifying no proxy PID is live. Do not reintroduce `cmd &; wait` for Claude — background async jobs were implicated in TUI input garbling (see `docs/tui-troubleshooting.md`).
 
 **`isolation: "worktree"` agents branch from the last pushed commit, not local HEAD.**
 When dispatching parallel agents with `isolation: "worktree"` (via the Agent tool), each
@@ -110,6 +110,17 @@ Some repo files are derived from `config/model-map.json` and `agents/*.md`; see
 - `~/.claude/settings.json` — cleaned on install (durable c-thru fleet hooks removed by path **or** script basename; no new global hooks written). Fleet hooks are injected ephemerally by `c-thru` only.
 
 Project `.claude/settings.json` holds **permissions only** — no static c-thru hooks (those double-fired with ephemeral inject). Fleet hooks + the opt-in `c-thru-autonomous-gate` Stop hook are injected only by `c-thru` launch (gate still no-ops unless `.claude/autonomous-gate.local.json` exists). Runtime-only (not written by install): `.prepull-stamp-<tier>` (bulk pre-pull debounce, invalidated on model-map change), `proxy.log` (ops log under `~/.claude/`; optional `proxy.log.old` after size rotate), `proxy.pid`. `c-thru-self-update.sh` writes `.c-thru-update.log` inside the repo root only.
+
+### Ephemeral-only surfaces (do not re-add to static `.claude`)
+
+| Surface | Static `.claude` / durable settings | How it ships |
+|---|---|---|
+| Fleet hooks (session-start, classify, proxy-health, map-changed, stop, agent-router, …) | **No** — double-fires with inject | Ephemeral `--settings` on `c-thru` launch; plugin `hooks.json` for marketplace installs |
+| Default `statusLine` | **No** project default; user custom is fine | Absent-only inject (`c-thru-statusline`); never overwrites a user `statusLine` |
+| Agent badge `color` | N/A | **Not used** — not injected into `--agents` |
+| Autonomous gate Stop | **No** project Stop registration | Ephemeral Stop; no-op unless `.claude/autonomous-gate.local.json` exists |
+
+TUI garble / “keys broken” under c-thru: see [`docs/tui-troubleshooting.md`](docs/tui-troubleshooting.md) (A/B matrix; not a keystroke hook).
 
 ## Architecture
 

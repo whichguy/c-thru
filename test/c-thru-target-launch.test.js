@@ -106,12 +106,12 @@ async function main() {
     assert((result.json?.args || []).includes('--append-system-prompt'),
       'normal launch still receives injected session flags');
     // Token-budget guard: system summary is paid every main-chat turn.
-    // ~2k chars ≈ room for IDENTITY + fleet prose; grow only with intent.
+    // Hard cap 2500 chars (IDENTITY + fleet prose); grow only with intent.
     const args1 = result.json?.args || [];
     const aspIdx = args1.indexOf('--append-system-prompt');
     const asp = aspIdx >= 0 ? (args1[aspIdx + 1] || '') : '';
-    assert(asp.length > 0 && asp.length <= 2500,
-      `system summary stays within char budget (got ${asp.length} chars)`);
+    assert(asp.length >= 400 && asp.length <= 2500,
+      `system summary within budget on direct path (got ${asp.length} chars)`);
     assert(/Use specialized agents aggressively/.test(asp),
       'system summary still carries fleet aggression policy');
   }
@@ -137,6 +137,13 @@ async function main() {
         `explicit target uses proxy mediation instead of direct provider URL (got ${JSON.stringify(result.json?.anthropic_base_url)})`);
       assert((result.json?.args || []).some(arg => arg === '--model=explicit-target' || arg === 'explicit-target'),
         'forwarded args preserve explicit target label');
+      const args2 = result.json?.args || [];
+      const aspIdx2 = args2.indexOf('--append-system-prompt');
+      const asp2 = aspIdx2 >= 0 ? (args2[aspIdx2 + 1] || '') : '';
+      assert(asp2.length >= 400 && asp2.length <= 2500,
+        `system summary within budget on proxy path (got ${asp2.length} chars)`);
+      assert(/Use specialized agents aggressively/.test(asp2),
+        'proxy-path system summary still carries fleet aggression policy');
     }
   }
 
@@ -179,6 +186,11 @@ async function main() {
         `stderr notes proxy routing (got ${(result.stderr || '').slice(0, 300)})`);
       assert(/no fleet/.test(result.stderr || ''),
         `stderr notes no fleet inject on native subcmd (got ${(result.stderr || '').slice(0, 400)})`);
+      assert(/c-thru list/.test(result.stderr || ''),
+        `stderr points at c-thru list for status (got ${(result.stderr || '').slice(0, 400)})`);
+      const proxyInfoLines = (result.stderr || '').split('\n').filter(l => /via proxy/.test(l));
+      assert(proxyInfoLines.length === 1,
+        `single via-proxy info line (got ${proxyInfoLines.length}: ${JSON.stringify(proxyInfoLines)})`);
     }
   }
 

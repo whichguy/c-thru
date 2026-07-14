@@ -600,6 +600,8 @@ write_ephemeral_settings() {
     // them and Claude runs SessionStart/UserPromptSubmit twice — extra
     // context inject + stderr that paints the TUI. Strip by basename so
     // cThruInjected is the sole owner under a c-thru launch.
+    // Keep in sync with install.sh cleanup_old_persistent_config fleet stems
+    // and test/install-smoke.test.sh "Fleet hook cleanup" remaining_fleet filter.
     const C_THRU_OWNED_HOOK_STEMS = new Set([
       "c-thru-session-start",
       "c-thru-postcompact-context",
@@ -1518,9 +1520,8 @@ run_native_claude_subcommand() {
       rebuilt=("$subcmd" "--model" "$route_model" ${FORWARDED_ARGS[@]+"${FORWARDED_ARGS[@]}"})
     fi
     FORWARDED_ARGS=("${rebuilt[@]}")
-    # Loud once: proxy is on, but this is still native commander (no fleet inject).
-    echo "c-thru: ${subcmd} via proxy — model=${route_model} ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}" >&2
-    echo "c-thru: native ${subcmd}: no fleet --agents / --append-system-prompt (commander); for full fleet use main cthru chat or brand Agent tool" >&2
+    # Loud once: proxy on, no fleet inject (commander). Ops: c-thru list.
+    echo "c-thru: ${subcmd} via proxy model=${route_model} base=${ANTHROPIC_BASE_URL} (no fleet inject) — fleet: main cthru chat; status: c-thru list" >&2
   elif [[ -n "${STRIPPED_MODEL:-}" ]]; then
     # Non-native model stripped but proxy bypassed / unavailable
     echo "c-thru: stripped --model '${STRIPPED_MODEL}' (not a Claude-native alias; not forwarded to claude ${subcmd})" >&2

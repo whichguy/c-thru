@@ -283,25 +283,47 @@ cleanup_old_persistent_config() {
             #   2) basename stem of known fleet scripts (repo paths, old copies,
             #      quoted forms). Exact-prefix-only missed repo-path hooks and
             #      left SessionStart/UserPromptSubmit double-firing under c-thru.
-            jq --arg tools "$TOOLS_DEST" '
+            # Stem list MUST stay aligned with C_THRU_OWNED_HOOK_STEMS in
+            # tools/c-thru write_ephemeral_settings() and the install-smoke
+            # fleet-cleanup assertion (test/install-smoke.test.sh).
+            # jq has no \xHH escapes — use \u0022 / \u0027 for quote stripping.
+            # first_token/stem/is_cthru_fleet_hook operate on a hook *object*
+            # ({type,command,...}), reading .command — not bare strings.
+            # Fail loudly if jq errors (do not print success after a no-op).
+            if jq --arg tools "$TOOLS_DEST" '
                 def first_token:
-                  ((. // "") | gsub("^[[:space:]]+|[[:space:]]+$"; "") | split(" ")[0] // "")
-                  | gsub("^[\x22\x27]|[\x22\x27]$"; "");
+                  ((.command // "") | tostring
+                    | gsub("^[[:space:]]+|[[:space:]]+$"; "")
+                    | split(" ")[0] // "")
+                  | gsub("^\u0022|\u0022$"; "")
+                  | gsub("^\u0027|\u0027$"; "");
                 def stem:
                   (first_token | split("/")[-1] // "") | sub("\\.sh$"; "");
                 def is_cthru_fleet_hook:
                   (first_token | startswith($tools))
                   or (stem | test("^c-thru-(session-start|postcompact-context|proxy-health|classify|map-changed|plan-visibility-hook|stop-hook|autonomous-gate|agent-router-hook|enter-plan-hook)$"));
                 if .hooks then
+                  # with_entries: each .value is an array of matcher groups
+                  # {matcher?, hooks:[{type,command},...]}. Filter hook
+                  # objects inside each group, drop empty groups, then drop
+                  # empty events. Parens required: `a |= b | c` is (a|=b)|c.
                   .hooks |= with_entries(
-                    .value |= map(
-                      .hooks |= map(select(is_cthru_fleet_hook | not))
-                    ) | map(select(.hooks | length > 0))
-                  ) | .hooks |= with_entries(select(.value | length > 0))
+                    .value |= (
+                      map(.hooks |= map(select(is_cthru_fleet_hook | not)))
+                      | map(select((.hooks // []) | length > 0))
+                    )
+                  )
+                  | .hooks |= with_entries(select(.value | length > 0))
                   | if (.hooks | length) == 0 then del(.hooks) else . end
                 else . end
-            ' "$settings" > "$tmp" && mv "$tmp" "$settings"
-            echo -e "  ${GREEN}✅ cleaned up persistent hooks from settings.json${NC}"
+            ' "$settings" > "$tmp"; then
+                mv "$tmp" "$settings"
+                echo -e "  ${GREEN}✅ cleaned up persistent hooks from settings.json${NC}"
+            else
+                rm -f "$tmp"
+                echo -e "  ${RED}❌ failed to clean persistent hooks from settings.json (jq error)${NC}" >&2
+                exit 1
+            fi
         fi
         if [ -f "$claude_json" ]; then
             local tmp="${claude_json}.tmp.$$"

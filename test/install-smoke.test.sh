@@ -109,6 +109,82 @@ for hs in "${HOOK_SCRIPTS[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
+# Fleet hook stem strip — repo-path + tools-path hooks removed; user hooks kept
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Fleet hook cleanup (repo-path / stem) ==="
+
+if command -v jq >/dev/null 2>&1; then
+  # Historical double-fire: durable settings with repo-path fleet scripts.
+  # install.sh must strip by stem (not only ~/.claude/tools/ prefix).
+  cat > "$SETTINGS" <<EOF
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$REPO_DIR/tools/c-thru-session-start.sh\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "echo user-session-hook-keep",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$FAKE_CLAUDE/tools/c-thru-classify",
+            "timeout": 8
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+  # Surface install stderr on failure (silent 2>/dev/null hid the jq bugs).
+  # Full stem list must match install.sh is_cthru_fleet_hook + c-thru OWNED stems.
+  _install_err="$TMP/install-hook-cleanup.err"
+  if ! (cd "$REPO_DIR" && bash install.sh >"$TMP/install-hook-cleanup.out" 2>"$_install_err"); then
+    echo "ABORT: install.sh non-zero during hook-cleanup run" >&2
+    tail -40 "$_install_err" >&2 || true
+    exit 1
+  fi
+
+  remaining_fleet=$(jq -r '
+    [.hooks // {} | .. | objects | .command? // empty]
+    | map(select(test("c-thru-(session-start|postcompact-context|proxy-health|classify|map-changed|plan-visibility-hook|stop-hook|autonomous-gate|agent-router-hook|enter-plan-hook)")))
+    | length
+  ' "$SETTINGS" 2>/dev/null || echo "err")
+  check "repo/tools fleet hooks stripped by install" "0" "$remaining_fleet"
+
+  user_kept=$(jq -r '
+    [.hooks // {} | .. | objects | .command? // empty]
+    | map(select(test("user-session-hook-keep")))
+    | length
+  ' "$SETTINGS" 2>/dev/null || echo "0")
+  check "non-c-thru user hook preserved" "1" "$user_kept"
+
+  # Only the user SessionStart hook should remain (fleet UserPromptSubmit gone).
+  events_left=$(jq -r '(.hooks // {}) | keys | sort | join(",")' "$SETTINGS" 2>/dev/null || echo "")
+  check "only SessionStart event remains after fleet strip" "SessionStart" "$events_left"
+
+  # Reset settings for the rest of the suite (ephemeral arch expects no durable
+  # c-thru hooks; user-hook residue would break the "no hooks" idempotency checks).
+  printf '{}\n' > "$SETTINGS"
+else
+  echo "  SKIP  fleet hook cleanup (jq not available)"
+fi
+
+# ---------------------------------------------------------------------------
 # Second run — idempotency + overrides preservation
 # ---------------------------------------------------------------------------
 echo ""

@@ -89,6 +89,8 @@ Hooks and agent scripts live **in the git repo** (`tools/c-thru-*.sh`, mirrored 
 
 **Pick the right entry point:** full planner/coder fleet → main `cthru` chat (CLI install). Brand opinion leaf → “ask agent grok” inside that chat. Agent-view UI with a non-Anthropic default → `cthru agents --model grok` (proxy yes, fleet no). Multi-file Grok implement/review → `coder` or `grok-cc`, not the brand leaf.
 
+**Routing forensics without fleet inject:** use `c-thru list` or `/c-thru-status` (needs a live proxy — started by main `cthru` or a native brand `agents` launch). Port discovery uses `proxy.pid` / `CLAUDE_PROXY_PORT` / `ANTHROPIC_BASE_URL`; agent-view does not inject SessionStart control-plane hooks.
+
 ---
 
 ## How c-thru works
