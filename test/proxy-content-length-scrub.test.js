@@ -113,10 +113,13 @@ async function main() {
 
           const req = stub.lastRequest();
           assert(!!req, 'stub received request');
-          // Proxy must have scrubbed content-length (forwarded undefined or absent).
-          assert(req.forwarded_cl === undefined,
-            `content-length NOT forwarded to upstream (got: ${JSON.stringify(req.forwarded_cl)})`);
-          // Actual bytes received must be consistent with the body the stub parsed.
+          // Client Content-Length is scrubbed, then the proxy may re-set CL to the
+          // *rewritten* body size (Anthropic path after model rewrite / xAI sanitize).
+          // Invariant: if CL is present it MUST equal actual bytes — never a stale client CL.
+          if (req.forwarded_cl !== undefined) {
+            assertEq(Number(req.forwarded_cl), req.actual_bytes,
+              `forwarded content-length matches rewritten body (got CL=${req.forwarded_cl}, bytes=${req.actual_bytes})`);
+          }
           assert(req.actual_bytes > 0, `upstream received non-empty body (${req.actual_bytes} bytes)`);
         });
       } finally {
@@ -155,22 +158,22 @@ async function main() {
           const req = stub.lastRequest();
           assert(!!req, 'stub received request');
           assertEq(req.model_used, longModelName, `upstream saw the long model name`);
-          // Key invariant: no content-length forwarded, so no mismatch possible.
-          assert(req.forwarded_cl === undefined,
-            `content-length NOT forwarded — no length mismatch risk (got: ${JSON.stringify(req.forwarded_cl)})`);
+          // Same invariant as test 1: CL absent (chunked) OR CL === actual bytes.
+          if (req.forwarded_cl !== undefined) {
+            assertEq(Number(req.forwarded_cl), req.actual_bytes,
+              `long-name: forwarded CL matches body (CL=${req.forwarded_cl}, bytes=${req.actual_bytes})`);
+          }
         });
       } finally {
         await stub.close().catch(() => {});
       }
     }
 
-    // ── Test 3: Anthropic-kind backend — content-length also scrubbed ────────
-    // forwardAnthropic uses the same scrubCthruHeaders() as the Ollama path.
-    // Verify the upstream receives no content-length header regardless of
-    // what the client sent. (We send a correct content-length here — the
-    // important check is that the upstream still sees none, because the proxy
-    // may rewrite the body model field, and scrub runs unconditionally.)
-    console.log('\n3. Anthropic-kind backend — content-length is absent from forwarded request');
+    // ── Test 3: Anthropic-kind backend — content-length matches rewritten body ─
+    // forwardAnthropic scrubs the client Content-Length then re-sets it to
+    // Buffer.byteLength(payload) after model rewrite / sanitize so upstreams
+    // that reject chunked-only bodies (and length-mismatch traps) stay happy.
+    console.log('\n3. Anthropic-kind backend — content-length matches rewritten body');
     {
       const stub = await measuringStub();
       try {
@@ -184,7 +187,7 @@ async function main() {
         const configPath = writeConfig(tmpDir, cfg);
         await withProxy({ configPath, profile: '64gb', mode: 'connected' }, async ({ port }) => {
           // Send a correct content-length (the helpers.js httpJson helper sets it
-          // automatically). The proxy should strip it before forwarding.
+          // automatically). The proxy scrubs then re-sets to the outbound payload size.
           const r = await httpJson(port, 'POST', '/v1/messages', {
             model: 'claude-test',
             stream: false,
@@ -195,10 +198,11 @@ async function main() {
           assertEq(r.status, 200, 'anthropic-kind backend request succeeded');
           const req = stub.lastRequest();
           assert(!!req, 'stub received request');
-          // scrubCthruHeaders deletes content-length unconditionally — the upstream
-          // must see undefined (not the client's value, not a recomputed value).
-          assert(req.forwarded_cl === undefined,
-            `content-length NOT forwarded to anthropic upstream (got: ${JSON.stringify(req.forwarded_cl)})`);
+          // Scrub removes client CL; Anthropic path re-sets CL to payload bytes.
+          if (req.forwarded_cl !== undefined) {
+            assertEq(Number(req.forwarded_cl), req.actual_bytes,
+              `anthropic: forwarded CL matches body (CL=${req.forwarded_cl}, bytes=${req.actual_bytes})`);
+          }
           assert(req.actual_bytes > 0, `upstream received non-empty body (${req.actual_bytes} bytes)`);
         });
       } finally {

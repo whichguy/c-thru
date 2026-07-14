@@ -1,6 +1,6 @@
 ---
 name: gemini
-description: MUST BE USED for Google Gemini Pro / Flash brand routing — "ask gemini", "ask agent gemini", "use gemini", "google gemini", "gemini-pro". Leaf: parent should spawn once with the user question; do not chain further agents. Not for the pdf specialist role — use pdf instead.
+description: MUST BE USED for Google Gemini Pro / Flash brand routing — "ask gemini", "ask agent gemini", "use gemini", "google gemini", "gemini-pro". Leaf: parent should spawn once with the user question; do not chain further agents. Not for the pdf specialist role — use pdf instead. Not for grok, deepseek, qwen, or kimi brand opinion asks — use grok, deepseek, qwen, or kimi instead.
 model: gemini
 tier_budget: 999999
 color: orange

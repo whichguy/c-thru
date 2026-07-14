@@ -102,13 +102,29 @@ console.log('\n4. unknown mode falls back to best-cloud (graceful degradation)')
 }
 
 // ── Test 5: agent_to_capability values all map to known capabilities ────────
-// If an agent maps to a capability not in llm_profiles, requests to that agent
-// will fail at runtime (capability lookup returns null → 404/503).
-console.log('\n5. every agent_to_capability target is a known capability in llm_profiles');
+// Identity-mapped capabilities must exist in llm_profiles. Brand leaves use
+// `model:<concrete>` pins — those skip llm_profiles and resolve via model_routes
+// (see resolveBackend model: pin branch). Require the pin target to be routable.
+console.log('\n5. every agent_to_capability target is a known capability or model: pin');
 const a2c = config.agent_to_capability || {};
 const targetCaps = new Set(Object.values(a2c));
+const routes = config.model_routes || {};
 let missingCaps = 0;
 for (const target of targetCaps) {
+  if (typeof target === 'string' && target.startsWith('model:')) {
+    const pin = target.slice('model:'.length);
+    const routable = Object.prototype.hasOwnProperty.call(routes, pin)
+      || Object.keys(routes).some((k) => k.startsWith('re:'));
+    // Direct key is enough for brand pins; regex routes are rare for pins.
+    if (!Object.prototype.hasOwnProperty.call(routes, pin)) {
+      missingCaps++;
+      if (missingCaps <= 5) {
+        const orphanAgents = Object.entries(a2c).filter(([, c]) => c === target).map(([a]) => a);
+        assert(false, `model: pin '${pin}' for agents [${orphanAgents.join(', ')}] missing from model_routes`);
+      }
+    }
+    continue;
+  }
   if (!Object.prototype.hasOwnProperty.call(profiles, target)) {
     missingCaps++;
     if (missingCaps <= 5) {
@@ -117,7 +133,7 @@ for (const target of targetCaps) {
     }
   }
 }
-assertEq(missingCaps, 0, 'every agent_to_capability target exists in llm_profiles');
+assertEq(missingCaps, 0, 'every agent_to_capability target is resolvable');
 
 // ── Test 6: model_overrides has no cycles ─────────────────────────────────
 console.log('\n6. model_overrides has no cycles');

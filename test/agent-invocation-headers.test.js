@@ -54,6 +54,14 @@ function buildFixture(stubPort) {
   const llm_profiles = {};
   const model_routes = {};
   for (const cap of caps) {
+    // Brand leaves use agent_to_capability → "model:<concrete>". resolveBackend
+    // pin-branches to the concrete name (capability recorded as the request
+    // model / agent name). Route the concrete pin to the hermetic stub.
+    if (typeof cap === 'string' && cap.startsWith('model:')) {
+      const pin = cap.slice('model:'.length);
+      model_routes[pin] = 'stub';
+      continue;
+    }
     const model = `served-${cap}`;
     // Same model across all tiers/modes — the agent→capability seam is what's
     // under test here, not tier/mode resolution (covered by other suites).
@@ -114,8 +122,14 @@ async function main() {
       env: { CLAUDE_PROXY_JOURNAL: '1', CLAUDE_PROXY_JOURNAL_DIR: journalDir },
     }, async ({ port }) => {
       for (const agent of AGENTS) {
-        const expectedCap   = PROD.agent_to_capability[agent];
-        const expectedModel = expectByCap[expectedCap];
+        const a2cTarget = PROD.agent_to_capability[agent];
+        // model: pins record capability as the request model (agent name) and
+        // serve the concrete pin; identity-mapped agents keep a2c → llm_profiles.
+        const isModelPin = typeof a2cTarget === 'string' && a2cTarget.startsWith('model:');
+        const expectedCap = isModelPin ? agent : a2cTarget;
+        const expectedModel = isModelPin
+          ? a2cTarget.slice('model:'.length)
+          : expectByCap[expectedCap];
 
         const r = await httpJson(port, 'POST', '/v1/messages', {
           model: agent,
@@ -140,21 +154,26 @@ async function main() {
           `${agent}: resolved-via.capability === '${expectedCap}'`);
 
         assertEq(r.headers['x-c-thru-served-by'], expectedModel,
-          `${agent}: x-c-thru-served-by === tracer prediction '${expectedModel}'`);
+          `${agent}: x-c-thru-served-by === '${expectedModel}'`);
       }
     });
 
-    // Journal: every distinct capability exercised must have a recorded line
-    // carrying the matching capability + served_by.
+    // Journal: every agent request records under its resolved capability key
+    // (agent name for model: pins; a2c capability for identity-mapped agents).
     console.log('\nJournal records (capability + served_by per request):');
-    const caps = [...new Set(AGENTS.map(a => PROD.agent_to_capability[a]))].sort();
-    for (const cap of caps) {
-      const entries = readJournal(journalDir, cap);
-      assert(entries.length >= 1, `journal: '${cap}.jsonl' has ≥1 entry (got ${entries.length})`);
+    for (const agent of AGENTS) {
+      const a2cTarget = PROD.agent_to_capability[agent];
+      const isModelPin = typeof a2cTarget === 'string' && a2cTarget.startsWith('model:');
+      const journalCap = isModelPin ? agent : a2cTarget;
+      const expectedModel = isModelPin
+        ? a2cTarget.slice('model:'.length)
+        : expectByCap[a2cTarget];
+      const entries = readJournal(journalDir, journalCap);
+      assert(entries.length >= 1, `journal: '${journalCap}.jsonl' has ≥1 entry (got ${entries.length})`);
       if (entries.length) {
         const e = entries[entries.length - 1];
-        assertEq(e.capability, cap, `journal[${cap}].capability === '${cap}'`);
-        assertEq(e.served_by, expectByCap[cap], `journal[${cap}].served_by === '${expectByCap[cap]}'`);
+        assertEq(e.capability, journalCap, `journal[${journalCap}].capability === '${journalCap}'`);
+        assertEq(e.served_by, expectedModel, `journal[${journalCap}].served_by === '${expectedModel}'`);
       }
     }
   } finally {

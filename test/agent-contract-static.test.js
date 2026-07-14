@@ -77,6 +77,13 @@ const ROSTER = {
   'fast-scout':           { warnOnly: true },
   'long-context':         { warnOnly: true },
 
+  // ── Brand-pin leaves (model: pins; leaf/opinion only) ──────────────────────────
+  'grok':                 { warnOnly: true },
+  'deepseek':             { warnOnly: true },
+  'qwen':                 { warnOnly: true },
+  'kimi':                 { warnOnly: true },
+  'gemini':               { warnOnly: true },
+
   // ── Routing-only entries: no agent file; resolve via agent_to_capability only ──
   // routingOnly: true — skip all file checks; only coverage in agent_to_capability is verified.
   'WebSearch': { routingOnly: true },
