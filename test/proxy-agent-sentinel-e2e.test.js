@@ -152,6 +152,35 @@ async function main() {
     assertEq(r.headers['x-c-thru-agent-identity'], 'none', 'identity none');
   });
 
+  // Unroutable marker (unknown agent name, no capability / model_routes): keep
+  // body.model. Do not invent a model that would hit Ollama-fallback 400.
+  console.log('\n7. unroutable sentinel → keep default model (no override)');
+  await withSentinelProxy({}, async ({ port, agentStub, defaultStub }) => {
+    const r = await httpJson(port, 'POST', '/v1/messages',
+      bodyWith(`${marker('totally-unknown-agent-xyz')}\nhi`));
+    assertEq(r.status, 200, 'unroutable: 200');
+    assertEq(r.headers['x-c-thru-served-by'], DEFAULT_MODEL, 'unroutable: default model');
+    assert(defaultStub.requests.length === 1, 'unroutable: default stub hit');
+    assert(agentStub.requests.length === 0, 'unroutable: agent stub not hit');
+    assertEq(r.headers['x-c-thru-agent-identity'], 'none', 'unroutable: identity none');
+    const fwd = defaultStub.requests[0] && defaultStub.requests[0].body;
+    assert(fwd && !JSON.stringify(fwd).includes('[[c-thru-agent:'),
+      'unroutable: marker still stripped from upstream body');
+  });
+
+  // Source-code poison (${lookup_key}) is rejected by parseAgentSentinel; same
+  // "keep default" outcome as unroutable, even when a prior valid marker exists
+  // later in history as the last *invalid* match.
+  console.log('\n8. poison ${lookup_key} ignored → keep default when sole marker');
+  await withSentinelProxy({}, async ({ port, agentStub, defaultStub }) => {
+    const r = await httpJson(port, 'POST', '/v1/messages',
+      bodyWith('tool_result: sentinel="[[c-thru-agent:${lookup_key}]]"$'));
+    assertEq(r.status, 200, 'poison-only: 200');
+    assertEq(r.headers['x-c-thru-served-by'], DEFAULT_MODEL, 'poison-only: default model');
+    assert(defaultStub.requests.length === 1, 'poison-only: default stub');
+    assert(agentStub.requests.length === 0, 'poison-only: no agent stub');
+  });
+
   const failed = summary();
   process.exit(failed ? 1 : 0);
 }

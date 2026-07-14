@@ -148,7 +148,7 @@ console.log('\n3. Documented non-1:1 remaps hold (guards the README "⚠" rows +
     `plan-scheduler → fast-generalist (got ${JSON.stringify(a2c['plan-scheduler'])})`);
   // Brand agents pin directly to concrete models (not llm_profiles capabilities).
   const brandPins = {
-    grok: 'model:grok',
+    grok: 'model:grok-4.5',
     deepseek: 'model:deepseek-v4-pro:cloud',
     qwen: 'model:qwen3.6:35b',
     kimi: 'model:kimi-k2.7-code:cloud',

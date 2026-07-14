@@ -27,7 +27,7 @@ ok(map.endpoints.xai && map.endpoints.xai.url === 'https://api.x.ai', 'endpoints
 ok(map.endpoints.xai.auth && map.endpoints.xai.auth.env === 'XAI_API_KEY', 'endpoints.xai auth env XAI_API_KEY');
 ok(map.model_routes.grok && map.model_routes.grok.endpoint === 'xai', 'model_routes.grok → xai');
 ok(map.model_routes.grok.name === 'grok-4.5', 'model_routes.grok name grok-4.5');
-ok(map.agent_to_capability.grok === 'model:grok', 'agent_to_capability.grok pin');
+ok(map.agent_to_capability.grok === 'model:grok-4.5', 'agent_to_capability.grok pin');
 ok(map.agent_to_capability.deepseek === 'model:deepseek-v4-pro:cloud', 'deepseek pin');
 ok(map.agent_to_capability.qwen === 'model:qwen3.6:35b', 'qwen pin');
 ok(map.agent_to_capability.kimi === 'model:kimi-k2.7-code:cloud', 'kimi pin');
@@ -132,7 +132,7 @@ async function runProxyE2e() {
       grok: { endpoint: 'xai', name: 'grok-4.5' },
       'grok-4.5': 'xai',
     },
-    agent_to_capability: { grok: 'model:grok' },
+    agent_to_capability: { grok: 'model:grok-4.5' },
     llm_profiles: {},
     llm_mode: 'best-cloud',
   };

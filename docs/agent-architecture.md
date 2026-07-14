@@ -53,7 +53,7 @@ this fleet.
 | `edge` | `edge` | Tiny-model tasks (classify, summarize, transform) | (leaf) |
 | `vision` | `vision` | Screenshots, diagrams, image OCR | (leaf) |
 | `pdf` | `pdf` | PDF parsing (tables, multi-column, figures) | (leaf) |
-| `grok` 📌 | `model:grok` | Brand: xAI Grok commercial cloud | (leaf) |
+| `grok` 📌 | `model:grok-4.5` | Brand: xAI Grok commercial cloud | (leaf) |
 | `deepseek` 📌 | `model:deepseek-v4-pro:cloud` | Brand: DeepSeek cloud OSS | (leaf) |
 | `qwen` 📌 | `model:qwen3.6:35b` | Brand: local Qwen | (leaf) |
 | `kimi` 📌 | `model:kimi-k2.7-code:cloud` | Brand: Kimi cloud OSS | (leaf) |

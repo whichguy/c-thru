@@ -302,7 +302,7 @@ async function main() {
       grok: shipped.model_routes.grok,
       'grok-4.5': shipped.model_routes['grok-4.5'],
     },
-    agent_to_capability: { grok: 'model:grok' },
+    agent_to_capability: { grok: 'model:grok-4.5' },
     llm_profiles: {},
     llm_mode: 'best-cloud',
   };

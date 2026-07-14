@@ -10,10 +10,11 @@
 // agent_to_capability keys. Trust is loopback-client-only in claude-proxy (no HMAC).
 //
 // Detection is cheapest-first and does NOT parse the JSON structure:
-//   1. O(1) header check (any non-empty trimmed string; empty today, future-proof).
-//   2. lastIndexOf of the prefix over the WHOLE raw body, then take content until
-//      the next ']]' so the *most recently* injected marker wins and names can be
-//      arbitrary length / charset (OpenRouter slugs, advisor:org/model, …).
+//   1. O(1) header check — non-empty trimmed string that passes
+//      isValidAgentRoutingName (empty today; future OOB channel).
+//   2. Walk body markers last→first (last *valid* match wins). Names can be
+//      agent ids, OpenRouter slugs, advisor:org/model, etc., but not shell
+//      source leaks like ${lookup_key}.
 //
 // After routing, stripAgentSentinelFromBody() removes all markers from the structured
 // body so upstream LLMs never see routing metadata. Strip walks nested tool_result
@@ -28,6 +29,26 @@ const SENTINEL_GLOBAL_RE = /\[\[c-thru-agent:(?:(?!\]\]).)*\]\]\n?/g;
 const MAX_INTERIOR_LEN = 512;
 // Kept for tests that still import READ_WINDOW as the old bound concept.
 const READ_WINDOW = MAX_INTERIOR_LEN;
+
+// Routing names must look like agent ids / model tags / advisor pins — NOT source
+// code or unexpanded shell. Observed poison: agents reading c-thru-agent-router-hook.sh
+// put the literal `[[c-thru-agent:${lookup_key}]]` into tool_result history; lastIndexOf
+// then routed the next request to model "${lookup_key}" → Ollama 400 "invalid model name".
+// Allow: explore, reviewer-security, kimi-k2.7-code:cloud, advisor:org/model, thudm/glm-4-plus
+const ROUTING_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,199}$/;
+
+/**
+ * True if `name` is a plausible agent/model routing key (not shell/source leakage).
+ */
+function isValidAgentRoutingName(name) {
+  if (typeof name !== 'string') return false;
+  const n = name.trim();
+  if (!n || n.length > 200) return false;
+  if (!ROUTING_NAME_RE.test(n)) return false;
+  // Reject common source-leak patterns even if they somehow pass the charset set.
+  if (n.includes('${') || n.includes('//') || n.includes('`')) return false;
+  return true;
+}
 
 /**
  * Split interior into { name, tag }.
@@ -49,24 +70,34 @@ function splitNameAndTag(interior) {
 
 // parseAgentSentinel(bodyText, headerValue) -> { name, tag, index } | null
 function parseAgentSentinel(bodyText, headerValue) {
-  // Tier 1 — header: any non-empty trimmed string (opaque routing key).
+  // Tier 1 — header: validated routing key (future OOB channel).
   if (typeof headerValue === 'string') {
     const h = headerValue.trim();
-    if (h && !/[\u0000-\u001f\u007f]/.test(h)) {
+    if (h && isValidAgentRoutingName(h)) {
       return { name: h, tag: null };
     }
   }
-  // Tier 2 — last match wins.
+  // Tier 2 — last *valid* match wins. Skip poison markers that appear when agents
+  // read c-thru source (hook/sentinel docs contain the prefix literally).
   if (typeof bodyText !== 'string') return null;
-  const i = bodyText.lastIndexOf(SENTINEL_PREFIX);
-  if (i < 0) return null;
-  const start = i + SENTINEL_PREFIX.length;
-  const close = bodyText.indexOf(']]', start);
-  if (close < 0) return null;
-  const interior = bodyText.slice(start, close);
-  const split = splitNameAndTag(interior);
-  if (!split) return null;
-  return { name: split.name, tag: split.tag, index: i };
+  let searchFrom = bodyText.length;
+  while (searchFrom > 0) {
+    const i = bodyText.lastIndexOf(SENTINEL_PREFIX, searchFrom - 1);
+    if (i < 0) break;
+    const start = i + SENTINEL_PREFIX.length;
+    const close = bodyText.indexOf(']]', start);
+    if (close < 0) {
+      searchFrom = i;
+      continue;
+    }
+    const interior = bodyText.slice(start, close);
+    const split = splitNameAndTag(interior);
+    if (split && isValidAgentRoutingName(split.name)) {
+      return { name: split.name, tag: split.tag, index: i };
+    }
+    searchFrom = i;
+  }
+  return null;
 }
 
 function stripSentinelFromString(s) {
@@ -136,6 +167,7 @@ module.exports = {
   stripAgentSentinelFromBody,
   stripSentinelFromString,
   splitNameAndTag,
+  isValidAgentRoutingName,
   SENTINEL_PREFIX,
   SENTINEL_GLOBAL_RE,
   HMAC_SUFFIX_RE,

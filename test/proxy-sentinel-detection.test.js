@@ -89,6 +89,44 @@ console.log('proxy sentinel detection (parseAgentSentinel) + C19 trust gate\n');
   'advisor marker with colon model id → advisor:deepseek-v4-pro:cloud');
 }
 
+// ── poison markers from agents reading c-thru source (must not route) ───────────
+{
+  // Hook source contains the unexpanded shell form; last match would be poison.
+  const r = parseAgentSentinel(body({
+    model: 'sonnet',
+    messages: [
+      { role: 'user', content: '[[c-thru-agent:explore]]\nfind injection points' },
+      { role: 'assistant', content: 'reading hook…' },
+      { role: 'user', content: 'tool_result: sentinel="[[c-thru-agent:${lookup_key}]]"$' },
+    ],
+  }), undefined);
+  assert(r && r.name === 'explore' && r.tag === null,
+    'source-code poison ${lookup_key} ignored; earlier valid explore wins');
+}
+{
+  const r = parseAgentSentinel(body({
+    messages: [
+      { role: 'user', content: '[[c-thru-agent:coder]]\nfix' },
+      { role: 'user', content: 'see agent-sentinel.js: // [[c-thru-agent: const HMAC' },
+    ],
+  }), undefined);
+  assert(r && r.name === 'coder',
+    'incomplete/code-like marker ignored; prior coder wins');
+}
+{
+  const r = parseAgentSentinel(body({
+    messages: [{ role: 'user', content: 'only poison [[c-thru-agent:${lookup_key}]] here' }],
+  }), undefined);
+  assert(r === null, 'sole poison marker → null (no routing override)');
+}
+{
+  const r = parseAgentSentinel(body({
+    messages: [{ role: 'user', content: '[[c-thru-agent:kimi-k2.7-code:cloud]]\nok' }],
+  }), undefined);
+  assert(r && r.name === 'kimi-k2.7-code:cloud',
+    'concrete model tag with digits/dots/colon still valid');
+}
+
 // ── signed marker → tag captured ─────────────────────────────────────────────────
 {
   const r = parseAgentSentinel(body({ messages: [{ role: 'user', content: '[[c-thru-agent:coder:0123456789abcdef]] go' }] }), undefined);
@@ -112,9 +150,19 @@ assert(parseAgentSentinel('plain text', undefined) === null, 'unrelated text →
   assert(r && r.name === 'planner', 'valid header takes precedence over a body marker → planner');
 }
 {
-  // Header is opaque; non-empty wins even with punctuation (still no HMAC on header).
+  // Invalid header (spaces / disallowed chars) is rejected — same charset gate as body.
+  // Falls through so a real body marker still routes (header path is future OOB only).
   const r = parseAgentSentinel(body({ messages: [{ role: 'user', content: '[[c-thru-agent:tester]] t' }] }), 'bad header!');
-  assert(r && r.name === 'bad header!', 'non-empty header takes precedence (opaque name)');
+  assert(r && r.name === 'tester', 'invalid header ignored; body marker tester wins');
+}
+{
+  const r = parseAgentSentinel(body({ messages: [{ role: 'user', content: 'no marker' }] }), 'bad header!');
+  assert(r === null, 'invalid header alone → null (no routing override)');
+}
+{
+  // Header still accepts model-like / advisor pins (no HMAC on header).
+  const r = parseAgentSentinel(body({ messages: [{ role: 'user', content: '[[c-thru-agent:tester]] t' }] }), 'advisor:org/model');
+  assert(r && r.name === 'advisor:org/model', 'valid model-like header takes precedence over body');
 }
 
 // ── defensive / bounds ───────────────────────────────────────────────────────────

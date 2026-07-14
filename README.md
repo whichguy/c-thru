@@ -206,7 +206,7 @@ The full mapping, all the way through the implementation: **agent → capability
 | `fast-scout` | `fast-scout` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `ollama_local` |
 | `gemini` &nbsp;⚠ | `model:gemini-pro` | `—` | `—` | `—` | `—` |
 | `generalist` | `generalist` | `claude-sonnet-5` | `glm-5.2:cloud` | `qwen3.6:35b` | `anthropic` |
-| `grok` &nbsp;⚠ | `model:grok` | `—` | `—` | `—` | `—` |
+| `grok` &nbsp;⚠ | `model:grok-4.5` | `—` | `—` | `—` | `—` |
 | `kimi` &nbsp;⚠ | `model:kimi-k2.7-code:cloud` | `—` | `—` | `—` | `—` |
 | `long-context` | `long-context` | `claude-sonnet-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `pdf` | `pdf` | `claude-sonnet-5` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |

@@ -1297,6 +1297,26 @@ function applyOutboundAuth(backend, incomingHeaders, outgoingHeaders, meta) {
   return true;
 }
 
+/**
+ * True when a sentinel / header agent key would resolve through a known path
+ * (capability, agent pin, model_routes, advisor pin, or backend sigil) rather
+ * than the bare Ollama "not in model_routes" fallback. Unroutable names must
+ * NOT override body.model — the request keeps its default/session model.
+ */
+function isSentinelRoutable(name, cfg) {
+  if (typeof name !== 'string' || !name.trim()) return false;
+  if (name.startsWith('advisor:') && name.slice('advisor:'.length).trim()) return true;
+  if (resolveCapabilityAlias(name, cfg)) return true;
+  const modelRoutes = (cfg && cfg.model_routes) || {};
+  if (matchModelRoute(modelRoutes, name)) return true;
+  const sigil = parseBackendSigil(name);
+  if (sigil) {
+    const eps = (cfg && (cfg.endpoints || cfg.backends)) || {};
+    if (eps[sigil.backendId]) return true;
+  }
+  return false;
+}
+
 function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
   const endpointsOrBackends = cfg.endpoints || cfg.backends || {};
   const modelRoutes = cfg.model_routes || {};
@@ -5627,8 +5647,15 @@ const server = http.createServer((req, res) => {
         // Agent tool's model param is a 4-alias enum — see
         // docs/planning/agent-delegation-findings.md). Routing is PER-REQUEST and
         // stateless, so many agents → many models run concurrently in one session
-        // without races. When present, route by the AGENT, overriding body.model (the
-        // hook's don't-block alias). Marker must resolve to a known agent (anti-spoof).
+        // without races.
+        //
+        // When the marker names a *routable* key (agent→capability, capability,
+        // model_routes entry, advisor: pin, backend sigil), override body.model so
+        // this request goes to that agent's model. When the marker is unroutable
+        // (unknown agent, source-code leak already filtered by parseAgentSentinel,
+        // junk), leave body.model alone — that is the session/default model the
+        // client already sent (hook alias or main-thread model). Never invent a
+        // model name that would hit the bare Ollama fallback with a 400.
         //
         // Detection is cheapest-first and does NOT parse the payload (the JSON parse
         // above is needed for routing regardless; we add no structured walk):
@@ -5659,17 +5686,25 @@ const server = http.createServer((req, res) => {
               }
             }
             if (trusted) {
-              // Opaque routing key: agent name, capability, concrete model tag,
-              // advisor: pin, etc. resolveBackend maps transparently — do not
-              // pre-gate on agent_to_capability only.
-              ctxLog(ctx, 'sentinel_override', {
-                agent: agentName,
-                from_model: body.model,
-                source: fromHeader ? 'header' : 'sentinel',
-              });
-              body.model = agentName;
-              sentinelAgent = agentName;
-              agentIdentitySource = fromHeader ? 'header' : 'sentinel';
+              // Opaque routing key when it actually resolves: agent name, capability,
+              // concrete model tag, advisor: pin, etc. If it does not resolve, keep
+              // body.model (default) — do not force an unmapped name through.
+              if (!isSentinelRoutable(agentName, CONFIG)) {
+                ctxLog(ctx, 'sentinel_unroutable', {
+                  agent: agentName,
+                  kept_model: body.model,
+                  source: fromHeader ? 'header' : 'sentinel',
+                });
+              } else {
+                ctxLog(ctx, 'sentinel_override', {
+                  agent: agentName,
+                  from_model: body.model,
+                  source: fromHeader ? 'header' : 'sentinel',
+                });
+                body.model = agentName;
+                sentinelAgent = agentName;
+                agentIdentitySource = fromHeader ? 'header' : 'sentinel';
+              }
             }
           }
         }

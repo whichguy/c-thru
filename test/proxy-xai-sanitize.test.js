@@ -183,7 +183,7 @@ async function runProxyE2e() {
       },
     },
     model_routes: { grok: { endpoint: 'xai', name: 'grok-4.5' }, 'grok-4.5': 'xai' },
-    agent_to_capability: { grok: 'model:grok' },
+    agent_to_capability: { grok: 'model:grok-4.5' },
     llm_profiles: {},
     llm_mode: 'best-cloud',
   }));

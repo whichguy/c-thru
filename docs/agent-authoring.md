@@ -100,7 +100,29 @@ description's examples) whose `expect[0]` is the new agent, plus genuinely-accep
 in the rest of `expect`. Without them, the new agent is "never selected" in the scorecard and the
 selection tiers can't tell whether its description actually works.
 
+## Brand / named-model leaves (grok, deepseek, kimi, qwen, gemini)
+
+Brand agents are **gateway pin leaves**: the user asks for a vendor by name; the proxy maps
+`agent_to_capability` → concrete model. Same Claude Code limits apply under LiteLLM/OpenRouter
+(Agent `model` enum is only sonnet/opus/haiku/fable; OpenRouter’s `CLAUDE_CODE_SUBAGENT_MODEL`
+is one model for *all* subagents unless the gateway has a per-agent channel like c-thru’s
+sentinel).
+
+**Tools:** omit the `tools` field so the subagent **inherits the full parent toolset**
+(Claude Code default). Do not put a narrow allowlist on brand leaves. Optional
+`disallowedTools` is supported by `build_ephemeral_agents` if you ever need a denylist, but
+the shipped brand agents do not deny tools.
+
+| Do in `agents/<brand>.md` | Don’t |
+|---|---|
+| Omit `tools:` (inherit all) | Restrict brand leaves to Read-only / no tools |
+| Description: “Leaf: parent should spawn once… do not chain” | Expect `model: grok` alone to select xAI without the proxy map |
+| Identity: report actual model; if not the brand, say routing may have failed | Roleplay “You are Grok” as the only control (masks mis-routing) |
+
+Fleet `--append-system-prompt` also tells the **parent** to one-shot brand agents.
+
 ## Don't touch the rest of the frontmatter
 
 `name`, `model`, and `tier_budget` are validated by `tools/c-thru-contract-check.sh` and the
-agent→capability tests — leave them exactly as-is when editing a description.
+agent→capability tests — leave them exactly as-is when editing a description. Prefer omitting
+`tools` so agents inherit the session toolset.
