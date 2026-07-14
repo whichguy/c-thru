@@ -73,6 +73,22 @@ Plugin hooks fire globally in every Claude Code session; the CLI injects the sam
 
 Plugin users can still drive routing via environment variables — `CLAUDE_LLM_MODE`, `CLAUDE_LLM_PROFILE`, `CLAUDE_LLM_MEMORY_GB`, `CLAUDE_PROXY_BYPASS`, `CLAUDE_PROXY_JOURNAL` all work the same way the CLI flags do. The flags are a CLI convenience, not a capability difference at the proxy layer.
 
+### Entry points: what each path actually guarantees
+
+Hooks and agent scripts live **in the git repo** (`tools/c-thru-*.sh`, mirrored under `plugins/c-thru/hooks/`). They are **enabled** either by the marketplace plugin (user-wide, always-on) or by **`c-thru` ephemeral inject** (CLI path only — not durable project settings).
+
+| Entry point | Proxy | Fleet `--agents` / system-prompt inject | Brand `--model` (e.g. `grok`) | Hooks |
+|---|:---:|:---:|:---:|---|
+| `cthru` (main chat) | ✓ | ✓ | ✓ (resolved on wire) | Ephemeral per launch (CLI) |
+| `cthru agents --model grok` | ✓ (brand models) | — (commander rejects) | Re-inserted; proxy resolves | Limited — no fleet inject |
+| `cthru agents --model sonnet` | optional / not forced | — | Claude-native alias kept | Limited |
+| Brand Agent tool inside main `cthru` (“ask grok”) | ✓ (sentinel + map) | Parent has fleet; leaf is one-shot | Via `agent_to_capability` | Parent hooks |
+| `grok-cc` / Grok Build CLI | external | n/a | CLI auth | n/a |
+| Plain `claude` (no plugin, no `cthru`) | — | — | Anthropic only | none from c-thru |
+| Plain `claude` + marketplace plugin | ✓ (plugin SessionStart) | — (no CLI fleet inject) | map if proxy routes | Plugin always-on |
+
+**Pick the right entry point:** full planner/coder fleet → main `cthru` chat (CLI install). Brand opinion leaf → “ask agent grok” inside that chat. Agent-view UI with a non-Anthropic default → `cthru agents --model grok` (proxy yes, fleet no). Multi-file Grok implement/review → `coder` or `grok-cc`, not the brand leaf.
+
 ---
 
 ## How c-thru works

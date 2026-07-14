@@ -1518,7 +1518,9 @@ run_native_claude_subcommand() {
       rebuilt=("$subcmd" "--model" "$route_model" ${FORWARDED_ARGS[@]+"${FORWARDED_ARGS[@]}"})
     fi
     FORWARDED_ARGS=("${rebuilt[@]}")
+    # Loud once: proxy is on, but this is still native commander (no fleet inject).
     echo "c-thru: ${subcmd} via proxy — model=${route_model} ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}" >&2
+    echo "c-thru: native ${subcmd}: no fleet --agents / --append-system-prompt (commander); for full fleet use main cthru chat or brand Agent tool" >&2
   elif [[ -n "${STRIPPED_MODEL:-}" ]]; then
     # Non-native model stripped but proxy bypassed / unavailable
     echo "c-thru: stripped --model '${STRIPPED_MODEL}' (not a Claude-native alias; not forwarded to claude ${subcmd})" >&2

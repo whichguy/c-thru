@@ -105,6 +105,15 @@ async function main() {
       'forwarded args preserve unmatched model label');
     assert((result.json?.args || []).includes('--append-system-prompt'),
       'normal launch still receives injected session flags');
+    // Token-budget guard: system summary is paid every main-chat turn.
+    // ~2k chars ≈ room for IDENTITY + fleet prose; grow only with intent.
+    const args1 = result.json?.args || [];
+    const aspIdx = args1.indexOf('--append-system-prompt');
+    const asp = aspIdx >= 0 ? (args1[aspIdx + 1] || '') : '';
+    assert(asp.length > 0 && asp.length <= 2500,
+      `system summary stays within char budget (got ${asp.length} chars)`);
+    assert(/Use specialized agents aggressively/.test(asp),
+      'system summary still carries fleet aggression policy');
   }
 
   console.log('\n2. Explicit target ids stay proxy-owned end-to-end');
@@ -168,6 +177,8 @@ async function main() {
         `agents --model grok sets proxy ANTHROPIC_BASE_URL (got ${JSON.stringify(result.json?.anthropic_base_url)})`);
       assert(/via proxy/.test(result.stderr || ''),
         `stderr notes proxy routing (got ${(result.stderr || '').slice(0, 300)})`);
+      assert(/no fleet/.test(result.stderr || ''),
+        `stderr notes no fleet inject on native subcmd (got ${(result.stderr || '').slice(0, 400)})`);
     }
   }
 
