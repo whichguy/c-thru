@@ -3,7 +3,6 @@ name: plan-scheduler
 description: Use to dispatch a wave of READY_ITEMS from a c-thru plan to worker agents via TaskCreate — a thin wrapper around the /schedule-plan-tasks skill. Use for "schedule these tasks", "dispatch this wave", "kick off the READY_ITEMS". Use after planner produces READY_ITEMS and before wave execution begins. Not for producing the plan — use planner first. Routes to fast-generalist (terminal dispatch step).
 model: plan-scheduler
 tier_budget: 10000
-color: yellow
 ---
 Input: `plan_dir`, `wave_dir`, `ready_items`
 

@@ -1525,6 +1525,33 @@ let DASHBOARD_URL = '';
 // and dynamic (CLI) ports since it is built from this instance's own port.
 let PROXY_BASE_URL = '';
 
+// ── /hooks/context payloads (token-conscious by channel frequency) ─────────
+// Shared endpoint for SessionStart, PreCompact, and UserPromptSubmit
+// (c-thru-classify). UPS fires every user prompt — keep that path SHORT.
+// SessionStart/PreCompact are rare — LONG may add a brief "when to query" blurb.
+// Contract: non-empty body.prompt → short; otherwise long (empty body, event
+// SessionStart/PreCompact, or any non-UPS shape). No LLM classification.
+function buildHooksContextAdditional(body, tier, mode) {
+  const shortLines = [
+    `(c-thru) proxy control plane: ${PROXY_BASE_URL} — query with curl:`,
+    `  GET /c-thru/status (routes, per-model usage, cooldowns)`,
+    `  GET /c-thru/recent?n=N (recent requests: served model, tokens, latency, errors)`,
+    `  GET /c-thru/dashboard (live HTML stats — open in a browser)`,
+    `Profile: ${tier}, Mode: ${mode}.${DASHBOARD_URL ? ` Dashboard: ${DASHBOARD_URL}` : ''}`,
+  ];
+  const prompt = body && typeof body.prompt === 'string' ? body.prompt.trim() : '';
+  const wantLong = !prompt;
+  if (!wantLong) return shortLines.join('\n');
+  const longExtra = [
+    ``,
+    `When to query (routing/status questions only — not every coding turn):`,
+    `  • Which model served / cooldowns / are we on the proxy → GET /c-thru/recent?n=5 or /c-thru/status`,
+    `  • Prefer response headers x-c-thru-served-by / x-c-thru-resolved-via over guessing`,
+    `  • Deep forensics → /c-thru-status skill (or \`c-thru list\`). Do not invent served models.`,
+  ];
+  return shortLines.concat(longExtra).join('\n');
+}
+
 // ── Anthropic-fidelity helpers ───────────────────────────────────────────
 // Make our Ollama->Anthropic-translated responses indistinguishable from real
 // api.anthropic.com responses. These are used by forwardOllamaLegacy only; the
@@ -5530,23 +5557,26 @@ const server = http.createServer((req, res) => {
       if (req.method === 'POST' && req.url === '/hooks/context') {
         const tier = resolveActiveTier(CONFIG);
         const mode = REQUEST_MODE;
-        proxyLog('hook_injection', { tier, mode });
-        // Canonical control-plane block — the single source of the proxy URL +
-        // endpoint list handed to a session. Built from this instance's own live
-        // port (PROXY_BASE_URL) so it is correct for fixed (plugin) and dynamic
-        // (CLI) ports alike. c-thru-session-start.sh injects this verbatim in
-        // both launch modes; nothing else duplicates the endpoint list.
-        const lines = [
-          `(c-thru) proxy control plane: ${PROXY_BASE_URL} — query with curl:`,
-          `  GET /c-thru/status (routes, per-model usage, cooldowns)`,
-          `  GET /c-thru/recent?n=N (recent requests: served model, tokens, latency, errors)`,
-          `  GET /c-thru/dashboard (live HTML stats — open in a browser)`,
-          `Profile: ${tier}, Mode: ${mode}.${DASHBOARD_URL ? ` Dashboard: ${DASHBOARD_URL}` : ''}`,
-        ];
+        // Parse body for event-split: UPS (prompt present) → short block;
+        // SessionStart/PreCompact/empty → long. Fail-open on bad JSON → long
+        // (safe for bootstrap; never bloating the hot path accidentally).
+        let body = null;
+        try {
+          const buf = await readBody(req);
+          if (buf && buf.length) body = JSON.parse(buf.toString());
+        } catch {
+          body = null;
+        }
+        const hasPrompt = !!(body && typeof body.prompt === 'string' && body.prompt.trim());
+        const variant = hasPrompt ? 'short' : 'long';
+        proxyLog('hook_injection', { tier, mode, variant, event: (body && body.event) || null });
+        // Canonical control-plane block — single source of proxy URL + endpoint
+        // list (PROXY_BASE_URL). c-thru-session-start / postcompact / classify
+        // re-wrap additionalContext under their real hookEventName.
         return send(res, 200, {
           hookSpecificOutput: {
             hookEventName: "SessionStart",
-            additionalContext: lines.join('\n')
+            additionalContext: buildHooksContextAdditional(body, tier, mode),
           }
         });
       }

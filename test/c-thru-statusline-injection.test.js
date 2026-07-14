@@ -21,7 +21,7 @@ function extractEphemeral(src) {
   };
 }
 
-function runEphemeral(extracted, userSettingsPath) {
+function runEphemeral(extracted, userSettingsPath, extraEnv = {}) {
   const args = extracted.argVarNames.map(name => `SENTINEL__${name}`);
   const userSettingsIndex = extracted.argVarNames.indexOf('user_settings_path');
   const callerSettingsIndex = extracted.argVarNames.indexOf('caller_settings_payloads_json');
@@ -32,7 +32,10 @@ function runEphemeral(extracted, userSettingsPath) {
   args[userSettingsIndex] = userSettingsPath;
   args[callerSettingsIndex] = '[]';
 
-  const result = spawnSync(process.execPath, ['-e', extracted.jsBody, '--', ...args], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['-e', extracted.jsBody, '--', ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, ...extraEnv },
+  });
   if (result.status !== 0 || !result.stdout) {
     throw new Error(`ephemeral node -e script failed: ${result.stderr || result.error}`);
   }
@@ -41,26 +44,33 @@ function runEphemeral(extracted, userSettingsPath) {
 }
 
 function main() {
-  console.log('statusline absent-only injection\n');
+  console.log('statusline absent-only injection (default when unspecified)\n');
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-statusline-injection-'));
   try {
     const extracted = extractEphemeral(fs.readFileSync(CTHRU_PATH, 'utf8'));
 
+    const envNoOptOut = { ...process.env };
+    delete envNoOptOut.C_THRU_NO_STATUSLINE;
+
     const absentPath = path.join(tmpDir, 'absent-settings.json');
     fs.writeFileSync(absentPath, JSON.stringify({}));
-    const absent = runEphemeral(extracted, absentPath);
-    assertEq(absent.settings.statusLine.type, 'command', 'absent statusLine injects a command statusline');
-    assertEq(absent.settings.statusLine.command, absent.statuslineCommand,
-      'absent statusLine uses the resolved c-thru-statusline command');
+    const absentDefault = runEphemeral(extracted, absentPath, envNoOptOut);
+    assertEq(absentDefault.settings.statusLine.type, 'command', 'absent statusLine injects default statusline');
+    assertEq(absentDefault.settings.statusLine.command, absentDefault.statuslineCommand,
+      'default statusLine uses the resolved c-thru-statusline command');
 
     const presentPath = path.join(tmpDir, 'present-settings.json');
     const ownStatusLine = { type: 'command', command: '/my/own/statusline' };
     fs.writeFileSync(presentPath, JSON.stringify({ statusLine: ownStatusLine }));
-    const present = runEphemeral(extracted, presentPath);
+    const present = runEphemeral(extracted, presentPath, envNoOptOut);
     assert(present.settings.statusLine && present.settings.statusLine.type === 'command',
       'existing user statusLine remains present');
     assertEq(present.settings.statusLine.command, ownStatusLine.command,
       'existing user statusLine command is never overwritten');
+
+    const optOut = runEphemeral(extracted, absentPath, { ...envNoOptOut, C_THRU_NO_STATUSLINE: '1' });
+    assert(!optOut.settings.statusLine,
+      'C_THRU_NO_STATUSLINE=1 skips default statusLine inject when none specified');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

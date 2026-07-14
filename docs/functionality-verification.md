@@ -61,12 +61,13 @@ complete.
   exists only in `test/proxy-classify.test.js`, which `test/run-all.sh:312` **explicitly excludes** with
   the comment *"CLAUDE_PROXY_CLASSIFY feature not implemented in proxy."* `docs/dynamic-classification-phase-a.md`
   previously marked it **"shipped"**; 0345fb8 re-marked it *proposed / not yet implemented*.
-- The `/hooks/context` endpoint `tools/c-thru-classify.sh` calls returns a **static** control-plane block
-  and never inspects the prompt; no `classify_intent` logic exists anywhere. The script header previously
-  claimed "classify_intent-based context injection"; 0345fb8 corrected it to state the endpoint returns a
-  fixed block.
-- **Status: doc/script wording fixed in 0345fb8.** The underlying gap — no classifier in code — remains,
-  by design (the feature is unimplemented, not broken).
+- The `/hooks/context` endpoint is **event-split by body shape**, not a model classifier:
+  non-empty `prompt` (UserPromptSubmit / `c-thru-classify`) → **short** control-plane block;
+  SessionStart/PreCompact/empty → **long** (adds a brief when-to-query blurb). No
+  `classify_intent` / no LLM call on this path. The script header correctly states there
+  is no intent classification; token cost is controlled by not growing the UPS payload.
+- **Status: event-split shipped** (short vs long). Full intent classification remains
+  intentionally unimplemented.
 
 ### 4b. `recommended-mappings.json` — schema-mismatched, apply is a permanent no-op  → **RETIRED in this audit**
 

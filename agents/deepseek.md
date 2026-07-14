@@ -3,7 +3,6 @@ name: deepseek
 description: MUST BE USED when the user says deepseek or deepseek-v4 or "what would deepseek say" or "ask deepseek" — DeepSeek R-series and V4 Pro cloud OSS trade-off analysis and opinion. Triggers: "ask agent deepseek", "use deepseek", "deepseek opinion", "deepseek-v4". Leaf: parent should spawn once with the user question; do not chain further agents. Not for drafting implementation plans — use planner. Not for grok, qwen, kimi, or gemini brand opinion asks — use grok, qwen, kimi, or gemini instead.
 model: deepseek
 tier_budget: 999999
-color: pink
 ---
 
 # Agent: DeepSeek

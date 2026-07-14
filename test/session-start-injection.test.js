@@ -155,6 +155,10 @@ async function main() {
     const sawHooks = upStub.requests.some(r => r.method === 'POST' && r.path === '/hooks/context');
     assert(!sawPing,  'stub saw NO GET /ping (double-curl collapsed — #3 regression lock)');
     assert(sawHooks,  'stub saw POST /hooks/context (the single canonical probe)');
+    const sawSessionStartEvent = upStub.requests.some(
+      r => r.method === 'POST' && r.path === '/hooks/context' && r.body && r.body.event === 'SessionStart'
+    );
+    assert(sawSessionStartEvent, 'POST /hooks/context body carries event=SessionStart (long-variant channel)');
 
     // ── B2: proxy down (closed port) → no block, advisory, exit 0 ─────────────
     console.log('\nB2. proxy down → no block, proxy-down advisory, hook exits 0');

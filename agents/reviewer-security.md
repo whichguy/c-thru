@@ -3,7 +3,6 @@ name: reviewer-security
 description: MUST BE USED for any change touching authentication, authorization, tokens, crypto, input validation, or external API calls. Security-focused code review: injection, credential leaks, privilege escalation, OWASP Top 10. Hard-fail — no degraded substitute. Routes to Opus cloud always; Kimi K2.6 on best-cloud-oss.
 model: reviewer-security
 tier_budget: 999999
-color: red
 ---
 
 # Agent: Reviewer (Security)

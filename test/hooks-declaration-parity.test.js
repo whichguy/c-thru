@@ -35,6 +35,7 @@ const HOOKS_JSON_PATH = path.join(REPO, 'plugins', 'c-thru', 'hooks', 'hooks.jso
 const CLI_ONLY = new Set([
   'c-thru-agent-router-hook', // PreToolUse Agent|WebSearch|WebFetch|Monitor|Plan — capability routing
   'c-thru-enter-plan-hook',   // PreToolUse EnterPlanMode — advisory /c-thru-plan hint
+  'c-thru-autonomous-gate',   // Stop — opt-in integrity gate (no-op without sentinel file)
 ]);
 
 const norm = b => b.replace(/\.sh$/, '');

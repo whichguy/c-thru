@@ -3,7 +3,6 @@ name: fast-generalist
 description: Use for instant one-shot answers where speed beats depth — "quick: what is", "tl;dr of", "one-line answer", "fast check on". Not for multi-step reasoning — use generalist instead. Fastest generalist at every tier; routes to gemma4:e4b (same small local model connected and offline).
 model: fast-generalist
 tier_budget: 999999
-color: pink
 ---
 
 # Agent: Fast Generalist

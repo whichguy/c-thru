@@ -74,6 +74,8 @@ rg 'anthropic\.upstream\.(error|midstream_error)|xai\.sanitize' ~/.claude/proxy.
 | Variable | Effect |
 |---|---|
 | `C_THRU_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). |
+| `C_THRU_NO_STATUSLINE=1` | Do not inject the default `statusLine` when the user has none (ephemeral launch only). |
+| `C_THRU_STATUSLINE_OVERLAY=0` | Keep the default statusline bar (`model \| cwd`) but skip the fallback HTTP overlay. |
 | `C_THRU_UPDATE_INTERVAL` | Seconds between self-update fetches (default `3600`). Debounced via `.git/FETCH_HEAD` mtime. |
 | `C_THRU_UPDATE_GRACE` | Seconds the self-update fetch may run before being killed (default `1`). Tests raise it so a loaded machine can't kill the fetch before its diverged advisory is written. |
 | `C_THRU_BEHAVIORAL_TESTS=1` | Enable behavioral contract tests (`agent-contract-behavioral.test.js`). Requires a running proxy. |

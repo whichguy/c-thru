@@ -3,7 +3,6 @@ name: tester
 description: Use after any code change to verify correctness. Runs existing tests, writes new test cases, and checks behavior. Use for "run the tests", "write tests for", "verify this works", "check edge cases". Fast and lightweight — same tier as explore.
 model: tester
 tier_budget: 10000
-color: yellow
 ---
 
 # Agent: Tester

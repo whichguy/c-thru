@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# c-thru default statusline wrapper: "<model> | <cwd>" + fallback overlay.
-# For users with no existing statusline. Always exits 0.
+# c-thru default statusline: "<model> | <cwd>" + optional fallback overlay.
+# Injected by c-thru when the user has no statusLine of their own.
+# Always exits 0. Opt out of inject: C_THRU_NO_STATUSLINE=1.
+# Skip only the HTTP overlay: C_THRU_STATUSLINE_OVERLAY=0.
 set +e
 trap 'exit 0' ERR
 
@@ -20,6 +22,9 @@ if command -v jq >/dev/null 2>&1 && [[ -n "$input" ]]; then
 else
   model="claude"; cwd=""
 fi
-overlay=$("$ROUTER_REPO_ROOT/tools/c-thru-statusline-overlay.sh" 2>/dev/null)
+overlay=""
+if [[ "${C_THRU_STATUSLINE_OVERLAY:-1}" != "0" ]]; then
+  overlay=$("$ROUTER_REPO_ROOT/tools/c-thru-statusline-overlay.sh" 2>/dev/null)
+fi
 printf '%s | %s%s' "${model:-claude}" "$cwd" "$overlay"
 exit 0

@@ -29,7 +29,10 @@ if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
 fi
 [ -n "$BASE_URL" ] || exit 0
 
-recent_json=$(curl -sf --max-time 2 "${BASE_URL}/c-thru/recent?n=5" 2>/dev/null)
+# Keep this on the TUI hot path: Claude refreshes statusline often and waits
+# for the command. Cap HTTP well under a second (was 2s) so a slow proxy cannot
+# stall redraw while the user types or moves the mouse.
+recent_json=$(curl -sf --max-time 0.25 --connect-timeout 0.15 "${BASE_URL}/c-thru/recent?n=5" 2>/dev/null)
 [ -n "$recent_json" ] || exit 0
 
 fallback_entry=$(printf '%s' "$recent_json" | jq -c '.requests[]? | select(.fallback_from != null)' 2>/dev/null | head -1)
@@ -47,5 +50,6 @@ age=$((now_ms - last_ms))
 served_by=$(printf '%s' "$fallback_entry" | jq -r '.served_by // empty' 2>/dev/null)
 [ -n "$served_by" ] || exit 0
 
-printf ' ⚠️  FALLBACK → %s' "$served_by"
+# ASCII only — wide emoji (e.g. warning sign) mis-measures columns in some TUIs.
+printf ' [fallback] -> %s' "$served_by"
 exit 0

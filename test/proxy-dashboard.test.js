@@ -118,19 +118,45 @@ async function main() {
     assertEq(msg.headers['x-c-thru-dashboard'], `http://127.0.0.1:${port}/c-thru/dashboard`,
       'header present on a proxied /v1/messages response');
 
-    // ── 4. POST /hooks/context carries the canonical control-plane block ──
-    // This is the Part-1 contract: the proxy owns the single source of the
-    // proxy URL + endpoint list; c-thru-session-start.sh injects it verbatim.
-    console.log('\n4. POST /hooks/context returns the full control-plane block');
-    const hk = await httpJson(port, 'POST', '/hooks/context', null, {}, 3000);
-    assertEq(hk.status, 200, '/hooks/context returns 200');
-    const addl = hk.json && hk.json.hookSpecificOutput && hk.json.hookSpecificOutput.additionalContext;
-    assert(typeof addl === 'string' && addl.length > 0, 'additionalContext is a non-empty string');
-    assert(addl.includes(`http://127.0.0.1:${port}`), `block carries the proxy base URL (http://127.0.0.1:${port})`);
-    assert(addl.includes('/c-thru/status'), 'block lists /c-thru/status');
-    assert(addl.includes('/c-thru/recent'), 'block lists /c-thru/recent');
-    assert(addl.includes('/c-thru/dashboard'), 'block lists /c-thru/dashboard');
-    assert(addl.includes(`http://127.0.0.1:${port}/c-thru/dashboard`), 'block surfaces the dashboard_url');
+    // ── 4. POST /hooks/context — long (SessionStart/empty) vs short (UPS prompt)
+    // Proxy owns the control-plane URL + endpoint list. Long adds "when to
+    // query" for rare channels only; UserPromptSubmit (prompt present) stays short.
+    console.log('\n4a. POST /hooks/context empty body → long control-plane block');
+    const hkLong = await httpJson(port, 'POST', '/hooks/context', null, {}, 3000);
+    assertEq(hkLong.status, 200, '/hooks/context returns 200');
+    const addlLong = hkLong.json && hkLong.json.hookSpecificOutput && hkLong.json.hookSpecificOutput.additionalContext;
+    assert(typeof addlLong === 'string' && addlLong.length > 0, 'long additionalContext is a non-empty string');
+    assert(addlLong.includes(`http://127.0.0.1:${port}`), `long block carries the proxy base URL (http://127.0.0.1:${port})`);
+    assert(addlLong.includes('/c-thru/status'), 'long block lists /c-thru/status');
+    assert(addlLong.includes('/c-thru/recent'), 'long block lists /c-thru/recent');
+    assert(addlLong.includes('/c-thru/dashboard'), 'long block lists /c-thru/dashboard');
+    assert(addlLong.includes(`http://127.0.0.1:${port}/c-thru/dashboard`), 'long block surfaces the dashboard_url');
+    assert(addlLong.includes('When to query'), 'long block includes when-to-query blurb');
+    assert(addlLong.includes('x-c-thru-served-by'), 'long block mentions served-by header');
+    assert(addlLong.length <= 1200, `long block stays budgeted (got ${addlLong.length} chars)`);
+
+    console.log('\n4b. POST /hooks/context event=SessionStart → long');
+    const hkSs = await httpJson(port, 'POST', '/hooks/context', { event: 'SessionStart' }, {}, 3000);
+    assertEq(hkSs.status, 200, 'SessionStart hooks/context 200');
+    const addlSs = hkSs.json?.hookSpecificOutput?.additionalContext || '';
+    assert(addlSs.includes('When to query'), 'SessionStart gets long when-to-query');
+
+    console.log('\n4c. POST /hooks/context event=PreCompact → long');
+    const hkPc = await httpJson(port, 'POST', '/hooks/context', { event: 'PreCompact' }, {}, 3000);
+    assertEq(hkPc.status, 200, 'PreCompact hooks/context 200');
+    const addlPc = hkPc.json?.hookSpecificOutput?.additionalContext || '';
+    assert(addlPc.includes('When to query'), 'PreCompact gets long when-to-query');
+
+    console.log('\n4d. POST /hooks/context with prompt (UPS) → short, no when-to-query');
+    const hkShort = await httpJson(port, 'POST', '/hooks/context', { prompt: 'fix the typo in README' }, {}, 3000);
+    assertEq(hkShort.status, 200, 'UPS hooks/context 200');
+    const addlShort = hkShort.json?.hookSpecificOutput?.additionalContext || '';
+    assert(addlShort.includes('/c-thru/status'), 'short block still lists status');
+    assert(addlShort.includes(`http://127.0.0.1:${port}`), 'short block carries base URL');
+    assert(!addlShort.includes('When to query'), 'short block omits when-to-query essay');
+    assert(!addlShort.includes('x-c-thru-served-by'), 'short block omits header lecture');
+    assert(addlShort.length < addlLong.length, 'short block is shorter than long');
+    assert(addlShort.length <= 600, `short block stays budgeted (got ${addlShort.length} chars)`);
 
     await killAndWait(child, 'SIGTERM');
     child = null;

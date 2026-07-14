@@ -3,7 +3,6 @@ name: long-context
 description: Use for large-document retrieval and needle-in-haystack over 50K+ token spans — "find X in this large file", "summarize this 200-page doc", "search through all of these files". The oversized context window is the differentiator — prefer generalist for ordinary-length reasoning. Routes to claude-sonnet-5 connected / qwen3.6:35b local.
 model: long-context
 tier_budget: 999999
-color: cyan
 ---
 
 # Agent: Long Context Specialist

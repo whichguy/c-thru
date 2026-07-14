@@ -100,7 +100,11 @@ These URIs are c-thru operator/hooks surfaces, not Claude API:
 - `GET /ping`, `HEAD /`
 - `GET /c-thru/status|recent|dashboard`, plan dashboards
 - `POST /c-thru/mode|reload|stats/clear`
-- `POST /hooks/context`
+- `POST /hooks/context` — control-plane cheatsheet for hooks. **Long** payload
+  (endpoint list + brief when-to-query) for SessionStart/PreCompact/empty body;
+  **short** (endpoint list only) when the body has a non-empty `prompt`
+  (UserPromptSubmit / `c-thru-classify`). See `docs/headers.md` for
+  `x-c-thru-served-by` / `x-c-thru-resolved-via` (prefer those over guessing).
 - Session identity prefix: `/s/<session-id>/…` stripped before dispatch
 
 Response observability: `docs/headers.md` (`x-c-thru-*`).

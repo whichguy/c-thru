@@ -12,6 +12,7 @@ CTHRU="$SCRIPT_DIR/../tools/c-thru"
 eval "$(awk '/^write_ephemeral_settings\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^build_ephemeral_agents\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^cthru_flag_width\(\) \{/,/^\}$/' "$CTHRU")"
+eval "$(awk '/^strip_cthru_cli_args\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^build_forwarded_args\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^setup_ephemeral_session\(\) \{/,/^\}$/' "$CTHRU")"
 
@@ -458,61 +459,52 @@ assert "caller agent collision removes only the ephemeral symlink" test ! -e "$S
 assert "caller agent collision does not modify the symlink target" cmp -s "$REAL_PROFILE_AGENT" "$FIXTURE_DIR/remove-me-before"
 
 echo
-echo "11. Agent color frontmatter parses, normalizes, validates, and rides only the c-thru fleet"
+echo "11a. Durable c-thru fleet hooks are stripped by basename (no double SessionStart)"
+# User settings often keep repo-path copies of fleet hooks after old installs.
+# Exact-path dedupe can miss those; basename strip must leave a single inject.
+printf '%s\n' '{"hooks":{"SessionStart":[{"matcher":"*","hooks":[{"type":"command","command":"/elsewhere/repo/tools/c-thru-session-start.sh","timeout":99}]}],"UserPromptSubmit":[{"matcher":"*","hooks":[{"type":"command","command":"/elsewhere/c-thru-proxy-health.sh","timeout":99},{"type":"command","command":"/foreign/my-custom-hook.sh","timeout":7}]}]}}' > "$PROFILE_DIR/settings.json"
+rm -rf "$SESSION_DIR/agents"; mkdir -p "$PROFILE_DIR/agents"
+RUN_PAYLOADS=()
+run_builder
+assert "basename-strip builder exits 0" test "$?" -eq 0
+assert "owned SessionStart stripped; inject remains once with timeout 5" node - "$BUILT_JSON" <<'NODE'
+const s = JSON.parse(process.argv[2]);
+const starts = (s.hooks.SessionStart || []).flatMap(e => e.hooks);
+const health = (s.hooks.UserPromptSubmit || []).flatMap(e => e.hooks)
+  .filter(h => String(h.command).includes('c-thru-proxy-health'));
+const foreign = (s.hooks.UserPromptSubmit || []).flatMap(e => e.hooks)
+  .filter(h => String(h.command).includes('my-custom-hook'));
+process.exit(
+  starts.length === 1 && starts[0].timeout === 5 &&
+  !String(starts[0].command).includes('/elsewhere/') &&
+  health.length === 1 && health[0].timeout === 5 &&
+  foreign.length === 1 && foreign[0].timeout === 7
+    ? 0 : 1
+);
+NODE
+
+echo
+echo "11. Agent color is never injected into --agents JSON (TUI risk surface removed)"
 # Fleet agents live in $CTHRU_REPO_ROOT/agents (= $FIXTURE_DIR/agent-fleet/agents, set by run_agents_builder).
-# Use fresh names so they never collide with the §10 collision/profile fixtures.
-write_color_fixture() {
-  local file="$1" color_line="$2"
-  {
-    printf '%s\n' "---" "description: color fixture agent that does useful work for matching" \
-      "model: $file" "tier_budget: 999999"
-    # Emit the color line only when present so the no-color (color-none) fixture has
-    # the same frontmatter shape as a real agent without color — no blank line between
-    # tier_budget and the closing ---. A blank line is benign under the current regex
-    # parser but would mask a future blank-line-sensitive regression (false pass).
-    [[ -n "$color_line" ]] && printf '%s\n' "$color_line"
-    printf '%s\n' "---" "fixture prompt body"
-  } > "$AGENT_FLEET_DIR/$file.md"
-}
-write_color_fixture color-ok       'color: purple'
-write_color_fixture color-mixed    'color: Purple'
-write_color_fixture color-upper    'color: RED'
-write_color_fixture color-bad      'color: teal'
-write_color_fixture color-empty    'color: '
-write_color_fixture color-none     ''
-# Fidelity invariant: the no-color fixture must match a real agent's frontmatter
-# shape — no blank line between tier_budget and the closing --- (regression guard
-# for the write_color_fixture conditional-emit fix).
-COLOR_NONE_NONE_BLANK=$(awk '/^---$/{c++; next} c==1 && /^$/{print "BLANK"}' "$AGENT_FLEET_DIR/color-none.md")
-assert "no-color fixture has no blank line in frontmatter (production shape)" test -z "$COLOR_NONE_NONE_BLANK"
+# Even if frontmatter still has color:, the builder must omit the key on every entry.
+{
+  printf '%s\n' "---" "description: color strip fixture agent that does useful work for matching" \
+    "model: color-strip" "tier_budget: 999999" "color: purple" "---" "fixture prompt body"
+} > "$AGENT_FLEET_DIR/color-strip.md"
 rm -rf "$SESSION_DIR/agents"; rm -rf "$PROFILE_DIR/agents"; mkdir -p "$PROFILE_DIR/agents"
 NO_AGENTS=0
 RUN_PAYLOADS=()
-COLOR_WARN="$FIXTURE_DIR/color-warn"
-run_agents_builder 2>"$COLOR_WARN"
-assert "color builder exits 0" test "$?" -eq 0
-assert "valid color passes through verbatim (lowercase)" node - "$BUILT_AGENTS_JSON" <<'NODE'
-const a = JSON.parse(process.argv[2]); process.exit(a['color-ok']?.color === 'purple' ? 0 : 1);
+run_agents_builder
+assert "color-strip builder exits 0" test "$?" -eq 0
+assert "color: frontmatter is ignored — no color key on any fleet agent" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const a = JSON.parse(process.argv[2]);
+for (const [name, entry] of Object.entries(a)) {
+  if (entry && Object.prototype.hasOwnProperty.call(entry, 'color')) process.exit(1);
+}
+process.exit(a['color-strip'] ? 0 : 1);
 NODE
-assert "mixed-case value is normalized to lowercase (Purple -> purple)" node - "$BUILT_AGENTS_JSON" <<'NODE'
-const a = JSON.parse(process.argv[2]); process.exit(a['color-mixed']?.color === 'purple' ? 0 : 1);
-NODE
-assert "uppercase value is normalized to lowercase (RED -> red)" node - "$BUILT_AGENTS_JSON" <<'NODE'
-const a = JSON.parse(process.argv[2]); process.exit(a['color-upper']?.color === 'red' ? 0 : 1);
-NODE
-assert "invalid color (teal) omits the key" node - "$BUILT_AGENTS_JSON" <<'NODE'
-const a = JSON.parse(process.argv[2]); process.exit(!('color' in (a['color-bad'] || {})) ? 0 : 1);
-NODE
-assert "empty color omits the key" node - "$BUILT_AGENTS_JSON" <<'NODE'
-const a = JSON.parse(process.argv[2]); process.exit(!('color' in (a['color-empty'] || {})) ? 0 : 1);
-NODE
-assert "missing color line omits the key" node - "$BUILT_AGENTS_JSON" <<'NODE'
-const a = JSON.parse(process.argv[2]); process.exit(!('color' in (a['color-none'] || {})) ? 0 : 1);
-NODE
-assert "invalid color emits the pinned stderr warning" grep -q '^c-thru: ignoring invalid agent color "teal" on color-bad (allowed: red|blue|green|yellow|purple|orange|pink|cyan)$' "$COLOR_WARN"
-assert "empty color is treated as invalid and warns with an empty raw value" grep -q '^c-thru: ignoring invalid agent color "" on color-empty (allowed: red|blue|green|yellow|purple|orange|pink|cyan)$' "$COLOR_WARN"
 
-# §4 c-thru-only: NO_AGENTS=1 baseline invents no agents at all (no color, no entries).
+# §4 c-thru-only: NO_AGENTS=1 baseline invents no agents at all.
 NO_AGENTS=1
 rm -rf "$SESSION_DIR/agents"
 run_agents_builder

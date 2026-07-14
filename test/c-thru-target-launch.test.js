@@ -131,27 +131,67 @@ async function main() {
     }
   }
 
-  console.log('\n3. Native Claude Code subcommands pass through untouched');
+  console.log('\n3. Native Claude Code subcommands pass through (no session inject)');
   {
     const result = runCthru({
       args: ['agents', '--help'],
-      backends: {},
-      targets: {},
+      // Valid minimal map (native path now runs after config validate)
+      backends: { local: { kind: 'ollama', url: 'http://127.0.0.1:11434' } },
+      targets: { default: { backend: 'local' } },
     });
     const args = result.json?.args || [];
-    assert(result.code === 0, `agents passthrough exits 0 (got ${result.code})`);
+    assert(result.code === 0, `agents passthrough exits 0 (got ${result.code}; stderr: ${(result.stderr || '').slice(0, 200)})`);
     assert(JSON.stringify(args) === JSON.stringify(['agents', '--help']),
-      `agents passthrough preserves argv exactly (got ${JSON.stringify(args)})`);
+      `agents --help preserves argv exactly (got ${JSON.stringify(args)})`);
     assert(!args.some(arg => ['--append-system-prompt', '--settings', '--agents', '--model', '--dangerously-skip-permissions'].includes(arg) || /^--model=/.test(arg)),
       `agents passthrough has no session-injected flags (got ${JSON.stringify(args)})`);
+  }
+
+  console.log('\n3b. Native agents --model grok: proxy + re-insert model (not bare Anthropic)');
+  {
+    const result = runCthru({
+      args: ['agents', '--model', 'grok', '--json'],
+      backends: {
+        xai: { kind: 'anthropic', url: 'https://api.x.ai', format: 'anthropic' },
+      },
+      model_routes: { grok: { endpoint: 'xai', name: 'grok-4.5' } },
+    });
+    const args = result.json?.args || [];
+    if (proxyBindDenied(result)) {
+      console.log('  SKIP  agents --model grok proxy path (sandbox denied loopback bind)');
+    } else {
+      assert(result.code === 0, `agents --model grok exits 0 (got ${result.code}; stderr: ${(result.stderr || '').slice(0, 240)})`);
+      assert(JSON.stringify(args) === JSON.stringify(['agents', '--model', 'grok', '--json']),
+        `agents re-inserts --model grok after subcommand (got ${JSON.stringify(args)})`);
+      assert(typeof result.json?.anthropic_base_url === 'string' &&
+        /^http:\/\/127\.0\.0\.1:\d+/.test(result.json.anthropic_base_url),
+        `agents --model grok sets proxy ANTHROPIC_BASE_URL (got ${JSON.stringify(result.json?.anthropic_base_url)})`);
+      assert(/via proxy/.test(result.stderr || ''),
+        `stderr notes proxy routing (got ${(result.stderr || '').slice(0, 300)})`);
+    }
+  }
+
+  console.log('\n3c. Native agents keeps Claude-native --model sonnet (no forced proxy message)');
+  {
+    const result = runCthru({
+      args: ['agents', '--model', 'sonnet', '--json'],
+      backends: { local: { kind: 'ollama', url: 'http://127.0.0.1:11434' } },
+      targets: { default: { backend: 'local' } },
+    });
+    const args = result.json?.args || [];
+    assert(result.code === 0, `agents --model sonnet exits 0 (got ${result.code})`);
+    assert(JSON.stringify(args) === JSON.stringify(['agents', '--model', 'sonnet', '--json']),
+      `agents forwards Claude-native --model sonnet (got ${JSON.stringify(args)})`);
+    assert(!/stripped --model 'sonnet'/.test(result.stderr || ''),
+      `stderr does not warn for sonnet (got ${(result.stderr || '').slice(0, 200)})`);
   }
 
   console.log('\n4. Additional native subcommands pass through untouched');
   {
     const result = runCthru({
       args: ['mcp', 'list'],
-      backends: {},
-      targets: {},
+      backends: { local: { kind: 'ollama', url: 'http://127.0.0.1:11434' } },
+      targets: { default: { backend: 'local' } },
     });
     const args = result.json?.args || [];
     assert(result.code === 0, `mcp passthrough exits 0 (got ${result.code})`);

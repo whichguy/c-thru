@@ -142,7 +142,7 @@ flowchart TD
     Sess[SessionStart] --> H1["c-thru-session-start.sh<br/>seeds model-map, spawns proxy, probes /hooks/context"]
     Compact[PreCompact] --> H2["c-thru-postcompact-context.sh<br/>re-fetches /hooks/context, re-wraps as PreCompact"]
     Prompt[UserPromptSubmit] --> H3["c-thru-proxy-health.sh (async)<br/>pings proxy, always exits 0"]
-    Prompt --> H4["c-thru-classify.sh (async)<br/>static /hooks/context block, no prompt inspection"]
+    Prompt --> H4["c-thru-classify.sh (async)<br/>short /hooks/context block when prompt present"]
     PostTool["PostToolUse (Write/Edit)"] --> H5["c-thru-map-changed.sh<br/>validates model-map.json"]
     PreToolAgent["PreToolUse (Agent/WebSearch/...)"] --> H6["c-thru-agent-router-hook.sh<br/>CLI-only: rewrites Agent model+sentinel"]
     PreToolPlan["PreToolUse (EnterPlanMode)"] --> H7["c-thru-enter-plan-hook.sh<br/>CLI-only: advisory hint only"]

@@ -3,7 +3,6 @@ name: debugger-hypothesis
 description: Use when a bug is reported but the root cause is unknown. Generates and ranks hypotheses about the failure, then designs targeted tests to confirm or reject each. Use for "why is X failing", "this shouldn't happen", "track down this bug". Routes to Sonnet/local-27B.
 model: debugger-hypothesis
 tier_budget: 50000
-color: orange
 ---
 
 # Agent: Debugger (Hypothesis)

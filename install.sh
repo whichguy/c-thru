@@ -278,13 +278,27 @@ cleanup_old_persistent_config() {
     if [ "$JQ_AVAILABLE" -eq 1 ]; then
         if [ -f "$settings" ]; then
             local tmp="${settings}.tmp.$$"
+            # Strip durable c-thru fleet hooks. Match by:
+            #   1) command path under ~/.claude/tools/ (install dest), OR
+            #   2) basename stem of known fleet scripts (repo paths, old copies,
+            #      quoted forms). Exact-prefix-only missed repo-path hooks and
+            #      left SessionStart/UserPromptSubmit double-firing under c-thru.
             jq --arg tools "$TOOLS_DEST" '
+                def first_token:
+                  ((. // "") | gsub("^[[:space:]]+|[[:space:]]+$"; "") | split(" ")[0] // "")
+                  | gsub("^[\x22\x27]|[\x22\x27]$"; "");
+                def stem:
+                  (first_token | split("/")[-1] // "") | sub("\\.sh$"; "");
+                def is_cthru_fleet_hook:
+                  (first_token | startswith($tools))
+                  or (stem | test("^c-thru-(session-start|postcompact-context|proxy-health|classify|map-changed|plan-visibility-hook|stop-hook|autonomous-gate|agent-router-hook|enter-plan-hook)$"));
                 if .hooks then
                   .hooks |= with_entries(
                     .value |= map(
-                      .hooks |= map(select((.command // "") | startswith($tools) | not))
+                      .hooks |= map(select(is_cthru_fleet_hook | not))
                     ) | map(select(.hooks | length > 0))
                   ) | .hooks |= with_entries(select(.value | length > 0))
+                  | if (.hooks | length) == 0 then del(.hooks) else . end
                 else . end
             ' "$settings" > "$tmp" && mv "$tmp" "$settings"
             echo -e "  ${GREEN}✅ cleaned up persistent hooks from settings.json${NC}"

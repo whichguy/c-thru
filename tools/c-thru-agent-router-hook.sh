@@ -98,16 +98,21 @@ case "$tool_name" in
     # Agent tool: look up subagent_type in agent_to_capability
     lookup_key=$(json_read "$stdin_data" '.tool_input.subagent_type // .tool_input.name // empty')
     [ -n "$DEBUG_LOG" ] && printf '[%s] lookup_key=%s\n' "$(date +%H:%M:%S)" "${lookup_key:-<empty>}" >> "$DEBUG_LOG"
-    [ -n "$lookup_key" ] || { printf '[c-thru-agent-router] Agent tool call with no subagent_type — pass through\n' >&2; exit 0; }
+    [ -n "$lookup_key" ] || {
+      [ -n "$DEBUG_LOG" ] && printf '[%s] Agent tool call with no subagent_type — pass through\n' "$(date +%H:%M:%S)" >> "$DEBUG_LOG"
+      exit 0
+    }
     capability=$(resolve_capability "$lookup_key")
     ;;
 
   WebSearch|WebFetch|Monitor|Plan)
     # Non-LLM tools: log capability mapping for observability, pass through
     # without updatedInput.model (setting it corrupts tool input params).
+    # Do NOT write to stderr — Claude Code paints exit-0 hook stderr into the
+    # TUI and that interleaves with the interactive session (mouse/redraw noise).
     mapped_cap=$(resolve_capability "$tool_name")
-    if [ -n "$mapped_cap" ]; then
-      printf '[c-thru-agent-router] tool=%s capability=%s (observability only — no model override)\n' "$tool_name" "$mapped_cap" >&2
+    if [ -n "$mapped_cap" ] && [ -n "$DEBUG_LOG" ]; then
+      printf '[%s] tool=%s capability=%s (observability only)\n' "$(date +%H:%M:%S)" "$tool_name" "$mapped_cap" >> "$DEBUG_LOG"
     fi
     exit 0
     ;;
@@ -119,7 +124,10 @@ case "$tool_name" in
 esac
 
 [ -n "$DEBUG_LOG" ] && printf '[%s] capability=%s\n' "$(date +%H:%M:%S)" "${capability:-<empty>}" >> "$DEBUG_LOG"
-[ -n "$capability" ] || { printf '[c-thru-agent-router] no capability mapping for lookup_key=%s — pass through\n' "$lookup_key" >&2; exit 0; }
+[ -n "$capability" ] || {
+  [ -n "$DEBUG_LOG" ] && printf '[%s] no capability mapping for lookup_key=%s — pass through\n' "$(date +%H:%M:%S)" "$lookup_key" >> "$DEBUG_LOG"
+  exit 0
+}
 
 # --- Output updatedInput ---------------------------------------------
 # This hook is the per-delegation HANDSHAKE that carries the agent identity to the

@@ -193,6 +193,8 @@ run_suite "session-start-seeding (first-run seed + settings registration)" \
   bash "$REPO_DIR/test/session-start-seeding.test.sh"
 run_suite "c-thru-ephemeral-settings (user preferences + denylist)" \
   bash "$REPO_DIR/test/c-thru-ephemeral-settings.test.sh"
+run_suite "c-thru-strip-args (allowlist strip c-thru flags; keep -p/prompts)" \
+  bash "$REPO_DIR/test/c-thru-strip-args.test.sh"
 run_suite "launcher-secret-gen-proxy-enforcement (C19/C23 secret-gen → live proxy enforces)" \
   bash "$REPO_DIR/test/launcher-secret-gen-proxy-enforcement.test.sh"
 run_suite "cross-session-secret-stability (HMAC key stable across sessions → A-signed marker verifies in B)" \
@@ -338,6 +340,8 @@ run_suite "plan-orchestrator-integration (orchestrator wave lifecycle, hermetic)
   node "$REPO_DIR/test/plan-orchestrator-integration.test.js"
 run_suite "c-thru-target-launch (target launch helpers)" \
   node "$REPO_DIR/test/c-thru-target-launch.test.js"
+run_suite "c-thru-run-real-claude-fg (foreground TTY ownership for proxied launch)" \
+  bash "$REPO_DIR/test/c-thru-run-real-claude-fg.test.sh"
 run_suite "cli-e2e-flags (CLI flag forwarding e2e)" \
   node "$REPO_DIR/test/cli-e2e-flags.test.js"
 run_suite "compile-prompts (agent prompt compilation)" \

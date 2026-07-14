@@ -61,7 +61,7 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | Slash commands `/c-thru-status`, `/cplan` | ✓ | ✓ |
 | Skills `c-thru-plan`, `c-thru-config`, `c-thru-control` | ✓ | ✓ |
 | User-wide hooks — fire in every Claude Code session (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) | ✓ | — |
-| Project hooks — fire only inside the c-thru repo working tree (SessionStart, PostCompact, FileChanged, PostToolUse on `model-map.json`) | — | ✓ |
+| Ephemeral hooks — injected per `c-thru` launch only (no static project `.claude` hooks) | — | ✓ |
 | `c-thru` binary on PATH | — | ✓ |
 | Control subcommands (`list`, `reload`, `restart`, `explain`, `stats`, `check-deps`) | — | ✓ |
 | Flags (`--mode`, `--profile`, `--bypass-proxy`, `--journal`, `--router-debug`) | (use env vars) | ✓ |
@@ -69,7 +69,7 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | `llm-capabilities` MCP server injected via `--settings` | — | ✓ |
 | Contributor checks (`c-thru-contract-check`, `c-thru-hygiene-check`) | — | ✓ |
 
-Plugin hooks fire globally in every Claude Code session; the CLI install's hooks fire only when Claude Code runs inside the c-thru repo working tree (`install.sh` deliberately strips persistent user-wide hooks from `~/.claude/settings.json`).
+Plugin hooks fire globally in every Claude Code session; the CLI injects the same shared fleet ephemerally on each `c-thru` launch (`install.sh` strips durable c-thru fleet hooks from `~/.claude/settings.json`; project `.claude/settings.json` does not register c-thru hooks).
 
 Plugin users can still drive routing via environment variables — `CLAUDE_LLM_MODE`, `CLAUDE_LLM_PROFILE`, `CLAUDE_LLM_MEMORY_GB`, `CLAUDE_PROXY_BYPASS`, `CLAUDE_PROXY_JOURNAL` all work the same way the CLI flags do. The flags are a CLI convenience, not a capability difference at the proxy layer.
 

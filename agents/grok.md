@@ -3,7 +3,6 @@ name: grok
 description: MUST BE USED for Grok opinion/critique from xAI — "ask grok", "ask agent grok", "what does grok think", "grok critique", "xai second opinion". Leaf: parent should spawn once with the user question; do not chain further agents. Not for multi-file implement, fix, or review loops — use coder instead. Not for deepseek, qwen, kimi, or gemini brand opinion asks — use deepseek, qwen, kimi, or gemini instead.
 model: grok
 tier_budget: 999999
-color: red
 ---
 
 # Agent: Grok (xAI brand)

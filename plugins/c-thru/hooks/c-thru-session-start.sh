@@ -102,7 +102,12 @@ issues=()
 # "no block, no advisory" — same as before.
 proxy_ctx=""
 hook_json=""
-if hook_json=$(curl -sf --max-time 2 -X POST "${BASE_URL:-http://127.0.0.1:$PORT}/hooks/context" 2>/dev/null); then
+# event=SessionStart → long "when to query" blurb (rare channel). Empty-body
+# POSTs also get long from the proxy; the event makes intent explicit.
+if hook_json=$(curl -sf --max-time 2 -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"event":"SessionStart"}' \
+    "${BASE_URL:-http://127.0.0.1:$PORT}/hooks/context" 2>/dev/null); then
     if command -v jq >/dev/null 2>&1; then
         proxy_ctx=$(printf '%s' "$hook_json" | jq -r '.hookSpecificOutput.additionalContext // ""')
     elif command -v node >/dev/null 2>&1; then

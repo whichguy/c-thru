@@ -163,7 +163,7 @@ Detail: `docs/model-map.md`, `docs/hardware-profile-matrix.md`.
 | Edit CLI (JSON edit-spec, deep-merge + validate) | `model-map-edit.js` | full | `tools/model-map-edit.js:235` |
 | Pollution detect/clean (project entries leaked into profile) | `--detect-pollution`/`--clean-pollution` | full | `tools/model-map-config.js:260` |
 | apply-recommendations (inject `recommended-mappings.json`) | — | **removed/retired** (was a permanent no-op; see verification) | n/a |
-| `/hooks/context` prompt-submit injection (static control-plane block) | `c-thru-classify.sh` → proxy | full *(misnamed: no classification)* | `tools/claude-proxy:4533` |
+| `/hooks/context` prompt-submit injection (short control-plane when `prompt` set; long on SessionStart/PreCompact) | `c-thru-classify.sh` / session-start / postcompact → proxy | full *(no LLM classify; body-shape event-split)* | `tools/claude-proxy` `buildHooksContextAdditional` |
 | Dynamic role classifier (`CLAUDE_PROXY_CLASSIFY`) | — | **absent (retired surface)** | never implemented; design docs under ARCHIVE banner |
 
 ---
@@ -198,7 +198,7 @@ guarded by `test/hooks-declaration-parity.test.js`. Visual event→hook view:
 |---|---|---|---|---|
 | session-start | SessionStart | Probe proxy+Ollama, inject context, GC sweep | `c-thru-session-start.sh` | hooks.json + ephemeral |
 | proxy-health | UserPromptSubmit | Curl `/ping`; advisory on down; **always exit 0** | `c-thru-proxy-health.sh` | hooks.json + ephemeral |
-| classify | UserPromptSubmit | POST to `/hooks/context` (static info inject) | `c-thru-classify.sh` | hooks.json + ephemeral |
+| classify | UserPromptSubmit | POST prompt to `/hooks/context` (short control-plane inject) | `c-thru-classify.sh` | hooks.json + ephemeral |
 | map-changed | PostToolUse `Write\|Edit` | Re-validate model-map on edit | `c-thru-map-changed.sh` | hooks.json + ephemeral |
 | postcompact-context | PreCompact | Re-inject routing context | `c-thru-postcompact-context.sh` | hooks.json + ephemeral |
 | agent-router | PreToolUse `Agent` | subagent_type → capability model rewrite | `c-thru-agent-router-hook.sh` | **CLI-only** |

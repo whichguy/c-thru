@@ -299,7 +299,6 @@ build_ephemeral_agents() {
         let model = name;
         let tier_budget = 999999;
         let disallowedTools = null;
-        let color = null;
         if (m) {
           const frontmatter = m[1];
           const descMatch = frontmatter.match(/^description:\s*(.*)$/m);
@@ -319,29 +318,14 @@ build_ephemeral_agents() {
               disallowedTools = raw.split(",").map(s => s.trim()).filter(Boolean);
             }
           }
-          // Claude Code --agents accepts a `color` field (case-sensitive key) that paints
-          // the subagent task-list / transcript badge. Value is normalized to lowercase
-          // and validated against the documented enum; invalid values are dropped with a
-          // pinned stderr warning so a typo never breaks the session.
-          const colorMatch = frontmatter.match(/^color:\s*(.*)$/m);
-          if (colorMatch) {
-            const raw = colorMatch[1].trim();
-            const value = raw.toLowerCase();
-            if (/^(red|blue|green|yellow|purple|orange|pink|cyan)$/.test(value)) {
-              color = value;
-            } else {
-              process.stderr.write("c-thru: ignoring invalid agent color \"" + raw + "\" on " + name +
-                " (allowed: red|blue|green|yellow|purple|orange|pink|cyan)\n");
-            }
-          }
+          // Intentionally do NOT pass `color` into --agents JSON. Agent badge colors
+          // were removed as a TUI risk surface (plain badges only). Any color: line
+          // left in an agent file is ignored.
           prompt = content.slice(m[0].length).trim();
         }
         const entry = { description, prompt, model, tier_budget };
         if (Array.isArray(disallowedTools) && disallowedTools.length) {
           entry.disallowedTools = disallowedTools;
-        }
-        if (color) {
-          entry.color = color;
         }
         agents[name] = entry;
       });
@@ -516,13 +500,16 @@ write_ephemeral_settings() {
     else echo "$tools_dest/$base"; fi
   }
 
-  local session_cmd health_cmd classify_cmd map_changed_cmd plan_visibility_cmd stop_hook_cmd statusline_cmd postcompact_cmd planner_hint_cmd agent_router_cmd mcp_js
+  local session_cmd health_cmd classify_cmd map_changed_cmd plan_visibility_cmd stop_hook_cmd autonomous_gate_cmd statusline_cmd postcompact_cmd planner_hint_cmd agent_router_cmd mcp_js
   session_cmd="$(find_tool_path c-thru-session-start)"
   health_cmd="$(find_tool_path c-thru-proxy-health)"
   classify_cmd="$(find_tool_path c-thru-classify)"
   map_changed_cmd="$(find_tool_path c-thru-map-changed)"
   plan_visibility_cmd="$(find_tool_path c-thru-plan-visibility-hook)"
   stop_hook_cmd="$(find_tool_path c-thru-stop-hook)"
+  # CLI-only: opt-in via .claude/autonomous-gate.local.json (script no-ops without it).
+  # Was project-static Stop; now ephemeral so .claude/settings.json carries no c-thru hooks.
+  autonomous_gate_cmd="$(find_tool_path c-thru-autonomous-gate)"
   statusline_cmd="$(find_tool_path c-thru-statusline)"
   postcompact_cmd="$(find_tool_path c-thru-postcompact-context)"
   planner_hint_cmd="$(find_tool_path c-thru-enter-plan-hook)"
@@ -559,13 +546,16 @@ write_ephemeral_settings() {
   # SessionStart     *               c-thru-session-start      proxy+Ollama health + /hooks/context block (curled by the hook)
   # PreCompact       *               c-thru-postcompact-context re-inject context before compaction (PreCompact is the live event; the old PostCompact never fired)
   # UserPromptSubmit *               c-thru-proxy-health       asyncRewake if proxy down
-  # UserPromptSubmit *               c-thru-classify           fetch static /hooks/context block (no prompt inspection; not intent classification)
+  # UserPromptSubmit *               c-thru-classify           fetch short /hooks/context block (prompt present; not intent classification)
   # PostToolUse      Write|Edit      c-thru-map-changed        validate model-map.json on edit
   # PostToolUse      ExitPlanMode    c-thru-plan-visibility-hook spool approved plan + open live dashboard
   # Stop              *               c-thru-stop-hook          fallback systemMessage advisory
+  # Stop              *               c-thru-autonomous-gate    CLI-only; no-op unless .claude/autonomous-gate.local.json
   # PreToolUse       Agent|WebSearch|c-thru-agent-router-hook  resolve capability for tool calls (log-only for non-Agent)
   #                   WebFetch|Monitor|Plan
   # PreToolUse       EnterPlanMode   c-thru-enter-plan-hook    advisory hint for /c-thru-plan
+  #
+  # No c-thru hooks in project/user .claude/settings.json — static defs double-fired with this inject.
 
   # No SessionStart HTTP /hooks/context hook: the c-thru-session-start command
   # hook curls /hooks/context itself and injects the proxy block (single source,
@@ -585,7 +575,7 @@ write_ephemeral_settings() {
   # Paths are passed as argv so node handles all escaping.
   EPHEMERAL_SETTINGS_JSON=$(node -e '
     const fs = require("fs");
-    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, planVisibilityCmd, agentRouterCmd, plannerHintCmd, userSettingsPath, callerSettingsPayloadsJson, stopHookCmd, statuslineCmd, userLocalSettingsPath] = process.argv.slice(1);
+    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, planVisibilityCmd, agentRouterCmd, plannerHintCmd, userSettingsPath, callerSettingsPayloadsJson, stopHookCmd, statuslineCmd, userLocalSettingsPath, autonomousGateCmd] = process.argv.slice(1);
     const USER_SETTINGS_DENYLIST = new Set([
       // c-thru injects an ephemeral MCP server; a user original would fight it.
       "mcpServers",
@@ -604,6 +594,56 @@ write_ephemeral_settings() {
       try { return fs.realpathSync(command); } catch (_) { return command; }
     };
     const hookKey = (event, matcher, hook) => `${event}\u0000${normalizedMatcher(matcher)}\u0000${canonicalCommand(hook.command)}`;
+    // Fleet hooks c-thru re-injects via cThruInjected. Durable user/project
+    // settings often still list the same scripts (legacy install or manual
+    // paste) under a different path string; exact-path dedupe alone can miss
+    // them and Claude runs SessionStart/UserPromptSubmit twice — extra
+    // context inject + stderr that paints the TUI. Strip by basename so
+    // cThruInjected is the sole owner under a c-thru launch.
+    const C_THRU_OWNED_HOOK_STEMS = new Set([
+      "c-thru-session-start",
+      "c-thru-postcompact-context",
+      "c-thru-proxy-health",
+      "c-thru-classify",
+      "c-thru-map-changed",
+      "c-thru-plan-visibility-hook",
+      "c-thru-stop-hook",
+      "c-thru-autonomous-gate",
+      "c-thru-agent-router-hook",
+      "c-thru-enter-plan-hook",
+    ]);
+    const commandFirstToken = command => {
+      if (typeof command !== "string") return "";
+      // No single-quotes in this node -e body (bash wraps it in '...').
+      const t = command.trim().split(/\s+/)[0] || "";
+      const dq = String.fromCharCode(34);
+      const sq = String.fromCharCode(39);
+      if ((t.startsWith(dq) && t.endsWith(dq)) || (t.startsWith(sq) && t.endsWith(sq))) {
+        return t.slice(1, -1);
+      }
+      return t;
+    };
+    const commandStem = command => {
+      const base = path.basename(commandFirstToken(command));
+      return base.replace(/\.sh$/, "");
+    };
+    const isOwnedCthruHook = hook =>
+      isCommandHook(hook) && C_THRU_OWNED_HOOK_STEMS.has(commandStem(hook.command));
+    const stripOwnedCthruHooks = hooks => {
+      if (!isPlainObject(hooks)) return hooks;
+      const result = {};
+      for (const [event, entries] of Object.entries(hooks)) {
+        if (!Array.isArray(entries)) continue;
+        const survivingEntries = [];
+        for (const entry of entries) {
+          if (!isPlainObject(entry) || !Array.isArray(entry.hooks)) continue;
+          const survivingHooks = entry.hooks.filter(hook => !isOwnedCthruHook(hook));
+          if (survivingHooks.length) survivingEntries.push({ ...entry, hooks: survivingHooks });
+        }
+        if (survivingEntries.length) result[event] = survivingEntries;
+      }
+      return result;
+    };
     const validatePermissions = permissions => {
       if (!isPlainObject(permissions)) return "permissions is not an object";
       for (const key of ["allow", "deny", "ask"]) {
@@ -761,7 +801,11 @@ write_ephemeral_settings() {
       hooks: {
         SessionStart: [{ matcher: "*", hooks: [cmdHook(sessionCmd, 5)] }],
         PreCompact: [{ matcher: "*", hooks: [cmdHook(postcompactCmd, 10)] }],
-        Stop: [{ matcher: "*", hooks: [cmdHook(stopHookCmd, 5)] }],
+        Stop: [{ matcher: "*", hooks: [
+          cmdHook(stopHookCmd, 5),
+          // CLI-only: cheap no-op unless .claude/autonomous-gate.local.json exists.
+          cmdHook(autonomousGateCmd, 60),
+        ] }],
         UserPromptSubmit: [
           { matcher: "*", hooks: [cmdHook(healthCmd, 5, { async: true, asyncRewake: true })] },
           { matcher: "*", hooks: [cmdHook(classifyCmd, 8, { async: true })] },
@@ -793,7 +837,9 @@ write_ephemeral_settings() {
       // The bash wrapper always serializes this array; tolerate direct script execution too.
     }
     let settings = sanitizeSettings(userSettings, "user", false);
+    if (settings.hooks) settings.hooks = stripOwnedCthruHooks(settings.hooks);
     settings = mergeSettings(settings, sanitizeSettings(userLocalSettings, "user local", false));
+    if (settings.hooks) settings.hooks = stripOwnedCthruHooks(settings.hooks);
     const callerSettingsParseable = [];
     for (const payload of callerSettingsPayloads) {
       const parsed = parseCallerPayload(payload);
@@ -803,14 +849,19 @@ write_ephemeral_settings() {
         continue;
       }
       callerSettingsParseable.push(true);
-      settings = mergeSettings(settings, sanitizeSettings(parsed.settings, "--settings", true));
+      const callerSanitized = sanitizeSettings(parsed.settings, "--settings", true);
+      if (callerSanitized.hooks) callerSanitized.hooks = stripOwnedCthruHooks(callerSanitized.hooks);
+      settings = mergeSettings(settings, callerSanitized);
     }
     // statusLine is absent-only: never overwrite a user- or caller-provided one.
-    // mergeSettings does a shallow spread for non-hooks/non-permissions keys, so
-    // leaving cThruInjected.statusLine undefined here lets an existing one survive.
-    if (!own(settings, "statusLine")) {
+    // Default when unspecified: inject c-thru-statusline (model|cwd + fast overlay).
+    // Opt out of the default: C_THRU_NO_STATUSLINE=1 (A/B or users with a custom bar
+    // they prefer to set only outside c-thru). mergeSettings shallow-spreads other
+    // keys, so leaving cThruInjected.statusLine undefined preserves an existing one.
+    if (!own(settings, "statusLine") && process.env.C_THRU_NO_STATUSLINE !== "1") {
       cThruInjected.statusLine = { type: "command", command: statuslineCmd };
     }
+    // cThruInjected wins for fleet hooks; lower layers already had owned stems stripped.
     settings = mergeSettings(settings, cThruInjected);
     // The production wrapper provides a serialized payload array and needs the
     // parseability bits from this same resolution pass. The parity test runs
@@ -819,7 +870,7 @@ write_ephemeral_settings() {
     process.stdout.write(JSON.stringify(callerSettingsPayloadsAreSerialized ? {
       settings, callerSettingsParseable,
     } : settings));
-  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$plan_visibility_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path" "$caller_settings_payloads_json" "$stop_hook_cmd" "$statusline_cmd" "$user_local_settings_path") || {
+  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$plan_visibility_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path" "$caller_settings_payloads_json" "$stop_hook_cmd" "$statusline_cmd" "$user_local_settings_path" "$autonomous_gate_cmd") || {
     echo "c-thru: failed to build ephemeral settings JSON" >&2
     exit 1
   }
@@ -856,6 +907,8 @@ cmd_help() {
   echo "  c-thru [--route <name>] [--model <name>] [--local-only] [--best-cloud] [claude args...]"
   echo "  c-thru <subcommand> [options]"
   echo -e "  ${GRAY}Native Claude Code subcommands (agents, mcp, auth, ...) pass through to claude.${NC}"
+  echo -e "  ${GRAY}On agents|mcp|…: c-thru flags stripped; brand --model (grok, …) routes via proxy;${NC}"
+  echo -e "  ${GRAY}Claude-native --model (sonnet/opus/fable/haiku/claude-*) and -p/--print pass through.${NC}"
   echo ""
   echo -e "${BOLD}Subcommands${NC} ${GRAY}(operate on c-thru itself):${NC}"
   echo -e "  ${GRAY}Lifecycle:${NC}"
@@ -1152,17 +1205,331 @@ fi
 if [[ "${1:-}" == "check-deps" ]]; then
   cmd_check_deps "$@"; exit $?
 fi
-# Native Claude Code subcommands must reach the real binary untouched — the
-# proxy/banner/session-injection path (build_forwarded_args) appends
-# --append-system-prompt/--settings/--agents, which are invalid for
-# subcommands and make commander error out. Keep this list in sync with
-# `claude --help` → Commands.
-case "${1:-}" in
-  agents|auth|auto-mode|doctor|gateway|install|mcp|plugin|plugins|project|setup-token|ultrareview|update|upgrade)
-    REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
-    exec "$REAL_CLAUDE" "$@"
-    ;;
-esac
+
+# ARCH: cthru_flag_width — single source of truth for how many argv tokens a
+#   c-thru value-taking flag consumes, given the flag name and the token that
+#   follows it (if any). Both the Phase-1 pre-parse loop (below) and
+#   build_forwarded_args() call this so the two stages can never disagree
+#   about where a flag's value boundary lies — the exact drift this
+#   refactor eliminates. Returns via stdout: "0" (flag takes a value but none
+#   follows — treat as valueless), "1" (bare/valueless flag, or value-taking
+#   flag with no legitimate value to consume), or "2" (flag + one value token
+#   consumed). Encodes two peek rules:
+#     - --model/--route/--mode/--profile/--memory-gb/--settings/--agents: consume the next token
+#       as the value only if it doesn't look like a flag (doesn't start with
+#       '-') — otherwise a following flag (e.g. --print) would be swallowed.
+#     - --proxy-debug/--router-debug: optional numeric value; consume the
+#       next token only if it matches ^[12]$.
+#   Equals-form flags (--model=x) and flags with no value at all
+#   (--bypass-proxy, --debug, ...) don't call this — they're single tokens.
+cthru_flag_width() {
+  local flag="$1" next="$2" has_next="$3"
+  case "$flag" in
+    --model | --route | --mode | --profile | --memory-gb | --settings | --agents)
+      if [[ "$has_next" == "1" && "$next" != -* ]]; then
+        printf '2'
+      else
+        printf '1'
+      fi
+      ;;
+    --proxy-debug | --router-debug)
+      if [[ "$has_next" == "1" && "$next" =~ ^[12]$ ]]; then
+        printf '2'
+      else
+        printf '1'
+      fi
+      ;;
+    *)
+      printf '1'
+      ;;
+  esac
+}
+
+# True if $1 is a Claude-native / first-party model id or alias that Claude Code
+# agent-view --model may accept (sonnet, opus, fable, haiku, claude-*, …).
+# Used only on native_subcmd path: forward these --model values; strip c-thru
+# route/brand names (grok, deepseek, ollama tags, claude-via-*, …).
+is_claude_native_model_name() {
+  local m="${1:-}"
+  [[ -z "$m" ]] && return 1
+  # c-thru picker aliases first (also match claude-* otherwise)
+  [[ "$m" == claude-via-* ]] && return 1
+  # Bare aliases Claude Code documents for the picker / agent view
+  case "$m" in
+    sonnet|opus|fable|haiku) return 0 ;;
+    sonnet-*|opus-*|fable-*|haiku-*) return 0 ;;
+  esac
+  # Full Anthropic ids and family prefixes
+  [[ "$m" == claude-* || "$m" == anthropic* ]] && return 0
+  return 1
+}
+
+# ARCH: strip_cthru_cli_args — allowlist strip of c-thru-private flags from ORIG_ARGS.
+#   Binding rule: only the c-thru flag vocabulary is recognized. Every other token
+#   (Claude flags including -p/--print, unknown future options, positionals, prompt
+#   text) is forwarded ONE token at a time — never invent width for Claude flags.
+#   Policies:
+#     main          — used by build_forwarded_args: strip private flags; reinject
+#                     resolved --model; strip parseable caller --settings/--agents
+#                     that the ephemeral merge will re-inject.
+#     native_subcmd — used before exec of claude agents|mcp|…: strip private flags;
+#                     strip --model only when the value is NOT Claude-native
+#                     (sonnet/opus/fable/haiku/claude-*); forward Claude-native
+#                     --model for agent-view defaults. No session inject.
+#   Outputs: FORWARDED_ARGS (bash array), STRIPPED_MODEL (value stripped on
+#   native_subcmd when a non-Claude --model was present, else empty).
+#   Do not register -p/--print or any Claude value-taking flag in cthru_flag_width.
+strip_cthru_cli_args() {
+  local policy="${1:-main}"
+  local desired_model="${2:-}"
+  FORWARDED_ARGS=()
+  STRIPPED_MODEL=""
+  local i=0
+  local saw_model=0
+  local saw_skip_permissions=0
+  local caller_settings_index=0
+  local caller_agents_index=0
+  local _w=""
+  local arg=""
+  local next_val=""
+
+  while [[ $i -lt ${#ORIG_ARGS[@]} ]]; do
+    arg="${ORIG_ARGS[i]}"
+    if [[ "$arg" == "--" ]]; then
+      # Escape hatch: remainder is opaque to c-thru (prompts that look like flags).
+      FORWARDED_ARGS+=("${ORIG_ARGS[@]:i}")
+      break
+    fi
+    case "$arg" in
+      --route)
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        i=$((i + _w))
+        continue
+        ;;
+      --route=*)
+        i=$((i + 1))
+        continue
+        ;;
+      --mode | --profile | --memory-gb)
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        i=$((i + _w))
+        continue
+        ;;
+      --mode=* | --profile=* | --memory-gb=* | --proxy-debug=* | --router-debug=* | --thinking=*)
+        i=$((i + 1))
+        continue
+        ;;
+      --bypass-proxy | --journal | --no-update | --no-agents | --debug | --thinking | \
+      --local-only | --best-cloud | --best-opensource-cloud | --best-opensource-local | \
+      --best-opensource | --offline)
+        i=$((i + 1))
+        continue
+        ;;
+      --proxy-debug | --router-debug)
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        i=$((i + _w))
+        continue
+        ;;
+      --print-routing | --dry-run)
+        i=$((i + 1))
+        continue
+        ;;
+      --model)
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        if [[ "$_w" == "2" ]]; then
+          next_val="${ORIG_ARGS[i+1]}"
+        else
+          next_val=""
+        fi
+        if [[ "$policy" == "native_subcmd" ]]; then
+          # Forward Claude-native ids (sonnet/opus/fable/haiku/claude-*) for
+          # agent-view defaults; strip c-thru route/brand names (grok, …).
+          if [[ -n "$next_val" ]] && is_claude_native_model_name "$next_val"; then
+            FORWARDED_ARGS+=("--model" "$next_val")
+          elif [[ -n "$next_val" ]]; then
+            [[ -z "$STRIPPED_MODEL" ]] && STRIPPED_MODEL="$next_val"
+          fi
+          # bare --model with no value: drop (invalid either way)
+        else
+          if [[ "$saw_model" -eq 0 && -n "$desired_model" ]]; then
+            FORWARDED_ARGS+=("--model" "$desired_model")
+            saw_model=1
+          fi
+        fi
+        i=$((i + _w))
+        continue
+        ;;
+      --model=*)
+        next_val="${arg#--model=}"
+        if [[ "$policy" == "native_subcmd" ]]; then
+          if [[ -n "$next_val" ]] && is_claude_native_model_name "$next_val"; then
+            FORWARDED_ARGS+=("--model=$next_val")
+          elif [[ -n "$next_val" ]]; then
+            [[ -z "$STRIPPED_MODEL" ]] && STRIPPED_MODEL="$next_val"
+          fi
+        else
+          if [[ "$saw_model" -eq 0 && -n "$desired_model" ]]; then
+            FORWARDED_ARGS+=("--model=$desired_model")
+            saw_model=1
+          fi
+        fi
+        i=$((i + 1))
+        continue
+        ;;
+      --settings)
+        # Main path: strip parseable inject payloads (re-injected as ephemeral).
+        # Native path: forward (Claude subcommands may accept --settings).
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        if [[ "$policy" == "main" && "$_w" == "2" && "${CALLER_SETTINGS_PARSEABLE[caller_settings_index]:-0}" == "1" ]]; then
+          i=$((i + _w))
+        else
+          FORWARDED_ARGS+=("$arg")
+          [[ "$_w" == "2" ]] && FORWARDED_ARGS+=("${ORIG_ARGS[i+1]}")
+          i=$((i + _w))
+        fi
+        caller_settings_index=$((caller_settings_index + 1))
+        continue
+        ;;
+      --settings=*)
+        if [[ "$policy" == "main" && "${CALLER_SETTINGS_PARSEABLE[caller_settings_index]:-0}" == "1" ]]; then
+          i=$((i + 1))
+        else
+          FORWARDED_ARGS+=("$arg")
+          i=$((i + 1))
+        fi
+        caller_settings_index=$((caller_settings_index + 1))
+        continue
+        ;;
+      --agents)
+        # Main: strip parseable fleet-inject JSON. Native: forward (Claude-owned).
+        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
+          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
+        else
+          _w="$(cthru_flag_width "$arg" "" 0)"
+        fi
+        if [[ "$policy" == "main" && "$_w" == "2" && "${CALLER_AGENTS_PARSEABLE[caller_agents_index]:-0}" == "1" ]]; then
+          i=$((i + _w))
+        else
+          FORWARDED_ARGS+=("$arg")
+          [[ "$_w" == "2" ]] && FORWARDED_ARGS+=("${ORIG_ARGS[i+1]}")
+          i=$((i + _w))
+        fi
+        caller_agents_index=$((caller_agents_index + 1))
+        continue
+        ;;
+      --agents=*)
+        if [[ "$policy" == "main" && "${CALLER_AGENTS_PARSEABLE[caller_agents_index]:-0}" == "1" ]]; then
+          i=$((i + 1))
+        else
+          FORWARDED_ARGS+=("$arg")
+          i=$((i + 1))
+        fi
+        caller_agents_index=$((caller_agents_index + 1))
+        continue
+        ;;
+      --dangerously-skip-permissions)
+        # Forward once if user passed it (main + native).
+        if [[ "$saw_skip_permissions" -eq 0 ]]; then
+          FORWARDED_ARGS+=("$arg")
+          saw_skip_permissions=1
+        fi
+        i=$((i + 1))
+        continue
+        ;;
+      *)
+        # Allowlist-only: unknown Claude flags, -p, prompts, positionals — one token.
+        FORWARDED_ARGS+=("$arg")
+        i=$((i + 1))
+        ;;
+    esac
+  done
+
+  if [[ "$policy" == "main" && -n "$desired_model" && "$saw_model" -eq 0 ]]; then
+    FORWARDED_ARGS=("--model=$desired_model" "${FORWARDED_ARGS[@]}")
+  fi
+}
+
+# ARCH: run_native_claude_subcommand — launch `claude agents|mcp|…` after
+#   allowlist-stripping c-thru flags. If --model names a c-thru route/brand
+#   (not sonnet/opus/fable/haiku/claude-*), start the proxy and re-insert that
+#   model so agent-view sessions hit ANTHROPIC_BASE_URL → claude-proxy instead
+#   of bare Anthropic (which is what caused weekly-limit failures for
+#   `cthru agents --model grok`). Claude-native --model values pass through
+#   without proxy. No --append-system-prompt / fleet inject (commander).
+#   Must NOT exec when a proxy was started — EXIT traps clean proxy children.
+run_native_claude_subcommand() {
+  local subcmd="${ORIG_ARGS[0]:-}"
+  local REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
+  local route_model=""
+  local a inserted rebuilt
+
+  strip_cthru_cli_args native_subcmd
+
+  # Prefer Phase-1 explicit_model; stripper also records non-native values.
+  if [[ -n "${explicit_model:-}" ]] && ! is_claude_native_model_name "$explicit_model"; then
+    route_model="$explicit_model"
+  elif [[ -n "${STRIPPED_MODEL:-}" ]]; then
+    route_model="$STRIPPED_MODEL"
+  fi
+
+  if [[ -n "$route_model" && "${CLAUDE_PROXY_BYPASS:-0}" != "1" ]]; then
+    # Proxy-mediated agent view: same client env as a normal c-thru chat hop.
+    [[ -n "${CONFIG:-}" ]] || {
+      echo "c-thru: native subcommand with --model '${route_model}' requires a loaded model-map" >&2
+      return 1
+    }
+    inject_subscription_oauth_from_store || true
+    ensure_proxy_http_base || return 1
+    export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
+    ensure_proxy_client_api_key
+    apply_background_model_overrides "$route_model"
+    # Re-insert --model after the subcommand so Claude agent-view defaults to
+    # the c-thru route name; the proxy resolves it (e.g. grok → grok-4.5 @ xai).
+    rebuilt=()
+    inserted=0
+    for a in "${FORWARDED_ARGS[@]+"${FORWARDED_ARGS[@]}"}"; do
+      rebuilt+=("$a")
+      if [[ "$inserted" -eq 0 && "$a" == "$subcmd" ]]; then
+        rebuilt+=("--model" "$route_model")
+        inserted=1
+      fi
+    done
+    if [[ "$inserted" -eq 0 ]]; then
+      rebuilt=("$subcmd" "--model" "$route_model" ${FORWARDED_ARGS[@]+"${FORWARDED_ARGS[@]}"})
+    fi
+    FORWARDED_ARGS=("${rebuilt[@]}")
+    echo "c-thru: ${subcmd} via proxy — model=${route_model} ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}" >&2
+  elif [[ -n "${STRIPPED_MODEL:-}" ]]; then
+    # Non-native model stripped but proxy bypassed / unavailable
+    echo "c-thru: stripped --model '${STRIPPED_MODEL}' (not a Claude-native alias; not forwarded to claude ${subcmd})" >&2
+    echo "c-thru: for routed models without --bypass-proxy use: cthru --model ${STRIPPED_MODEL}" >&2
+  fi
+
+  # Foreground launch so EXIT traps can kill the proxy we may have started.
+  run_real_claude "$REAL_CLAUDE" ${FORWARDED_ARGS[@]+"${FORWARDED_ARGS[@]}"}
+  return $?
+}
+
 if [[ "${1:-}" == "/c-thru-control" ]]; then
   shift
   # We need the config resolved to start the proxy
@@ -4153,7 +4520,8 @@ run_real_claude() {
   local -a cmd=("$@")
   local url="${ANTHROPIC_BASE_URL:-}"
   local tok="${ANTHROPIC_AUTH_TOKEN:-}"
-  
+  local ec
+
   # Harassment prevention
   local quiet_env_survey="1"
   local quiet_env_color="1"
@@ -4173,232 +4541,45 @@ run_real_claude() {
     fi
   fi
 
+  # Proxy was started by this shell: cannot exec (bash skips EXIT traps on
+  # exec, which would leak the proxy). Same constraint as c-thru-control:
+  # run as a true *foreground* child, then let EXIT reap the proxy.
+  #
+  # Do NOT use `cmd &; wait`. Backgrounding under a non-interactive script
+  # makes Claude an async job (SIGINT/SIGQUIT ignored at spawn). Users then
+  # see TUI garbling when typing, pressing left-arrow, and moving the mouse
+  # over the window — only under c-thru; plain `claude` is clean. A set -m +
+  # fg approach was tried but is fragile: if fg fails, Claude stays a
+  # background job under job control and can get SIGTTIN on terminal reads.
+  # Pure foreground matches c-thru-control and keeps Claude in the terminal's
+  # foreground process group with the waiting shell.
   arm_proxy_cleanup
   if [[ -n "$url" && -n "$tok" ]]; then
     env ANTHROPIC_BASE_URL="$url" \
         ANTHROPIC_AUTH_TOKEN="$tok" \
         CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
         CLAUDE_CODE_COLOR="$quiet_env_color" \
-        "${cmd[@]}" &
+        "${cmd[@]}"
   else
     env CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
         CLAUDE_CODE_COLOR="$quiet_env_color" \
-        "${cmd[@]}" &
+        "${cmd[@]}"
   fi
-  CLAUDE_CHILD_PID="$!"
-  wait "$CLAUDE_CHILD_PID"
-  local ec="$?"
-  CLAUDE_CHILD_PID=""
+  ec=$?
   return "$ec"
 }
 
-# ARCH: cthru_flag_width — single source of truth for how many argv tokens a
-#   c-thru value-taking flag consumes, given the flag name and the token that
-#   follows it (if any). Both the Phase-1 pre-parse loop (below) and
-#   build_forwarded_args() call this so the two stages can never disagree
-#   about where a flag's value boundary lies — the exact drift this
-#   refactor eliminates. Returns via stdout: "0" (flag takes a value but none
-#   follows — treat as valueless), "1" (bare/valueless flag, or value-taking
-#   flag with no legitimate value to consume), or "2" (flag + one value token
-#   consumed). Encodes two peek rules:
-#     - --model/--route/--mode/--profile/--memory-gb/--settings/--agents: consume the next token
-#       as the value only if it doesn't look like a flag (doesn't start with
-#       '-') — otherwise a following flag (e.g. --print) would be swallowed.
-#     - --proxy-debug/--router-debug: optional numeric value; consume the
-#       next token only if it matches ^[12]$.
-#   Equals-form flags (--model=x) and flags with no value at all
-#   (--bypass-proxy, --debug, ...) don't call this — they're single tokens.
-cthru_flag_width() {
-  local flag="$1" next="$2" has_next="$3"
-  case "$flag" in
-    --model | --route | --mode | --profile | --memory-gb | --settings | --agents)
-      if [[ "$has_next" == "1" && "$next" != -* ]]; then
-        printf '2'
-      else
-        printf '1'
-      fi
-      ;;
-    --proxy-debug | --router-debug)
-      if [[ "$has_next" == "1" && "$next" =~ ^[12]$ ]]; then
-        printf '2'
-      else
-        printf '1'
-      fi
-      ;;
-    *)
-      printf '1'
-      ;;
-  esac
-}
 
-# ARCH: build_forwarded_args — strips c-thru-private flags (--route, --mode, --profile,
-#   --memory-gb, --bypass-proxy, etc.) from ORIG_ARGS before passing to the real claude
-#   binary; re-injects --model with the resolved concrete model name. This is the ONLY
-#   place where the c-thru flag vocabulary is erased — do not strip flags elsewhere.
+# ARCH: build_forwarded_args — strip c-thru flags (strip_cthru_cli_args main) then
+#   inject session flags (--append-system-prompt / ephemeral --settings / --agents).
+#   Re-injects --model with the resolved concrete model name via the stripper.
 #   c-thru no longer auto-enables --dangerously-skip-permissions; it is forwarded
 #   only when the user passes it explicitly.
 build_forwarded_args() {
   local desired_model="$1"
-  local -a forwarded=()
   local -a inject=()
-  local i=0
-  local saw_model=0
-  local saw_skip_permissions=0
-  local caller_settings_index=0
-  local caller_agents_index=0
-  local _w=""
 
-  while [[ $i -lt ${#ORIG_ARGS[@]} ]]; do
-    local arg="${ORIG_ARGS[i]}"
-    if [[ "$arg" == "--" ]]; then
-      forwarded+=("${ORIG_ARGS[@]:i}")
-      break
-    fi
-    case "$arg" in
-      --route)
-        # Width decided by the shared cthru_flag_width helper (see its
-        # definition above build_forwarded_args) so this stage can never
-        # disagree with the pre-parse loop about --route's value boundary.
-        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
-          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
-        else
-          _w="$(cthru_flag_width "$arg" "" 0)"
-        fi
-        i=$((i + _w))
-        continue
-        ;;
-      --route=*)
-        i=$((i + 1))
-        continue
-        ;;
-      --mode | --profile | --memory-gb)
-        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
-          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
-        else
-          _w="$(cthru_flag_width "$arg" "" 0)"
-        fi
-        i=$((i + _w))
-        continue
-        ;;
-      --mode=* | --profile=* | --memory-gb=* | --proxy-debug=* | --router-debug=* | --thinking=*)
-        i=$((i + 1))
-        continue
-        ;;
-      --bypass-proxy | --journal | --no-update | --no-agents | --debug | --thinking | \
-      --local-only | --best-cloud | --best-opensource-cloud | --best-opensource-local | \
-      --best-opensource | --offline)
-        i=$((i + 1))
-        continue
-        ;;
-      --proxy-debug | --router-debug)
-        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
-          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
-        else
-          _w="$(cthru_flag_width "$arg" "" 0)"
-        fi
-        i=$((i + _w))
-        continue
-        ;;
-      --print-routing | --dry-run)
-        # c-thru-only dry-run flag; never reaches the real claude binary.
-        # The routed path short-circuits before launch; the transparent path
-        # does the same (see the print_routing_only guard below). Stripping
-        # here is defense-in-depth so the canonical forwarded argv never
-        # contains c-thru-private flags.
-        i=$((i + 1))
-        continue
-        ;;
-      --model)
-        if [[ "$saw_model" -eq 0 && -n "$desired_model" ]]; then
-          forwarded+=("--model" "$desired_model")
-          saw_model=1
-        fi
-        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
-          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
-        else
-          _w="$(cthru_flag_width "$arg" "" 0)"
-        fi
-        i=$((i + _w))
-        continue
-        ;;
-      --model=*)
-        if [[ "$saw_model" -eq 0 && -n "$desired_model" ]]; then
-          forwarded+=("--model=$desired_model")
-          saw_model=1
-        fi
-        i=$((i + 1))
-        continue
-        ;;
-      --settings)
-        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
-          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
-        else
-          _w="$(cthru_flag_width "$arg" "" 0)"
-        fi
-        if [[ "$_w" == "2" && "${CALLER_SETTINGS_PARSEABLE[caller_settings_index]:-0}" == "1" ]]; then
-          i=$((i + _w))
-        else
-          forwarded+=("$arg")
-          [[ "$_w" == "2" ]] && forwarded+=("${ORIG_ARGS[i+1]}")
-          i=$((i + _w))
-        fi
-        caller_settings_index=$((caller_settings_index + 1))
-        continue
-        ;;
-      --settings=*)
-        if [[ "${CALLER_SETTINGS_PARSEABLE[caller_settings_index]:-0}" == "1" ]]; then
-          i=$((i + 1))
-        else
-          forwarded+=("$arg")
-          i=$((i + 1))
-        fi
-        caller_settings_index=$((caller_settings_index + 1))
-        continue
-        ;;
-      --agents)
-        if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
-          _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
-        else
-          _w="$(cthru_flag_width "$arg" "" 0)"
-        fi
-        if [[ "$_w" == "2" && "${CALLER_AGENTS_PARSEABLE[caller_agents_index]:-0}" == "1" ]]; then
-          i=$((i + _w))
-        else
-          forwarded+=("$arg")
-          [[ "$_w" == "2" ]] && forwarded+=("${ORIG_ARGS[i+1]}")
-          i=$((i + _w))
-        fi
-        caller_agents_index=$((caller_agents_index + 1))
-        continue
-        ;;
-      --agents=*)
-        if [[ "${CALLER_AGENTS_PARSEABLE[caller_agents_index]:-0}" == "1" ]]; then
-          i=$((i + 1))
-        else
-          forwarded+=("$arg")
-          i=$((i + 1))
-        fi
-        caller_agents_index=$((caller_agents_index + 1))
-        continue
-        ;;
-      --dangerously-skip-permissions)
-        if [[ "$saw_skip_permissions" -eq 0 ]]; then
-          forwarded+=("$arg")
-          saw_skip_permissions=1
-        fi
-        i=$((i + 1))
-        continue
-        ;;
-      *)
-        forwarded+=("$arg")
-        i=$((i + 1))
-        ;;
-    esac
-  done
-
-  if [[ -n "$desired_model" && "$saw_model" -eq 0 ]]; then
-    forwarded=("--model=$desired_model" "${forwarded[@]}")
-  fi
+  strip_cthru_cli_args main "$desired_model"
 
   # Inject system info summary if not bypassed
   if [[ "${CLAUDE_PROXY_BYPASS:-0}" != "1" && "${C_THRU_SKIP_INFO_INJECTION:-0}" != "1" ]]; then
@@ -4427,8 +4608,8 @@ c-thru proxy control plane: http://127.0.0.1:${PROXY_PORT} — see SessionStart 
   if [[ -n "$EPHEMERAL_AGENTS_JSON" && "$EPHEMERAL_AGENTS_JSON" != "{}" ]]; then
     inject+=("--agents" "$EPHEMERAL_AGENTS_JSON")
   fi
-  forwarded=( "${inject[@]}" "${forwarded[@]}" )
-  printf '%s\0' "${forwarded[@]}"
+  FORWARDED_ARGS=( "${inject[@]}" "${FORWARDED_ARGS[@]}" )
+  printf '%s\0' "${FORWARDED_ARGS[@]}"
 }
 
 # Helper: print a config section if it exists and has content
@@ -5081,6 +5262,15 @@ done
 # and avoids modifying ~/.claude folders permanently.
 setup_ephemeral_session
 trap cleanup_ephemeral_session EXIT
+
+# Native Claude Code subcommands (agents, mcp, …): after Phase-1 so --model is
+# known and CONFIG/proxy helpers exist. Keep list in sync with `claude --help`.
+case "${ORIG_ARGS[0]:-}" in
+  agents|auth|auto-mode|doctor|gateway|install|mcp|plugin|plugins|project|setup-token|ultrareview|update|upgrade)
+    run_native_claude_subcommand
+    exit $?
+    ;;
+esac
 
 # Check Ollama requirements for the active tier's agent tags before pre-pulling
 ensure_active_tier_ollama_requirements

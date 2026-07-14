@@ -93,8 +93,9 @@ async function main() {
       const homeA = fs.mkdtempSync(path.join(base, 'home-a-'));
       const out1 = await runHook(scratchHook, homeA, port, 'session-a');
       assertEq(out1.status, 0, 'hook always exits 0');
-      assert(out1.stdout.includes('FALLBACK') && out1.stdout.includes('secondary-target'),
-        `badge names the serving model (got: ${JSON.stringify(out1.stdout)})`);
+      assert(
+        /\[fallback\]/i.test(out1.stdout) && out1.stdout.includes('secondary-target') && !/\u26A0/.test(out1.stdout),
+        `ASCII badge names the serving model (got: ${JSON.stringify(out1.stdout)})`);
 
       // ── 2. Session B: healthy only -> no badge, isolated from session A ──
       console.log('\n2. Session B (healthy request only): no badge, isolated from session A');

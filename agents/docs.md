@@ -3,7 +3,6 @@ name: docs
 description: Use PROACTIVELY after any public API, CLI flag, or schema change to update documentation. Writes and updates CLAUDE.md, README, help text, and inline docs. Use for "update the docs", "document this change", "write the help text for". Small, fast writer — Gemma E4B across all tiers.
 model: docs
 tier_budget: 10000
-color: blue
 ---
 
 # Agent: Docs Writer

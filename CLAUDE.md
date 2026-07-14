@@ -107,9 +107,9 @@ Some repo files are derived from `config/model-map.json` and `agents/*.md`; see
 - `~/.claude/tools/` — symlinks to `tools/` in the repo (never copies)
 - `~/.claude/commands/c-thru-status.md`, `commands/cplan.md` — vendor slash-command content, reinstalled on every run
 - `~/.claude/skills/c-thru/`, `~/.claude/agents/c-thru/` — legacy persistent symlinks; `install.sh`'s `cleanup_old_persistent_config()` actively removes these if present rather than creating them. Skills/agents now reach Claude Code via ephemeral `--agents`/`--settings` JSON injection per `c-thru` launch (see the "Injection layer" table in `docs/functionality-map.md`), not a persistent filesystem symlink.
-- `~/.claude/settings.json` — cleaned on install (old persistent hooks from ~/.claude/tools/ removed); no new global hooks written
+- `~/.claude/settings.json` — cleaned on install (durable c-thru fleet hooks removed by path **or** script basename; no new global hooks written). Fleet hooks are injected ephemerally by `c-thru` only.
 
-Outside `install.sh`'s footprint but part of the repo's own on-disk state: the project-level `.claude/settings.json` carries persistent project hooks (`SessionStart` → `c-thru-session-start.sh` (10s), `PreCompact` → `c-thru-postcompact-context.sh` (5s)) — version-controlled, never touched by `install.sh`. Runtime-only (not written by install): `.prepull-stamp-<tier>` (bulk pre-pull debounce, invalidated on model-map change), `proxy.log` (ops log under `~/.claude/`; optional `proxy.log.old` after size rotate), `proxy.pid`. `c-thru-self-update.sh` writes `.c-thru-update.log` inside the repo root only.
+Project `.claude/settings.json` holds **permissions only** — no static c-thru hooks (those double-fired with ephemeral inject). Fleet hooks + the opt-in `c-thru-autonomous-gate` Stop hook are injected only by `c-thru` launch (gate still no-ops unless `.claude/autonomous-gate.local.json` exists). Runtime-only (not written by install): `.prepull-stamp-<tier>` (bulk pre-pull debounce, invalidated on model-map change), `proxy.log` (ops log under `~/.claude/`; optional `proxy.log.old` after size rotate), `proxy.pid`. `c-thru-self-update.sh` writes `.c-thru-update.log` inside the repo root only.
 
 ## Architecture
 

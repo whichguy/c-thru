@@ -3,7 +3,6 @@ name: vision
 description: Use for screenshots, UI mockups, diagrams, and image OCR — "describe this screenshot", "read this diagram", "extract text from image". Not for PDF documents — use pdf instead. Routes to claude-sonnet-5 connected (full multimodal) / qwen3.6:35b local (basic).
 model: vision
 tier_budget: 999999
-color: pink
 ---
 
 # Agent: Vision Specialist

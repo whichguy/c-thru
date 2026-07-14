@@ -3,7 +3,6 @@ name: planner
 description: MUST BE USED for all planning, architecture, and design tasks. Produces detailed implementation plans before any code is written. Use for "plan how to", "design the architecture of", "what's the approach for", "break down this feature". Routes to Fable cloud (all tiers) or Qwen3-30B local at 64GB+.
 model: planner
 tier_budget: 999999
-color: purple
 ---
 Input: `signal`, `intent`, `discovery`, `current.md`
 Input: `signal`, `wave_summary`, `affected_items`, `current.md`, `learnings.md`, `final_review`
