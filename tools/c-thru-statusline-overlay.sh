@@ -50,6 +50,10 @@ age=$((now_ms - last_ms))
 served_by=$(printf '%s' "$fallback_entry" | jq -r '.served_by // empty' 2>/dev/null)
 [ -n "$served_by" ] || exit 0
 
-# ASCII only — wide emoji (e.g. warning sign) mis-measures columns in some TUIs.
-printf ' [fallback] -> %s' "$served_by"
+# ASCII only — wide emoji mis-measures columns; no OSC-8 (unreliable in CC TUI).
+# Keep standalone for users who append this to a *custom* statusLine.
+_short="$served_by"
+_short="${_short##*/}"
+if (( ${#_short} > 28 )); then _short="${_short:0:27}…"; fi
+printf ' [fallback] -> %s' "$_short"
 exit 0

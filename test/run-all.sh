@@ -173,6 +173,8 @@ run_suite "c-thru-autonomous-gate (Stop-hook gate sentinel/block matrix)" \
   bash "$REPO_DIR/test/c-thru-autonomous-gate.test.sh"
 run_suite "c-thru-statusline-overlay (fallback badge: real proxy, real fallback, session isolation)" \
   node "$REPO_DIR/test/c-thru-statusline-overlay.test.js"
+run_suite "c-thru-statusline (default bar + recent stats + dash hint)" \
+  node "$REPO_DIR/test/c-thru-statusline.test.js"
 run_suite "statusline absent-only injection (c-thru never overwrites a user statusLine)" \
   node "$REPO_DIR/test/c-thru-statusline-injection.test.js"
 run_suite "agent-router-hook (subagent_type → capability model rewrite)" \
