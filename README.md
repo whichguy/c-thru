@@ -79,10 +79,10 @@ Hooks and agent scripts live **in the git repo** (`tools/c-thru-*.sh`, mirrored 
 
 | Entry point | Proxy | Fleet `--agents` / system-prompt inject | Brand `--model` (e.g. `grok`) | Hooks |
 |---|:---:|:---:|:---:|---|
-| `cthru` (main chat) | ✓ | ✓ | ✓ (resolved on wire) | Ephemeral per launch (CLI) |
-| `cthru agents --model grok` | ✓ (brand models) | — (commander rejects) | Re-inserted; proxy resolves | Limited — no fleet inject |
-| `cthru agents --model sonnet` | optional / not forced | — | Claude-native alias kept | Limited |
-| Brand Agent tool inside main `cthru` (“ask grok”) | ✓ (sentinel + map) | Parent has fleet; leaf is one-shot | Via `agent_to_capability` | Parent hooks |
+| `cthru` (main chat) | ✓ | ✓ | ✓ (resolved on wire) | CLI ephemeral inject per launch |
+| `cthru agents --model grok` | ✓ (brand models) | — (commander rejects) | Re-inserted; proxy resolves | No CLI ephemeral inject (plugin hooks only if installed) |
+| `cthru agents --model sonnet` | optional / not forced | — | Claude-native alias kept | No CLI ephemeral inject (plugin hooks only if installed) |
+| Brand Agent tool inside main `cthru` (“ask grok”) | ✓ (sentinel + map) | Parent has fleet; leaf is one-shot | Via `agent_to_capability` | Parent session hooks |
 | `grok-cc` / Grok Build CLI | external | n/a | CLI auth | n/a |
 | Plain `claude` (no plugin, no `cthru`) | — | — | Anthropic only | none from c-thru |
 | Plain `claude` + marketplace plugin | ✓ (plugin SessionStart) | — (no CLI fleet inject) | map if proxy routes | Plugin always-on |
