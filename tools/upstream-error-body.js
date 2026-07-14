@@ -12,19 +12,108 @@ const zlib = require('zlib');
 
 const DEFAULT_MESSAGE_CAP = 400;
 
+/** Default cap for upstream error-body collection (forensics + client forward). */
+const DEFAULT_COLLECT_MAX_BYTES = 1024 * 1024; // 1 MiB
+/** Default idle/total wait for error-body collection before resolving what we have. */
+const DEFAULT_COLLECT_TIMEOUT_MS = 30000;
+
 /**
- * Collect a readable stream into a single Buffer.
+ * Collect a readable stream into a single Buffer with optional bounds.
+ * Bounds matter on ≥400 paths that buffer the full body before responding —
+ * an unbounded hung/huge upstream would hang the client or OOM the proxy.
+ *
  * @param {NodeJS.ReadableStream} stream
- * @returns {Promise<Buffer>}
+ * @param {{ maxBytes?: number, timeoutMs?: number }} [opts]
+ *   maxBytes — stop after this many bytes (default 1 MiB). Pass Infinity to disable.
+ *   timeoutMs — resolve with what we have after this many ms (default 30s). 0 disables.
+ * @returns {Promise<{ buffer: Buffer, truncated: boolean, timedOut: boolean }>}
  */
-function collectStreamBody(stream) {
+function collectStreamBody(stream, opts) {
+  const o = opts || {};
+  const maxBytes = o.maxBytes != null ? o.maxBytes : DEFAULT_COLLECT_MAX_BYTES;
+  const timeoutMs = o.timeoutMs != null ? o.timeoutMs : DEFAULT_COLLECT_TIMEOUT_MS;
+
   return new Promise((resolve, reject) => {
     const chunks = [];
-    stream.on('data', (c) => {
-      chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
-    });
-    stream.on('end', () => resolve(Buffer.concat(chunks)));
-    stream.on('error', reject);
+    let total = 0;
+    let truncated = false;
+    let timedOut = false;
+    let settled = false;
+    let timer = null;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      // Detach listeners so a late 'error' after resolve is not unhandled.
+      try { stream.removeListener('data', onData); } catch {}
+      try { stream.removeListener('end', onEnd); } catch {}
+      try { stream.removeListener('error', onError); } catch {}
+      resolve({
+        buffer: Buffer.concat(chunks),
+        truncated,
+        timedOut,
+      });
+    };
+
+    const onData = (c) => {
+      if (settled) return;
+      const buf = Buffer.isBuffer(c) ? c : Buffer.from(c);
+      if (total >= maxBytes) {
+        truncated = true;
+        // Stop reading further — destroy if available so the socket frees.
+        try {
+          if (typeof stream.destroy === 'function') stream.destroy();
+          else if (typeof stream.pause === 'function') stream.pause();
+        } catch {}
+        finish();
+        return;
+      }
+      const room = maxBytes - total;
+      if (buf.length > room) {
+        chunks.push(buf.subarray(0, room));
+        total += room;
+        truncated = true;
+        try {
+          if (typeof stream.destroy === 'function') stream.destroy();
+          else if (typeof stream.pause === 'function') stream.pause();
+        } catch {}
+        finish();
+        return;
+      }
+      chunks.push(buf);
+      total += buf.length;
+    };
+
+    const onEnd = () => finish();
+    const onError = (err) => {
+      if (settled) return;
+      // If we already have bytes (e.g. destroy after truncate), finish successfully.
+      if (chunks.length || truncated || timedOut) return finish();
+      settled = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      reject(err);
+    };
+
+    stream.on('data', onData);
+    stream.on('end', onEnd);
+    stream.on('error', onError);
+
+    if (timeoutMs > 0) {
+      // Keep timer ref'd: on a hung upstream with no further socket events, an
+      // unref'd timer would let the event loop exit before we resolve, leaving
+      // the client hanging forever (and unit tests would false-green via early
+      // process exit). Proxy-server handles keep the process alive in production
+      // either way; the ref costs nothing for a 30s error-body deadline.
+      timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          if (typeof stream.destroy === 'function') stream.destroy();
+          else if (typeof stream.pause === 'function') stream.pause();
+        } catch {}
+        finish();
+      }, timeoutMs);
+    }
   });
 }
 
@@ -185,4 +274,6 @@ module.exports = {
   formatUpstreamErrorMessage,
   isCompressedEncoding,
   DEFAULT_MESSAGE_CAP,
+  DEFAULT_COLLECT_MAX_BYTES,
+  DEFAULT_COLLECT_TIMEOUT_MS,
 };

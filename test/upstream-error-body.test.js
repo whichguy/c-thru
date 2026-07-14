@@ -6,16 +6,56 @@
 // Run: node test/upstream-error-body.test.js
 
 const zlib = require('zlib');
+const { Readable } = require('stream');
 const {
+  collectStreamBody,
   decodeUpstreamText,
   extractErrorMessage,
   sanitizeErrorMessage,
   formatUpstreamErrorMessage,
   nonTextErrorFallback,
+  DEFAULT_COLLECT_MAX_BYTES,
 } = require('../tools/upstream-error-body.js');
 const { assert, assertEq, summary } = require('./helpers');
 
 console.log('upstream-error-body unit tests\n');
+
+async function runCollectStreamBodyTests() {
+  // ── collectStreamBody bounds (error-path forensics must not hang/OOM) ────
+  console.log('collectStreamBody: full small body');
+  {
+    const s = Readable.from([Buffer.from('hello '), Buffer.from('world')]);
+    const r = await collectStreamBody(s, { maxBytes: 1024, timeoutMs: 2000 });
+    assertEq(r.buffer.toString('utf8'), 'hello world', 'concatenates chunks');
+    assertEq(r.truncated, false, 'not truncated');
+    assertEq(r.timedOut, false, 'not timed out');
+  }
+
+  console.log('collectStreamBody: maxBytes truncates and settles');
+  {
+    const s = new Readable({
+      read() {
+        this.push(Buffer.alloc(600, 0x61)); // 'a' * 600
+        this.push(Buffer.alloc(600, 0x62)); // would exceed 800
+        this.push(null);
+      },
+    });
+    const r = await collectStreamBody(s, { maxBytes: 800, timeoutMs: 2000 });
+    assertEq(r.buffer.length, 800, 'stops at maxBytes (got ' + r.buffer.length + ')');
+    assertEq(r.truncated, true, 'truncated flag set');
+    assertEq(r.timedOut, false, 'not timed out on size cap');
+  }
+
+  console.log('collectStreamBody: timeoutMs resolves with what we have');
+  {
+    const s = new Readable({ read() { /* hang after first push */ } });
+    s.push(Buffer.from('partial'));
+    const r = await collectStreamBody(s, { maxBytes: 1024, timeoutMs: 50 });
+    assertEq(r.buffer.toString('utf8'), 'partial', 'keeps partial bytes on timeout');
+    assertEq(r.timedOut, true, 'timedOut flag set');
+    assert(DEFAULT_COLLECT_MAX_BYTES >= 1024 * 1024, 'default collect cap is ≥ 1 MiB');
+  }
+}
 
 // ── decodeUpstreamText ─────────────────────────────────────────────────────
 
@@ -160,4 +200,11 @@ console.log('upstream-error-body unit tests\n');
   assertEq(fb, 'upstream returned 429 (non-text body, 17 bytes, encoding=gzip)', 'fallback format');
 }
 
-process.exit(summary() === 0 ? 0 : 1);
+runCollectStreamBodyTests()
+  .then(() => {
+    process.exit(summary() === 0 ? 0 : 1);
+  })
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
