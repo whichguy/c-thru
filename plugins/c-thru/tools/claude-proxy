@@ -41,6 +41,11 @@ const {
   sanitizeErrorMessage,
   isCompressedEncoding,
 } = require('./upstream-error-body.js');
+const {
+  DEFAULT_MAX_AGE_MS: PROXY_LOG_DEFAULT_MAX_AGE_MS,
+  DEFAULT_MAX_BYTES: PROXY_LOG_DEFAULT_MAX_BYTES,
+  maintainProxyLogFile,
+} = require('./proxy-log-maintain.js');
 
 // CLI flag parsing — flags are aliases for env vars, set before any consumers
 // read them. Documented in CLAUDE.md ("Proxy CLI Flags"). Supported forms:
@@ -411,7 +416,7 @@ function proxyLog(event, fields = {}) {
   if (PROXY_LOG_FILE) {
     try {
       fs.appendFileSync(PROXY_LOG_FILE, line);
-      checkRotateProxyLog();
+      maintainProxyLog();
     } catch {}
   } else {
     process.stderr.write(line);
@@ -471,7 +476,19 @@ function numberFromEnv(key, def) {
 
 // ── Persistence & Usage ──────────────────────────────────────────────
 const PROXY_LOG_FILE = process.env.CLAUDE_PROXY_LOG_FILE || path.join(os.homedir(), '.claude', 'proxy.log');
-const PROXY_LOG_MAX_SIZE = 10 * 1024 * 1024;
+// Size rotate (hot path) + age prune (throttled). Defaults: 10 MiB / 14 days.
+// Never keep lines older than max age; .old sidecars deleted when mtime exceeds max age.
+const PROXY_LOG_MAX_SIZE = numberFromEnv('CLAUDE_PROXY_LOG_MAX_BYTES', PROXY_LOG_DEFAULT_MAX_BYTES);
+const PROXY_LOG_MAX_AGE_DAYS = numberFromEnv('CLAUDE_PROXY_LOG_MAX_AGE_DAYS', 14);
+const PROXY_LOG_MAX_AGE_MS = PROXY_LOG_MAX_AGE_DAYS > 0
+  ? PROXY_LOG_MAX_AGE_DAYS * 24 * 60 * 60 * 1000
+  : PROXY_LOG_DEFAULT_MAX_AGE_MS;
+// Age-prune at most once per hour on the write path (full rewrite is O(file size)).
+const PROXY_LOG_AGE_PRUNE_INTERVAL_MS = numberFromEnv(
+  'CLAUDE_PROXY_LOG_AGE_PRUNE_INTERVAL_MS',
+  60 * 60 * 1000,
+);
+let _lastProxyLogAgePruneAt = 0;
 const USAGE_STATS_FILE = process.env.CLAUDE_PROXY_USAGE_STATS_FILE || path.join(os.homedir(), '.claude', 'usage-stats.json');
 // Every reader of proxy.pid (c-thru cmd_reload/cmd_restart, c-thru-lib.sh)
 // looks in $CLAUDE_PROFILE_DIR — which c-thru shadows per launch for
@@ -883,16 +900,27 @@ function pushRecentRequest(ctx, req, res, aborted) {
   if (RECENT_REQUESTS.length > RECENT_MAX) RECENT_REQUESTS.splice(0, RECENT_REQUESTS.length - RECENT_MAX);
 }
 
-function checkRotateProxyLog() {
+/**
+ * Retain ops log: drop lines older than PROXY_LOG_MAX_AGE_MS (default 14d),
+ * delete ancient .old sidecars, size-rotate when over PROXY_LOG_MAX_SIZE.
+ * Age prune is throttled on the write path; forceAgePrune=true for startup.
+ */
+function maintainProxyLog(opts) {
   if (!PROXY_LOG_FILE) return;
+  const forceAge = !!(opts && opts.forceAgePrune);
+  const now = Date.now();
+  const dueForAge = forceAge
+    || (now - _lastProxyLogAgePruneAt >= PROXY_LOG_AGE_PRUNE_INTERVAL_MS);
+  if (dueForAge) _lastProxyLogAgePruneAt = now;
   try {
-    const stat = fs.statSync(PROXY_LOG_FILE);
-    if (stat.size > PROXY_LOG_MAX_SIZE) {
-      const old = PROXY_LOG_FILE + '.old';
-      if (fs.existsSync(old)) fs.unlinkSync(old);
-      fs.renameSync(PROXY_LOG_FILE, old);
-    }
-  } catch {}
+    maintainProxyLogFile({
+      filePath: PROXY_LOG_FILE,
+      maxAgeMs: PROXY_LOG_MAX_AGE_MS,
+      maxBytes: PROXY_LOG_MAX_SIZE,
+      nowMs: now,
+      doAgePrune: dueForAge,
+    });
+  } catch { /* best-effort — never break request path for log hygiene */ }
 }
 
 // ── Journal ──────────────────────────────────────────────────────────
@@ -1758,10 +1786,12 @@ function sseWrite(res, event, data) {
 // Only for POST-commitment failures — pre-commitment failures must keep
 // taking the backend-failure path (markBackendFailed + tryFallbackOrFail).
 const RES_TERMINATED = Symbol('cthruCommittedResponseTerminated');
-function terminateCommittedResponse(ctx, res, isSse, logEvent, message) {
+function terminateCommittedResponse(ctx, res, isSse, logEvent, message, meta) {
   if (res[RES_TERMINATED]) return;
   res[RES_TERMINATED] = true;
-  ctxLog(ctx, logEvent, { message });
+  // Optional meta: client_cancelled, backend, agent, tools_in, etc. — forensics only.
+  const payload = Object.assign({ message }, meta && typeof meta === 'object' ? meta : {});
+  ctxLog(ctx, logEvent, payload);
   try {
     if (isSse) {
       sseWrite(res, 'error', { type: 'error', error: { type: 'api_error', message } });
@@ -2277,15 +2307,19 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       wireBody = sanitized;
       if (requestMeta) requestMeta.xaiSanitized = true;
     }
+    const toolsIn = Array.isArray(body.tools) ? body.tools.length : 0;
+    if (requestMeta) requestMeta.toolsIn = toolsIn;
     ctxLog(ctx, 'xai.sanitize_messages', {
       backend: backend.id,
       changed,
       messages_in: Array.isArray(body.messages) ? body.messages.length : 0,
       messages_out: Array.isArray(wireBody.messages) ? wireBody.messages.length : 0,
       has_system: wireBody.system != null,
-      tools_in: Array.isArray(body.tools) ? body.tools.length : 0,
+      tools_in: toolsIn,
       tools_out: Array.isArray(wireBody.tools) ? wireBody.tools.length : 0,
     });
+  } else if (requestMeta && Array.isArray(body && body.tools)) {
+    requestMeta.toolsIn = body.tools.length;
   }
 
   const targetUrl = new URL(backend.url);
@@ -2335,28 +2369,56 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   const up = lib.request(options, upRes => {
     const backendLatencyMs = Date.now() - backendStartedAt;
     ctxLog(ctx, 'backend_response', { backend: backend.id, statusCode: upRes.statusCode });
-    if (shouldFallbackOnStatus(upRes.statusCode) && !res.headersSent) {
-      // Buffer the upstream error body, decode (gzip/br), extract a clean
-      // message — never embed raw compressed bytes (TUI mojibake). Then
-      // attempt fallback; if none fires, surface the sanitized Anthropic error.
+    // Buffer ALL non-2xx bodies so we can log a safe message. 400 was previously
+    // piped without logging (shouldFallbackOnStatus excludes it) — production
+    // forensics for xAI/brand agents could only see statusCode. Still never
+    // fall back on 400 (malformed request would loop).
+    if (upRes.statusCode >= 400 && !res.headersSent) {
       collectStreamBody(upRes).then(async (rawBuf) => {
         const { decoded, message: safeMsg } = formatUpstreamErrorMessage(rawBuf, {
           contentEncoding: upRes.headers && upRes.headers['content-encoding'],
           statusCode: upRes.statusCode,
         });
-        markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, decoded));
-        const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
-          reason: `upstream returned ${upRes.statusCode}`,
+        ctxLog(ctx, 'anthropic.upstream.error', {
+          backend: backend.id,
           statusCode: upRes.statusCode,
-          error: safeMsg.slice(0, 200),
+          message: safeMsg,
+          body_preview: sanitizeErrorMessage(decoded, { cap: 500 }),
+          agent: requestMeta.agent || null,
+          tools_in: requestMeta.toolsIn != null
+            ? requestMeta.toolsIn
+            : (Array.isArray(body && body.tools) ? body.tools.length : 0),
+          xai_sanitized: !!requestMeta.xaiSanitized,
+          xai: isXaiBackend(backend),
         });
-        if (!handled && !res.headersSent) {
-          sendAnthropicError(
-            res,
-            upRes.statusCode,
-            `backend ${backend.id} returned ${upRes.statusCode}: ${safeMsg}`,
-            decoded
-          );
+        if (shouldFallbackOnStatus(upRes.statusCode)) {
+          markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, decoded));
+          const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
+            reason: `upstream returned ${upRes.statusCode}`,
+            statusCode: upRes.statusCode,
+            error: safeMsg.slice(0, 200),
+          });
+          if (!handled && !res.headersSent) {
+            sendAnthropicError(
+              res,
+              upRes.statusCode,
+              `backend ${backend.id} returned ${upRes.statusCode}: ${safeMsg}`,
+              decoded
+            );
+          }
+          return;
+        }
+        // Non-fallback (esp. 400): forward original status + body so clients keep
+        // upstream shape; logs above already captured a safe message/preview.
+        if (!res.headersSent) {
+          const errHeaders = Object.assign({}, upRes.headers);
+          if (requestMeta.capability) {
+            errHeaders['x-c-thru-resolved-via'] = buildResolvedViaJson(requestMeta, effectiveModel);
+          }
+          errHeaders['x-c-thru-served-by'] = effectiveModel || '';
+          errHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
+          res.writeHead(upRes.statusCode, errHeaders);
+          res.end(rawBuf);
         }
       }).catch(async (e) => {
         if (!res.headersSent) {
@@ -2443,7 +2505,17 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
         }
       }
       terminateCommittedResponse(ctx, res, responseIsSse, 'anthropic.upstream.midstream_error',
-        `upstream ${backend.id} failed mid-response: ${e.message}`);
+        `upstream ${backend.id} failed mid-response: ${e.message}`,
+        {
+          backend: backend.id,
+          client_cancelled: !!upstreamCancelled,
+          agent: requestMeta.agent || null,
+          tools_in: requestMeta.toolsIn != null
+            ? requestMeta.toolsIn
+            : (Array.isArray(body && body.tools) ? body.tools.length : 0),
+          stream: !!responseIsSse,
+          xai: isXaiBackend(backend),
+        });
     };
     upRes.on('error', onUpstreamMidstreamFailure);
     upRes.on('aborted', () => onUpstreamMidstreamFailure(new Error('upstream aborted')));
@@ -2543,7 +2615,17 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       // Post-commitment: fallback is impossible (bytes already reached the
       // client) — terminate coherently instead of hanging the response.
       terminateCommittedResponse(ctx, res, responseIsSse, 'anthropic.upstream.midstream_error',
-        `upstream ${backend.id} failed mid-response: ${e.message}`);
+        `upstream ${backend.id} failed mid-response: ${e.message}`,
+        {
+          backend: backend.id,
+          client_cancelled: !!upstreamCancelled,
+          agent: requestMeta.agent || null,
+          tools_in: requestMeta.toolsIn != null
+            ? requestMeta.toolsIn
+            : (Array.isArray(body && body.tools) ? body.tools.length : 0),
+          stream: !!responseIsSse,
+          xai: isXaiBackend(backend),
+        });
       return;
     }
     const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
@@ -5506,13 +5588,15 @@ const server = http.createServer((req, res) => {
           return null;
         };
         // Endpoints whose routes get auto-synthesized claude-via-* aliases.
-        // Default covers cloud-hosted non-Anthropic providers; users can override
-        // via top-level `picker_alias_endpoints` in config. Anthropic-format
-        // endpoints already surface their claude-* IDs natively, so excluded.
+        // Users can override via top-level `picker_alias_endpoints` in config.
+        // Anthropic-format claude-* route IDs surface natively; everything else
+        // needs claude-via-* so Claude Code gateway model discovery (which only
+        // keeps ids starting with claude or anthropic) can list them.
+        // Default: gemini_ai, gemini_vertex, xai. See docs/anthropic-api-coverage.md.
         const aliasEndpoints = new Set(
           Array.isArray(CONFIG.picker_alias_endpoints)
             ? CONFIG.picker_alias_endpoints
-            : ['gemini_ai', 'gemini_vertex']
+            : ['gemini_ai', 'gemini_vertex', 'xai']
         );
         for (const key of Object.keys(routes)) {
           if (key.startsWith('re:')) continue; // regex routes have no canonical id
@@ -5882,6 +5966,9 @@ server.on('error', err => {
   process.exit(1);
 });
 server.listen(INITIAL_PORT, BIND_ADDR, () => {
+  // Age-prune ops log on boot so multi-week files shrink without waiting for
+  // the first size threshold (throttled on the write path thereafter).
+  try { maintainProxyLog({ forceAgePrune: true }); } catch { /* ignore */ }
   process.stdout.write(`READY ${server.address().port}\n`);
   console.error(`c-thru listening on ${BIND_ADDR}:${server.address().port}`);
   // Dashboard URL — host is 127.0.0.1 for any loopback bind (browsers can't

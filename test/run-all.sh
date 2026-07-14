@@ -406,6 +406,8 @@ run_suite "proxy-translation (Anthropic→provider translation)" \
   node "$REPO_DIR/test/proxy-translation.test.js"
 run_suite "anthropic-api-coverage (501 gating + translation-gap header)" \
   node "$REPO_DIR/test/anthropic-api-coverage.test.js"
+run_suite "proxy-gateway-protocol (Claude Code LLM gateway contract pins)" \
+  node "$REPO_DIR/test/proxy-gateway-protocol.test.js"
 run_suite "resolution-coverage (full resolution coverage)" \
   node "$REPO_DIR/test/resolution-coverage.test.js"
 run_suite "proxy-model-pin-routing (model pin + routing)" \
@@ -431,6 +433,10 @@ run_suite "proxy-xai-routing (xAI endpoint, named model pins, auth strip, path)"
   node "$REPO_DIR/test/proxy-xai-routing.test.js"
 run_suite "proxy-xai-sanitize (fold role:system out of messages for xAI)" \
   node "$REPO_DIR/test/proxy-xai-sanitize.test.js"
+run_suite "proxy-xai-upstream-error-log (400 body logged for xAI forensics)" \
+  node "$REPO_DIR/test/proxy-xai-upstream-error-log.test.js"
+run_suite "proxy-log-maintain (age prune + size rotate)" \
+  node "$REPO_DIR/test/proxy-log-maintain.test.js"
 run_suite "proxy-brand-agent-routing (agent name → concrete model + correct API path)" \
   node "$REPO_DIR/test/proxy-brand-agent-routing.test.js"
 # EXCLUDED unless live: proxy-xai-live.test.js — needs C_THRU_LIVE_XAI=1 + XAI_API_KEY

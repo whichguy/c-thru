@@ -39,8 +39,79 @@ catch-all even when a Gemini backend is present).
 | **Anthropic** | `call_style: "anthropic"` (default), `endpoints.anthropic`, OpenRouter, etc. |
 | **Gemini** | `call_style: "gemini"` (Google AI Studio + Vertex). Translated by `forwardGemini`. |
 | **Ollama** | `kind: "ollama"` or `localhost:11434`. Default path is `forwardAnthropic` to Ollama's `/v1/messages` adapter (Ollama 0.4+); `legacy_ollama_chat: true` opts into `forwardOllamaLegacy` (`/api/chat`). |
-| **xAI (Grok)** | `endpoints.xai` — `format: "anthropic"` passthrough to `https://api.x.ai/v1/messages` (legacy Anthropic SDK compat on xAI; prefer verifying tools+SSE with `C_THRU_LIVE_XAI=1`). Auth: `XAI_API_KEY` via `header_env` (never Anthropic client keys). |
-| **OpenAI** | `call_style: "openai"` — currently a hard 501 stub (see Tier 3d). Durable Chat Completions path for Grok if Anthropic compat is dropped. |
+| **xAI (Grok)** | `endpoints.xai` — `format: "anthropic"` passthrough to `https://api.x.ai/v1/messages`. **Upstream status:** xAI documents Anthropic SDK / Messages compatibility as **fully deprecated** (prefer Responses API or gRPC for new clients). c-thru still uses Messages for brand-agent and `best-cloud-gov` Grok cells; the proxy sanitizes known 400 shapes (`sanitizeXaiAnthropicBody`). Non-2xx responses log `anthropic.upstream.error` (safe `message` + `body_preview`, `tools_in`, `xai`); midstream SSE failures log `client_cancelled` on `anthropic.upstream.midstream_error`. **Canary:** `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js` (C1–C5). Auth: `XAI_API_KEY` via `header_env` (never Anthropic client keys). The separate Grok Build CLI (`grok-cc`) does **not** use this path. See `docs/agent-architecture.md` § Grok surfaces. |
+| **OpenAI** | `call_style: "openai"` — currently a hard 501 stub (see Tier 3d). Reserved durable landing zone if Anthropic Messages on xAI is hard-sunset (Chat Completions / Responses translator). |
+
+---
+
+## Claude Code LLM gateway contract
+
+Claude Code over `ANTHROPIC_BASE_URL` is an **Anthropic Messages-format gateway
+client**. The authoritative operator contract is Anthropic’s
+[gateway protocol reference](https://code.claude.com/docs/en/llm-gateway-protocol)
+(plus [connect](https://code.claude.com/docs/en/llm-gateway-connect) /
+[rollout](https://code.claude.com/docs/en/llm-gateway-rollout)). c-thru’s
+`claude-proxy` is that gateway: it also *translates* to Gemini/Ollama and
+sanitizes xAI Messages quirks. The matrix below is the full Anthropic API
+surface; this section marks what is **load-bearing for day-to-day Claude Code**
+vs rare admin / Managed Agents traffic.
+
+### Load-bearing for Claude Code (must stay green)
+
+| Requirement | Official | c-thru | Pins |
+|---|---|---|---|
+| `POST /v1/messages` (+ `?beta=true`) | Required | ✅ all backends above | suite-wide |
+| Stream SSE as bytes arrive (no full-body buffer) | Required | ✅ Anthropic: `upRes.pipe(res)` after headers; Gemini/Ollama: re-encoded Anthropic SSE | `test/proxy-gateway-protocol.test.js` §1; `test/proxy-streaming.test.js` |
+| Forward `anthropic-beta` / `anthropic-version` open-list | Required | ✅ `scrubCthruHeaders` only strips host / content-length / `x-c-thru-*` | `test/proxy-gateway-protocol.test.js` §3 |
+| Forward request body fields unchanged (Anthropic upstream) | Required | ✅ passthrough; translators intentionally rewrite | `tool_reference` pin §4 |
+| Upstream **400** error wording unmodified | Required (CC auto-recovery matches text) | ✅ non-fallback 400: raw body; 5xx may use structured wrapper | `test/proxy-gateway-protocol.test.js` §2 |
+| `POST /v1/messages/count_tokens` | Optional (CC estimates if absent) | ✅ | `test/proxy-count-tokens.test.js` |
+| `GET /v1/models` | Optional discovery | ✅ synthesized from `model_routes` + `claude-via-*` | §5 of gateway-protocol suite |
+| `HEAD /` | Best-effort startup probe | ✅ empty 200 | §5 |
+| Long-lived SSE / stall | Client idle ~5m on gateways (`API_FORCE_IDLE_TIMEOUT`) | Proxy `STREAM_STALL_HARDFAIL_MS` (~5m) + translate-path `event: ping` keepalives | env: `CLAUDE_PROXY_PING_INTERVAL_MS` |
+
+### Model discovery filter (Claude Code client)
+
+When `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, Claude Code calls
+`GET /v1/models?limit=1000` and **keeps only** entries whose `id` starts with
+`claude` or `anthropic`. Non-Claude route keys (e.g. `grok-4.5`, `gemini-*`)
+are ignored unless the proxy synthesizes `claude-via-<key>` aliases.
+
+Default `picker_alias_endpoints`: `gemini_ai`, `gemini_vertex`, **`xai`**.
+Override with a top-level array in `model-map.json`. Normal c-thru sessions
+also inject fleet agents via `--agents` and do not require discovery.
+
+### Client features the proxy cannot re-enable
+
+With a non-first-party `ANTHROPIC_BASE_URL`, Claude Code itself disables or
+defaults-off several features (see env-vars docs). Operators may opt back in:
+
+| Feature | Client default on gateway | Operator note |
+|---|---|---|
+| Remote Control | Off (≥2.1.196) | By design; not a proxy gap |
+| MCP tool search | Off | Set `ENABLE_TOOL_SEARCH=true` if the proxy/upstream forwards `tool_reference` blocks (c-thru Anthropic path does) |
+| Fine-grained tool streaming | Off | `CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=1` |
+| Adaptive thinking | Sent for current Claude models | Anthropic OK; non-Anthropic may 400 → `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1` |
+
+### Proxy-native control plane (not Anthropic)
+
+These URIs are c-thru operator/hooks surfaces, not Claude API:
+
+- `GET /ping`, `HEAD /`
+- `GET /c-thru/status|recent|dashboard`, plan dashboards
+- `POST /c-thru/mode|reload|stats/clear`
+- `POST /hooks/context`
+- Session identity prefix: `/s/<session-id>/…` stripped before dispatch
+
+Response observability: `docs/headers.md` (`x-c-thru-*`).
+
+### Rare / catch-all (Claude Code seldom hits via local proxy)
+
+Batches, Files, Skills, Agents, Sessions (incl. `GET …/stream`), Environments,
+Vaults, OAuth, org/admin, usage reports — see endpoint matrix. Pattern:
+`ANTHROPIC_ONLY_PATHS` → Anthropic catch-all when configured, else structured
+501. Long-lived session SSE skips the catch-all idle timeout when
+`Accept: text/event-stream` is present.
 
 ---
 
@@ -270,7 +341,8 @@ non-loopback) for the full ambient-key safety net.
 End-to-end smoke (manual):
 
 - `node --check tools/claude-proxy` and `bash -n tools/c-thru` pass.
-- `make test` passes (includes `test/anthropic-api-coverage.test.js`).
+- `make test` passes (includes `test/anthropic-api-coverage.test.js` and
+  `test/proxy-gateway-protocol.test.js` for the Claude Code gateway contract pins).
 - With proxy running, `CLAUDE_LLM_MODE=best-local-oss`, **no Anthropic auth**:
   ```
   curl -is localhost:$PORT/v1/messages/batches -d '{}'

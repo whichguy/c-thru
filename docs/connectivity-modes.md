@@ -90,11 +90,14 @@ time and runtime, even if a fallback chain would otherwise reach one.
 
 **Commercial US cloud (not FedRAMP ATO by itself).** Selected capabilities (currently
 `generalist` and `writer` at 32gb+) route to **Grok** (`grok-4.5` via `endpoints.xai`,
-`XAI_API_KEY`) under `best-cloud-gov`. That is a US commercial path (GSA OneGov / xAI for
-Government framing); operators must confirm agency ATO before CUI. High-stakes capabilities
-(`planner-hard`, `reviewer-security`, `coder`, `tester`, `code-reviewer`, …) stay on Claude.
-Named agents `deepseek` / `qwen` / `kimi` pin Chinese-origin models and are unsuitable in
-gov modes — use `grok` or Claude instead.
+`XAI_API_KEY`) under `best-cloud-gov`. That is **Grok surface B** (silent capability pin) —
+the same proxy Anthropic Messages path as the brand leaf (surface A), not the Grok Build CLI
+(surface C). See `docs/agent-architecture.md` § Grok surfaces. It is a US commercial path
+(GSA OneGov / xAI for Government framing); operators must confirm agency ATO before CUI.
+High-stakes capabilities (`planner-hard`, `reviewer-security`, `coder`, `tester`,
+`code-reviewer`, …) stay on Claude. Named agents `deepseek` / `qwen` / `kimi` pin
+Chinese-origin models and are unsuitable in gov modes — use the `grok` brand leaf or Claude
+instead.
 
 ---
 

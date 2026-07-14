@@ -1104,8 +1104,9 @@ async function main() {
     // ── T-models-claude-via. Auto-synthesized claude-via-* aliases for Gemini ──
     // /v1/models synthesizes claude-via-<key> entries for any non-claude-prefixed
     // route whose endpoint is in picker_alias_endpoints (default: gemini_ai,
-    // gemini_vertex). Claude Code's /model picker only displays claude-* IDs,
-    // so without these synthetics Gemini routes would be invisible.
+    // gemini_vertex, xai). Claude Code's /model picker only displays claude-* /
+    // anthropic* IDs from gateway discovery, so without these synthetics Gemini
+    // routes would be invisible.
     console.log('\nT-models-claude-via. /v1/models synthesizes claude-via-<key> aliases for Gemini routes');
     await withProxy({ configPath: phase1Path, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: 'k' } }, async ({ port }) => {
       const r = await httpJson(port, 'GET', '/v1/models');

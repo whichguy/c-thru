@@ -40,10 +40,12 @@ Otherwise, export keys for whichever cloud providers you want to route to. None 
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENROUTER_API_KEY="sk-or-..."
 export GOOGLE_API_KEY="..."               # Gemini AI Studio
-export XAI_API_KEY="xai-..."              # Grok (brand agent: ask agent grok)
+export XAI_API_KEY="xai-..."              # Grok brand leaf + gov generalist/writer cells
 ```
 
 **Brand-name agents** (CLI install / `c-thru` only): say *“ask agent grok …”*, *“ask deepseek …”*, *“use qwen …”*, *“ask kimi …”*, *“use gemini …”*. Definitions live in repo `agents/*.md` and are **runtime-injected** each launch via ephemeral `--agents` JSON — they are **not** installed into Claude’s durable agent store (`~/.claude/agents/`). Plain `claude` without `c-thru` does not load them. Each is a leaf agent whose `model:` pin resolves to that vendor’s concrete model (Grok needs `XAI_API_KEY`). Chinese-origin brands (deepseek/qwen/kimi) are filtered under `best-cloud-gov` / `best-local-gov`.
+
+**Grok has three surfaces** (see [docs/agent-architecture.md § Grok surfaces](docs/agent-architecture.md#grok-surfaces-brand-vs-gov-vs-cli)): (A) the brand leaf above for short opinions via the proxy, (B) silent `best-cloud-gov` routing of `generalist`/`writer` to `grok-4.5` (same proxy path, same `XAI_API_KEY`), and (C) the separate **Grok Build CLI** via the marketplace `grok-cc` plugin (`grok login` and/or `XAI_API_KEY`) for implement/fix/review loops. Do not use the brand leaf for multi-file Grok coding work — use `coder` / Codex, or `grok-cc` when installed.
 
 ---
 

@@ -65,6 +65,34 @@ this fleet.
 `Monitor` are tool calls mapped to `fast-scout` in `agent_to_capability` for observability only —
 they are not agent files and the router does not override their model.
 
+## Grok surfaces (brand vs gov vs CLI)
+
+Grok appears in **three** places. Parents and operators must not treat them as one path.
+
+| Surface | How it is reached | Runtime | Auth | c-thru owns it? |
+|---|---|---|---|---|
+| **A — Brand leaf** `agents/grok` | User says *ask grok / what does Grok think / grok critique* → parent spawns `subagent_type: grok` | Proxy → Anthropic Messages → `api.x.ai/v1/messages` + **Claude Code tools** (full inherit) | `XAI_API_KEY` | Yes |
+| **B — Capability pin** | Mode `best-cloud-gov`, tier ≥ 32gb: `generalist` / `writer` cells → `grok-4.5` | Same proxy path as A | `XAI_API_KEY` | Yes (`llm_profiles`) |
+| **C — Grok Build CLI** | `grok-cc` plugin / `/grok-cc:rescue` / global Claude policy (stuck, review, explicit implement) | Separate `grok -p` process — **not** the c-thru proxy | `grok login` and/or `XAI_API_KEY` | No (marketplace plugin) |
+
+**Install conditions.** Surface A needs the **CLI install** path (`c-thru` injects `--agents`). Marketplace-plugin-only sessions do not load brand agents. Surface C needs the **grok-cc** plugin and a working Grok CLI; it works without c-thru fleet injection. Surfaces A and B share xAI’s **legacy Anthropic Messages** compatibility endpoint (proxy-sanitized); live canary: `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js`. Surface C does not use that path.
+
+### Dispatch ladder (first match wins)
+
+| Priority | Signal | Route |
+|---|---|---|
+| 1 | Explicit Grok implement / fix / multi-step write | **C** CLI (bounded brief), or `coder` / Codex per global policy |
+| 2 | Explicit Grok review / diagnose, no edits | **C** CLI `--read` / `/grok-cc:review` |
+| 3 | *Ask Grok* opinion / critique (no multi-file edit contract) | **A** brand leaf |
+| 4 | Normal Sonnet/Opus/Fable implementation | Codex / native — **not** Grok |
+| 5 | Stuck or Codex path blocked | **C** CLI (report prior failure first) |
+| 6 | Silent `best-cloud-gov` generalist/writer | **B** capability pin |
+| 7 | New app LLM features | xAI Responses API — not brand agent |
+
+**Hard rules.** Brand leaf failures do not prove the CLI works (different auth stacks). Never silent-fallback “as Grok” while answering with Claude. Brand remains a **leaf** (one spawn, no chains). “Not for patches” on the brand leaf is **policy** (description + fleet prompt), not a tool denylist — the subagent still inherits Claude Code tools.
+
+Fleet `--append-system-prompt` tells the parent to spawn brand agents for *ask &lt;name&gt;* opinion asks; multi-file Grok implement/review should not default to the brand leaf. See also `docs/connectivity-modes.md` (gov Grok cells) and `docs/env-vars.md` (`XAI_API_KEY`, live canary).
+
 ## 4-layer resolution
 
 ```

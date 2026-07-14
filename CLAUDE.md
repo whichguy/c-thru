@@ -109,7 +109,7 @@ Some repo files are derived from `config/model-map.json` and `agents/*.md`; see
 - `~/.claude/skills/c-thru/`, `~/.claude/agents/c-thru/` — legacy persistent symlinks; `install.sh`'s `cleanup_old_persistent_config()` actively removes these if present rather than creating them. Skills/agents now reach Claude Code via ephemeral `--agents`/`--settings` JSON injection per `c-thru` launch (see the "Injection layer" table in `docs/functionality-map.md`), not a persistent filesystem symlink.
 - `~/.claude/settings.json` — cleaned on install (old persistent hooks from ~/.claude/tools/ removed); no new global hooks written
 
-Outside `install.sh`'s footprint but part of the repo's own on-disk state: the project-level `.claude/settings.json` carries persistent project hooks (`SessionStart` → `c-thru-session-start.sh` (10s), `PreCompact` → `c-thru-postcompact-context.sh` (5s)) — version-controlled, never touched by `install.sh`. Runtime-only (not written by install): `.prepull-stamp-<tier>` (bulk pre-pull debounce, invalidated on model-map change), `proxy.*.log`, `proxy.pid`. `c-thru-self-update.sh` writes `.c-thru-update.log` inside the repo root only.
+Outside `install.sh`'s footprint but part of the repo's own on-disk state: the project-level `.claude/settings.json` carries persistent project hooks (`SessionStart` → `c-thru-session-start.sh` (10s), `PreCompact` → `c-thru-postcompact-context.sh` (5s)) — version-controlled, never touched by `install.sh`. Runtime-only (not written by install): `.prepull-stamp-<tier>` (bulk pre-pull debounce, invalidated on model-map change), `proxy.log` (ops log under `~/.claude/`; optional `proxy.log.old` after size rotate), `proxy.pid`. `c-thru-self-update.sh` writes `.c-thru-update.log` inside the repo root only.
 
 ## Architecture
 
@@ -215,7 +215,7 @@ storage, and privacy guidance, see `docs/journaling.md`.
 
 ## Proxy Lifecycle
 
-`claude-proxy` is a long-running HTTP server auto-spawned by `c-thru` when the backend needs it. The router coordinates via a `/ping` handshake on a dynamically-selected port. Logs land at `~/.claude/proxy.*.log`. Kill a stuck proxy with `pkill -f claude-proxy`.
+`claude-proxy` is a long-running HTTP server auto-spawned by `c-thru` when the backend needs it. The router coordinates via a `/ping` handshake on a dynamically-selected port. Ops logs land at `~/.claude/proxy.log` (14-day age prune + 10 MiB size rotate into `proxy.log.old`; see `docs/env-vars.md`). Kill a stuck proxy with `pkill -f claude-proxy`.
 
 **After changing proxy JS** (`tools/claude-proxy`, `tools/upstream-error-body.js`, etc.), restart running proxies — Node loads the script once per process, so long-lived sessions keep old interpretation code until `pkill -f claude-proxy` (or a full c-thru exit). Response-body decode rules are documented in `docs/proxy-response-interpretation.md`.
 
@@ -265,7 +265,7 @@ Per-capability `on_failure` field in `llm_profiles[<capability>]` (sibling to th
 
 **Response headers**: see `docs/headers.md` for the full `x-c-thru-*` reference (routing, cache, translation gaps, thinking observability, deprecation warnings). Key callouts:
 - Gemini 3 thinking is auto-enabled on Pro family via the `thinkingLevel` enum (Gemini 2.5 keeps legacy `thinkingBudget`); `output_tokens` includes thinking tokens for Anthropic parity. Streaming surfaces `thoughtsTokenCount` via a custom `c-thru-thinking-tokens` SSE event (since headers can't be set after writeHead); `message_delta.usage` stays spec-compliant.
-- `claude-via-<X>` aliases are auto-synthesized at `/v1/models` for routes whose endpoint is in `picker_alias_endpoints` (default `["gemini_ai", "gemini_vertex"]`). `claude-via-<X>` resolves the same as `<X>` at request time.
+- `claude-via-<X>` aliases are auto-synthesized at `/v1/models` for routes whose endpoint is in `picker_alias_endpoints` (default `["gemini_ai", "gemini_vertex", "xai"]`). `claude-via-<X>` resolves the same as `<X>` at request time. Claude Code gateway model discovery only surfaces IDs starting with `claude` or `anthropic`, so non-Claude backends need these aliases (or an explicit `claude-*` route id) to appear in `/model` when `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`.
 - Deprecated model tags trigger `x-c-thru-deprecated-model` (built-in list covers `gemini-1.x-*` and other retired tags; user `deprecated_models` config extends or overrides — set to `false` to un-deprecate).
 - Endpoint-level `fallback_to: "<model_name>"` triggers transparent retry against another backend on any retryable upstream error (5xx, 429, network errors). The shipped config sets `endpoints.gemini_ai.fallback_to = "claude-sonnet-5"` so coding/debugging requests transparently retry against Sonnet when Gemini fails. Both forwardAnthropic AND forwardGemini honor this — earlier the Gemini path silently dropped HTTP-error fallbacks (fixed in commit ec8ad3b).
 
@@ -372,7 +372,7 @@ tier_budget values are hand-copied from each `agents/*.md` frontmatter — updat
 
 | Agent | Pin target |
 |---|---|
-| `grok` | `grok-4.5` @ `xai` (`XAI_API_KEY`) |
+| `grok` | `grok-4.5` @ `xai` (`XAI_API_KEY`) — opinion/critique leaf only; multi-file Grok implement/review → `coder` or external `grok-cc` CLI (see `docs/agent-architecture.md` § Grok surfaces) |
 | `deepseek` | `deepseek-v4-pro:cloud` |
 | `qwen` | `qwen3.6:35b` |
 | `kimi` | `kimi-k2.7-code:cloud` |

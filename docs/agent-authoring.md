@@ -118,8 +118,11 @@ the shipped brand agents do not deny tools.
 | Omit `tools:` (inherit all) | Restrict brand leaves to Read-only / no tools |
 | Description: “Leaf: parent should spawn once… do not chain” | Expect `model: grok` alone to select xAI without the proxy map |
 | Identity: report actual model; if not the brand, say routing may have failed | Roleplay “You are Grok” as the only control (masks mis-routing) |
+| For `grok` only: scope description to opinion/critique; disambiguate multi-file implement to `coder` | Treat brand Grok as interchangeable with Grok Build CLI (`grok-cc`) |
 
-Fleet `--append-system-prompt` also tells the **parent** to one-shot brand agents.
+Fleet `--append-system-prompt` also tells the **parent** to one-shot brand agents for
+*ask &lt;name&gt;* opinion asks, and to prefer external Grok CLI or `coder` for Grok multi-file
+implement/fix/review. Full ladder: `docs/agent-architecture.md` § Grok surfaces.
 
 ## The rest of the frontmatter
 
