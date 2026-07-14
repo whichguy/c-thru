@@ -177,8 +177,27 @@ async function main() {
       console.log('  SKIP  agents --model grok proxy path (sandbox denied loopback bind)');
     } else {
       assert(result.code === 0, `agents --model grok exits 0 (got ${result.code}; stderr: ${(result.stderr || '').slice(0, 240)})`);
-      assert(JSON.stringify(args) === JSON.stringify(['agents', '--model', 'grok', '--json']),
-        `agents re-inserts --model grok after subcommand (got ${JSON.stringify(args)})`);
+      // Brand proxy path re-inserts --model and may inject minimal SessionStart --settings
+      // (port resurrection only — not full fleet).
+      assert(args[0] === 'agents', `args start with agents (got ${JSON.stringify(args)})`);
+      const modelIdx = args.indexOf('--model');
+      assert(modelIdx > 0 && args[modelIdx + 1] === 'grok',
+        `agents re-inserts --model grok (got ${JSON.stringify(args)})`);
+      assert(args.includes('--json'), `forwards --json (got ${JSON.stringify(args)})`);
+      const settingsIdx = args.indexOf('--settings');
+      if (settingsIdx >= 0) {
+        const settingsRaw = args[settingsIdx + 1] || '';
+        let settingsObj = null;
+        try { settingsObj = JSON.parse(settingsRaw); } catch (_) { /* ignore */ }
+        assert(settingsObj && settingsObj.hooks && settingsObj.hooks.SessionStart,
+          `minimal --settings carries SessionStart (got ${settingsRaw.slice(0, 200)})`);
+        assert(settingsObj.hooks.StopFailure,
+          `minimal brand --settings also carries StopFailure (got ${settingsRaw.slice(0, 200)})`);
+        assert(!settingsObj.hooks.UserPromptSubmit && !settingsObj.hooks.PreCompact,
+          'native brand agents does not inject full fleet hooks');
+        assert(!args.includes('--append-system-prompt') && !args.includes('--agents'),
+          `no fleet --append-system-prompt/--agents (got ${JSON.stringify(args)})`);
+      }
       assert(typeof result.json?.anthropic_base_url === 'string' &&
         /^http:\/\/127\.0\.0\.1:\d+/.test(result.json.anthropic_base_url),
         `agents --model grok sets proxy ANTHROPIC_BASE_URL (got ${JSON.stringify(result.json?.anthropic_base_url)})`);

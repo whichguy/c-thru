@@ -56,8 +56,12 @@ async function main() {
     // ── proxy-health: closed port → warns naming the resolved port ──────────
     {
       const closed = await getFreePort(); // bound then released → nothing listening
+      // C_THRU_NO_RESURRECT: pin warn-only path (UPS may otherwise spawn a real proxy).
       const r = await spawnCapture('bash', [health], {
-        env: hookEnv({ ANTHROPIC_BASE_URL: `http://127.0.0.1:${closed}` }), timeout: 8000,
+        env: hookEnv({
+          ANTHROPIC_BASE_URL: `http://127.0.0.1:${closed}`,
+          C_THRU_NO_RESURRECT: '1',
+        }), timeout: 8000,
       });
       assertEq(r.status, 0, `[${name}] proxy-health exits 0 on a down proxy`);
       assert(r.stderr.includes(`unreachable on :${closed}`),

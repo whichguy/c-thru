@@ -92,6 +92,7 @@ HOOK_SCRIPTS=(
     c-thru-classify
     c-thru-map-changed
     c-thru-stop-hook
+    c-thru-stop-failure-hook
     c-thru-enter-plan-hook
     c-thru-postcompact-context
     c-thru-statusline
@@ -161,7 +162,7 @@ EOF
 
   remaining_fleet=$(jq -r '
     [.hooks // {} | .. | objects | .command? // empty]
-    | map(select(test("c-thru-(session-start|postcompact-context|proxy-health|classify|map-changed|plan-visibility-hook|stop-hook|autonomous-gate|agent-router-hook|enter-plan-hook)")))
+    | map(select(test("c-thru-(session-start|postcompact-context|proxy-health|classify|map-changed|plan-visibility-hook|stop-hook|stop-failure-hook|autonomous-gate|agent-router-hook|enter-plan-hook)")))
     | length
   ' "$SETTINGS" 2>/dev/null || echo "err")
   check "repo/tools fleet hooks stripped by install" "0" "$remaining_fleet"

@@ -104,17 +104,48 @@ proxy_ctx=""
 hook_json=""
 # event=SessionStart → long "when to query" blurb (rare channel). Empty-body
 # POSTs also get long from the proxy; the event makes intent explicit.
-if hook_json=$(curl -sf --max-time 2 -X POST \
-    -H 'Content-Type: application/json' \
-    -d '{"event":"SessionStart"}' \
-    "${BASE_URL:-http://127.0.0.1:$PORT}/hooks/context" 2>/dev/null); then
+_fetch_hooks_context() {
+    curl -sf --max-time 2 -X POST \
+        -H 'Content-Type: application/json' \
+        -d '{"event":"SessionStart"}' \
+        "${BASE_URL:-http://127.0.0.1:$PORT}/hooks/context" 2>/dev/null
+}
+if hook_json=$(_fetch_hooks_context); then
     if command -v jq >/dev/null 2>&1; then
         proxy_ctx=$(printf '%s' "$hook_json" | jq -r '.hookSpecificOutput.additionalContext // ""')
     elif command -v node >/dev/null 2>&1; then
         proxy_ctx=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write((d.hookSpecificOutput&&d.hookSpecificOutput.additionalContext)||'')}catch{}" <<<"$hook_json" 2>/dev/null || true)
     fi
 else
-    issues+=("⚠️ proxy down on :${PORT} — API calls will fail. Fix: pkill -f claude-proxy")
+    # Agent-view reenter / rehydrate: session still has ANTHROPIC_BASE_URL pointing
+    # at a dead port (prior c-thru EXIT killed the proxy). Resurrect on the SAME
+    # port — do not rewrite env (hooks cannot change the parent process).
+    _resurrected=0
+    if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-ensure-proxy-on-port.sh" ]; then
+        # shellcheck source=c-thru-ensure-proxy-on-port.sh
+        . "$ROUTER_REPO_ROOT/tools/c-thru-ensure-proxy-on-port.sh"
+        # Opt-out for tests / emergency: C_THRU_NO_RESURRECT=1
+        if [ "${C_THRU_NO_RESURRECT:-0}" != "1" ] && cthru_ensure_proxy_on_port "$PORT" 2>/dev/null; then
+            _resurrected=1
+        fi
+    fi
+    if [ "$_resurrected" = "1" ] && hook_json=$(_fetch_hooks_context); then
+        if command -v jq >/dev/null 2>&1; then
+            proxy_ctx=$(printf '%s' "$hook_json" | jq -r '.hookSpecificOutput.additionalContext // ""')
+        elif command -v node >/dev/null 2>&1; then
+            proxy_ctx=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write((d.hookSpecificOutput&&d.hookSpecificOutput.additionalContext)||'')}catch{}" <<<"$hook_json" 2>/dev/null || true)
+        fi
+        context_parts_pre_resurrect="(c-thru) proxy resurrected on :${PORT} after connection refused — same ANTHROPIC_BASE_URL, no env rewrite"
+        # Defer into context_parts after array is initialized below via issues path;
+        # stash on proxy_ctx prefix instead so we don't reference unset arrays under set -u.
+        if [ -n "$proxy_ctx" ]; then
+            proxy_ctx="${context_parts_pre_resurrect}"$'\n'"${proxy_ctx}"
+        else
+            proxy_ctx="${context_parts_pre_resurrect}"
+        fi
+    else
+        issues+=("⚠️ proxy down on :${PORT} — API calls will fail (connection refused). Fix: keep cthru running, or re-open \`cthru agents\` so SessionStart can resurrect the proxy on this port.")
+    fi
 fi
 
 # Check 2: Ollama reachability — prefer OLLAMA_URL (set by c-thru binary) else OLLAMA_BASE_URL

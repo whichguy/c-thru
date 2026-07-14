@@ -500,13 +500,14 @@ write_ephemeral_settings() {
     else echo "$tools_dest/$base"; fi
   }
 
-  local session_cmd health_cmd classify_cmd map_changed_cmd plan_visibility_cmd stop_hook_cmd autonomous_gate_cmd statusline_cmd postcompact_cmd planner_hint_cmd agent_router_cmd mcp_js
+  local session_cmd health_cmd classify_cmd map_changed_cmd plan_visibility_cmd stop_hook_cmd stop_failure_cmd autonomous_gate_cmd statusline_cmd postcompact_cmd planner_hint_cmd agent_router_cmd mcp_js
   session_cmd="$(find_tool_path c-thru-session-start)"
   health_cmd="$(find_tool_path c-thru-proxy-health)"
   classify_cmd="$(find_tool_path c-thru-classify)"
   map_changed_cmd="$(find_tool_path c-thru-map-changed)"
   plan_visibility_cmd="$(find_tool_path c-thru-plan-visibility-hook)"
   stop_hook_cmd="$(find_tool_path c-thru-stop-hook)"
+  stop_failure_cmd="$(find_tool_path c-thru-stop-failure-hook)"
   # CLI-only: opt-in via .claude/autonomous-gate.local.json (script no-ops without it).
   # Was project-static Stop; now ephemeral so .claude/settings.json carries no c-thru hooks.
   autonomous_gate_cmd="$(find_tool_path c-thru-autonomous-gate)"
@@ -551,6 +552,7 @@ write_ephemeral_settings() {
   # PostToolUse      ExitPlanMode    c-thru-plan-visibility-hook spool approved plan + open live dashboard
   # Stop              *               c-thru-stop-hook          fallback systemMessage advisory
   # Stop              *               c-thru-autonomous-gate    CLI-only; no-op unless .claude/autonomous-gate.local.json
+  # StopFailure      server_error|…  c-thru-stop-failure-hook  same-port proxy resurrect after API refuse (fire-and-forget)
   # PreToolUse       Agent|WebSearch|c-thru-agent-router-hook  resolve capability for tool calls (log-only for non-Agent)
   #                   WebFetch|Monitor|Plan
   # PreToolUse       EnterPlanMode   c-thru-enter-plan-hook    advisory hint for /c-thru-plan
@@ -562,20 +564,17 @@ write_ephemeral_settings() {
   # Part 1) — registering both would double-inject. The port-gated branch that
   # used to live here existed only to build that HTTP hook's URL, so it's gone.
   #
-  # SessionStart timeout budget = 5s (kept identical to the plugin hooks.json
-  # SessionStart entry so the hook has the same headroom in both launch modes).
-  # The hook self-bounds well under this: a single proxy probe (POST
-  # /hooks/context, curl --max-time 2) + the optional Ollama probe (Check 2,
-  # curl --max-time 3, only when OLLAMA_URL/OLLAMA_BASE_URL is set) + sub-second
-  # local checks (pollution/git/ollama-list). Collapsing the old /ping+/hooks
-  # double-curl into one shaved ~2s off the worst case. Typical wall-time << 1s.
+  # SessionStart timeout budget = 10s (kept identical to the plugin hooks.json
+  # SessionStart entry). Happy path is << 1s (one POST /hooks/context). Budget
+  # also covers port resurrection when /hooks/context fails: ensure-proxy-on-port
+  # (~2s) + one retry of /hooks/context (~2s) + optional Ollama probe.
   # Built via node -e + JSON.stringify (mirrors the EPHEMERAL_AGENTS_JSON
   # construction above) rather than a heredoc with raw path interpolation —
   # a `"` or `\` in a resolved tool path can no longer produce malformed JSON.
   # Paths are passed as argv so node handles all escaping.
   EPHEMERAL_SETTINGS_JSON=$(node -e '
     const fs = require("fs");
-    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, planVisibilityCmd, agentRouterCmd, plannerHintCmd, userSettingsPath, callerSettingsPayloadsJson, stopHookCmd, statuslineCmd, userLocalSettingsPath, autonomousGateCmd] = process.argv.slice(1);
+    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, planVisibilityCmd, agentRouterCmd, plannerHintCmd, userSettingsPath, callerSettingsPayloadsJson, stopHookCmd, stopFailureCmd, statuslineCmd, userLocalSettingsPath, autonomousGateCmd] = process.argv.slice(1);
     const USER_SETTINGS_DENYLIST = new Set([
       // c-thru injects an ephemeral MCP server; a user original would fight it.
       "mcpServers",
@@ -610,6 +609,7 @@ write_ephemeral_settings() {
       "c-thru-map-changed",
       "c-thru-plan-visibility-hook",
       "c-thru-stop-hook",
+      "c-thru-stop-failure-hook",
       "c-thru-autonomous-gate",
       "c-thru-agent-router-hook",
       "c-thru-enter-plan-hook",
@@ -801,13 +801,15 @@ write_ephemeral_settings() {
         "llm-capabilities": { type: "stdio", command: "node", args: [mcpJs] },
       },
       hooks: {
-        SessionStart: [{ matcher: "*", hooks: [cmdHook(sessionCmd, 5)] }],
+        SessionStart: [{ matcher: "*", hooks: [cmdHook(sessionCmd, 10)] }],
         PreCompact: [{ matcher: "*", hooks: [cmdHook(postcompactCmd, 10)] }],
         Stop: [{ matcher: "*", hooks: [
           cmdHook(stopHookCmd, 5),
           // CLI-only: cheap no-op unless .claude/autonomous-gate.local.json exists.
           cmdHook(autonomousGateCmd, 60),
         ] }],
+        // Fire-and-forget: same-port proxy resurrect after transport-ish API errors.
+        StopFailure: [{ matcher: "server_error|unknown", hooks: [cmdHook(stopFailureCmd, 10)] }],
         UserPromptSubmit: [
           { matcher: "*", hooks: [cmdHook(healthCmd, 5, { async: true, asyncRewake: true })] },
           { matcher: "*", hooks: [cmdHook(classifyCmd, 8, { async: true })] },
@@ -872,7 +874,7 @@ write_ephemeral_settings() {
     process.stdout.write(JSON.stringify(callerSettingsPayloadsAreSerialized ? {
       settings, callerSettingsParseable,
     } : settings));
-  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$plan_visibility_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path" "$caller_settings_payloads_json" "$stop_hook_cmd" "$statusline_cmd" "$user_local_settings_path" "$autonomous_gate_cmd") || {
+  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$plan_visibility_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path" "$caller_settings_payloads_json" "$stop_hook_cmd" "$stop_failure_cmd" "$statusline_cmd" "$user_local_settings_path" "$autonomous_gate_cmd") || {
     echo "c-thru: failed to build ephemeral settings JSON" >&2
     exit 1
   }
@@ -1520,15 +1522,82 @@ run_native_claude_subcommand() {
       rebuilt=("$subcmd" "--model" "$route_model" ${FORWARDED_ARGS[@]+"${FORWARDED_ARGS[@]}"})
     fi
     FORWARDED_ARGS=("${rebuilt[@]}")
-    # Loud once: proxy on, no fleet inject (commander). Ops: c-thru list.
+    # Loud once: proxy on, no full fleet inject (commander). Ops: c-thru list.
+    # Session revive: rehydrate existing agent-view jobs onto THIS gateway
+    # (new ANTHROPIC_BASE_URL) via staged CLAUDE_CONFIG_DIR + claude respawn —
+    # not merely resurrecting the old dead port (see c-thru-revive-agent-sessions.sh).
+    # Minimal SessionStart: still heals mid-session dead listener as fallback.
+    # H1: default keep proxy on EXIT for brand agents (workers outlive UI).
+    # Opt out: C_THRU_KEEP_PROXY=0.
+    if [[ -z "${C_THRU_KEEP_PROXY+x}" ]]; then
+      export C_THRU_KEEP_PROXY=1
+    fi
     echo "c-thru: ${subcmd} via proxy model=${route_model} base=${ANTHROPIC_BASE_URL} (no fleet inject) — fleet: main cthru chat; status: c-thru list" >&2
+    if [[ "${C_THRU_NO_SESSION_REVIVE:-0}" != "1" ]]; then
+      local revive_script=""
+      if [[ -f "$CTHRU_SELF_DIR/c-thru-revive-agent-sessions.sh" ]]; then
+        revive_script="$CTHRU_SELF_DIR/c-thru-revive-agent-sessions.sh"
+      fi
+      if [[ -n "$revive_script" ]]; then
+        # Fail-open: never block agent-view launch.
+        bash "$revive_script" || true
+      fi
+    fi
+    local session_cmd native_settings_json a rebuilt2 inserted2
+    session_cmd=""
+    if [[ -x "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-session-start" ]]; then
+      session_cmd="${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-session-start"
+    elif [[ -f "$CTHRU_SELF_DIR/c-thru-session-start.sh" ]]; then
+      session_cmd="$CTHRU_SELF_DIR/c-thru-session-start.sh"
+    fi
+    local stop_fail_cmd=""
+    if [[ -x "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-stop-failure-hook" ]]; then
+      stop_fail_cmd="${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-stop-failure-hook"
+    elif [[ -f "$CTHRU_SELF_DIR/c-thru-stop-failure-hook.sh" ]]; then
+      stop_fail_cmd="$CTHRU_SELF_DIR/c-thru-stop-failure-hook.sh"
+    fi
+    if [[ -n "$session_cmd" && -f "$session_cmd" ]]; then
+      native_settings_json="$(node -e '
+        const sessionCmd = process.argv[1];
+        const stopFailCmd = process.argv[2] || "";
+        const hooks = {
+          SessionStart: [{
+            matcher: "*",
+            hooks: [{ type: "command", command: sessionCmd, timeout: 10 }],
+          }],
+        };
+        if (stopFailCmd) {
+          hooks.StopFailure = [{
+            matcher: "server_error|unknown",
+            hooks: [{ type: "command", command: stopFailCmd, timeout: 10 }],
+          }];
+        }
+        process.stdout.write(JSON.stringify({ hooks }));
+      ' "$session_cmd" "$stop_fail_cmd" 2>/dev/null || true)"
+      if [[ -n "$native_settings_json" ]]; then
+        rebuilt2=()
+        inserted2=0
+        for a in "${FORWARDED_ARGS[@]+"${FORWARDED_ARGS[@]}"}"; do
+          rebuilt2+=("$a")
+          if [[ "$inserted2" -eq 0 && "$a" == "$subcmd" ]]; then
+            rebuilt2+=("--settings" "$native_settings_json")
+            inserted2=1
+          fi
+        done
+        if [[ "$inserted2" -eq 0 ]]; then
+          rebuilt2=("$subcmd" "--settings" "$native_settings_json" ${FORWARDED_ARGS[@]+"${FORWARDED_ARGS[@]}"})
+        fi
+        FORWARDED_ARGS=("${rebuilt2[@]}")
+      fi
+    fi
   elif [[ -n "${STRIPPED_MODEL:-}" ]]; then
     # Non-native model stripped but proxy bypassed / unavailable
     echo "c-thru: stripped --model '${STRIPPED_MODEL}' (not a Claude-native alias; not forwarded to claude ${subcmd})" >&2
     echo "c-thru: for routed models without --bypass-proxy use: cthru --model ${STRIPPED_MODEL}" >&2
   fi
 
-  # Foreground launch so EXIT traps can kill the proxy we may have started.
+  # Foreground launch so EXIT traps can kill the proxy we may have started
+  # (unless other agent-view daemons still reference PROXY_PORT — see cleanup).
   run_real_claude "$REAL_CLAUDE" ${FORWARDED_ARGS[@]+"${FORWARDED_ARGS[@]}"}
   return $?
 }
@@ -2575,6 +2644,54 @@ pid_looks_like_proxy() {
   esac
 }
 
+# True if some other process still has ANTHROPIC_BASE_URL aimed at loopback:$1.
+# Used so EXIT cleanup does not kill a proxy that agent-view daemons still need.
+# Args: port, then optional PIDs to exclude (this shell, claude child, proxy).
+#
+# Note: brand `agents` defaults C_THRU_KEEP_PROXY=1 so peer detect is a
+# secondary signal. We intentionally do NOT keep based on jobs/*.json alone —
+# that left main-chat proxies orphaned whenever any brand job was working.
+proxy_port_referenced_by_peers() {
+  local port="${1:-}"
+  shift || true
+  [[ -n "$port" && "$port" =~ ^[0-9]+$ ]] || return 1
+  local -a exclude=("$@")
+  local pid e skip envline
+  command -v pgrep >/dev/null 2>&1 || return 1
+  command -v ps >/dev/null 2>&1 || return 1
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    pid="$(printf '%s' "$pid" | tr -d ' ')"
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    skip=0
+    for e in "${exclude[@]+"${exclude[@]}"}"; do
+      if [[ "$pid" == "$e" ]]; then skip=1; break; fi
+    done
+    [[ "$skip" -eq 1 || "$pid" == "$$" ]] && continue
+    envline="$(ps eww -p "$pid" 2>/dev/null || true)"
+    [[ -n "$envline" ]] || continue
+    if printf '%s\n' "$envline" | tr ' ' '\n' | grep -qE "^ANTHROPIC_BASE_URL=https?://(127\\.0\\.0\\.1|localhost|\\[::1\\]):${port}(/|$)"; then
+      return 0
+    fi
+  done < <(pgrep -f '[c]laude' 2>/dev/null || true)
+  return 1
+}
+
+# Kill a proxy-like listener on $1 if present (reaps ensure-spawned PIDs that
+# are not PROXY_STARTED_PID). No-op when keep-proxy is active.
+reap_proxy_port_listener() {
+  local port="${1:-}"
+  [[ -n "$port" && "$port" =~ ^[0-9]+$ ]] || return 0
+  command -v lsof >/dev/null 2>&1 || return 0
+  local epid
+  epid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true)"
+  [[ -n "$epid" ]] || return 0
+  if pid_looks_like_proxy "$epid"; then
+    kill "$epid" >/dev/null 2>&1 || true
+    wait "$epid" >/dev/null 2>&1 || true
+  fi
+}
+
 cleanup_proxy_children() {
   local ec="${1:-$?}"
   if [[ -n "${_PROXY_SPIN_PID:-}" ]]; then
@@ -2589,17 +2706,30 @@ cleanup_proxy_children() {
     fi
     CLAUDE_CHILD_PID=""
   fi
-  if [[ -n "${PROXY_STARTED_PID:-}" ]]; then
-    if [[ "${C_THRU_KEEP_PROXY:-0}" == "1" ]]; then
-      if [[ -n "${C_THRU_DEBUG:-}" && "$C_THRU_DEBUG" != "0" ]]; then
-        echo "c-thru: leaving claude-proxy (pid $PROXY_STARTED_PID) running due to C_THRU_KEEP_PROXY=1" >&2
-      fi
-    elif pid_looks_like_proxy "$PROXY_STARTED_PID"; then
+  local keep=0
+  if [[ "${C_THRU_KEEP_PROXY:-0}" == "1" ]]; then
+    keep=1
+    if [[ -n "${C_THRU_DEBUG:-}" && "$C_THRU_DEBUG" != "0" ]]; then
+      echo "c-thru: leaving claude-proxy (pid ${PROXY_STARTED_PID:-?}) running due to C_THRU_KEEP_PROXY=1" >&2
+    fi
+  elif [[ -n "${PROXY_PORT:-}" ]] && \
+       proxy_port_referenced_by_peers "$PROXY_PORT" \
+         "${CLAUDE_CHILD_PID:-}" "$$" "${PROXY_STARTED_PID:-}"; then
+    keep=1
+    echo "c-thru: leaving claude-proxy on :${PROXY_PORT} (pid ${PROXY_STARTED_PID:-?}) — other sessions still reference it" >&2
+  fi
+  if [[ "$keep" -eq 0 ]]; then
+    if [[ -n "${PROXY_STARTED_PID:-}" ]] && pid_looks_like_proxy "$PROXY_STARTED_PID"; then
       kill "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
       wait "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
     fi
-    PROXY_STARTED_PID=""
+    # Ensure/UPS/StopFailure may have spawned a new listener under a different
+    # PID than PROXY_STARTED_PID — reap by port when we own cleanup.
+    if [[ -n "${PROXY_PORT:-}" ]]; then
+      reap_proxy_port_listener "$PROXY_PORT"
+    fi
   fi
+  PROXY_STARTED_PID=""
   # NOTE: do not return "$ec" here.  When this function is called from the
   # EXIT trap ("trap 'cleanup_proxy_children $?' EXIT"), the process exit code
   # is already determined by the shell before the trap fires; a return value

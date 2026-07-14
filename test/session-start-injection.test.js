@@ -161,9 +161,14 @@ async function main() {
     assert(sawSessionStartEvent, 'POST /hooks/context body carries event=SessionStart (long-variant channel)');
 
     // ── B2: proxy down (closed port) → no block, advisory, exit 0 ─────────────
+    // C_THRU_NO_RESURRECT=1 so ensure-proxy cannot spawn a real proxy on the free
+    // port (scratch has no ensure script either; flag pins the advisory path).
     console.log('\nB2. proxy down → no block, proxy-down advisory, hook exits 0');
     const closedProxyPort = await getFreePort();   // bound-then-freed → definitively closed
-    const b2 = await runHook(hookEnv({ ANTHROPIC_BASE_URL: `http://127.0.0.1:${closedProxyPort}` }));
+    const b2 = await runHook(hookEnv({
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${closedProxyPort}`,
+      C_THRU_NO_RESURRECT: '1',
+    }));
     assertEq(b2.status, 0, `hook exits 0 when proxy is down (stderr: ${b2.stderr.slice(0, 200)})`);
     assert(!b2.addl.includes('proxy control plane'), 'no proxy block when proxy is down');
     assert(b2.addl.includes(`proxy down on :${closedProxyPort}`), 'proxy-down advisory present');

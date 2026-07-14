@@ -193,6 +193,14 @@ else
 fi
 run_suite "session-start-seeding (first-run seed + settings registration)" \
   bash "$REPO_DIR/test/session-start-seeding.test.sh"
+run_suite "c-thru-ensure-proxy-on-port (resurrect dead loopback proxy port)" \
+  bash "$REPO_DIR/test/c-thru-ensure-proxy-on-port.test.sh"
+run_suite "c-thru-revive-agent-sessions (rehydrate jobs onto new gateway)" \
+  bash "$REPO_DIR/test/c-thru-revive-agent-sessions.test.sh"
+run_suite "c-thru-stop-failure-hook (same-port ensure after API refuse)" \
+  bash "$REPO_DIR/test/c-thru-stop-failure-hook.test.sh"
+run_suite "c-thru-proxy-keep-alive (EXIT skip kill when peers need port)" \
+  bash "$REPO_DIR/test/c-thru-proxy-keep-alive.test.sh"
 run_suite "c-thru-ephemeral-settings (user preferences + denylist)" \
   bash "$REPO_DIR/test/c-thru-ephemeral-settings.test.sh"
 run_suite "c-thru-strip-args (allowlist strip c-thru flags; keep -p/prompts)" \

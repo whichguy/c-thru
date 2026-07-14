@@ -4,13 +4,19 @@
     "SessionStart": [{
       "matcher": "*",
       "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-session-start.sh", "timeout": 5 }
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-session-start.sh", "timeout": 10 }
       ]
     }],
     "Stop": [{
       "matcher": "*",
       "hooks": [
         { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-stop-hook.sh", "timeout": 5 }
+      ]
+    }],
+    "StopFailure": [{
+      "matcher": "server_error|unknown",
+      "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-stop-failure-hook.sh", "timeout": 10 }
       ]
     }],
     "UserPromptSubmit": [{

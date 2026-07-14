@@ -27,5 +27,16 @@ if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
 fi
 [ -n "$PORT" ] || exit 0
 curl -sf --max-time 2 "http://127.0.0.1:$PORT/ping" >/dev/null 2>&1 && exit 0
-echo "c-thru: proxy unreachable on :${PORT} — run: pkill -f claude-proxy" >&2
+# Preempt: dead listener while the session still freezes ANTHROPIC_BASE_URL on
+# this port. Same-port ensure (not a new port rewrite). Fail-open always.
+# Opt out: C_THRU_NO_RESURRECT=1 (tests / emergency).
+if [ "${C_THRU_NO_RESURRECT:-0}" != "1" ] && \
+   [ -r "$ROUTER_REPO_ROOT/tools/c-thru-ensure-proxy-on-port.sh" ]; then
+  # shellcheck source=c-thru-ensure-proxy-on-port.sh
+  . "$ROUTER_REPO_ROOT/tools/c-thru-ensure-proxy-on-port.sh"
+  if cthru_ensure_proxy_on_port "$PORT" 2>/dev/null; then
+    exit 0
+  fi
+fi
+echo "c-thru: proxy unreachable on :${PORT} — ensure failed; claude-proxy --port ${PORT}" >&2
 exit 0

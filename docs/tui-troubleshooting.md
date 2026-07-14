@@ -87,6 +87,34 @@ Open the dashboard: `open "http://127.0.0.1:PORT/c-thru/dashboard"` (use the por
 | Routes, usage tables, cooldowns | `c-thru list` / `/c-thru-status`, `GET /c-thru/status` |
 | Live HTML | `GET /c-thru/dashboard` |
 
+## Agent view: connection refused after exit / re-enter
+
+**Symptom:** `cthru agents --model grok` works, you **Esc** out, re-open agent view, **reuse an existing session** → connection refused to an old `127.0.0.1:<port>`.
+
+**Cause:** Agent-view workers **freeze gateway env** at spawn. A new `cthru agents` launch starts a **new** proxy on a **new** port; old workers still dial the dead URL. Hooks cannot rewrite the parent process env. Claude also **strips `ANTHROPIC_BASE_URL` from job `providerEnv`** on disk (only `CLAUDE_CONFIG_DIR` is allowlisted), so a plain `claude respawn` does not pick up the shell’s new gateway by itself.
+
+**Gateway survival stack** (best → last resort):
+
+| Layer | When | Behavior |
+|---|---|---|
+| **EXIT keep-alive** | Esc agent-view while workers still need the gateway | Brand `agents` defaults `C_THRU_KEEP_PROXY=1`; also keeps if live `ps` shows another claude process with `ANTHROPIC_BASE_URL` on that port. Does **not** keep based on `jobs/*.json` alone (that orphaned main-chat proxies). Opt out: `C_THRU_KEEP_PROXY=0` |
+| **SessionStart ensure** | New/resumed process | Dead local port → `c-thru-ensure-proxy-on-port` (same port) |
+| **UPS ensure** (`c-thru-proxy-health`) | Each prompt | `/ping` fail → same-port ensure (preempt before next API call) |
+| **StopFailure ensure** | Turn dies on API error (`server_error` / `unknown`) | Same-port ensure (after refuse; fire-and-forget — no auto-retry) |
+| **Session revive** (brand `cthru agents`) | Re-open agents with **new** gateway | Stage `~/.claude/c-thru-agent-gateway/`; **respawn** only dead/wrong-port workers; **patch-only** healthy live workers’ `providerEnv` (no thrash) |
+
+Hooks **cannot** rewrite the parent process’s `ANTHROPIC_BASE_URL`. Same-port heal keeps the frozen URL valid; only revive/respawn (or a fixed `CLAUDE_PROXY_PORT`) delivers a new port.
+
+**Ops checklist:**
+
+1. Re-enter brand work with **`cthru agents --model <brand>`** (revive + proxy).
+2. Stderr: `revived session …` / `resurrected proxy on :PORT`.
+3. Opt out same-port ensure: `C_THRU_NO_RESURRECT=1`. Opt out revive: `C_THRU_NO_SESSION_REVIVE=1`. Revive done jobs: `C_THRU_REVIVE_ALL=1`. Cap respawns: `C_THRU_REVIVE_MAX` (default 20).
+4. Gateway staging never writes real OAuth/API tokens (or profile `*KEY`/`*TOKEN` env) to disk — placeholders like `ollama` only. Same-port ensure refuses non-loopback `ANTHROPIC_BASE_URL`.
+5. Long-term stability: fixed `CLAUDE_PROXY_PORT` so the URL stops changing.
+
+**Not fixed by “telling the model the new port”** — the client dials env/settings; the model never chooses the TCP endpoint.
+
 ## Vendor class (Claude Code)
 
 Claude Code enables terminal mouse tracking. Upstream issues report raw SGR / mouse sequences leaking into the input or display (garbled text on mouse move). That class can appear **without** c-thru. If plain `claude` is also dirty, treat as vendor/terminal first.

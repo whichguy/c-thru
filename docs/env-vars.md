@@ -56,6 +56,13 @@ list: [Claude Code env-vars](https://code.claude.com/docs/en/env-vars). Gateway 
 | `C_THRU_PLAN_PAGE=0` | Disable the PostToolUse/ExitPlanMode plan-visibility hook entirely. |
 | `C_THRU_PLAN_AUTOOPEN=0` | Continue spooling approved plans but never auto-open the local dashboard browser page. |
 | `C_THRU_PLAN_SPOOL` | Override the plan event/snapshot/narrative spool directory (primarily useful for isolated tests). |
+| `C_THRU_KEEP_PROXY=1` | Leave `claude-proxy` running on EXIT (brand `cthru agents` defaults this so agent-view workers keep their gateway). Opt out: `C_THRU_KEEP_PROXY=0`. |
+| `C_THRU_NO_RESURRECT=1` | Disable same-port proxy ensure (SessionStart / UPS health / StopFailure). |
+| `C_THRU_NO_SESSION_REVIVE=1` | Skip brand-agent session revive (`c-thru-revive-agent-sessions.sh`) on `cthru agents`. |
+| `C_THRU_REVIVE_ALL=1` | Also revive jobs in terminal states (`done`/`stopped`/`failed`). Default: only `working`/`blocked`. |
+| `C_THRU_REVIVE_MAX` | Cap `claude respawn` calls per revive run (default `20`). |
+| `C_THRU_REVIVE_DRY_RUN=1` | Log revive candidates without patching state or respawning. |
+| `C_THRU_AGENT_GATEWAY_DIR` | Override staged gateway profile dir (default `~/.claude/c-thru-agent-gateway`). |
 
 ## Ops log location and retention
 
