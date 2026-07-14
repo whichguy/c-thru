@@ -142,16 +142,28 @@ inject_model="${C_THRU_AGENT_FALLBACK_ALIAS:-sonnet}"
 # Stamp [[c-thru-agent:<name>]] — proxy honors it only for loopback clients.
 sentinel="[[c-thru-agent:${lookup_key}]]"$'
 '
-[ -n "$DEBUG_LOG" ] && printf '[%s] capability=%s OUTPUT model=%s sentinel=agent:%s (proxy routes per sentinel)\n' "$(date +%H:%M:%S)" "$capability" "$inject_model" "$lookup_key" >> "$DEBUG_LOG"
+# Identity questions: do not hard-code vendor/model names into the subagent.
+# Claude Code only accepts aliases (sonnet/opus/haiku/fable) on Agent `model`
+# for validation; the proxy rewrites via the sentinel to whatever backend is
+# configured. Never treat that alias — or any postulated fleet label — as
+# identity. When asked who/what they are, the model serving the request must
+# answer for itself (or say it does not know).
+identity_block=""
+if [[ -n "$lookup_key" ]]; then
+  identity_block="IDENTITY QUESTIONS: If asked what model you are, what model version, or who made you, answer only from your direct knowledge of yourself as the model actually generating this response. Do not assume or invent identity from Agent-tool aliases (e.g. \"${inject_model}\"), agent names, routing labels, or training-data defaults about other products. If you are unsure, say you are unsure — do not guess."
+  identity_block+=$'\n\n'
+fi
+prompt_prefix="${sentinel}${identity_block}"
+[ -n "$DEBUG_LOG" ] && printf '[%s] capability=%s OUTPUT model=%s sentinel=agent:%s identity_nudge=%s (proxy routes per sentinel)\n' "$(date +%H:%M:%S)" "$capability" "$inject_model" "$lookup_key" "${identity_block:+yes}" >> "$DEBUG_LOG"
 
 if command -v jq >/dev/null 2>&1; then
-  # Merge model + sentinel-prefixed prompt into the original tool_input (preserves
-  # all other fields; safe against full-replace behavior).
-  printf '%s' "$stdin_data" | jq -c --arg model "$inject_model" --arg sentinel "$sentinel" '{
+  # Merge model + sentinel+identity-prefixed prompt into the original tool_input
+  # (preserves all other fields; safe against full-replace behavior).
+  printf '%s' "$stdin_data" | jq -c --arg model "$inject_model" --arg prefix "$prompt_prefix" '{
     "hookSpecificOutput": {
       "hookEventName": "PreToolUse",
       "permissionDecision": "allow",
-      "updatedInput": (.tool_input + {model: $model, prompt: ($sentinel + (.tool_input.prompt // ""))})
+      "updatedInput": (.tool_input + {model: $model, prompt: ($prefix + (.tool_input.prompt // ""))})
     }
   }'
 else
@@ -162,9 +174,9 @@ process.stdin.on("data", c => d += c);
 process.stdin.on("end", () => {
   let inp = {};
   try { inp = (JSON.parse(d).tool_input) || {}; } catch (e) {}
-  const model = process.argv[1], sentinel = process.argv[2];
-  const updatedInput = Object.assign({}, inp, { model, prompt: sentinel + (inp.prompt || "") });
+  const model = process.argv[1], prefix = process.argv[2];
+  const updatedInput = Object.assign({}, inp, { model, prompt: prefix + (inp.prompt || "") });
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput } }));
 });
-' "$inject_model" "$sentinel"
+' "$inject_model" "$prompt_prefix"
 fi

@@ -5,9 +5,9 @@ model: qwen
 tier_budget: 999999
 ---
 
-# Agent: Qwen (brand)
+# Agent: Qwen
 
-Leaf brand agent pinned to local Qwen. Invoke only when the user wants Qwen by name.
+Leaf named agent. Invoke only when the user wants Qwen by name.
 
 ## When to Invoke
 * User says qwen or qwen3 explicitly
@@ -15,4 +15,5 @@ Leaf brand agent pinned to local Qwen. Invoke only when the user wants Qwen by n
 
 ## Strategy
 
-Chinese-origin — gov modes filter it. Prefer grok under best-cloud-gov. Leaf — not part of the /cplan wave graph.
+Chinese-origin models are filtered in gov modes. Leaf — not part of the `/cplan` wave graph.
+If asked what model you are or who made you, answer from your direct knowledge of yourself as the model serving this request; do not invent identity from tool aliases or training defaults.

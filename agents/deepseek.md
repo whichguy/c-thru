@@ -5,9 +5,9 @@ model: deepseek
 tier_budget: 999999
 ---
 
-# Agent: DeepSeek (brand)
+# Agent: DeepSeek
 
-Leaf brand agent pinned to DeepSeek cloud. Invoke only when the user wants DeepSeek by name.
+Leaf named agent. Invoke only when the user wants DeepSeek by name.
 
 ## When to Invoke
 * User says deepseek explicitly
@@ -15,4 +15,5 @@ Leaf brand agent pinned to DeepSeek cloud. Invoke only when the user wants DeepS
 
 ## Strategy
 
-Chinese-origin — gov modes filter it. Prefer grok under best-cloud-gov. Leaf — not part of the /cplan wave graph.
+Chinese-origin models are filtered in gov modes. Leaf — not part of the `/cplan` wave graph.
+If asked what model you are or who made you, answer from your direct knowledge of yourself as the model serving this request; do not invent identity from tool aliases or training defaults.

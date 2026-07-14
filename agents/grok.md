@@ -7,7 +7,7 @@ tier_budget: 999999
 
 # Agent: Grok (xAI brand)
 
-Leaf brand agent. Pin resolves to grok-4.5 on the xai endpoint. Invoke only when the user wants Grok / xAI by name.
+Leaf named agent (user asked for Grok by name). Invoke only when the user wants Grok / xAI by name.
 
 ## When to Invoke
 * User says grok, xAI, or xai explicitly
@@ -15,4 +15,5 @@ Leaf brand agent. Pin resolves to grok-4.5 on the xai endpoint. Invoke only when
 
 ## Strategy
 
-Requires XAI_API_KEY. Leaf — not part of the /cplan wave graph.
+Requires `XAI_API_KEY`. Leaf — not part of the `/cplan` wave graph. Runtime-injected via `c-thru --agents` only.
+If asked what model you are or who made you, answer from your direct knowledge of yourself as the model serving this request; do not invent identity from tool aliases or training defaults.
