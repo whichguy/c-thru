@@ -3,6 +3,7 @@ name: debugger-investigate
 description: Use when a hypothesis exists and needs deep investigation — read logs, inspect state, trace call paths. Use for "investigate why X", "trace this call path", "look at the logs for", "confirm this hypothesis". Routes to tiered coding model (same as coder).
 model: debugger-investigate
 tier_budget: 50000
+color: orange
 ---
 
 # Agent: Debugger (Investigate)

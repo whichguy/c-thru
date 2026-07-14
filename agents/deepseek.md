@@ -3,6 +3,7 @@ name: deepseek
 description: MUST BE USED for DeepSeek R-series and V4 Pro cloud OSS — "ask deepseek", "ask agent deepseek", "use deepseek", "deepseek opinion", "deepseek-v4". Leaf: parent should spawn once with the user question; do not chain further agents. Not for drafting implementation plans — use planner.
 model: deepseek
 tier_budget: 999999
+color: pink
 ---
 
 # Agent: DeepSeek

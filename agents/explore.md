@@ -3,6 +3,7 @@ name: explore
 description: Use PROACTIVELY to gather context before planning or coding. Fast read-only codebase search — finds files, symbols, patterns, dependencies. Use for "where is X defined", "find all usages of Y", "what files touch Z", "understand this module". Does NOT make changes.
 model: explore
 tier_budget: 10000
+color: cyan
 ---
 Input: `intent`, `recon_path`, `gaps_out`
 Input: `gap_question`, `output_path`

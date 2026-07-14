@@ -3,6 +3,7 @@ name: debugger-hard
 description: Use for bugs that resist normal debugging — concurrency issues, heisenbugs, deep stack corruption, proxy/network-layer failures, or bugs needing multi-file simultaneous reasoning. Use for "this race only happens in prod", "intermittent failure I can't reproduce", "the bug moves when I add logging". Not for first-pass debugging — escalate from debugger-investigate. Hard-fail, no degraded substitute. Routes to Opus cloud always; Kimi K2.6 on best-cloud-oss.
 model: debugger-hard
 tier_budget: 999999
+color: orange
 ---
 
 # Agent: Debugger (Hard)

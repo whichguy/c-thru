@@ -3,6 +3,7 @@ name: code-reviewer
 description: Use PROACTIVELY after coder completes any non-trivial change. Reviews code for correctness, style, missing edge cases, and test coverage. Use for "review this PR", "check this code", "is this correct". Not for security audits — use reviewer-security for those.
 model: code-reviewer
 tier_budget: 50000
+color: blue
 ---
 Input: `current.md`, `INDEX`, `round`, `review_out`
 Input: `intent`, `current.md`, `INDEX`, `journal`, `journal_offset`, `review_out`

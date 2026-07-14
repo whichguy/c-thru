@@ -457,5 +457,56 @@ run_agents_builder
 assert "caller agent collision removes only the ephemeral symlink" test ! -e "$SESSION_DIR/agents/remove-me.md" -a ! -L "$SESSION_DIR/agents/remove-me.md"
 assert "caller agent collision does not modify the symlink target" cmp -s "$REAL_PROFILE_AGENT" "$FIXTURE_DIR/remove-me-before"
 
+echo
+echo "11. Agent color frontmatter parses, normalizes, validates, and rides only the c-thru fleet"
+# Fleet agents live in $CTHRU_REPO_ROOT/agents (= $FIXTURE_DIR/agent-fleet/agents, set by run_agents_builder).
+# Use fresh names so they never collide with the §10 collision/profile fixtures.
+write_color_fixture() {
+  local file="$1" color_line="$2"
+  printf '%s\n' "---" "description: color fixture agent that does useful work for matching" \
+    "model: $file" "tier_budget: 999999" "$color_line" "---" "fixture prompt body" > "$AGENT_FLEET_DIR/$file.md"
+}
+write_color_fixture color-ok       'color: purple'
+write_color_fixture color-mixed    'color: Purple'
+write_color_fixture color-upper    'color: RED'
+write_color_fixture color-bad      'color: teal'
+write_color_fixture color-empty    'color: '
+write_color_fixture color-none     ''
+rm -rf "$SESSION_DIR/agents"; rm -rf "$PROFILE_DIR/agents"; mkdir -p "$PROFILE_DIR/agents"
+NO_AGENTS=0
+RUN_PAYLOADS=()
+COLOR_WARN="$FIXTURE_DIR/color-warn"
+run_agents_builder 2>"$COLOR_WARN"
+assert "color builder exits 0" test "$?" -eq 0
+assert "valid color passes through verbatim (lowercase)" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const a = JSON.parse(process.argv[2]); process.exit(a['color-ok']?.color === 'purple' ? 0 : 1);
+NODE
+assert "mixed-case value is normalized to lowercase (Purple -> purple)" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const a = JSON.parse(process.argv[2]); process.exit(a['color-mixed']?.color === 'purple' ? 0 : 1);
+NODE
+assert "uppercase value is normalized to lowercase (RED -> red)" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const a = JSON.parse(process.argv[2]); process.exit(a['color-upper']?.color === 'red' ? 0 : 1);
+NODE
+assert "invalid color (teal) omits the key" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const a = JSON.parse(process.argv[2]); process.exit(!('color' in (a['color-bad'] || {})) ? 0 : 1);
+NODE
+assert "empty color omits the key" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const a = JSON.parse(process.argv[2]); process.exit(!('color' in (a['color-empty'] || {})) ? 0 : 1);
+NODE
+assert "missing color line omits the key" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const a = JSON.parse(process.argv[2]); process.exit(!('color' in (a['color-none'] || {})) ? 0 : 1);
+NODE
+assert "invalid color emits the pinned stderr warning" grep -q '^c-thru: ignoring invalid agent color "teal" on color-bad (allowed: red|blue|green|yellow|purple|orange|pink|cyan)$' "$COLOR_WARN"
+assert "empty color is treated as invalid and warns with an empty raw value" grep -q '^c-thru: ignoring invalid agent color "" on color-empty (allowed: red|blue|green|yellow|purple|orange|pink|cyan)$' "$COLOR_WARN"
+
+# §4 c-thru-only: NO_AGENTS=1 baseline invents no agents at all (no color, no entries).
+NO_AGENTS=1
+rm -rf "$SESSION_DIR/agents"
+run_agents_builder
+assert "NO_AGENTS=1 baseline builds an empty agent map" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const a = JSON.parse(process.argv[2]); const keys = Object.keys(a);
+process.exit(keys.length === 0 ? 0 : 1);
+NODE
+
 echo "$((PASS + FAIL)) tests: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

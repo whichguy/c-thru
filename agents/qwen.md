@@ -3,6 +3,7 @@ name: qwen
 description: MUST BE USED for Alibaba Qwen3.6 local Ollama weights — "ask qwen", "ask agent qwen", "use qwen", "qwen summarize", "qwen3", "qwen3.6". Leaf: parent should spawn once with the user question; do not chain further agents. Not for security audits — use reviewer-security.
 model: qwen
 tier_budget: 999999
+color: pink
 ---
 
 # Agent: Qwen

@@ -3,6 +3,7 @@ name: planner-hard
 description: Use PROACTIVELY for high-stakes, ambiguous, or cross-system planning where the cost of a wrong plan is high. Prefer over planner when: the task spans >5 files, touches shared infrastructure, requires security or compliance review, or has conflicting requirements. Routes to Fable cloud always; Kimi K2.6 on best-cloud-oss.
 model: planner-hard
 tier_budget: 999999
+color: purple
 ---
 
 # Agent: Planner (Hard Mode)

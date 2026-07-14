@@ -3,6 +3,7 @@ name: writer
 description: Use for long-form prose — documentation, README files, architecture explainers, release notes, API guides. Use for "write the README", "draft release notes", "polish this architecture doc", "turn these notes into prose". Quality and style coherence over speed. Not for code generation — use coder; for quick docs after a change use docs. Routes to claude-opus-4-8 @128gb, claude-sonnet-5 below (connected); qwen3.6:35b local.
 model: writer
 tier_budget: 999999
+color: blue
 ---
 
 # Agent: Writer

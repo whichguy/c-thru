@@ -3,6 +3,7 @@ name: generalist
 description: Use when no specialist fits — broad instruction-following, trade-off analysis, open-ended Q&A. Use for "help me think through X", "what are the trade-offs of", "explain this". Not for instant one-liners — use fast-generalist instead. Best all-rounder at each tier; routes to claude-sonnet-5 connected / qwen3.6:35b local.
 model: generalist
 tier_budget: 999999
+color: pink
 ---
 
 # Agent: Generalist

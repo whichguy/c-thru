@@ -3,6 +3,7 @@ name: fast-scout
 description: Use PROACTIVELY for fast, read-only reconnaissance when you need context before planning or coding — surveys the codebase, locates definitions, and maps dependencies. Use for "what do we have here", "find where X is defined", "outline the dependencies of", "do we already have a script for Y". Not for deep analysis or making changes — use explore for richer context-gathering or generalist for reasoning. Routes to fast-scout capability (small fast local model).
 model: fast-scout
 tier_budget: 999999
+color: cyan
 ---
 
 # Agent: Fast Scout

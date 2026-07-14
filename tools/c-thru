@@ -299,6 +299,7 @@ build_ephemeral_agents() {
         let model = name;
         let tier_budget = 999999;
         let disallowedTools = null;
+        let color = null;
         if (m) {
           const frontmatter = m[1];
           const descMatch = frontmatter.match(/^description:\s*(.*)$/m);
@@ -318,11 +319,29 @@ build_ephemeral_agents() {
               disallowedTools = raw.split(",").map(s => s.trim()).filter(Boolean);
             }
           }
+          // Claude Code --agents accepts a `color` field (case-sensitive key) that paints
+          // the subagent task-list / transcript badge. Value is normalized to lowercase
+          // and validated against the documented enum; invalid values are dropped with a
+          // pinned stderr warning so a typo never breaks the session.
+          const colorMatch = frontmatter.match(/^color:\s*(.*)$/m);
+          if (colorMatch) {
+            const raw = colorMatch[1].trim();
+            const value = raw.toLowerCase();
+            if (/^(red|blue|green|yellow|purple|orange|pink|cyan)$/.test(value)) {
+              color = value;
+            } else {
+              process.stderr.write("c-thru: ignoring invalid agent color \"" + raw + "\" on " + name +
+                " (allowed: red|blue|green|yellow|purple|orange|pink|cyan)\n");
+            }
+          }
           prompt = content.slice(m[0].length).trim();
         }
         const entry = { description, prompt, model, tier_budget };
         if (Array.isArray(disallowedTools) && disallowedTools.length) {
           entry.disallowedTools = disallowedTools;
+        }
+        if (color) {
+          entry.color = color;
         }
         agents[name] = entry;
       });

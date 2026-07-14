@@ -121,8 +121,61 @@ the shipped brand agents do not deny tools.
 
 Fleet `--append-system-prompt` also tells the **parent** to one-shot brand agents.
 
-## Don't touch the rest of the frontmatter
+## The rest of the frontmatter
 
 `name`, `model`, and `tier_budget` are validated by `tools/c-thru-contract-check.sh` and the
 agent→capability tests — leave them exactly as-is when editing a description. Prefer omitting
 `tools` so agents inherit the session toolset.
+
+### `color` — display badge color (load-bearing for the TUI)
+
+Claude Code's `--agents` schema accepts a `color` field that paints the subagent's task-list and
+transcript badge in the terminal (`red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`,
+`cyan`). `tools/c-thru`'s `build_ephemeral_agents` parses `color:` frontmatter and passes it
+through in the injected `--agents` JSON, so each c-thru agent shows up color-coded **only when
+c-thru is running** — the field rides the ephemeral fleet injection and is never written to
+`~/.claude/agents` or `.claude/agents`, so stock Claude Code sessions are untouched.
+
+This is **load-bearing for the TUI**: a `color:` line that lives only in the disk agent file is
+ignored when the JSON entry omits `color` (Claude Code prefers the CLI `--agents` definition over
+the disk file for the same name — a full replace, not a field merge). So the parser step in
+`build_ephemeral_agents` is what makes the frontmatter field actually render; don't assume a
+frontmatter-only edit will color anything.
+
+Conventions:
+
+- The key is **case-sensitive** (`color:`, like every other frontmatter key). The **value** is
+  normalized to lowercase and validated against the enum; an invalid value (e.g. `teal`, empty,
+  garbage) is dropped with a pinned `c-thru: ignoring invalid agent color …` stderr warning and
+  the session continues — a typo never breaks launch.
+- `color` is **not** contract-enforced (`tools/c-thru-contract-check.sh` does not check it). A new
+  agent without `color` simply renders with a plain badge; it does not fail the check. The one-time
+  fleet migration gave every shipped agent a color; future agents are encouraged but not required
+  to follow the family defaults below.
+
+Recommended role-family defaults (a coherent terminal system, not a hard rule):
+
+| Color | Role family | Agents |
+|---|---|---|
+| `purple` | thinking / design | `planner`, `planner-hard` |
+| `cyan` | recon / search | `explore`, `fast-scout`, `long-context` |
+| `green` | build | `coder`, `coder-fallback` |
+| `yellow` | verify / dispatch | `tester`, `plan-scheduler` |
+| `blue` | review / prose | `code-reviewer`, `reviewer-plan`, `docs`, `writer` |
+| `red` | security / xAI brand | `reviewer-security`, `grok` |
+| `orange` | debug / Google brand | `debugger-hypothesis`, `debugger-investigate`, `debugger-hard`, `gemini` |
+| `pink` | specialty / leaf | `vision`, `pdf`, `qwen`, `kimi`, `deepseek`, `edge`, `generalist`, `fast-generalist` |
+
+Brand-pin agents (`grok`, `deepseek`, `qwen`, `kimi`, `gemini`) keep their model pin; `color` is
+purely display. (Skills already use `color: teal`, which is **outside** the agent allowlist — do
+not reuse skill colors for agents.)
+
+### Known limitation: same-basename profile shadow
+
+`build_ephemeral_agents` links profile agents (`~/.claude/agents/<name>.md`) into the ephemeral
+session dir **first**, so a user profile agent with the same basename as a fleet agent wins — and
+the JSON entry is parsed from whatever landed in the session dir. A user `~/.claude/agents/coder.md`
+without `color` therefore yields an uncolored `coder` even after every fleet `color:` edit. c-thru
+does **not** override user profile files. Agents shadowed by a same-basename profile file without
+`color` will render plain. A future enhancement could backfill `color` from the fleet file when a
+profile-sourced entry omits it (without overriding `description`/`prompt`/`model`).

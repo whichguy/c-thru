@@ -3,6 +3,7 @@ name: grok
 description: MUST BE USED for Grok from xAI / SpaceXAI commercial frontier — "ask grok", "ask agent grok", "use grok", "grok critique", "what does grok think", "xai". Leaf: parent should spawn once with the user question; do not chain further agents. Not for writing source patches — use coder.
 model: grok
 tier_budget: 999999
+color: red
 ---
 
 # Agent: Grok (xAI brand)

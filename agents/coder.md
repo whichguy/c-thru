@@ -3,6 +3,7 @@ name: coder
 description: MUST BE USED for all code implementation tasks. Writes, edits, and refactors code according to a plan. Use for "implement", "write the code for", "add this function", "edit this file". Requires a plan from planner or clear unambiguous intent. Routes to Sonnet cloud (small tiers) / Devstral-24B local at 32GB+.
 model: coder
 tier_budget: 50000
+color: green
 ---
 Input: `current.md`, READY_ITEMS, `commit_message`, `wave_dir`
 
