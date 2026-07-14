@@ -12,7 +12,9 @@ const {
   agePruneProxyLogFile,
   unlinkIfOlderThan,
   sizeRotateProxyLogFile,
+  withExclusiveFileLock,
   maintainProxyLogFile,
+  prepareBufferedResponseHeaders,
   DEFAULT_MAX_AGE_MS,
 } = require('../tools/proxy-log-maintain.js');
 
@@ -111,6 +113,52 @@ console.log('\n3. agePruneProxyLogFile + sizeRotate + unlinkIfOlderThan (fs)');
 console.log('\n4. defaults');
 {
   ok(DEFAULT_MAX_AGE_MS === 14 * 24 * 60 * 60 * 1000, 'default max age is 14 days');
+}
+
+console.log('\n5. prepareBufferedResponseHeaders');
+{
+  const h = prepareBufferedResponseHeaders({
+    'Content-Type': 'application/json',
+    'Transfer-Encoding': 'chunked',
+    Connection: 'keep-alive',
+    'Content-Length': '999',
+    'x-request-id': 'abc',
+  }, 42);
+  ok(h['content-length'] === '42', 'sets content-length to body bytes');
+  ok(h['Transfer-Encoding'] == null && h['transfer-encoding'] == null, 'strips transfer-encoding');
+  ok(h.Connection == null && h.connection == null, 'strips connection');
+  ok(h['Content-Type'] === 'application/json', 'keeps content-type');
+  ok(h['x-request-id'] === 'abc', 'keeps custom headers');
+}
+
+console.log('\n6. withExclusiveFileLock + maintain skip when locked');
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-loglock-'));
+  try {
+    const lockPath = path.join(dir, 'proxy.log.lock');
+    fs.writeFileSync(lockPath, '1', { flag: 'wx' });
+    const r = withExclusiveFileLock(lockPath, () => 'ran');
+    ok(r.skipped === true, 'skips when lock held');
+    fs.unlinkSync(lockPath);
+    const r2 = withExclusiveFileLock(lockPath, () => 7);
+    ok(r2.skipped === false && r2.result === 7, 'runs when lock free');
+    ok(!fs.existsSync(lockPath), 'lock released after run');
+
+    // maintain under held lock
+    const logPath = path.join(dir, 'proxy.log');
+    fs.writeFileSync(logPath, '2026-07-14T00:00:00.000Z c-thru [x] {}\n');
+    fs.writeFileSync(logPath + '.lock', 'holder', { flag: 'wx' });
+    const m = maintainProxyLogFile({
+      filePath: logPath,
+      doAgePrune: true,
+      maxAgeMs: 14 * 864e5,
+      maxBytes: 1e9,
+    });
+    ok(m.skipped === true, 'maintain skips when lock held');
+    fs.unlinkSync(logPath + '.lock');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 console.log(failed ? `\nFAILED (${failed})` : '\nAll proxy-log-maintain tests passed');

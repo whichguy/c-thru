@@ -260,6 +260,61 @@ async function main() {
       }
     }
 
+    // ── 2b. buffered 400 strips hop-by-hop (chunked) headers ──────────────
+    console.log('\n2b. non-fallback 400 with Transfer-Encoding: chunked still yields valid body');
+    {
+      const EXACT_MSG = 'chunked-upstream-error-wording-must-survive';
+      const stub = await stubBackend();
+      stub.setHandler((req, res) => {
+        const chunks = [];
+        req.on('data', (c) => chunks.push(c));
+        req.on('end', () => {
+          const err = {
+            type: 'error',
+            error: { type: 'invalid_request_error', message: EXACT_MSG },
+          };
+          const raw = JSON.stringify(err);
+          // Deliberately claim chunked encoding (as some upstreams do) while
+          // also sending a full body — proxy must re-header for buffered reply.
+          res.writeHead(400, {
+            'Content-Type': 'application/json',
+            'Transfer-Encoding': 'chunked',
+            Connection: 'keep-alive',
+          });
+          res.end(raw);
+        });
+        return true;
+      });
+      try {
+        const configPath = writeConfig(tmpDir, anthropicConfig(stub.port));
+        await withProxy({
+          configPath,
+          profile: '128gb',
+          mode: 'best-cloud',
+          env: { CLAUDE_PROXY_SKIP_VALIDATOR: '1' },
+        }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'gw-model',
+            max_tokens: 16,
+            messages: [{ role: 'user', content: '.' }],
+          }, {}, 5000);
+          assertEq(r.status, 400, 'chunked-stub status 400');
+          assert(r.bodyText && r.bodyText.includes(EXACT_MSG),
+            `chunked path keeps exact message (got: ${(r.bodyText || '').slice(0, 200)})`);
+          assertEq(r.json && r.json.error && r.json.error.message, EXACT_MSG,
+            'JSON parseable after hop-by-hop scrub');
+          // Client-visible content-length should match body (Node normalizes header names)
+          const cl = r.headers && (r.headers['content-length'] || r.headers['Content-Length']);
+          if (cl != null) {
+            assertEq(String(cl), String(Buffer.byteLength(r.bodyText)),
+              'content-length matches body bytes');
+          }
+        });
+      } finally {
+        await stub.close().catch(() => {});
+      }
+    }
+
     // ── 3. anthropic-beta open-list forward ───────────────────────────────
     console.log('\n3. novel anthropic-beta + anthropic-version forwarded to upstream');
     {
@@ -404,9 +459,14 @@ async function main() {
           assertEq(r.status, 200, 'claude-via-grok-4.5 → 200');
           assert(stub.requests.length >= 1, 'stub received request');
           const served = r.headers['x-c-thru-served-by'] || '';
-          // Served model should be the concrete route (grok-4.5) not the alias.
-          assert(/grok-4\.5/.test(served) || r.status === 200,
-            `served-by mentions grok-4.5 or request succeeded (served-by=${served})`);
+          // Served model must be the concrete route (grok-4.5), not the alias.
+          // Do NOT weaken with `|| status===200` — that false-greens a wrong served-by.
+          assertEq(served, 'grok-4.5',
+            `x-c-thru-served-by must be concrete grok-4.5 (got ${JSON.stringify(served)})`);
+          const last = stub.requests[stub.requests.length - 1];
+          const wireModel = last && last.body && last.body.model;
+          assertEq(wireModel, 'grok-4.5',
+            `upstream body.model must be rewritten to grok-4.5 (got ${JSON.stringify(wireModel)})`);
         });
       } finally {
         await stub.close().catch(() => {});

@@ -437,6 +437,8 @@ run_suite "proxy-xai-upstream-error-log (400 body logged for xAI forensics)" \
   node "$REPO_DIR/test/proxy-xai-upstream-error-log.test.js"
 run_suite "proxy-log-maintain (age prune + size rotate)" \
   node "$REPO_DIR/test/proxy-log-maintain.test.js"
+run_suite "proxy-log-write-warn (unwritable ops log → stderr warn, proxy stays up)" \
+  node "$REPO_DIR/test/proxy-log-write-warn.test.js"
 run_suite "proxy-brand-agent-routing (agent name → concrete model + correct API path)" \
   node "$REPO_DIR/test/proxy-brand-agent-routing.test.js"
 # EXCLUDED unless live: proxy-xai-live.test.js — needs C_THRU_LIVE_XAI=1 + XAI_API_KEY

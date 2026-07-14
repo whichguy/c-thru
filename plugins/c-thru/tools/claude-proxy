@@ -45,6 +45,7 @@ const {
   DEFAULT_MAX_AGE_MS: PROXY_LOG_DEFAULT_MAX_AGE_MS,
   DEFAULT_MAX_BYTES: PROXY_LOG_DEFAULT_MAX_BYTES,
   maintainProxyLogFile,
+  prepareBufferedResponseHeaders,
 } = require('./proxy-log-maintain.js');
 
 // CLI flag parsing — flags are aliases for env vars, set before any consumers
@@ -408,6 +409,10 @@ function debugLog(event, fields = {}) {
   })}`);
 }
 
+// One-shot stderr warn if ops log becomes unwritable (full disk / EACCES).
+// Avoids silent empty logs that look like "wrong log path" while not spamming.
+let _proxyLogWriteWarned = false;
+
 function proxyLog(event, fields = {}) {
   const line = `${nowIso()} c-thru [${event}] ${JSON.stringify({
     pid: process.pid,
@@ -417,7 +422,16 @@ function proxyLog(event, fields = {}) {
     try {
       fs.appendFileSync(PROXY_LOG_FILE, line);
       maintainProxyLog();
-    } catch {}
+    } catch (e) {
+      if (!_proxyLogWriteWarned) {
+        _proxyLogWriteWarned = true;
+        try {
+          process.stderr.write(
+            `c-thru: proxy log write failed (${PROXY_LOG_FILE}): ${e && e.message ? e.message : e}\n`,
+          );
+        } catch { /* ignore */ }
+      }
+    }
   } else {
     process.stderr.write(line);
   }
@@ -2374,7 +2388,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     // forensics for xAI/brand agents could only see statusCode. Still never
     // fall back on 400 (malformed request would loop).
     if (upRes.statusCode >= 400 && !res.headersSent) {
-      collectStreamBody(upRes).then(async (rawBuf) => {
+      collectStreamBody(upRes).then(async (collected) => {
+        const rawBuf = collected.buffer;
         const { decoded, message: safeMsg } = formatUpstreamErrorMessage(rawBuf, {
           contentEncoding: upRes.headers && upRes.headers['content-encoding'],
           statusCode: upRes.statusCode,
@@ -2390,6 +2405,9 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
             : (Array.isArray(body && body.tools) ? body.tools.length : 0),
           xai_sanitized: !!requestMeta.xaiSanitized,
           xai: isXaiBackend(backend),
+          body_truncated: !!collected.truncated,
+          body_timed_out: !!collected.timedOut,
+          body_bytes: rawBuf.length,
         });
         if (shouldFallbackOnStatus(upRes.statusCode)) {
           markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(upRes.statusCode, decoded));
@@ -2408,10 +2426,12 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
           }
           return;
         }
-        // Non-fallback (esp. 400): forward original status + body so clients keep
-        // upstream shape; logs above already captured a safe message/preview.
+        // Non-fallback (esp. 400): forward status + body so clients keep upstream
+        // wording (Claude Code auto-recovery matches exact text). Body is fully
+        // buffered — always strip hop-by-hop (transfer-encoding: chunked etc.)
+        // and set Content-Length for a valid res.end(buffer) response.
         if (!res.headersSent) {
-          const errHeaders = Object.assign({}, upRes.headers);
+          const errHeaders = prepareBufferedResponseHeaders(upRes.headers, rawBuf.length);
           if (requestMeta.capability) {
             errHeaders['x-c-thru-resolved-via'] = buildResolvedViaJson(requestMeta, effectiveModel);
           }
@@ -2686,7 +2706,8 @@ function buildOllamaRequestBody(body, effectiveModel) {
 // ARCH: 400 is excluded from fallback (shouldFallbackOnStatus guard) so
 //       caller-malformed requests don't loop through the fallback chain.
 function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
-  collectStreamBody(upRes).then(async (rawBuf) => {
+  collectStreamBody(upRes).then(async (collected) => {
+    const rawBuf = collected.buffer;
     const { decoded, message: safeMsg } = formatUpstreamErrorMessage(rawBuf, {
       contentEncoding: upRes.headers && upRes.headers['content-encoding'],
       statusCode: upRes.statusCode,
@@ -3819,7 +3840,8 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
   const up = lib.request(options, (upRes) => {
     const statusCode = upRes.statusCode;
     if (statusCode >= 400) {
-      collectStreamBody(upRes).then(async (rawBuf) => {
+      collectStreamBody(upRes).then(async (collected) => {
+        const rawBuf = collected.buffer;
         const { decoded, message: safeMsg } = formatUpstreamErrorMessage(rawBuf, {
           contentEncoding: upRes.headers && upRes.headers['content-encoding'],
           statusCode,

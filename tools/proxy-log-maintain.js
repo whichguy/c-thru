@@ -136,51 +136,146 @@ function sizeRotateProxyLogFile(filePath, maxBytes, deps) {
 }
 
 /**
+ * Exclusive lock via O_EXCL create. Stale locks (mtime older than staleMs) are
+ * broken so a crashed proxy cannot block maintenance forever.
+ * @param {string} lockPath
+ * @param {() => any} fn
+ * @param {{ nowMs?: number, staleMs?: number, fs?: typeof fs }} [opts]
+ * @returns {{ skipped: boolean, result?: any }}
+ */
+function withExclusiveFileLock(lockPath, fn, opts) {
+  const fsys = (opts && opts.fs) || fs;
+  const nowMs = (opts && opts.nowMs != null) ? opts.nowMs : Date.now();
+  const staleMs = (opts && opts.staleMs != null) ? opts.staleMs : 10_000;
+  const tryCreate = () => {
+    fsys.writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+  };
+  try {
+    tryCreate();
+  } catch (e) {
+    if (!e || e.code !== 'EEXIST') throw e;
+    // Stale?
+    try {
+      const st = fsys.statSync(lockPath);
+      if (nowMs - st.mtimeMs <= staleMs) return { skipped: true };
+      try { fsys.unlinkSync(lockPath); } catch { /* ignore */ }
+      try {
+        tryCreate();
+      } catch (e2) {
+        if (e2 && e2.code === 'EEXIST') return { skipped: true };
+        throw e2;
+      }
+    } catch (e3) {
+      if (e3 && e3.code === 'ENOENT') {
+        try {
+          tryCreate();
+        } catch (e4) {
+          if (e4 && e4.code === 'EEXIST') return { skipped: true };
+          throw e4;
+        }
+      } else {
+        return { skipped: true };
+      }
+    }
+  }
+  try {
+    return { skipped: false, result: fn() };
+  } finally {
+    try { fsys.unlinkSync(lockPath); } catch { /* ignore */ }
+  }
+}
+
+/**
  * Full maintenance pass for the ops log path.
+ * Serialize concurrent maintainers via filePath+".lock" so multi-proxy age
+ * prune/size rotate cannot clobber each other.
  * @param {object} opts
  * @param {string} opts.filePath
  * @param {number} [opts.maxAgeMs]
  * @param {number} [opts.maxBytes]
  * @param {number} [opts.nowMs]
  * @param {boolean} [opts.doAgePrune] — when false, only size-rotate + drop ancient .old by mtime
+ * @param {boolean} [opts.useLock] — default true
  * @param {{ fs?: typeof fs }} [opts.deps]
  */
 function maintainProxyLogFile(opts) {
   const filePath = opts && opts.filePath;
-  if (!filePath) return { agePruned: false, sizeRotated: false, oldDeleted: false };
+  if (!filePath) return { agePruned: false, sizeRotated: false, oldDeleted: false, skipped: false };
   const maxAgeMs = opts.maxAgeMs != null ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
   const maxBytes = opts.maxBytes != null ? opts.maxBytes : DEFAULT_MAX_BYTES;
   const nowMs = opts.nowMs != null ? opts.nowMs : Date.now();
   const doAgePrune = opts.doAgePrune !== false;
+  const useLock = opts.useLock !== false;
   const deps = opts.deps;
 
-  const oldPath = filePath + '.old';
-  let oldDeleted = false;
-  try {
-    oldDeleted = unlinkIfOlderThan(oldPath, maxAgeMs, nowMs, deps);
-  } catch { /* best-effort */ }
-
-  let agePruned = false;
-  if (doAgePrune) {
-    const cutoff = nowMs - maxAgeMs;
+  const run = () => {
+    const oldPath = filePath + '.old';
+    let oldDeleted = false;
     try {
-      const r = agePruneProxyLogFile(filePath, cutoff, deps);
-      agePruned = r.pruned;
+      oldDeleted = unlinkIfOlderThan(oldPath, maxAgeMs, nowMs, deps);
     } catch { /* best-effort */ }
-    // .old may still hold ancient lines if mtime was refreshed by rename — filter too
-    if (!oldDeleted) {
+
+    let agePruned = false;
+    if (doAgePrune) {
+      const cutoff = nowMs - maxAgeMs;
       try {
-        agePruneProxyLogFile(oldPath, cutoff, deps);
-      } catch { /* ENOENT or IO — ignore */ }
+        const r = agePruneProxyLogFile(filePath, cutoff, deps);
+        agePruned = r.pruned;
+      } catch { /* best-effort */ }
+      // .old may still hold ancient lines if mtime was refreshed by rename — filter too
+      if (!oldDeleted) {
+        try {
+          agePruneProxyLogFile(oldPath, cutoff, deps);
+        } catch { /* ENOENT or IO — ignore */ }
+      }
+    }
+
+    let sizeRotated = false;
+    try {
+      sizeRotated = sizeRotateProxyLogFile(filePath, maxBytes, deps);
+    } catch { /* best-effort */ }
+
+    return { agePruned, sizeRotated, oldDeleted, skipped: false };
+  };
+
+  if (!useLock) return run();
+  const locked = withExclusiveFileLock(filePath + '.lock', run, {
+    nowMs,
+    fs: deps && deps.fs,
+  });
+  if (locked.skipped) {
+    return { agePruned: false, sizeRotated: false, oldDeleted: false, skipped: true };
+  }
+  return locked.result;
+}
+
+/**
+ * Headers for a fully-buffered upstream error body. Strip hop-by-hop fields
+ * that conflict with res.end(buffer) and set Content-Length.
+ * Keeps content-encoding (rawBuf may still be gzip).
+ * @param {object|null|undefined} upstreamHeaders
+ * @param {number} bodyByteLength
+ * @returns {object}
+ */
+function prepareBufferedResponseHeaders(upstreamHeaders, bodyByteLength) {
+  const out = {};
+  const drop = new Set([
+    'transfer-encoding',
+    'connection',
+    'keep-alive',
+    'content-length',
+    'trailer',
+    'upgrade',
+    'proxy-connection',
+  ]);
+  if (upstreamHeaders && typeof upstreamHeaders === 'object') {
+    for (const k of Object.keys(upstreamHeaders)) {
+      if (drop.has(k.toLowerCase())) continue;
+      out[k] = upstreamHeaders[k];
     }
   }
-
-  let sizeRotated = false;
-  try {
-    sizeRotated = sizeRotateProxyLogFile(filePath, maxBytes, deps);
-  } catch { /* best-effort */ }
-
-  return { agePruned, sizeRotated, oldDeleted };
+  out['content-length'] = String(bodyByteLength >>> 0);
+  return out;
 }
 
 module.exports = {
@@ -191,5 +286,7 @@ module.exports = {
   agePruneProxyLogFile,
   unlinkIfOlderThan,
   sizeRotateProxyLogFile,
+  withExclusiveFileLock,
   maintainProxyLogFile,
+  prepareBufferedResponseHeaders,
 };
