@@ -442,6 +442,8 @@ console.log('\n29. V3: endpoint URL with unset template var emits warning');
 {
   const savedEnv = process.env.TEST_MISSING_VAR_XYZ;
   delete process.env.TEST_MISSING_VAR_XYZ;
+  // Endpoint must be reachable (mapped from an active-mode profile cell) —
+  // unused optional endpoints no longer warn about template vars.
   const cfg = {
     endpoints: {
       vertex: {
@@ -450,7 +452,8 @@ console.log('\n29. V3: endpoint URL with unset template var emits warning');
         auth_env: 'GOOGLE_CLOUD_TOKEN',
       },
     },
-    model_routes: {},
+    model_routes: { 'vertex-model': 'vertex' },
+    llm_profiles: { workhorse: { 'best-cloud': 'vertex-model' } },
     llm_mode: 'best-cloud',
   };
   const warnMessages = [];
@@ -464,6 +467,125 @@ console.log('\n29. V3: endpoint URL with unset template var emits warning');
     warnMessages.some(m => m.includes('TEST_MISSING_VAR_XYZ') && m.includes('not set')),
     `warning emitted for unset URL template var (got: ${warnMessages[0] || 'none'})`
   );
+}
+
+// ── 29b. Unused endpoint: no Google template / auth env noise ────────────────
+console.log('\n29b. Unmapped Google endpoints suppress GOOGLE_* env notes/warnings');
+{
+  const savedRegion = process.env.GOOGLE_CLOUD_REGION;
+  const savedProject = process.env.GOOGLE_CLOUD_PROJECT;
+  delete process.env.GOOGLE_CLOUD_REGION;
+  delete process.env.GOOGLE_CLOUD_PROJECT;
+  // Active mode fully covered without Gemini. best-cloud still lists Gemini but
+  // must not count as reachable under best-cloud-oss (no mode-cell fallback).
+  // Unmapped gemini_vertex must not spam GOOGLE_CLOUD_*.
+  const cfg = {
+    endpoints: {
+      local: { url: 'http://localhost:11434', format: 'anthropic' },
+      gemini_ai: {
+        format: 'gemini',
+        url: 'https://generativelanguage.googleapis.com',
+      },
+      gemini_vertex: {
+        format: 'gemini',
+        vertex: true,
+        url: 'https://${GOOGLE_CLOUD_REGION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_REGION}/publishers/google/models',
+      },
+    },
+    model_routes: {
+      'local-model': 'local',
+      'gemini-pro-latest': 'gemini_ai',
+    },
+    llm_profiles: {
+      coder: {
+        'best-cloud-oss': 'local-model',
+        'best-cloud': 'gemini-pro-latest',
+      },
+    },
+    llm_mode: 'best-cloud-oss',
+  };
+  const warnMessages = [];
+  const noteMessages = [];
+  const origWarn = console.warn;
+  const origError = console.error;
+  console.warn = msg => warnMessages.push(msg);
+  console.error = msg => noteMessages.push(msg);
+  let errs;
+  try {
+    errs = validate(cfg);
+  } finally {
+    console.warn = origWarn;
+    console.error = origError;
+    if (savedRegion !== undefined) process.env.GOOGLE_CLOUD_REGION = savedRegion;
+    else delete process.env.GOOGLE_CLOUD_REGION;
+    if (savedProject !== undefined) process.env.GOOGLE_CLOUD_PROJECT = savedProject;
+    else delete process.env.GOOGLE_CLOUD_PROJECT;
+  }
+  assert(errs.length === 0, `unmapped Google endpoints → no hard error (got: ${errs.join('; ') || 'none'})`);
+  assert(!warnMessages.some(m => /GOOGLE_CLOUD_/.test(m)),
+    `unmapped gemini_vertex must not warn about GOOGLE_CLOUD_* (got: ${warnMessages.join(' | ') || 'none'})`);
+  assert(!noteMessages.some(m => /GOOGLE_API_KEY/.test(m)),
+    `Gemini only under unused best-cloud must not note GOOGLE_API_KEY (got: ${noteMessages.join(' | ') || 'none'})`);
+}
+
+// ── 29c. Reachable Gemini: Google env diagnostics still fire ─────────────────
+console.log('\n29c. Reachable Gemini endpoint still notes GOOGLE_API_KEY');
+{
+  const cfg = {
+    endpoints: {
+      gemini_ai: {
+        format: 'gemini',
+        url: 'https://generativelanguage.googleapis.com',
+      },
+    },
+    model_routes: { 'gemini-pro-latest': 'gemini_ai' },
+    llm_profiles: { coder: { 'best-cloud': 'gemini-pro-latest' } },
+    llm_mode: 'best-cloud',
+  };
+  const noteMessages = [];
+  const origError = console.error;
+  console.error = msg => noteMessages.push(msg);
+  let errs;
+  try {
+    errs = validate(cfg);
+  } finally {
+    console.error = origError;
+  }
+  assert(errs.length === 0, `reachable gemini_ai → no hard error (got: ${errs.join('; ') || 'none'})`);
+  assert(noteMessages.some(m => m.includes('gemini_ai') && m.includes('GOOGLE_API_KEY')),
+    `reachable gemini_ai emits GOOGLE_API_KEY note (got: ${noteMessages.join(' | ') || 'none'})`);
+}
+
+// ── 29d. Template var dedupe when same var appears twice in URL ──────────────
+console.log('\n29d. Repeated ${VAR} in one URL emits a single warning');
+{
+  const saved = process.env.GOOGLE_CLOUD_REGION;
+  delete process.env.GOOGLE_CLOUD_REGION;
+  const cfg = {
+    endpoints: {
+      vertex: {
+        format: 'gemini',
+        url: 'https://${GOOGLE_CLOUD_REGION}-aiplatform.googleapis.com/locations/${GOOGLE_CLOUD_REGION}/models',
+        auth_env: 'GOOGLE_CLOUD_TOKEN',
+      },
+    },
+    model_routes: { 'v-model': 'vertex' },
+    llm_profiles: { coder: { 'best-cloud': 'v-model' } },
+    llm_mode: 'best-cloud',
+  };
+  const warnMessages = [];
+  const origWarn = console.warn;
+  console.warn = msg => warnMessages.push(msg);
+  try {
+    validate(cfg);
+  } finally {
+    console.warn = origWarn;
+    if (saved !== undefined) process.env.GOOGLE_CLOUD_REGION = saved;
+    else delete process.env.GOOGLE_CLOUD_REGION;
+  }
+  const regionWarns = warnMessages.filter(m => m.includes('GOOGLE_CLOUD_REGION'));
+  assert(regionWarns.length === 1,
+    `duplicate \${GOOGLE_CLOUD_REGION} → exactly 1 warning (got ${regionWarns.length}: ${regionWarns.join(' | ') || 'none'})`);
 }
 
 // ── Auto-derived auth diagnostics ────────────────────────────────────────────
