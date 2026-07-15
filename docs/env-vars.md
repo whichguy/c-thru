@@ -57,12 +57,17 @@ list: [Claude Code env-vars](https://code.claude.com/docs/en/env-vars). Gateway 
 | `C_THRU_PLAN_AUTOOPEN=0` | Continue spooling approved plans but never auto-open the local dashboard browser page. |
 | `C_THRU_PLAN_SPOOL` | Override the plan event/snapshot/narrative spool directory (primarily useful for isolated tests). |
 | `C_THRU_KEEP_PROXY=1` | Leave `claude-proxy` running on EXIT (brand `cthru agents` defaults this so agent-view workers keep their gateway). Opt out: `C_THRU_KEEP_PROXY=0`. |
+| `C_THRU_BRAND_REUSE_GATEWAY_PROXY=0` | Disable reusing the durable gateway’s live proxy port on brand `agents` open (default **reuse** when `/ping` answers). Without reuse every open gets a new dynamic port and thrash-recycles live brand jobs. |
 | `C_THRU_NO_RESURRECT=1` | Disable same-port proxy ensure (SessionStart / UPS health / StopFailure). |
 | `C_THRU_NO_SESSION_REVIVE=1` | Skip brand-agent session revive (`c-thru-revive-agent-sessions.sh`) on `cthru agents`. |
 | `C_THRU_REVIVE_ALL=1` | Also revive jobs in terminal states (`done`/`stopped`/`failed`). Default: only `working`/`blocked`. |
 | `C_THRU_REVIVE_MAX` | Cap `claude respawn` calls per revive run (default `20`). |
 | `C_THRU_REVIVE_DRY_RUN=1` | Log revive candidates without patching state or respawning. |
-| `C_THRU_AGENT_GATEWAY_DIR` | Override staged gateway profile dir (default `~/.claude/c-thru-agent-gateway`). |
+| `C_THRU_AGENT_GATEWAY_DIR` | Override staged gateway profile dir (default `~/.claude/c-thru-agent-gateway`). Shared across brand jobs; `settings.env.ANTHROPIC_BASE_URL` is always **unscoped** (`http://127.0.0.1:<port>`, never `/s/<id>`). |
+| `C_THRU_REVIVE_SKIP_AGENTS_JSON=1` | Skip the budgeted `claude agents --json` live probe (tests / slow CLI). |
+| `C_THRU_CC_DAEMON_DIR` | Override daemon root for rv-sock live detect (default: scan `/tmp/cc-daemon-*`). |
+
+Brand-agent gateway auth: `settings.apiKeyHelper` points at `c-thru-gateway-auth-helper` (install symlink under `~/.claude/tools/`). Claude runs it per request so attach/resume does not depend on a frozen `ANTHROPIC_AUTH_TOKEN=ollama`. The helper never prints placeholders; it prefers process env OAuth, then keychain/`Claude Code-credentials`, then a prior real token in gateway settings.
 
 ## Ops log location and retention
 

@@ -99,42 +99,74 @@ function getActiveContext() {
   return { mode, tier };
 }
 
-// Walk llm_profiles for active mode (+ best-cloud fallback per resolve.js),
-// collect concrete model names, then map each to its endpoint via model_routes.
+// Walk llm_profiles for models that resolveProfileModel would actually select
+// under the active mode, then map each to its endpoint via model_routes.
+//
+// Mode resolution mirrors tools/model-map-resolve.js resolveProfileModel:
+//   active mode → custom_modes[mode].base → best-cloud
+// Only the winning mode cell is marked reachable — unused modes (including a
+// best-cloud cell that is never fallen back to) must not drive env-var notes
+// or template warnings (e.g. GOOGLE_API_KEY / ${GOOGLE_CLOUD_*} when Gemini is
+// only mapped under best-cloud while the session runs best-cloud-oss).
 function computeReachableSets(config, ctx) {
   const reachableCells = new Set();   // "<cap>.<mode>.<tier|*>"
   const reachableEndpoints = new Set();
-  const modes = new Set([ctx.mode]);
-  if (ctx.mode !== 'best-cloud') modes.add('best-cloud');
   const profiles = (config && config.llm_profiles) || {};
   const routes = (config && config.model_routes) || {};
+  const customModes = (config && config.custom_modes) || {};
+  const activeMode = (ctx && ctx.mode) || 'best-cloud';
+  const baseMode = (isObject(customModes[activeMode])
+    && typeof customModes[activeMode].base === 'string')
+    ? customModes[activeMode].base
+    : null;
+
+  function addEndpointForModel(model) {
+    if (typeof model !== 'string' || !model) return;
+    const route = routes[model];
+    let endpoint = null;
+    if (typeof route === 'string') {
+      endpoint = route;
+    } else if (route && typeof route === 'object') {
+      if (typeof route.endpoint === 'string') {
+        endpoint = route.endpoint;
+      } else {
+        // mode-conditional: collect any string-valued mode targets
+        for (const v2 of Object.values(route)) {
+          if (typeof v2 === 'string') reachableEndpoints.add(v2);
+        }
+      }
+    }
+    if (typeof endpoint === 'string') reachableEndpoints.add(endpoint);
+  }
+
   for (const [cap, entry] of Object.entries(profiles)) {
     if (!entry || typeof entry !== 'object') continue;
-    for (const m of modes) {
-      const v = entry[m];
-      if (v == null) continue;
-      const tiers = typeof v === 'string'
-        ? [{ tier: '*', model: v }]
-        : Object.entries(v).map(([t, mdl]) => ({ tier: t, model: mdl }));
-      for (const { tier, model } of tiers) {
-        if (ctx.tier && tier !== '*' && tier !== ctx.tier) continue;
-        reachableCells.add(`${cap}.${m}.${tier}`);
-        const route = routes[model];
-        let endpoint = null;
-        if (typeof route === 'string') {
-          endpoint = route;
-        } else if (route && typeof route === 'object') {
-          if (typeof route.endpoint === 'string') {
-            endpoint = route.endpoint;
-          } else {
-            // mode-conditional: collect any string-valued mode targets
-            for (const v2 of Object.values(route)) {
-              if (typeof v2 === 'string') reachableEndpoints.add(v2);
-            }
-          }
-        }
-        if (typeof endpoint === 'string') reachableEndpoints.add(endpoint);
-      }
+
+    // Pick the mode cell that would win at request time (not a union of modes).
+    let usedMode = activeMode;
+    let modeValue = entry[activeMode];
+    if (modeValue == null && baseMode) {
+      usedMode = baseMode;
+      modeValue = entry[baseMode];
+    }
+    if (modeValue == null) {
+      usedMode = 'best-cloud';
+      modeValue = entry['best-cloud'];
+    }
+    if (modeValue == null) continue;
+
+    if (typeof modeValue === 'string') {
+      reachableCells.add(`${cap}.${usedMode}.*`);
+      addEndpointForModel(modeValue);
+      continue;
+    }
+    if (typeof modeValue !== 'object' || Array.isArray(modeValue)) continue;
+
+    for (const [tier, model] of Object.entries(modeValue)) {
+      if (ctx.tier && tier !== ctx.tier) continue;
+      if (typeof model !== 'string') continue;
+      reachableCells.add(`${cap}.${usedMode}.${tier}`);
+      addEndpointForModel(model);
     }
   }
   return { reachableCells, reachableEndpoints };
@@ -801,14 +833,17 @@ function validateConfig(config, _errors, options) {
         }
       }
       // V3: warn on unresolved URL template variables (e.g. ${GOOGLE_CLOUD_REGION}).
-      // This is a config-correctness check (not a runtime path), so it fires
-      // regardless of endpoint reachability — a malformed URL template is a bug
-      // even if no route currently points at it.
-      if (entry.url) {
+      // Only for endpoints that a live request under the active mode can hit —
+      // unused optional endpoints (shipped gemini_vertex with no mapping) must
+      // not spam about GOOGLE_CLOUD_* when Gemini/Vertex is not in the mappings.
+      if (entry.url && (!reachable || reachable.reachableEndpoints.has(id))) {
         const templateVarRe = /\$\{([^}]+)\}/g;
+        const seenTemplateVars = new Set();
         let m;
         while ((m = templateVarRe.exec(entry.url)) !== null) {
           const varName = m[1];
+          if (seenTemplateVars.has(varName)) continue;
+          seenTemplateVars.add(varName);
           if (!process.env[varName]) {
             warn(`model-map-validate: warning: endpoint '${id}' url references \${${varName}} but ${varName} is not set in the environment — the URL will be malformed at runtime`);
           }

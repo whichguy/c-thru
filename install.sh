@@ -63,7 +63,7 @@ chmod +x "$TOOLS_SRC/c-thru" "$TOOLS_SRC/claude-proxy" "$TOOLS_SRC/llm-capabilit
 chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" "$TOOLS_SRC/c-thru-ollama-probe.sh" "$TOOLS_SRC/c-thru-postcompact-context.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-stop-failure-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TOOLS_SRC/c-thru-statusline-overlay.sh" 2>/dev/null || true
-chmod +x "$TOOLS_SRC/c-thru-ensure-proxy-on-port.sh" "$TOOLS_SRC/c-thru-revive-agent-sessions.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-ensure-proxy-on-port.sh" "$TOOLS_SRC/c-thru-revive-agent-sessions.sh" "$TOOLS_SRC/c-thru-gateway-auth-helper.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" "$TOOLS_SRC/c-thru-hygiene-check.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-resolve.js" "$TOOLS_SRC/c-thru-resolve" 2>/dev/null || true
@@ -129,6 +129,7 @@ link_tool c-thru-stop-hook.sh c-thru-stop-hook
 link_tool c-thru-stop-failure-hook.sh c-thru-stop-failure-hook
 link_tool c-thru-ensure-proxy-on-port.sh c-thru-ensure-proxy-on-port
 link_tool c-thru-revive-agent-sessions.sh c-thru-revive-agent-sessions
+link_tool c-thru-gateway-auth-helper.sh c-thru-gateway-auth-helper
 link_tool c-thru-statusline.sh c-thru-statusline
 link_tool c-thru-statusline-overlay.sh c-thru-statusline-overlay
 link_tool c-thru-ollama-gc.sh c-thru-ollama-gc

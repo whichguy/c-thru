@@ -195,6 +195,10 @@ async function main() {
           `minimal brand --settings also carries StopFailure (got ${settingsRaw.slice(0, 200)})`);
         assert(!settingsObj.hooks.UserPromptSubmit && !settingsObj.hooks.PreCompact,
           'native brand agents does not inject full fleet hooks');
+        // Hook commands must be durable (never under deleted c-thru-session.* shadows).
+        const ssCmd = settingsObj.hooks.SessionStart?.[0]?.hooks?.[0]?.command || '';
+        assert(ssCmd && !ssCmd.includes('c-thru-session.'),
+          `SessionStart command is durable, not ephemeral (got ${ssCmd})`);
         assert(!args.includes('--append-system-prompt') && !args.includes('--agents'),
           `no fleet --append-system-prompt/--agents (got ${JSON.stringify(args)})`);
       }

@@ -87,8 +87,61 @@ if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-lib.sh" ]; then
 fi
 [ -n "$PORT" ] || exit 0  # c-thru not active (or lib unavailable — fail open)
 
-issues=()
+# When this process uses the durable agent gateway as CLAUDE_CONFIG_DIR
+# (brand bg workers / attach-to-existing), refresh gateway settings so
+# apiKeyHelper stays valid. Hooks cannot rewrite parent env; Claude re-runs
+# apiKeyHelper per request (attach/resume path for "Not logged in").
+# Shared gateway BASE_URL is UNSCOPED (no /s/<id>) — one job must not poison all.
+# Fail-open, bounded.
+_cfg_dir="${CLAUDE_CONFIG_DIR:-${CLAUDE_PROFILE_DIR:-}}"
+case "$_cfg_dir" in
+  *c-thru-agent-gateway*)
+    if command -v node >/dev/null 2>&1; then
+      _gw_dir="$_cfg_dir"
+      _helper=""
+      if [ -x "${HOME}/.claude/tools/c-thru-gateway-auth-helper" ]; then
+        _helper="${HOME}/.claude/tools/c-thru-gateway-auth-helper"
+      elif [ -f "$_script_dir/c-thru-gateway-auth-helper.sh" ]; then
+        _helper="$_script_dir/c-thru-gateway-auth-helper.sh"
+      fi
+      # Unscoped — never copy ambient /s/<session-id> into the shared gateway.
+      _base="http://127.0.0.1:${PORT}"
+      node -e '
+        const fs = require("fs");
+        const path = require("path");
+        const settingsPath = path.join(process.argv[1], "settings.json");
+        const base = process.argv[2];
+        const helper = process.argv[3] || "";
+        const placeholders = new Set(["ollama", "unused", "test-token", "proxied-placeholder", ""]);
+        const isReal = (t) => !!(t && !placeholders.has(t) && String(t).length >= 20);
+        let s = {};
+        try { s = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+        if (!s || typeof s !== "object" || Array.isArray(s)) s = {};
+        s.env = (s.env && typeof s.env === "object" && !Array.isArray(s.env)) ? { ...s.env } : {};
+        const prevTok = String(s.env.ANTHROPIC_AUTH_TOKEN || "");
+        // Only rewrite BASE_URL when missing, session-scoped, or different port.
+        const prevBase = String(s.env.ANTHROPIC_BASE_URL || "");
+        const prevScoped = /\/s\//.test(prevBase);
+        const prevPortM = prevBase.match(/:(\d+)(?:\/|$)/);
+        const newPortM = base.match(/:(\d+)(?:\/|$)/);
+        const portDiff = (prevPortM && newPortM) ? prevPortM[1] !== newPortM[1] : true;
+        if (!prevBase || prevScoped || portDiff) {
+          s.env.ANTHROPIC_BASE_URL = base;
+        }
+        // Drop poisoned placeholders; keep a prior real token if present.
+        if (!isReal(prevTok) || placeholders.has(prevTok)) {
+          delete s.env.ANTHROPIC_AUTH_TOKEN;
+        }
+        const amb = process.env.ANTHROPIC_AUTH_TOKEN || "";
+        if (isReal(amb)) s.env.ANTHROPIC_AUTH_TOKEN = amb;
+        if (helper) s.apiKeyHelper = helper;
+        fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2) + "\n");
+      ' "$_gw_dir" "$_base" "$_helper" 2>/dev/null || true
+    fi
+    ;;
+esac
 
+issues=()
 # Check 1: proxy reachability AND the canonical control-plane block in ONE probe.
 # A single POST /hooks/context both proves the proxy is up (curl success) and
 # yields the block (Profile/Mode + endpoint list — the proxy owns it, Part 1, so

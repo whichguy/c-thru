@@ -1503,6 +1503,35 @@ run_native_claude_subcommand() {
       return 1
     }
     inject_subscription_oauth_from_store || true
+    # Brand agents default KEEP_PROXY=1, so prior opens leave a live proxy.
+    # Prefer reusing the durable gateway's port when it still answers /ping —
+    # otherwise every open gets a new dynamic port, restages gateway, and
+    # stop+respawns every live brand job ("recycled session …") for no gain.
+    if [[ -z "${CLAUDE_PROXY_PORT:-}" && "${C_THRU_BRAND_REUSE_GATEWAY_PROXY:-1}" != "0" ]]; then
+      local _gw_settings _gw_base _gw_port
+      _gw_settings="${ORIGINAL_CLAUDE_PROFILE_DIR:-$HOME/.claude}/c-thru-agent-gateway/settings.json"
+      if [[ -n "${C_THRU_AGENT_GATEWAY_DIR:-}" && -f "${C_THRU_AGENT_GATEWAY_DIR}/settings.json" ]]; then
+        _gw_settings="${C_THRU_AGENT_GATEWAY_DIR}/settings.json"
+      fi
+      if [[ -f "$_gw_settings" ]] && command -v node >/dev/null 2>&1; then
+        _gw_base="$(node -e '
+          try {
+            const s = require(process.argv[1]);
+            process.stdout.write((s.env && s.env.ANTHROPIC_BASE_URL) || "");
+          } catch {}
+        ' "$_gw_settings" 2>/dev/null || true)"
+        _gw_port=""
+        if [[ "$_gw_base" =~ ^https?://(127\.0\.0\.1|localhost|\[::1\]):([0-9]+) ]]; then
+          _gw_port="${BASH_REMATCH[2]}"
+        fi
+        if [[ -n "$_gw_port" ]] && curl -sf --max-time 1 "http://127.0.0.1:${_gw_port}/ping" >/dev/null 2>&1; then
+          export CLAUDE_PROXY_PORT="$_gw_port"
+          if [[ -n "${C_THRU_DEBUG:-}" && "${C_THRU_DEBUG}" != "0" ]]; then
+            echo "c-thru: reusing keep-alive gateway proxy on :${_gw_port}" >&2
+          fi
+        fi
+      fi
+    fi
     ensure_proxy_http_base || return 1
     export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
     ensure_proxy_client_api_key
@@ -1543,16 +1572,24 @@ run_native_claude_subcommand() {
         bash "$revive_script" || true
       fi
     fi
-    local session_cmd native_settings_json a rebuilt2 inserted2
+    # Durable hook paths only — never CLAUDE_PROFILE_DIR when it is an
+    # ephemeral c-thru-session.* shadow. Brand workers persist --settings in
+    # job respawnFlags; a temp path dies on EXIT and breaks SessionStart:resume.
+    local session_cmd native_settings_json a rebuilt2 inserted2 durable_tools
+    durable_tools="${ORIGINAL_CLAUDE_PROFILE_DIR:-${HOME:-}/.claude}/tools"
     session_cmd=""
-    if [[ -x "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-session-start" ]]; then
-      session_cmd="${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-session-start"
+    if [[ -x "$durable_tools/c-thru-session-start" ]]; then
+      session_cmd="$durable_tools/c-thru-session-start"
+    elif [[ -x "${HOME:-}/.claude/tools/c-thru-session-start" ]]; then
+      session_cmd="${HOME}/.claude/tools/c-thru-session-start"
     elif [[ -f "$CTHRU_SELF_DIR/c-thru-session-start.sh" ]]; then
       session_cmd="$CTHRU_SELF_DIR/c-thru-session-start.sh"
     fi
     local stop_fail_cmd=""
-    if [[ -x "${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-stop-failure-hook" ]]; then
-      stop_fail_cmd="${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-stop-failure-hook"
+    if [[ -x "$durable_tools/c-thru-stop-failure-hook" ]]; then
+      stop_fail_cmd="$durable_tools/c-thru-stop-failure-hook"
+    elif [[ -x "${HOME:-}/.claude/tools/c-thru-stop-failure-hook" ]]; then
+      stop_fail_cmd="${HOME}/.claude/tools/c-thru-stop-failure-hook"
     elif [[ -f "$CTHRU_SELF_DIR/c-thru-stop-failure-hook.sh" ]]; then
       stop_fail_cmd="$CTHRU_SELF_DIR/c-thru-stop-failure-hook.sh"
     fi

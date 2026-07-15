@@ -97,13 +97,16 @@ async function main() {
       assert(out1.stdout.includes('sonnet'), `shows prompt model (got ${JSON.stringify(out1.stdout)})`);
       assert(out1.stdout.includes('~/proj') || out1.stdout.includes('/Users/me/proj'),
         `shows cwd (got ${JSON.stringify(out1.stdout)})`);
-      assert(out1.stdout.includes('secondary-target') || /secondary/.test(out1.stdout),
-        `shows served/fallback model (got ${JSON.stringify(out1.stdout)})`);
-      assert(/\[fallback\]/.test(out1.stdout), `fallback badge (got ${JSON.stringify(out1.stdout)})`);
+      assert(/\[fallback\]/.test(out1.stdout) && /secondary/.test(out1.stdout),
+        `fallback badge names serving model once (got ${JSON.stringify(out1.stdout)})`);
+      // Newest request is the fallback: do not also print bare "served" twice.
+      const fbHits = (out1.stdout.match(/secondary-target/g) || []).length;
+      assert(fbHits === 1,
+        `served model appears once under fallback (hits=${fbHits}, got ${JSON.stringify(out1.stdout)})`);
       assert(out1.stdout.includes(`dash :${port}/c-thru/dashboard`),
         `plain dash hint (got ${JSON.stringify(out1.stdout)})`);
-      assert(!/\u26A0/.test(out1.stdout) && !/\x1b\]8;/.test(out1.stdout),
-        'no emoji / no OSC-8');
+      assert(!/\u26A0/.test(out1.stdout) && !/\u2026/.test(out1.stdout) && !/\x1b\]8;/.test(out1.stdout),
+        'no emoji / no unicode ellipsis / no OSC-8');
 
       console.log('\n2. C_THRU_STATUSLINE_OVERLAY=0: model|cwd only (no dash/stats)');
       const out2 = runStatusline(scratchHook, homeA, port, 'session-a', {

@@ -69,7 +69,9 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | `llm-capabilities` MCP server injected via `--settings` | — | ✓ |
 | Contributor checks (`c-thru-contract-check`, `c-thru-hygiene-check`) | — | ✓ |
 
-Plugin hooks fire globally in every Claude Code session; the CLI injects the same shared fleet ephemerally on each `c-thru` launch (`install.sh` strips durable c-thru fleet hooks from `~/.claude/settings.json`; project `.claude/settings.json` does not register c-thru hooks).
+Plugin hooks fire globally in every Claude Code session; the CLI injects the same shared fleet ephemerally on each `c-thru` launch (`install.sh` strips durable c-thru fleet hooks from `~/.claude/settings.json`; project `.claude/settings.json` does not register c-thru hooks). Prefer **one** of plugin vs CLI inject — both together can double-fire the same hooks.
+
+TUI garble / input junk under c-thru: see [`docs/tui-troubleshooting.md`](docs/tui-troubleshooting.md).
 
 Plugin users can still drive routing via environment variables — `CLAUDE_LLM_MODE`, `CLAUDE_LLM_PROFILE`, `CLAUDE_LLM_MEMORY_GB`, `CLAUDE_PROXY_BYPASS`, `CLAUDE_PROXY_JOURNAL` all work the same way the CLI flags do. The flags are a CLI convenience, not a capability difference at the proxy layer.
 
