@@ -1453,6 +1453,19 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
       if (nested.error) return nested;
       return { ...nested, logicalRole: nested.logicalRole || model, capability: model, chain };
     }
+    // c-thru --model X: generalist (and bare "generalist") resolve to X so the
+    // map routes.default→generalist path and generalist agents follow the launch
+    // model instead of llm_profiles.generalist.
+    const launchDefault = getLaunchDefaultModel();
+    if (launchDefault
+        && (capAlias === 'generalist' || model === 'generalist')
+        && launchDefault !== 'generalist'
+        && launchDefault !== model) {
+      chain.push(`launch_default(generalist->${launchDefault})`);
+      const nested = resolveBackend(launchDefault, cfg, tier, mode, seen, chain);
+      if (nested.error) return nested;
+      return { ...nested, logicalRole: 'generalist', capability: 'generalist', chain };
+    }
     // New schema: llm_profiles[capability] (capability-outer, not tier-outer).
     // For a custom mode, capabilities it doesn't override resolve under its `base`.
     const entry = (cfg.llm_profiles || {})[capAlias] || null;
@@ -2150,14 +2163,43 @@ async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, fail
   return tryGlobalDefaultFallback(ctx, req, res, body, requestMeta);
 }
 
+// Launch --model override — in-memory only (never a config/stamp file).
+// Seeded from C_THRU_LAUNCH_DEFAULT_MODEL at process start; updated at runtime
+// via POST /c-thru/launch-default when c-thru reuses a keep-alive proxy.
+// Used as routes.default last-resort AND as the generalist capability target.
+let LAUNCH_DEFAULT_MODEL = (() => {
+  const v = (process.env.C_THRU_LAUNCH_DEFAULT_MODEL || '').trim();
+  return v || null;
+})();
+
+function getLaunchDefaultModel() {
+  return LAUNCH_DEFAULT_MODEL;
+}
+
+function setLaunchDefaultModel(model) {
+  if (model == null || model === false) {
+    LAUNCH_DEFAULT_MODEL = null;
+    return null;
+  }
+  const s = String(model).trim();
+  LAUNCH_DEFAULT_MODEL = s || null;
+  return LAUNCH_DEFAULT_MODEL;
+}
+
+// Effective map default: launch --model wins over config routes.default.
+function effectiveMapDefault() {
+  return getLaunchDefaultModel() || (CONFIG.routes && CONFIG.routes.default) || null;
+}
+
 // Tier-3 last-resort: when every per-backend fallback chain has been
 // exhausted (depth, cycle, all cooldown'd terminals failed), try
-// routes.default. Distinct from the per-backend chain because it applies
-// even when the request had no fallback_to declared anywhere — it's the
-// system-wide safety net. Never enters cooldown itself.
+// launch --model (if set) else routes.default. Distinct from the per-backend
+// chain because it applies even when the request had no fallback_to declared
+// anywhere — it's the system-wide safety net. Never enters cooldown itself.
 function tryGlobalDefaultFallback(ctx, req, res, body, requestMeta) {
   if (res.headersSent) return false;
-  const defaultModel = CONFIG.routes && CONFIG.routes.default;
+  const launchDefault = getLaunchDefaultModel();
+  const defaultModel = effectiveMapDefault();
   if (!defaultModel) return false;
   const chain = requestMeta._fallbackChain || (requestMeta._fallbackChain = new Set());
   const resolved = resolveBackend(defaultModel, CONFIG, requestMeta.hwTier, requestMeta.activeMode);
@@ -2178,6 +2220,8 @@ function tryGlobalDefaultFallback(ctx, req, res, body, requestMeta) {
   }
   ctxLog(ctx, 'fallback.global_default', {
     default_model: defaultModel,
+    launch_default: launchDefault || null,
+    source: launchDefault ? 'launch_model' : 'routes.default',
     resolved_backend: resolved.backend.id,
     effective_model: resolved.effectiveModel,
   });
@@ -3075,7 +3119,7 @@ async function handleProbeLlm(req, res) {
   let modelParam = null;
   try { modelParam = new URL(req.url, 'http://x').searchParams.get('model') || null; } catch {}
 
-  const modelName = modelParam || (CONFIG.routes && CONFIG.routes.default) || null;
+  const modelName = modelParam || effectiveMapDefault() || null;
   if (!modelName) {
     return send(res, 400, { ok: false, error: 'no model specified and no default route configured' });
   }
@@ -5448,7 +5492,11 @@ const server = http.createServer((req, res) => {
             expires_in_ms: Math.max(0, until - Date.now()),
           })),
           // Global default-route resolution — ultimate last-resort target.
-          default_route: CONFIG.routes && CONFIG.routes.default ? CONFIG.routes.default : null,
+          // launch_default_model is set when c-thru was started with --model X
+          // (also remaps generalist); default_route is the effective last-resort.
+          default_route: effectiveMapDefault(),
+          map_default_route: CONFIG.routes && CONFIG.routes.default ? CONFIG.routes.default : null,
+          launch_default_model: getLaunchDefaultModel(),
           // C48 — fail-open degrade advisory. true when a reload orphaned the
           // proxy-wide (gov-based) mode and the proxy silently fell back to
           // best-cloud. session_mode_degraded* is scoped to THIS request's
@@ -5483,6 +5531,41 @@ const server = http.createServer((req, res) => {
           buffered: pool.length,
           cap: RECENT_MAX,
           requests: pool.slice(-n).reverse(),  // newest first
+        });
+      }
+
+      // In-memory launch default (c-thru --model X). Not persisted to disk.
+      if (req.method === 'POST' && (req.url === '/c-thru/launch-default' || req.url === '/c-thru/launch-default/')) {
+        if (!controlAuthorized(req, res)) return;  // C23
+        const buf = await readBody(req);
+        let payload = {};
+        if (buf && buf.length) {
+          try { payload = JSON.parse(buf.toString()); } catch (e) {
+            return sendAnthropicError(res, 400, `invalid JSON body: ${e.message}`);
+          }
+        }
+        // model: string sets; null/""/omit with clear:true clears
+        let next;
+        if (payload && Object.prototype.hasOwnProperty.call(payload, 'model')) {
+          next = payload.model;
+        } else if (payload && payload.clear) {
+          next = null;
+        } else {
+          return sendAnthropicError(res, 400, "body must include 'model' (string) or 'clear': true");
+        }
+        if (next != null && typeof next !== 'string') {
+          return sendAnthropicError(res, 400, "'model' must be a string or null");
+        }
+        const applied = setLaunchDefaultModel(next);
+        proxyLog('launch-default', {
+          launch_default_model: applied,
+          source: 'control-channel',
+        });
+        return send(res, 200, {
+          ok: true,
+          launch_default_model: applied,
+          default_route: effectiveMapDefault(),
+          map_default_route: CONFIG.routes && CONFIG.routes.default ? CONFIG.routes.default : null,
         });
       }
 
