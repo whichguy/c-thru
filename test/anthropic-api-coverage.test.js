@@ -290,6 +290,50 @@ async function runTranslationGapHeader() {
   }
 }
 
+async function runOpenAITranslationProbe() {
+  console.log('\n--- OpenAI Responses translation probe ---');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-coverage-openai-'));
+  let stub;
+  try {
+    stub = await stubBackend();
+    stub.setHandler((req, res) => {
+      let raw = '';
+      req.on('data', chunk => { raw += chunk; });
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          id: 'resp_coverage_openai', status: 'completed',
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'openai translated ok' }] }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }));
+      });
+      return true;
+    });
+    const configPath = writeConfig(tmpDir, {
+      endpoints: {
+        openai_stub: {
+          format: 'openai', call_style: 'openai',
+          url: `http://127.0.0.1:${stub.port}`,
+          auth: { header: 'Authorization', scheme: 'Bearer', literal: 'coverage-openai-key' },
+        },
+      },
+      model_routes: { 'openai-test-model': 'openai_stub' },
+    });
+    await withProxy({ configPath }, async ({ port }) => {
+      const r = await httpJson(port, 'POST', '/v1/messages', {
+        model: 'openai-test-model', max_tokens: 16,
+        messages: [{ role: 'user', content: 'hello' }],
+      }, {}, 5000);
+      assertEq(r.status, 200, 'POST /v1/messages → 200 via OpenAI Responses stub (not 501)');
+      assertEq(r.json?.content?.[0]?.text, 'openai translated ok',
+        'OpenAI Responses output is translated to Anthropic message content');
+    });
+  } finally {
+    try { if (stub) await stub.close(); } catch {}
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
 async function runPassthroughDenylist() {
   console.log('\n--- Phase 4: passthrough_denylist gates the catch-all forwarder ---');
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-coverage-deny-'));
@@ -330,6 +374,7 @@ async function runPassthroughDenylist() {
     await runUnauthedGating();
     await runAuthedPassthrough();
     await runTranslationGapHeader();
+    await runOpenAITranslationProbe();
     await runPassthroughDenylist();
   } catch (e) {
     console.error('test threw:', e && e.stack || e);

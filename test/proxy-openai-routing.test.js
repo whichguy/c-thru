@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 'use strict';
-// Pre-wiring routing coverage. The production call_style:"openai" branch and
-// dispatchBackend fallback branch are intentionally deferred to the follow-up
-// wiring task; this suite exercises the direct test hook only.
+// Routing coverage for the real Anthropic-to-OpenAI Responses dispatch path.
 
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
 const { stubBackend, writeConfig, httpJson, withProxy } = require('./helpers');
@@ -16,11 +13,31 @@ function assert(condition, message) {
   if (condition) { console.log(`  PASS  ${message}`); passed++; }
   else { console.error(`  FAIL  ${message}`); failed++; }
 }
-function direct(port, value) { return httpJson(port, 'POST', '/__test/openai-dispatch', value); }
-function packet(stub, body) {
-  return { backend: { id: 'openai_endpoint', url: `http://127.0.0.1:${stub.port}`,
-    format: 'openai', call_style: 'openai', auth: { header: 'Authorization', scheme: 'Bearer', env: 'OPENAI_TEST_KEY' } },
-  model: 'gpt-routing-test', body };
+const OPENAI_MODEL = 'gpt-routing-test';
+const PRIMARY_MODEL = 'primary-routing-test';
+
+function buildConfig(stubPort) {
+  return {
+    endpoints: {
+      openai_endpoint: {
+        url: `http://127.0.0.1:${stubPort}`,
+        format: 'openai', call_style: 'openai',
+        auth: { header: 'Authorization', scheme: 'Bearer', env: 'OPENAI_TEST_KEY' },
+      },
+      failing_primary: {
+        url: 'http://127.0.0.1:1', format: 'anthropic', call_style: 'anthropic',
+        auth: 'none', fallback_to: OPENAI_MODEL,
+      },
+    },
+    model_routes: {
+      [OPENAI_MODEL]: 'openai_endpoint',
+      [PRIMARY_MODEL]: 'failing_primary',
+    },
+  };
+}
+
+function request(body, model = OPENAI_MODEL) {
+  return Object.assign({ model }, body);
 }
 function handler(captured, response) {
   return (req, res) => {
@@ -37,13 +54,13 @@ async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-openai-routing-'));
   const stub = await stubBackend();
   try {
-    const configPath = writeConfig(tmp, { endpoints: { openai_endpoint: { format: 'openai' } } });
-    await withProxy({ configPath, profile: '16gb', env: { C_THRU_TEST_OPENAI_DIRECT: '1', OPENAI_TEST_KEY: 'routing-secret' } }, async ({ port }) => {
+    const configPath = writeConfig(tmp, buildConfig(stub.port));
+    await withProxy({ configPath, profile: '16gb', env: { OPENAI_TEST_KEY: 'routing-secret' } }, async ({ port }) => {
       // 1. Request mapper through dispatchOpenAIBackend ----------------------
       console.log('1. Dispatcher forwards to mapper/forwarder with all request context');
       const captured = {};
       stub.setHandler(handler(captured, { id: 'resp_routing', status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }], usage: { input_tokens: 1, output_tokens: 1 } }));
-      const r = await direct(port, packet(stub, {
+      const r = await httpJson(port, 'POST', '/v1/messages', request({
         system: [{ type: 'text', text: 'route system' }], temperature: 0.4, top_p: 0.8, max_tokens: 44,
         top_k: 10, stop_sequences: ['END'], thinking: { type: 'enabled', budget_tokens: 4096 },
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }, { type: 'tool_result', tool_use_id: 'old', content: 'dropped' }] }],
@@ -65,20 +82,34 @@ async function main() {
       const toolCaptured = {};
       stub.setHandler(handler(toolCaptured, { id: 'resp_tool', status: 'completed',
         output: [{ type: 'function_call', call_id: 'call_route', name: 'schema', arguments: '{"v":1}' }], usage: { input_tokens: 2, output_tokens: 3 } }));
-      const tool = await direct(port, packet(stub, { messages: [{ role: 'user', content: 'call it' }], stream: false }));
+      const tool = await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'call it' }], stream: false }));
       assert(tool.json?.stop_reason === 'tool_use' && tool.json?.content?.[0]?.type === 'tool_use'
         && tool.json?.content?.[0]?.input?.v === 1, 'status mapper inspects function_call output');
       stub.setHandler((req, res) => { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'bad input', type: 'invalid_request_error' } })); return true; });
-      const err = await direct(port, packet(stub, { messages: [{ role: 'user', content: 'bad' }], stream: false }));
+      const err = await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'bad' }], stream: false }));
       assert(err.status === 400 && err.json?.error?.type === 'invalid_request_error', 'extended anthropicErrorType handles OpenAI HTTP envelope');
 
       // 3. Endpoint-shaped auth ----------------------------------------------
       console.log('\n3. endpoints-shaped OpenAI auth uses Bearer token');
       const authCaptured = {};
       stub.setHandler(handler(authCaptured, { id: 'resp_auth', status: 'completed', output: [], usage: { input_tokens: 0, output_tokens: 0 } }));
-      await direct(port, packet(stub, { messages: [{ role: 'user', content: 'auth' }], stream: false }));
+      await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'auth' }], stream: false }));
       assert(authCaptured.value?.store === false && authCaptured.value?.stream === false, 'Responses stateless request fields forwarded');
       assert(stub.lastRequest()?.headers?.authorization === 'Bearer routing-secret', 'Authorization: Bearer key applied');
+
+      // 4. Fallback dispatch preserves the OpenAI call style ----------------
+      console.log('\n4. Anthropic primary fallback re-dispatches to OpenAI Responses');
+      const fallbackCaptured = {};
+      stub.setHandler(handler(fallbackCaptured, { id: 'resp_fallback', status: 'completed',
+        output: [{ type: 'message', content: [{ type: 'output_text', text: 'fallback ok' }] }],
+        usage: { input_tokens: 1, output_tokens: 2 } }));
+      const fallback = await httpJson(port, 'POST', '/v1/messages', request({
+        messages: [{ role: 'user', content: 'use fallback' }], stream: false,
+      }, PRIMARY_MODEL));
+      assert(fallback.status === 200 && fallback.json?.content?.[0]?.text === 'fallback ok',
+        'failed primary retries through OpenAI fallback with translated response');
+      assert(stub.lastRequest()?.path === '/v1/responses' && fallbackCaptured.value?.input?.[0]?.content?.[0]?.text === 'use fallback',
+        'fallback reaches Responses endpoint with translated Anthropic input');
     });
   } finally {
     await stub.close();

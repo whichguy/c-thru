@@ -1023,10 +1023,10 @@ const BACKEND_SIGIL_RE = /^(.*)@([a-zA-Z0-9_-]+)$/;
 //
 // call_style (explicit) vs format (inferred): format describes the wire protocol
 // the endpoint speaks; call_style controls which forwarding function handles the
-// request (anthropic=passthrough, gemini=Anthropic→Gemini translation, openai=501 stub).
+// request (anthropic=passthrough, gemini=Anthropic→Gemini translation, openai=Anthropic→OpenAI translation).
 // When call_style is absent it is inferred from format. Setting call_style explicitly
 // lets operators decouple translation from wire format — e.g. call_style:"openai" on
-// an endpoint with format:"anthropic" documents intent without changing dispatch yet.
+// an endpoint with format:"anthropic" selects OpenAI translation without changing its format.
 const VALID_CALL_STYLES = new Set(['anthropic', 'gemini', 'openai']);
 
 function inferCallStyle(format) {
@@ -1042,10 +1042,6 @@ function normalizeBackend(id, raw) {
   const result = { ...raw, id, format };
   if (result.auth == null && raw.kind === 'ollama' && !hasFormat) {
     result.auth = 'none';
-  }
-  if (format === 'openai' && raw.call_style == null) {
-    console.warn(`[c-thru] endpoint "${id}": format:"openai" is not yet implemented. ` +
-      `Use format:"anthropic" for OpenAI-compat passthrough or route through OpenRouter.`);
   }
   if (result.vertex === true) {
     const region = process.env.GOOGLE_CLOUD_REGION;
@@ -4466,13 +4462,16 @@ function dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, req
 
 // Shared dispatch helper used by fallback paths. Applies the same call_style
 // routing logic as the primary dispatch block so that fallback backends are
-// never silently downgraded to forwardAnthropic when call_style:"gemini".
+// never silently downgraded to forwardAnthropic for translated call styles.
 function dispatchBackend(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   if (isOllamaLegacy(backend)) {
     return dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
   }
   if (backend.call_style === 'gemini') {
     return dispatchGeminiBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
+  }
+  if (backend.call_style === 'openai') {
+    return dispatchOpenAIBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
   }
   return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
 }
@@ -5920,26 +5919,6 @@ const server = http.createServer((req, res) => {
         return res.end();
       }
 
-      // TEST-ONLY hook, inert unless explicitly enabled. It lets the offline
-      // OpenAI translation suites exercise the real HTTP/SSE forwarder before
-      // the production /v1/messages call_style:"openai" dispatch is flipped.
-      if (process.env.C_THRU_TEST_OPENAI_DIRECT === '1'
-          && req.method === 'POST' && req.url === '/__test/openai-dispatch') {
-        const buf = await readBody(req);
-        let testReq;
-        try { testReq = JSON.parse(buf.toString()); }
-        catch (e) { return sendAnthropicError(res, 400, `invalid JSON: ${e.message}`); }
-        if (!testReq || !testReq.backend || !testReq.body) {
-          return sendAnthropicError(res, 400, 'test OpenAI dispatch requires backend and body');
-        }
-        // The count_tokens test supplies the original Anthropic path so the
-        // forwarder can exercise its normal early short-circuit.
-        if (typeof testReq.requestUrl === 'string') req.url = testReq.requestUrl;
-        const requestMeta = {};
-        return dispatchOpenAIBackend(ctx, req, res, testReq.body, testReq.backend,
-          testReq.model || testReq.body.model, requestMeta);
-      }
-
       if (req.method === 'POST' && (req.url === '/c-thru/stats/clear' || req.url === '/c-thru/stats/clear/')) {
         if (!controlAuthorized(req, res)) return;  // C23
         const clearedAt = new Date().toISOString();
@@ -6603,17 +6582,7 @@ const server = http.createServer((req, res) => {
           return dispatchGeminiBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
         if (backend.call_style === 'openai') {
-          return sendAnthropicError(res, 501,
-            'call_style:"openai" (Anthropic→OpenAI translation) not yet implemented. ' +
-            'Translation requires mapping: (1) request `tools[]` shape (Anthropic ' +
-            '`{name,description,input_schema}` → OpenAI `{type:"function", function:{...}}`), ' +
-            '(2) `tool_use` / `tool_result` content blocks → OpenAI `tool_calls` / role:"tool" ' +
-            'messages, (3) streaming event vocabulary (Anthropic SSE event types → OpenAI ' +
-            '`chat.completion.chunk` deltas), and (4) finish-reason vocabulary (`end_turn` ' +
-            '/ `tool_use` / `max_tokens` ↔ `stop` / `tool_calls` / `length`). ' +
-            'See docs/anthropic-api-coverage.md for the full coverage matrix. ' +
-            'Workaround: use call_style:"anthropic" to passthrough as-is, or ' +
-            'call_style:"gemini" for Gemini endpoints.');
+          return dispatchOpenAIBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
         }
         return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
       }
