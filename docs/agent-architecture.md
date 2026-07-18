@@ -73,7 +73,7 @@ Grok appears in **three** places. Parents and operators must not treat them as o
 |---|---|---|---|---|
 | **A — Brand leaf** `agents/grok` | User says *ask grok / what does Grok think / grok critique* → parent spawns `subagent_type: grok` | Proxy → Anthropic Messages → `api.x.ai/v1/messages` + **Claude Code tools** (full inherit) | `XAI_API_KEY` | Yes |
 | **B — Capability pin** | Mode `best-cloud-gov`, tier ≥ 32gb: `generalist` / `writer` cells → `grok-4.5` | Same proxy path as A | `XAI_API_KEY` | Yes (`llm_profiles`) |
-| **C — Grok Build CLI** | `grok-cc` plugin / `/grok-cc:rescue` / global Claude policy (stuck, review, explicit implement) | Separate `grok -p` process — **not** the c-thru proxy | `grok login` and/or `XAI_API_KEY` | No (marketplace plugin) |
+| **C — Grok Build CLI** | `grok-cc` plugin / `/grok-cc:rescue` / global Claude policy (stuck, review, explicit implement) | Separate `grok -p` process — **not** the c-thru proxy | `grok login` preferred (pooled subscription usage); `XAI_API_KEY` explicit fallback only when no login session exists — an ambient key is stripped from the child env when login is present, closing an inversion risk. See `docs/subscription-auth.md` § Delegate CLIs. | No (marketplace plugin) |
 
 **Install conditions.** Surface A needs the **CLI install** path (`c-thru` injects `--agents`). Marketplace-plugin-only sessions do not load brand agents. Surface C needs the **grok-cc** plugin and a working Grok CLI; it works without c-thru fleet injection. Surfaces A and B share xAI’s **legacy Anthropic Messages** compatibility endpoint (proxy-sanitized); live canary: `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js`. Surface C does not use that path.
 

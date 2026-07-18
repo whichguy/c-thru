@@ -11,7 +11,7 @@ API keys. This page explains what's available per provider and how to configure 
 |---|---|---|
 | **Claude / Anthropic** | Yes | `claude login` sets `ANTHROPIC_AUTH_TOKEN`; c-thru routes via subscription credits |
 | **Gemini / Google** | Partial | AI Studio free tier has generous quotas; Google One AI Premium doesn't add API credits |
-| **OpenAI** | No | ChatGPT Plus/Pro is web-only; API always charges per-token separately |
+| **OpenAI** | No (Platform API) / Yes (Codex CLI only) | ChatGPT Plus/Pro is web-only for the generic `api.openai.com` HTTP API — always metered. The separate **Codex CLI**'s own ChatGPT-sign-in mode bills against plan-included credits instead, but that's a distinct, product-specific integration, not something reachable via a REST API key. See "Delegate CLIs" below. |
 
 ---
 
@@ -101,8 +101,16 @@ Use the `gemini_vertex` endpoint for this.
 ## OpenAI
 
 ChatGPT Plus and Pro subscriptions are for [chat.openai.com](https://chat.openai.com) only.
-They do **not** give access to the OpenAI API (`api.openai.com`). API usage always requires
-a separate API key from [platform.openai.com](https://platform.openai.com) and is billed per token.
+They do **not** give access to the generic OpenAI Platform HTTP API (`api.openai.com`).
+API usage through that surface always requires a separate API key from
+[platform.openai.com](https://platform.openai.com) and is billed per token. This applies
+to c-thru's own `openai` proxy endpoint (when configured) exactly as it does to any other
+direct caller of the Platform API — there is no subscription→API path for a REST endpoint.
+
+The **Codex CLI** is a separate exception: its own ChatGPT-sign-in mode is a
+product-specific integration (not the public Platform API) that bills against
+plan-included credits. See "Delegate CLIs" below for how that's handled outside c-thru's
+proxy.
 
 ### Alternatives within c-thru
 
@@ -110,6 +118,32 @@ a separate API key from [platform.openai.com](https://platform.openai.com) and i
   OpenRouter has its own billing (per-token) but often at lower rates. Set `OPENROUTER_API_KEY`
   and use the `openrouter` endpoint.
 - **Local models**: `best-local-oss` mode uses local Ollama models for free.
+
+---
+
+## Delegate CLIs (Codex / Grok Build) — not proxy-owned
+
+The Codex CLI (`codex-worker`/`codex:codex-rescue`) and the Grok Build CLI
+(`grok-cc:grok-rescue`) are separate subprocesses invoked outside c-thru's proxy
+entirely — none of the `KNOWN_HOSTS`/`applyOutboundAuth` machinery above applies to them.
+Both, however, implement the same conceptual policy this page documents for Claude:
+**prefer subscription/login-based billing, and fall back to a metered API key only when
+login genuinely isn't available.**
+
+- **Codex CLI**: `codex-worker-run.sh` runs a `codex login status` preflight check
+  before every launch/resume. When a ChatGPT session is confirmed, it actively strips
+  `OPENAI_API_KEY`/`CODEX_API_KEY` from the environment before invoking `codex`, closing
+  a confirmed inversion risk where an ambient key would otherwise silently redirect
+  billing to metered API-key mode even with a valid ChatGPT session active (`codex
+  doctor` surfaces this as "mixed auth signals" — `codex login status` alone cannot see
+  it). Only when no ChatGPT session exists does it fall back to an API key, with a
+  clear log line noting the fallback. See `~/.claude/agents/codex-worker.md`'s "Auth
+  mode" section for details.
+- **Grok Build CLI**: `grok-companion.mjs` prefers a cached `grok login` session
+  (tied to a SuperGrok/X Premium pooled usage quota) and strips an ambient `XAI_API_KEY`
+  from the child process whenever a login session is present, to avoid the same class of
+  inversion risk. It falls back to `XAI_API_KEY` only when no login session is found.
+  See the `grok-cc` plugin's `skills/grok-cli-runtime/SKILL.md` for details.
 
 ---
 
