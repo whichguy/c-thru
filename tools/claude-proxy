@@ -1617,6 +1617,25 @@ function anthropicErrorType(statusCode, errBody) {
           case 'UNKNOWN':           return 'api_error';
         }
       }
+      // OpenAI's HTTP error envelope already uses Anthropic-compatible type
+      // names ({error:{message,type,code,param}}), so preserve the provider's
+      // more-specific classification instead of reducing it to HTTP status.
+      const openaiHttpType = parsed && parsed.error && parsed.error.type;
+      if (typeof openaiHttpType === 'string' && openaiHttpType) return openaiHttpType;
+
+      // A Responses API in-band failure is shaped {code,message}, without a
+      // type. Keep this deliberately coarse until OpenAI's code vocabulary is
+      // characterized; unknown values still use the status-code fallback below.
+      const openaiInBandCode = parsed && typeof parsed.code === 'string'
+        ? parsed.code.toLowerCase()
+        : '';
+      if (openaiInBandCode) {
+        if (/rate[_-]?limit|quota/.test(openaiInBandCode)) return 'rate_limit_error';
+        if (/invalid|malformed/.test(openaiInBandCode)) return 'invalid_request_error';
+        if (/unauth|auth/.test(openaiInBandCode)) return 'authentication_error';
+        if (/permission|forbidden/.test(openaiInBandCode)) return 'permission_error';
+        if (/not[_-]?found/.test(openaiInBandCode)) return 'not_found_error';
+      }
     } catch {}
   }
   if (statusCode === 400) return 'invalid_request_error';
@@ -4434,6 +4453,10 @@ function dispatchGeminiBackend(ctx, req, res, body, backend, effectiveModel, req
   return forwardGemini(ctx, req, res, body, backend, effectiveModel, requestMeta);
 }
 
+function dispatchOpenAIBackend(ctx, req, res, body, backend, effectiveModel, requestMeta) {
+  return forwardOpenAI(ctx, req, res, body, backend, effectiveModel, requestMeta);
+}
+
 function dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta) {
   if (backend.format === 'ollama-legacy' || backend.legacy_ollama_chat === true) {
     return forwardOllamaLegacy(ctx, req, res, body, backend, effectiveModel, requestMeta);
@@ -4927,6 +4950,513 @@ function mapAnthropicToGemini(body, effectiveModel) {
 }
 
 // =============================================================================
+// OPENAI TRANSLATION
+// =============================================================================
+// Translates Anthropic Messages requests to OpenAI's Responses API. This is
+// intentionally distinct from Chat Completions: Responses uses typed input and
+// output items, flat function-tool declarations, and in-band response status.
+
+// OpenAI's Responses parameters dialect is used with strict:false here, so it
+// accepts standard JSON Schema constructs that Gemini rejects. Keep the named
+// wrapper (and observability Set contract) so a future proven upstream
+// restriction can be isolated here without changing the request mapper.
+function scrubOpenAiSchema(schema, removed) {
+  return schema;
+}
+
+function mapAnthropicToOpenAI(body, effectiveModel) {
+  const openaiReq = {
+    model: effectiveModel,
+    input: [],
+    store: false,
+    stream: !!body.stream,
+  };
+  const translationGap = new Set();
+  const schemaRemoved = new Set();
+
+  if (body.system) {
+    const systemText = Array.isArray(body.system)
+      ? body.system.map(s => (s && typeof s === 'object' ? (s.text || '') : String(s || ''))).filter(Boolean).join('\n')
+      : String(body.system);
+    if (systemText) openaiReq.instructions = systemText;
+  }
+  if (body.temperature != null) openaiReq.temperature = body.temperature;
+  if (body.top_p != null) openaiReq.top_p = body.top_p;
+  if (body.max_tokens != null) openaiReq.max_output_tokens = body.max_tokens;
+  if (body.top_k != null) translationGap.add('param:top_k');
+  if (body.stop_sequences != null) translationGap.add('param:stop_sequences');
+
+  if (body.thinking && body.thinking.type === 'enabled') {
+    const budget = Number(body.thinking.budget_tokens) || 0;
+    const effort = budget > 8192 ? 'high' : (budget > 1024 ? 'medium' : 'low');
+    openaiReq.reasoning = { effort, summary: 'auto' };
+  }
+
+  if (Array.isArray(body.tools)) {
+    const tools = [];
+    for (const tool of body.tools) {
+      if (!tool) continue;
+      if (typeof tool.type === 'string' && tool.type !== 'custom') {
+        translationGap.add('tool:' + tool.type);
+        continue;
+      }
+      tools.push({
+        type: 'function',
+        name: tool.name,
+        description: tool.description,
+        parameters: scrubOpenAiSchema(tool.input_schema || { type: 'object', properties: {} }, schemaRemoved),
+        strict: false,
+      });
+    }
+    if (tools.length) openaiReq.tools = tools;
+  }
+  if (body.tool_choice) {
+    const tc = typeof body.tool_choice === 'string' ? { type: body.tool_choice } : body.tool_choice;
+    if (tc.type === 'auto') openaiReq.tool_choice = 'auto';
+    else if (tc.type === 'any') openaiReq.tool_choice = 'required';
+    else if (tc.type === 'tool' && tc.name) openaiReq.tool_choice = { type: 'function', name: tc.name };
+    else if (tc.type === 'none') openaiReq.tool_choice = 'none';
+  }
+
+  for (const msg of (Array.isArray(body.messages) ? body.messages : [])) {
+    if (!msg || typeof msg !== 'object') continue;
+    const content = [];
+    if (typeof msg.content === 'string') {
+      content.push({ type: 'input_text', text: msg.content });
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block && block.type === 'text') {
+          if (block.citations) translationGap.add('text.citations');
+          content.push({ type: 'input_text', text: block.text || '' });
+        } else if (block && typeof block.type === 'string') {
+          // P0 is text-only. In particular, function_call/function_call_output
+          // history is a P1 round-trip, so drop it visibly rather than guessing.
+          translationGap.add(block.type);
+        }
+      }
+    }
+    openaiReq.input.push({ type: 'message', role: msg.role, content });
+  }
+
+  if (schemaRemoved.size > 0) {
+    Object.defineProperty(openaiReq, '_schemaRemoved', {
+      value: Array.from(schemaRemoved), enumerable: false, configurable: true,
+    });
+  }
+  if (translationGap.size > 0) {
+    Object.defineProperty(openaiReq, '_translationGap', {
+      value: Array.from(translationGap), enumerable: false, configurable: true,
+    });
+  }
+  return openaiReq;
+}
+
+function openAIOutputHasType(output, type) {
+  for (const item of (Array.isArray(output) ? output : [])) {
+    if (item && item.type === type) return true;
+    if (item && Array.isArray(item.content) && item.content.some(part => part && part.type === type)) return true;
+  }
+  return false;
+}
+
+// Map a Responses terminal status content-sensitively. A completed response is
+// not inherently an end_turn: tool calls and refusals are encoded in output.
+function mapOpenAIStatusToAnthropic(status, opts) {
+  const o = opts || {};
+  const output = o.output || [];
+  const hasToolUse = o.hasToolUse || openAIOutputHasType(output, 'function_call');
+  const hasRefusal = o.hasRefusal || openAIOutputHasType(output, 'refusal');
+  if (status === 'incomplete') {
+    if (o.incomplete_details && o.incomplete_details.reason === 'max_output_tokens') {
+      return { stop_reason: 'max_tokens', stop_sequence: null };
+    }
+    return { stop_reason: 'stop_sequence', stop_sequence: 'openai_content_block' };
+  }
+  if (status === 'completed' || !status) {
+    if (hasToolUse) return { stop_reason: 'tool_use', stop_sequence: null };
+    if (hasRefusal) return { stop_reason: 'refusal', stop_sequence: null };
+    return { stop_reason: 'end_turn', stop_sequence: null };
+  }
+  if (o.ctx) ctxLog(o.ctx, 'openai.unknown_response_status', { status });
+  return { stop_reason: 'stop_sequence', stop_sequence: 'openai_content_block' };
+}
+
+function mapOpenAIOutputToAnthropic(output) {
+  const content = [];
+  for (const item of (Array.isArray(output) ? output : [])) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'function_call') {
+      let input = {};
+      if (typeof item.arguments === 'string' && item.arguments) {
+        try { input = JSON.parse(item.arguments); } catch {}
+      } else if (item.arguments && typeof item.arguments === 'object') {
+        input = item.arguments;
+      }
+      content.push({ type: 'tool_use', id: item.call_id || item.id || ('call_' + crypto.randomBytes(4).toString('hex')), name: item.name, input });
+      continue;
+    }
+    const parts = Array.isArray(item.content) ? item.content : [item];
+    for (const part of parts) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'output_text' || part.type === 'text') {
+        content.push({ type: 'text', text: part.text || '' });
+      } else if (part.type === 'refusal') {
+        content.push({ type: 'refusal', refusal: part.refusal || part.text || '' });
+      }
+    }
+  }
+  return content;
+}
+
+async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, requestMeta) {
+  if (requestMeta) { requestMeta.servedBy = effectiveModel; requestMeta.backendId = backend.id; }
+
+  // Responses has no count-tokens endpoint. Never turn this into a billable
+  // generation just because /v1/messages shares its prefix with this route.
+  if (typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens')) {
+    const estimate = estimateInputTokens(body);
+    ctxLog(ctx, 'count_tokens.estimated', { backend: backend.id, input_tokens: estimate });
+    res.setHeader('x-c-thru-count-tokens', 'estimate');
+    return send(res, 200, { input_tokens: estimate });
+  }
+
+  const isStream = !!body.stream;
+  const openaiBody = mapAnthropicToOpenAI(body, effectiveModel);
+  if (body && body.metadata && typeof body.metadata.user_id === 'string') {
+    Object.defineProperty(openaiBody, '_userId', { value: body.metadata.user_id, enumerable: false, configurable: true });
+  }
+  const base = (backend.url || 'https://api.openai.com').replace(/\/$/, '');
+  const targetUrl = new URL(`${base}/v1/responses`);
+  const lib = targetUrl.protocol === 'https:' ? https : http;
+  const headers = scrubCthruHeaders(req.headers);
+  headers['content-type'] = 'application/json';
+  if (!applyOutboundAuth(backend, req.headers, headers, requestMeta)) {
+    return sendAnthropicError(res, 401,
+      `Endpoint "${backend.id}" is configured with auth:"subscription" — only Bearer session tokens are accepted.`);
+  }
+  if (requestMeta) requestMeta.authMissing = isAuthMissing(backend);
+  const payload = JSON.stringify(openaiBody);
+  headers['content-length'] = Buffer.byteLength(payload);
+  const startedAt = Date.now();
+  if (requestMeta) requestMeta.backendStartedAt = startedAt;
+  const messageId = 'msg_openai_' + crypto.randomBytes(12).toString('hex');
+  let stopOpenAiPingFn = () => {};
+  let upstreamCancelled = false;
+  let streamTerminated = false;
+
+  const relayPreCommitFailure = async (failure) => {
+    const statusCode = Number(failure.statusCode) || 502;
+    const raw = failure.raw || (failure.error ? JSON.stringify(failure.error) : '');
+    const message = failure.message || 'OpenAI upstream failure';
+    markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(statusCode, message));
+    try {
+      const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
+        reason: `openai ${statusCode}: ${message.slice(0, 200)}`,
+        statusCode,
+      });
+      if (handled || res.headersSent) return;
+    } catch {}
+    if (!res.headersSent) sendAnthropicError(res, statusCode, `OpenAI error: ${message}`, raw);
+  };
+
+  const up = lib.request({
+    hostname: targetUrl.hostname,
+    port: targetUrl.port || (targetUrl.protocol === 'https:' ? 443 : 80),
+    path: targetUrl.pathname + targetUrl.search,
+    method: 'POST',
+    headers,
+    timeout: GEMINI_UPSTREAM_TIMEOUT_MS,
+  }, upRes => {
+    const statusCode = upRes.statusCode || 502;
+    if (statusCode >= 400) {
+      collectStreamBody(upRes).then(async collected => {
+        const { decoded, message } = formatUpstreamErrorMessage(collected.buffer, {
+          contentEncoding: upRes.headers && upRes.headers['content-encoding'], statusCode,
+        });
+        await relayPreCommitFailure({ statusCode, message, raw: decoded });
+      }).catch(e => relayPreCommitFailure({ statusCode, message: `failed to read error body (${e.message})` }));
+      return;
+    }
+
+    if (!isStream) {
+      let respBody = '';
+      let respBytes = 0;
+      let nonStreamAborted = false;
+      upRes.on('data', d => {
+        if (nonStreamAborted) return;
+        respBytes += d.length;
+        if (respBytes > UPSTREAM_NONSTREAM_BODY_CAP) {
+          nonStreamAborted = true;
+          try { upRes.destroy(); } catch {}
+          relayPreCommitFailure({ statusCode: 502, message: `OpenAI non-stream response exceeded ${UPSTREAM_NONSTREAM_BODY_CAP} bytes` });
+          return;
+        }
+        respBody += d;
+      });
+      const onNonStreamFailure = e => {
+        if (nonStreamAborted) return;
+        nonStreamAborted = true;
+        relayPreCommitFailure({ statusCode: 502, message: `upstream ${backend.id} failed mid-response: ${e.message}` });
+      };
+      upRes.on('error', onNonStreamFailure);
+      upRes.on('aborted', () => onNonStreamFailure(new Error('upstream aborted')));
+      upRes.on('end', async () => {
+        if (nonStreamAborted) return;
+        try {
+          const openaiData = JSON.parse(respBody);
+          if (openaiData.status === 'failed') {
+            return relayPreCommitFailure({
+              statusCode: 502,
+              message: (openaiData.error && openaiData.error.message) || 'Responses API returned status:failed',
+              error: openaiData.error,
+            });
+          }
+          const usage = openaiData.usage || {};
+          const reasoningTokens = usage.output_tokens_details && usage.output_tokens_details.reasoning_tokens;
+          if (typeof reasoningTokens === 'number' && reasoningTokens > 0) {
+            Object.defineProperty(openaiBody, '_thinkingTokens', { value: reasoningTokens, enumerable: false, configurable: true });
+          }
+          const finish = mapOpenAIStatusToAnthropic(openaiData.status, {
+            output: openaiData.output,
+            incomplete_details: openaiData.incomplete_details,
+            ctx,
+          });
+          const anthropicRes = {
+            id: openaiData.id || messageId,
+            type: 'message',
+            role: 'assistant',
+            model: effectiveModel,
+            content: mapOpenAIOutputToAnthropic(openaiData.output),
+            stop_reason: finish.stop_reason,
+            stop_sequence: finish.stop_sequence,
+            usage: {
+              input_tokens: usage.input_tokens || 0,
+              output_tokens: usage.output_tokens || 0,
+            },
+          };
+          res.writeHead(200, Object.assign(
+            { 'Content-Type': 'application/json' },
+            buildCthruResponseHeaders(req, openaiBody, effectiveModel, requestMeta),
+          ));
+          res.end(JSON.stringify(anthropicRes));
+          recordUsageAndStamp(requestMeta, effectiveModel, backend.id, anthropicRes.usage.input_tokens,
+            anthropicRes.usage.output_tokens, Date.now() - startedAt, attributionName(requestMeta));
+          clearBackendCooldown(backend.id);
+        } catch (e) {
+          relayPreCommitFailure({ statusCode: 502, message: `failed to parse OpenAI response: ${e.message}` });
+        }
+      });
+      return;
+    }
+
+    // Do not write headers/message_start until the first usable output event.
+    // This preserves a real pre-commit failure path for response.failed.
+    let messageStarted = false;
+    let terminalSent = false;
+    let nextBlockIndex = 0;
+    let lastInputTokens = 0;
+    let lastOutputTokens = 0;
+    let hasToolUse = false;
+    let hasRefusal = false;
+    const itemBlocks = new Map();
+    const openBlocks = new Map();
+    let reasoningBlock = null;
+
+    const ensureMessageStart = () => {
+      if (messageStarted || streamTerminated) return !streamTerminated;
+      res.writeHead(200, Object.assign({
+        'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive',
+      }, buildCthruResponseHeaders(req, openaiBody, effectiveModel, requestMeta)));
+      sseWrite(res, 'message_start', {
+        type: 'message_start',
+        message: { id: messageId, type: 'message', role: 'assistant', model: effectiveModel,
+          content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } },
+      });
+      messageStarted = true;
+      return true;
+    };
+    const startBlock = (key, block) => {
+      if (openBlocks.has(key)) return openBlocks.get(key);
+      if (!ensureMessageStart()) return null;
+      const index = nextBlockIndex++;
+      openBlocks.set(key, index);
+      sseWrite(res, 'content_block_start', { type: 'content_block_start', index, content_block: block });
+      return index;
+    };
+    const closeBlock = key => {
+      const index = openBlocks.get(key);
+      if (index == null) return;
+      sseWrite(res, 'content_block_stop', { type: 'content_block_stop', index });
+      openBlocks.delete(key);
+    };
+    const closeAllBlocks = () => {
+      for (const key of [...openBlocks.keys()]) closeBlock(key);
+    };
+    const emitTerminal = response => {
+      if (terminalSent || streamTerminated) return;
+      ensureMessageStart();
+      closeAllBlocks();
+      const usage = (response && response.usage) || {};
+      lastInputTokens = usage.input_tokens != null ? usage.input_tokens : lastInputTokens;
+      lastOutputTokens = usage.output_tokens != null ? usage.output_tokens : lastOutputTokens;
+      const reasoningTokens = usage.output_tokens_details && usage.output_tokens_details.reasoning_tokens;
+      if (typeof reasoningTokens === 'number' && reasoningTokens > 0) {
+        Object.defineProperty(openaiBody, '_thinkingTokens', { value: reasoningTokens, enumerable: false, configurable: true });
+        sseWrite(res, 'c-thru-thinking-tokens', { type: 'c-thru-thinking-tokens', thinking_tokens: reasoningTokens });
+      }
+      const finish = mapOpenAIStatusToAnthropic((response && response.status) || 'completed', {
+        output: (response && response.output) || [], incomplete_details: response && response.incomplete_details,
+        hasToolUse, hasRefusal, ctx,
+      });
+      sseWrite(res, 'message_delta', { type: 'message_delta',
+        delta: { stop_reason: finish.stop_reason, stop_sequence: finish.stop_sequence },
+        usage: { output_tokens: lastOutputTokens },
+      });
+      sseWrite(res, 'message_stop', { type: 'message_stop' });
+      terminalSent = true;
+      stopOpenAiPingFn();
+      recordUsageAndStamp(requestMeta, effectiveModel, backend.id, lastInputTokens, lastOutputTokens,
+        Date.now() - startedAt, attributionName(requestMeta));
+      clearBackendCooldown(backend.id);
+      if (res.writable) res.end();
+    };
+    const failStream = data => {
+      const response = data.response || data;
+      const error = response.error || data.error || {};
+      const message = error.message || 'Responses API returned status:failed';
+      if (!messageStarted) {
+        streamTerminated = true;
+        stopOpenAiPingFn();
+        try { upRes.destroy(); } catch {}
+        relayPreCommitFailure({ statusCode: 502, message, error });
+        return;
+      }
+      streamTerminated = true;
+      stopOpenAiPingFn();
+      if (!upstreamCancelled) markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(502, message));
+      terminateCommittedResponse(ctx, res, true, 'openai.upstream.midstream_failed',
+        `upstream ${backend.id} failed mid-stream: ${message}`, { backend: backend.id });
+      try { upRes.destroy(); } catch {}
+    };
+
+    const openaiPingTick = setInterval(() => {
+      if (!messageStarted || !res.writable) return;
+      try { sseWrite(res, 'ping', { type: 'ping' }); } catch {}
+    }, SSE_PING_INTERVAL_MS);
+    stopOpenAiPingFn = () => { try { clearInterval(openaiPingTick); } catch {} };
+
+    let buffer = '';
+    upRes.on('data', chunk => {
+      if (streamTerminated || terminalSent) return;
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          const type = data.type || '';
+          const outputIndex = data.output_index != null ? data.output_index : 0;
+          const itemKey = `item:${outputIndex}`;
+          const partKey = `part:${outputIndex}:${data.content_index != null ? data.content_index : 0}`;
+          if (type === 'response.output_item.added') {
+            const item = data.item || {};
+            if (item.type === 'function_call') {
+              hasToolUse = true;
+              const index = startBlock(itemKey, { type: 'tool_use', id: item.call_id || item.id || ('call_' + crypto.randomBytes(4).toString('hex')), name: item.name, input: {} });
+              if (index != null) itemBlocks.set(outputIndex, itemKey);
+            } else if (item.type === 'refusal') {
+              hasRefusal = true;
+              startBlock(itemKey, { type: 'refusal', refusal: item.refusal || '' });
+              itemBlocks.set(outputIndex, itemKey);
+            }
+          } else if (type === 'response.content_part.added') {
+            const part = data.part || {};
+            if (part.type === 'refusal') {
+              hasRefusal = true;
+              startBlock(partKey, { type: 'refusal', refusal: part.refusal || '' });
+            } else if (part.type === 'output_text' || part.type === 'text') {
+              startBlock(partKey, { type: 'text', text: '' });
+            }
+          } else if (type === 'response.output_text.delta') {
+            const key = openBlocks.has(partKey) ? partKey : itemKey;
+            const index = startBlock(key, { type: 'text', text: '' });
+            if (index != null) sseWrite(res, 'content_block_delta', { type: 'content_block_delta', index,
+              delta: { type: 'text_delta', text: data.delta || '' },
+            });
+          } else if (type === 'response.function_call_arguments.delta') {
+            const key = itemBlocks.get(outputIndex) || itemKey;
+            const index = openBlocks.get(key);
+            if (index != null) sseWrite(res, 'content_block_delta', { type: 'content_block_delta', index,
+              delta: { type: 'input_json_delta', partial_json: data.delta || '' },
+            });
+          } else if (type === 'response.reasoning_summary_part.added') {
+            const key = `reasoning:${outputIndex}`;
+            reasoningBlock = key;
+            startBlock(key, { type: 'thinking', thinking: '' });
+          } else if (type === 'response.reasoning_summary_text.delta' || type === 'response.reasoning_summary_part.delta') {
+            const key = reasoningBlock || `reasoning:${outputIndex}`;
+            const index = startBlock(key, { type: 'thinking', thinking: '' });
+            if (index != null) sseWrite(res, 'content_block_delta', { type: 'content_block_delta', index,
+              delta: { type: 'thinking_delta', thinking: data.delta || '' },
+            });
+          } else if (type === 'response.content_part.done') {
+            closeBlock(partKey);
+          } else if (type === 'response.output_item.done') {
+            closeBlock(itemBlocks.get(outputIndex) || itemKey);
+          } else if (type === 'response.failed') {
+            failStream(data);
+          } else if (type === 'response.incomplete') {
+            const response = data.response || data;
+            if (response.error && response.incomplete_details?.reason !== 'max_output_tokens') failStream(data);
+            else emitTerminal(response);
+          } else if (type === 'response.completed') {
+            emitTerminal(data.response || data);
+          }
+        } catch (e) {
+          ctxLog(ctx, 'openai.stream.parse_error', { error: e.message, line });
+        }
+      }
+    });
+    upRes.on('end', () => {
+      stopOpenAiPingFn();
+      if (!streamTerminated && !terminalSent) emitTerminal({ status: 'completed' });
+    });
+    const onStreamFailure = e => {
+      stopOpenAiPingFn();
+      if (streamTerminated || terminalSent) return;
+      if (!messageStarted) {
+        streamTerminated = true;
+        relayPreCommitFailure({ statusCode: 502, message: `upstream ${backend.id} failed before streaming: ${e.message}` });
+        return;
+      }
+      streamTerminated = true;
+      if (!upstreamCancelled) markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
+      terminateCommittedResponse(ctx, res, true, 'openai.upstream.midstream_error',
+        `upstream ${backend.id} failed mid-stream: ${e.message}`, { backend: backend.id });
+    };
+    upRes.on('error', onStreamFailure);
+    upRes.on('aborted', () => onStreamFailure(new Error('upstream aborted')));
+  });
+
+  up.on('error', e => {
+    if (res.headersSent) return;
+    relayPreCommitFailure({ statusCode: 502, message: `backend openai at ${targetUrl.origin} error: ${e.message}` });
+  });
+  up.on('timeout', () => up.destroy(new Error('openai upstream timeout')));
+  const cancelUpstream = () => {
+    if (upstreamCancelled) return;
+    upstreamCancelled = true;
+    try { stopOpenAiPingFn(); } catch {}
+    try { if (!up.destroyed) up.destroy(); } catch {}
+  };
+  req.on('close', cancelUpstream);
+  res.on('close', cancelUpstream);
+  up.write(payload);
+  up.end();
+}
+
+// =============================================================================
 // LEGACY WIRE FORMAT: Ollama native /api/chat (NOT Anthropic Messages API)
 // =============================================================================
 // Translates Anthropic-format requests to Ollama's native /api/chat shape via
@@ -5388,6 +5918,26 @@ const server = http.createServer((req, res) => {
       if (req.method === 'HEAD' && req.url === '/') {
         res.writeHead(200, { 'Content-Length': '0' });
         return res.end();
+      }
+
+      // TEST-ONLY hook, inert unless explicitly enabled. It lets the offline
+      // OpenAI translation suites exercise the real HTTP/SSE forwarder before
+      // the production /v1/messages call_style:"openai" dispatch is flipped.
+      if (process.env.C_THRU_TEST_OPENAI_DIRECT === '1'
+          && req.method === 'POST' && req.url === '/__test/openai-dispatch') {
+        const buf = await readBody(req);
+        let testReq;
+        try { testReq = JSON.parse(buf.toString()); }
+        catch (e) { return sendAnthropicError(res, 400, `invalid JSON: ${e.message}`); }
+        if (!testReq || !testReq.backend || !testReq.body) {
+          return sendAnthropicError(res, 400, 'test OpenAI dispatch requires backend and body');
+        }
+        // The count_tokens test supplies the original Anthropic path so the
+        // forwarder can exercise its normal early short-circuit.
+        if (typeof testReq.requestUrl === 'string') req.url = testReq.requestUrl;
+        const requestMeta = {};
+        return dispatchOpenAIBackend(ctx, req, res, testReq.body, testReq.backend,
+          testReq.model || testReq.body.model, requestMeta);
       }
 
       if (req.method === 'POST' && (req.url === '/c-thru/stats/clear' || req.url === '/c-thru/stats/clear/')) {
