@@ -15,8 +15,13 @@ export CLAUDE_JOBS_DIR="$HOME_DIR/.claude/jobs"
 mkdir -p "$CLAUDE_JOBS_DIR/aabbcc11"
 
 set +u
-# Extract pid_looks_like_proxy through end of cleanup_proxy_children.
-eval "$(sed -n '2631,2739p' "$REPO/tools/c-thru")"
+# Extract by function name/pattern (not line range) so this stays correct
+# across edits to tools/c-thru — see test/c-thru-ephemeral-settings.test.sh
+# for the same convention.
+eval "$(awk '/^pid_looks_like_proxy\(\) \{/,/^\}$/' "$REPO/tools/c-thru")"
+eval "$(awk '/^proxy_port_referenced_by_peers\(\) \{/,/^\}$/' "$REPO/tools/c-thru")"
+eval "$(awk '/^reap_proxy_port_listener\(\) \{/,/^\}$/' "$REPO/tools/c-thru")"
+eval "$(awk '/^cleanup_proxy_children\(\) \{/,/^\}$/' "$REPO/tools/c-thru")"
 set -u
 
 echo "1. C_THRU_KEEP_PROXY=1 → skip kill"
