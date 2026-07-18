@@ -41,6 +41,15 @@
         "scheme": "Bearer",
         "env": "XAI_API_KEY"
       }
+    },
+    "openai": {
+      "url": "https://api.openai.com",
+      "format": "openai",
+      "auth": {
+        "header": "Authorization",
+        "scheme": "Bearer",
+        "env": "OPENAI_API_KEY"
+      }
     }
   },
   "llm_active_profile": "auto",
@@ -716,6 +725,10 @@
       "name": "grok-4.5"
     },
     "re:^grok-.*$": "xai",
+    "gpt-5.6-terra": {
+      "endpoint": "openai",
+      "name": "gpt-5.6-terra"
+    },
     "claude-sonnet-5": "anthropic",
     "re:^claude-.*$": "anthropic",
     "gemini-latest": {
