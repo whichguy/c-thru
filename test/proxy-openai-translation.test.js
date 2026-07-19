@@ -108,6 +108,22 @@ async function main() {
       assert(s3.events.filter(e => e.event === 'content_block_delta').map(e => e.data?.delta?.text).join('') === 'hello world', 'text deltas reassembled');
       assert(!s3.rawBody.includes('response.output_text.delta'), 'no raw OpenAI event names leak');
 
+      // 3b. Refusal deltas ---------------------------------------------------
+      console.log('\n3b. Refusal deltas are forwarded');
+      stub.setHandler((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const emit = obj => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+        emit({ type: 'response.output_item.added', output_index: 0, item: { type: 'message' } });
+        emit({ type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'refusal' } });
+        emit({ type: 'response.refusal.delta', output_index: 0, content_index: 0, delta: 'Cannot ' });
+        emit({ type: 'response.refusal.delta', output_index: 0, content_index: 0, delta: 'comply.' });
+        emit({ type: 'response.refusal.done', output_index: 0, content_index: 0 });
+        emit({ type: 'response.completed', response: response([{ type: 'message', content: [{ type: 'refusal', refusal: 'Cannot comply.' }] }]) });
+        res.end(); return true;
+      });
+      const refusalDelta = await httpStream(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'refuse' }], stream: true }));
+      assert(refusalDelta.events.filter(e => e.event === 'content_block_delta').map(e => e.data?.delta?.text).join('') === 'Cannot comply.', 'streamed refusal text is preserved');
+
       // 4. Finish reasons ----------------------------------------------------
       console.log('\n4. Content-aware finish reasons');
       const finishCases = [
@@ -163,6 +179,21 @@ async function main() {
       const postErrors = post.events.filter(e => e.event === 'error');
       assert(post.status === 200 && post.events.some(e => e.event === 'message_start') && postErrors.length === 1
         && postErrors[0].data?.type === 'error' && !post.events.some(e => e.event === 'message_stop'), 'post-commit response.failed emits exactly one terminal SSE error');
+
+      // 5b. Truncated streams are failures, never synthetic completion ------
+      console.log('\n5b. Truncated SSE does not synthesize success');
+      stub.setHandler((req, res) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end(); return true; });
+      const truncatedPre = await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'x' }], stream: true }));
+      assert(truncatedPre.status >= 400 && truncatedPre.json?.type === 'error' && !truncatedPre.json?.usage, 'pre-commit truncation is Anthropic error without usage');
+      stub.setHandler((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const emit = obj => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+        emit({ type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'output_text' } });
+        emit({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'partial' });
+        res.end(); return true;
+      });
+      const truncatedPost = await httpStream(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'x' }], stream: true }));
+      assert(truncatedPost.events.some(e => e.event === 'error') && !truncatedPost.events.some(e => e.event === 'message_stop'), 'post-commit truncation emits terminal error, not message_stop');
 
       // 6. Usage --------------------------------------------------------------
       console.log('\n6. Reasoning tokens are observational, not additive');

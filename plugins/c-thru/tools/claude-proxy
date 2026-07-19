@@ -5252,6 +5252,7 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
     // This preserves a real pre-commit failure path for response.failed.
     let messageStarted = false;
     let terminalSent = false;
+    let realTerminalSeen = false;
     let nextBlockIndex = 0;
     let lastInputTokens = 0;
     let lastOutputTokens = 0;
@@ -5383,6 +5384,12 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
             if (index != null) sseWrite(res, 'content_block_delta', { type: 'content_block_delta', index,
               delta: { type: 'text_delta', text: data.delta || '' },
             });
+          } else if (type === 'response.refusal.delta') {
+            const key = openBlocks.has(partKey) ? partKey : itemKey;
+            const index = startBlock(key, { type: 'refusal', refusal: '' });
+            if (index != null) sseWrite(res, 'content_block_delta', { type: 'content_block_delta', index,
+              delta: { type: 'text_delta', text: data.delta || '' },
+            });
           } else if (type === 'response.function_call_arguments.delta') {
             const key = itemBlocks.get(outputIndex) || itemKey;
             const index = openBlocks.get(key);
@@ -5401,15 +5408,20 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
             });
           } else if (type === 'response.content_part.done') {
             closeBlock(partKey);
+          } else if (type === 'response.refusal.done') {
+            closeBlock(openBlocks.has(partKey) ? partKey : itemKey);
           } else if (type === 'response.output_item.done') {
             closeBlock(itemBlocks.get(outputIndex) || itemKey);
           } else if (type === 'response.failed') {
+            realTerminalSeen = true;
             failStream(data);
           } else if (type === 'response.incomplete') {
             const response = data.response || data;
+            realTerminalSeen = true;
             if (response.error && response.incomplete_details?.reason !== 'max_output_tokens') failStream(data);
             else emitTerminal(response);
           } else if (type === 'response.completed') {
+            realTerminalSeen = true;
             emitTerminal(data.response || data);
           }
         } catch (e) {
@@ -5419,7 +5431,18 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
     });
     upRes.on('end', () => {
       stopOpenAiPingFn();
-      if (!streamTerminated && !terminalSent) emitTerminal({ status: 'completed' });
+      if (!streamTerminated && !terminalSent && !realTerminalSeen) {
+        const message = 'OpenAI stream ended without a terminal event';
+        if (!messageStarted) {
+          streamTerminated = true;
+          relayPreCommitFailure({ statusCode: 502, message });
+        } else {
+          streamTerminated = true;
+          if (!upstreamCancelled) markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(502, message));
+          terminateCommittedResponse(ctx, res, true, 'openai.upstream.missing_terminal',
+            `upstream ${backend.id} failed mid-stream: ${message}`, { backend: backend.id });
+        }
+      }
     });
     const onStreamFailure = e => {
       stopOpenAiPingFn();
