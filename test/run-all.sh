@@ -547,6 +547,15 @@ else
   skip_suite "proxy-gemini-live-vertex (set C_THRU_LIVE_GEMINI=1 + Vertex creds to enable)"
 fi
 
+if [[ "${C_THRU_LIVE_OPENAI:-0}" == "1" ]]; then
+  echo ""
+  echo "Live OpenAI tests (C_THRU_LIVE_OPENAI=1):"
+  run_suite "proxy-openai-live-shapes (real OpenAI Responses API response shapes)" \
+    node "$REPO_DIR/test/proxy-openai-live-shapes.test.js"
+else
+  skip_suite "proxy-openai-live-shapes (set C_THRU_LIVE_OPENAI=1 + OPENAI_API_KEY to enable)"
+fi
+
 echo ""
 echo "Validators:"
 run_suite "model-map-validate (config/model-map.json)" \
