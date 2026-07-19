@@ -270,7 +270,7 @@ const s = JSON.parse(process.argv[2]);
 process.exit(s.userPreference === 'user' && s.jsonPreference && s.filePreference && s.equalsPreference && s.callerWinner === 'equals' &&
   !('env' in s) && s.permissions.allow.includes('caller') && s.permissions.allow.filter(x => x === 'mcp__llm-capabilities__*').length === 1 &&
   s.hooks.SessionStart.flatMap(e => e.hooks).filter(h => h.command.endsWith('/c-thru-session-start.sh')).length === 1 &&
-  s.hooks.SessionStart[0].hooks[0].timeout === 5 ? 0 : 1);
+  s.hooks.SessionStart[0].hooks[0].timeout === 10 ? 0 : 1);
 NODE
 assert "caller proxy-owned key warning is exact" grep -qx 'c-thru: --settings key "env" is proxy-owned, ignored' "$WARN_FILE"
 
@@ -467,7 +467,7 @@ rm -rf "$SESSION_DIR/agents"; mkdir -p "$PROFILE_DIR/agents"
 RUN_PAYLOADS=()
 run_builder
 assert "basename-strip builder exits 0" test "$?" -eq 0
-assert "owned SessionStart stripped; inject remains once with timeout 5" node - "$BUILT_JSON" <<'NODE'
+assert "owned SessionStart stripped; inject remains once with timeout 10" node - "$BUILT_JSON" <<'NODE'
 const s = JSON.parse(process.argv[2]);
 const starts = (s.hooks.SessionStart || []).flatMap(e => e.hooks);
 const health = (s.hooks.UserPromptSubmit || []).flatMap(e => e.hooks)
@@ -475,7 +475,7 @@ const health = (s.hooks.UserPromptSubmit || []).flatMap(e => e.hooks)
 const foreign = (s.hooks.UserPromptSubmit || []).flatMap(e => e.hooks)
   .filter(h => String(h.command).includes('my-custom-hook'));
 process.exit(
-  starts.length === 1 && starts[0].timeout === 5 &&
+  starts.length === 1 && starts[0].timeout === 10 &&
   !String(starts[0].command).includes('/elsewhere/') &&
   health.length === 1 && health[0].timeout === 5 &&
   foreign.length === 1 && foreign[0].timeout === 7

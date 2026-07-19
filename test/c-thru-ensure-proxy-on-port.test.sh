@@ -21,6 +21,15 @@ fail() { echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
 # shellcheck source=/dev/null
 source "$ENSURE"
 
+# cthru_ensure_proxy_on_port refuses to act on any non-loopback
+# ANTHROPIC_BASE_URL by design (see case 5). The ambient environment this
+# test runs in (including a live Claude Code session) commonly exports
+# ANTHROPIC_BASE_URL=https://api.anthropic.com already, which would make
+# every case below silently hit that early-refuse guard instead of
+# exercising the ping/spawn mechanics they're meant to test. Isolate it
+# here; cases that need a specific value (4, 5, 6) set it explicitly inline.
+unset ANTHROPIC_BASE_URL
+
 # ── 1. bad port ──────────────────────────────────────────────────────────────
 echo "1. bad port → exit 2"
 cthru_ensure_proxy_on_port "not-a-port"
