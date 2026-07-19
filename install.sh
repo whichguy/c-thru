@@ -64,7 +64,7 @@ chmod +x "$TOOLS_SRC/verify-llm-capabilities-mcp.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-proxy-health.sh" "$TOOLS_SRC/c-thru-session-start.sh" "$TOOLS_SRC/c-thru-map-changed.sh" "$TOOLS_SRC/c-thru-classify.sh" "$TOOLS_SRC/c-thru-ollama-probe.sh" "$TOOLS_SRC/c-thru-postcompact-context.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-stop-hook.sh" "$TOOLS_SRC/c-thru-stop-failure-hook.sh" "$TOOLS_SRC/c-thru-statusline.sh" "$TOOLS_SRC/c-thru-statusline-overlay.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-ensure-proxy-on-port.sh" "$TOOLS_SRC/c-thru-revive-agent-sessions.sh" "$TOOLS_SRC/c-thru-gateway-auth-helper.sh" 2>/dev/null || true
-chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" "$TOOLS_SRC/c-thru-hygiene-check.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh" "$TOOLS_SRC/c-thru-marketplace-update.sh" "$TOOLS_SRC/c-thru-hygiene-check.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-resolve.js" "$TOOLS_SRC/c-thru-resolve" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-enter-plan-hook.sh" "$TOOLS_SRC/c-thru-agent-router-hook.sh" 2>/dev/null || true
@@ -136,6 +136,7 @@ link_tool c-thru-ollama-gc.sh c-thru-ollama-gc
 link_tool c-thru-contract-check.sh c-thru-contract-check
 link_tool c-thru-hygiene-check.sh c-thru-hygiene-check
 link_tool c-thru-self-update.sh c-thru-self-update
+link_tool c-thru-marketplace-update.sh c-thru-marketplace-update
 link_tool verify-lmstudio-ollama-compat.sh verify-lmstudio-ollama-compat
 link_tool c-thru-ollama-probe.sh c-thru-ollama-probe
 link_tool c-thru-enter-plan-hook.sh c-thru-enter-plan-hook

@@ -1676,6 +1676,11 @@ if [[ -x "$_benchmarks_update_script" ]]; then
   ( CTHRU_REPO_ROOT="$CTHRU_REPO_ROOT" bash "$_benchmarks_update_script" 2>/dev/null ) &
   disown 2>/dev/null || true
 fi
+# Daily-debounced marketplace refresh. Soft-fail; never blocks launch.
+_marketplace_update_script="$CTHRU_SELF_DIR/c-thru-marketplace-update.sh"
+if [[ -x "$_marketplace_update_script" ]]; then
+  ( bash "$_marketplace_update_script" 2>/dev/null ) & disown
+fi
 # Discover paths and environment via Node helper (single source of truth)
 eval "$(CLAUDE_MODEL_MAP_LAUNCH_CWD="$LAUNCH_CWD" node "$CTHRU_SELF_DIR/model-map-config.js" --shell-env 2>/dev/null || true)"
 
