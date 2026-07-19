@@ -213,6 +213,8 @@ run_suite "proxy-reuse-lock (explicit-port cross-session reuse: 2nd attach, no d
   bash "$REPO_DIR/test/proxy-reuse-lock.test.sh"
 run_suite "benchmarks-update (durable stamp vs shadow pid + SIGHUP)" \
   bash "$REPO_DIR/test/benchmarks-update.test.sh"
+run_suite "marketplace-update (third-party marketplace refresh safety + debounce)" \
+  bash "$REPO_DIR/test/c-thru-marketplace-update.test.sh"
 
 echo ""
 echo "Node tests:"
