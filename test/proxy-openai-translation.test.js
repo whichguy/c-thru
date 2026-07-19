@@ -203,6 +203,11 @@ async function main() {
       const usage = await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'x' }], stream: false }));
       assert(usage.json?.usage?.output_tokens === 7 && usage.headers['x-c-thru-thinking-tokens'] === '5', 'output_tokens excludes reasoning subset and header reports it');
 
+      stub.setHandler(jsonHandler(response([{ type: 'reasoning', summary: [{ type: 'summary_text', text: 'private chain' }] }, { type: 'message', content: [{ type: 'output_text', text: 'visible' }] }])));
+      const reasoning = await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'think' }], stream: false }));
+      assert((reasoning.headers['x-c-thru-translation-gap'] || '').includes('reasoning'), 'reasoning response item records translation gap');
+      assert(reasoning.json?.content?.length === 1 && reasoning.json.content[0]?.text === 'visible', 'reasoning output does not leak into Anthropic content');
+
       // 7. Count tokens ------------------------------------------------------
       console.log('\n7. count_tokens short-circuits before /v1/responses');
       const before = stub.requests.length;

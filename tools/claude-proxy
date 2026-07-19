@@ -1617,7 +1617,8 @@ function anthropicErrorType(statusCode, errBody) {
       // names ({error:{message,type,code,param}}), so preserve the provider's
       // more-specific classification instead of reducing it to HTTP status.
       const openaiHttpType = parsed && parsed.error && parsed.error.type;
-      if (typeof openaiHttpType === 'string' && openaiHttpType) return openaiHttpType;
+      const anthropicErrorTypes = new Set(['invalid_request_error', 'authentication_error', 'permission_error', 'not_found_error', 'rate_limit_error', 'overloaded_error', 'api_error', 'request_too_large', 'timeout_error']);
+      if (typeof openaiHttpType === 'string' && anthropicErrorTypes.has(openaiHttpType)) return openaiHttpType;
 
       // A Responses API in-band failure is shaped {code,message}, without a
       // type. Keep this deliberately coarse until OpenAI's code vocabulary is
@@ -5080,8 +5081,9 @@ function mapOpenAIStatusToAnthropic(status, opts) {
   return { stop_reason: 'stop_sequence', stop_sequence: 'openai_content_block' };
 }
 
-function mapOpenAIOutputToAnthropic(output) {
+function mapOpenAIOutputToAnthropic(output, gapTarget) {
   const content = [];
+  const translationGap = new Set(Array.isArray(gapTarget && gapTarget._translationGap) ? gapTarget._translationGap : []);
   for (const item of (Array.isArray(output) ? output : [])) {
     if (!item || typeof item !== 'object') continue;
     if (item.type === 'function_call') {
@@ -5094,6 +5096,7 @@ function mapOpenAIOutputToAnthropic(output) {
       content.push({ type: 'tool_use', id: item.call_id || item.id || ('call_' + crypto.randomBytes(4).toString('hex')), name: item.name, input });
       continue;
     }
+    if (item.type === 'reasoning') { translationGap.add('reasoning'); continue; }
     const parts = Array.isArray(item.content) ? item.content : [item];
     for (const part of parts) {
       if (!part || typeof part !== 'object') continue;
@@ -5104,6 +5107,7 @@ function mapOpenAIOutputToAnthropic(output) {
       }
     }
   }
+  if (gapTarget && translationGap.size > 0) Object.defineProperty(gapTarget, '_translationGap', { value: Array.from(translationGap), enumerable: false, configurable: true });
   return content;
 }
 
@@ -5225,7 +5229,7 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
             type: 'message',
             role: 'assistant',
             model: effectiveModel,
-            content: mapOpenAIOutputToAnthropic(openaiData.output),
+            content: mapOpenAIOutputToAnthropic(openaiData.output, openaiBody),
             stop_reason: finish.stop_reason,
             stop_sequence: finish.stop_sequence,
             usage: {

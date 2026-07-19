@@ -88,6 +88,9 @@ async function main() {
       stub.setHandler((req, res) => { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'bad input', type: 'invalid_request_error' } })); return true; });
       const err = await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'bad' }], stream: false }));
       assert(err.status === 400 && err.json?.error?.type === 'invalid_request_error', 'extended anthropicErrorType handles OpenAI HTTP envelope');
+      stub.setHandler((req, res) => { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'bad input', type: 'some_openai_only_type' } })); return true; });
+      const unknownErr = await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'bad' }], stream: false }));
+      assert(unknownErr.status === 400 && unknownErr.json?.error?.type === 'invalid_request_error', 'unknown OpenAI error.type falls back to Anthropic vocabulary');
 
       // 3. Endpoint-shaped auth ----------------------------------------------
       console.log('\n3. endpoints-shaped OpenAI auth uses Bearer token');
