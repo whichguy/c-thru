@@ -40,7 +40,7 @@ catch-all even when a Gemini backend is present).
 | **Gemini** | `call_style: "gemini"` (Google AI Studio + Vertex). Translated by `forwardGemini`. |
 | **Ollama** | `kind: "ollama"` or `localhost:11434`. Default path is `forwardAnthropic` to Ollama's `/v1/messages` adapter (Ollama 0.4+); `legacy_ollama_chat: true` opts into `forwardOllamaLegacy` (`/api/chat`). |
 | **xAI (Grok)** | `endpoints.xai` — `format: "anthropic"` passthrough to `https://api.x.ai/v1/messages`. **Upstream status:** xAI documents Anthropic SDK / Messages compatibility as **fully deprecated** (prefer Responses API or gRPC for new clients). c-thru still uses Messages for brand-agent and `best-cloud-gov` Grok cells; the proxy sanitizes known 400 shapes (`sanitizeXaiAnthropicBody`). Non-2xx responses log `anthropic.upstream.error` (safe `message` + `body_preview`, `tools_in`, `xai`); midstream SSE failures log `client_cancelled` on `anthropic.upstream.midstream_error`. **Canary:** `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js` (C1–C5). Auth: `XAI_API_KEY` via `header_env` (never Anthropic client keys). The separate Grok Build CLI (`grok-cc`) does **not** use this path. See `docs/agent-architecture.md` § Grok surfaces. |
-| **OpenAI** | `call_style: "openai"` — currently a hard 501 stub (see Tier 3d). Reserved durable landing zone if Anthropic Messages on xAI is hard-sunset (Chat Completions / Responses translator). |
+| **OpenAI** | `call_style: "openai"` — P0 Anthropic ↔ OpenAI Responses-API translation is shipped and live (commits `135070b`, `a671704`, `adb74c7`, `c240c86`). |
 
 ---
 
@@ -123,9 +123,9 @@ Vaults, OAuth, org/admin, usage reports — see endpoint matrix. Pattern:
 
 | Path | Method(s) | Anthropic | Gemini | Ollama | OpenAI |
 |---|---|---|---|---|---|
-| `/v1/messages` (non-stream) | POST | ✅ | ✅ | ✅ | 🚫 |
-| `/v1/messages` (stream) | POST | ✅ | ✅ | ✅ | 🚫 |
-| `/v1/messages/count_tokens` | POST | ✅ (passthrough) | ✅ (`:countTokens`) | ✅ (proxy-side estimate) | 🚫 |
+| `/v1/messages` (non-stream) | POST | ✅ | ✅ | ✅ | ✅ |
+| `/v1/messages` (stream) | POST | ✅ | ✅ | ✅ | ✅ |
+| `/v1/messages/count_tokens` | POST | ✅ (passthrough) | ✅ (`:countTokens`) | ✅ (proxy-side estimate) | 🔁 (proxy-side estimate) |
 | `/v1/messages/batches` | POST | ⚠️ catch-all → Anthropic | ➖ no native batch API | ➖ | 🚫 |
 | `/v1/messages/batches` (list) | GET | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
 | `/v1/messages/batches/{id}` | GET | ⚠️ catch-all → Anthropic | ➖ | ➖ | 🚫 |
@@ -177,24 +177,24 @@ on its way to the upstream backend. Output translation (upstream → Anthropic)
 is a separate concern handled by `forwardGemini` SSE assembly and the Ollama
 adapters.
 
-| Block type | Anthropic | Gemini | Ollama (`/v1/messages`) | Ollama (legacy `/api/chat`) |
-|---|---|---|---|---|
-| `text` | ✅ | ✅ → `parts[].text` | ✅ | ✅ |
-| `image` (base64/url/file) | ✅ | ✅ → `inlineData` / `fileData` | ✅ (forwarded; backend may reject) | ⚠️ flattened to text |
-| `document` (PDF) | ✅ | ✅ → `inlineData` / `fileData` (PDF mime) | ✅ (forwarded) | ⚠️ flattened |
-| `tool_use` | ✅ | ✅ → `functionCall` (with `thoughtSignature` for Gemini 3+) | ✅ | 🚫 stripped |
-| `tool_result` | ✅ | ✅ → `functionResponse` (`is_error` wrapped in `.error`) | ✅ | 🚫 stripped |
-| `thinking` | ✅ | ✅ → `parts[].thought:true` (+ `thoughtSignature`) | ✅ | 🚫 stripped |
-| `redacted_thinking` | ✅ | 🚫 dropped (Gemini cannot decrypt; surfaced via `x-c-thru-redacted-thinking-dropped` + `x-c-thru-translation-gap`) | ✅ | 🚫 stripped |
-| `server_tool_use` | ✅ | 🚫 dropped (Gemini grounding has different lifecycle; gap header) | ⚠️ unknown | 🚫 stripped |
-| `web_search_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped |
-| `web_fetch_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped |
-| `code_execution_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped |
-| `tool_search_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped |
-| `mcp_tool_use` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped |
-| `mcp_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped |
-| `container_upload` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped |
-| `citations[]` field on text | ✅ (passthrough) | ⚠️ stripped on translate to `parts[].text`; gap recorded as `text.citations` | ⚠️ unknown | 🚫 stripped |
+| Block type | Anthropic | Gemini | Ollama (`/v1/messages`) | Ollama (legacy `/api/chat`) | OpenAI |
+|---|---|---|---|---|---|
+| `text` | ✅ | ✅ → `parts[].text` | ✅ | ✅ | ✅ → `input_text` |
+| `image` (base64/url/file) | ✅ | ✅ → `inlineData` / `fileData` | ✅ (forwarded; backend may reject) | ⚠️ flattened to text | 🚫 dropped; `x-c-thru-translation-gap` |
+| `document` (PDF) | ✅ | ✅ → `inlineData` / `fileData` (PDF mime) | ✅ (forwarded) | ⚠️ flattened | 🚫 dropped; `x-c-thru-translation-gap` |
+| `tool_use` | ✅ | ✅ → `functionCall` (with `thoughtSignature` for Gemini 3+) | ✅ | 🚫 stripped | 🚫 inbound history dropped; `x-c-thru-translation-gap` (request-level `tools[]` mapping works) |
+| `tool_result` | ✅ | ✅ → `functionResponse` (`is_error` wrapped in `.error`) | ✅ | 🚫 stripped | 🚫 inbound history dropped; `x-c-thru-translation-gap` (request-level `tools[]` mapping works) |
+| `thinking` | ✅ | ✅ → `parts[].thought:true` (+ `thoughtSignature`) | ✅ | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `redacted_thinking` | ✅ | 🚫 dropped (Gemini cannot decrypt; surfaced via `x-c-thru-redacted-thinking-dropped` + `x-c-thru-translation-gap`) | ✅ | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `server_tool_use` | ✅ | 🚫 dropped (Gemini grounding has different lifecycle; gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `web_search_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `web_fetch_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `code_execution_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `tool_search_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `mcp_tool_use` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `mcp_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `container_upload` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `citations[]` field on text | ✅ (passthrough) | ⚠️ stripped on translate to `parts[].text`; gap recorded as `text.citations` | ⚠️ unknown | 🚫 stripped | ⚠️ text retained but citations dropped; `x-c-thru-translation-gap` |
 
 The **translation-gap header** (`x-c-thru-translation-gap`) was added to make
 the 🚫 cells in the Gemini column observable. When `mapAnthropicToGemini`
