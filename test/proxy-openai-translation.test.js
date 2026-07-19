@@ -3,6 +3,7 @@
 // Offline Responses-API translation tests through the real proxy dispatch path.
 
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const { stubBackend, writeConfig, httpJson, httpStream, withProxy } = require('./helpers');
@@ -215,6 +216,24 @@ async function main() {
       assert(count.status === 200 && count.json?.input_tokens >= 1 && count.headers['x-c-thru-count-tokens'] === 'estimate', 'count_tokens returns proxy estimate');
       assert(stub.requests.length === before, 'count_tokens never reaches generative stub endpoint');
     });
+
+    console.log('\n8. Streaming and non-stream resilience');
+    await withProxy({ configPath, profile: '16gb', env: { CLAUDE_PROXY_PING_INTERVAL_MS: '200' } }, async ({ port }) => {
+      stub.setHandler((req, res) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); const emit = obj => res.write(`data: ${JSON.stringify(obj)}\n\n`); emit({ type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'output_text' } }); emit({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'quiet' }); setTimeout(() => { emit({ type: 'response.completed', response: response([]) }); setTimeout(() => res.end(), 350); }, 450); return true; });
+      const quiet = await httpStream(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'quiet' }], stream: true }), {}, 3000);
+      const events = quiet.events.map(e => e.event); assert(events.includes('ping'), 'quiet committed stream emits keepalive ping'); assert(events.lastIndexOf('ping') < events.indexOf('message_stop'), 'keepalive interval stops after normal terminal event');
+      let upstreamClosed; const closed = new Promise(resolve => { upstreamClosed = resolve; });
+      stub.setHandler((req, res) => { req.on('close', upstreamClosed); res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end(`data: ${JSON.stringify({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'started' })}\n\n`); return true; });
+      await new Promise((resolve, reject) => { const client = http.request({ hostname: '127.0.0.1', port, path: '/v1/messages', method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => res.once('data', () => { res.destroy(); resolve(); })); client.on('error', reject); client.end(JSON.stringify(request({ messages: [{ role: 'user', content: 'disconnect' }], stream: true }))); });
+      assert(await Promise.race([closed.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 1500))]), 'client mid-stream disconnect destroys upstream promptly');
+    });
+    await withProxy({ configPath, profile: '16gb', env: { CLAUDE_PROXY_NONSTREAM_BODY_CAP: '1024' } }, async ({ port }) => { stub.setHandler((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(response([{ type: 'message', content: [{ type: 'output_text', text: 'x'.repeat(2048) }] }]))); return true; }); const r = await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'large' }], stream: false })); assert(r.status === 502 && r.json?.type === 'error', 'oversized non-stream response is Anthropic error'); });
+    await withProxy({ configPath, profile: '16gb', env: {} }, async ({ port }) => {
+      stub.setHandler((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{not json'); return true; }); let r = await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'bad json' }], stream: false })); assert(r.status === 502 && r.json?.type === 'error', 'malformed non-stream response is Anthropic error');
+      stub.setHandler((req, res) => { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'nope' } })); return true; }); r = await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'fail' }], stream: false })); assert(r.status >= 500 && !r.json?.usage, 'pre-commit HTTP failure has no successful usage');
+      stub.setHandler((req, res) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.write('data: {malformed json}\n\n'); res.end(`data: ${JSON.stringify({ type: 'response.completed', response: response([]) })}\n\n`); return true; }); const s = await httpStream(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'bad SSE' }], stream: true })); assert(s.events.filter(e => e.event === 'message_delta').length === 1 && s.events.filter(e => e.event === 'message_stop').length === 1, 'malformed SSE line is ignored and terminal usage is emitted once');
+    });
+
   } finally {
     await stub.close();
     fs.rmSync(tmp, { recursive: true, force: true });

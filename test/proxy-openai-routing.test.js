@@ -96,9 +96,10 @@ async function main() {
       console.log('\n3. endpoints-shaped OpenAI auth uses Bearer token');
       const authCaptured = {};
       stub.setHandler(handler(authCaptured, { id: 'resp_auth', status: 'completed', output: [], usage: { input_tokens: 0, output_tokens: 0 } }));
-      await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'auth' }], stream: false }));
+      await httpJson(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'auth' }], stream: false }), { Authorization: 'Bearer hostile-client-token', 'x-api-key': 'hostile-client-key' });
       assert(authCaptured.value?.store === false && authCaptured.value?.stream === false, 'Responses stateless request fields forwarded');
       assert(stub.lastRequest()?.headers?.authorization === 'Bearer routing-secret', 'Authorization: Bearer key applied');
+      assert(stub.lastRequest()?.headers?.authorization !== 'Bearer hostile-client-token' && stub.lastRequest()?.headers?.['x-api-key'] !== 'hostile-client-key', 'hostile client auth headers are stripped');
 
       // 4. Fallback dispatch preserves the OpenAI call style ----------------
       console.log('\n4. Anthropic primary fallback re-dispatches to OpenAI Responses');
