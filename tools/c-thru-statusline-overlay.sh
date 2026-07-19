@@ -30,9 +30,13 @@ fi
 [ -n "$BASE_URL" ] || exit 0
 
 # Keep this on the TUI hot path: Claude refreshes statusline often and waits
-# for the command. Cap HTTP well under a second (was 2s) so a slow proxy cannot
-# stall redraw while the user types or moves the mouse.
-recent_json=$(curl -sf --max-time 0.25 --connect-timeout 0.15 "${BASE_URL}/c-thru/recent?n=5" 2>/dev/null)
+# for the command. Budget raised from the original 0.25s to 0.8s (was 2s
+# before that) after measuring real proxy round-trips up to ~540ms under
+# normal load — 0.25s was timing out on legitimate, non-slow responses, not
+# just genuinely stuck ones. Still bounded well below the old 2s ceiling.
+# `|| true` keeps a failed/timed-out curl from tripping the ERR trap above
+# mid-substitution — without it, the trap fires on curl's own exit status.
+recent_json=$(curl -sf --max-time 0.8 --connect-timeout 0.3 "${BASE_URL}/c-thru/recent?n=5" 2>/dev/null || true)
 [ -n "$recent_json" ] || exit 0
 
 fallback_entry=$(printf '%s' "$recent_json" | jq -c '.requests[]? | select(.fallback_from != null)' 2>/dev/null | head -1)

@@ -40,7 +40,7 @@ fi
 
 tracker_file="$HOME/.claude/.c-thru-stop-hook-last-ts"
 
-recent_json=$(curl -sf --max-time 2 "${BASE_URL}/c-thru/recent?n=20" 2>/dev/null)
+recent_json=$(curl -sf --max-time 2 "${BASE_URL}/c-thru/recent?n=20" 2>/dev/null || true)
 [ -n "$recent_json" ] || exit 0
 
 # Ring is newest-first; the first entry with fallback_from set is the most
