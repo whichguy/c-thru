@@ -1861,10 +1861,13 @@ function terminateCommittedResponse(ctx, res, isSse, logEvent, message, meta) {
   res[RES_TERMINATED] = true;
   // Optional meta: client_cancelled, backend, agent, tools_in, etc. — forensics only.
   const payload = Object.assign({ message }, meta && typeof meta === 'object' ? meta : {});
+  const errorType = meta && typeof meta === 'object' && typeof meta.errorType === 'string'
+    ? meta.errorType
+    : 'api_error';
   ctxLog(ctx, logEvent, payload);
   try {
     if (isSse) {
-      sseWrite(res, 'error', { type: 'error', error: { type: 'api_error', message } });
+      sseWrite(res, 'error', { type: 'error', error: { type: errorType, message } });
       if (res.writable) res.end();
     } else {
       res.destroy();
@@ -5328,6 +5331,7 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
       const response = data.response || data;
       const error = response.error || data.error || {};
       const message = error.message || 'Responses API returned status:failed';
+      const errorType = anthropicErrorType(null, JSON.stringify({ code: error.code, message: error.message }));
       if (!messageStarted) {
         streamTerminated = true;
         stopOpenAiPingFn();
@@ -5339,7 +5343,7 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
       stopOpenAiPingFn();
       if (!upstreamCancelled) markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(502, message));
       terminateCommittedResponse(ctx, res, true, 'openai.upstream.midstream_failed',
-        `upstream ${backend.id} failed mid-stream: ${message}`, { backend: backend.id });
+        `upstream ${backend.id} failed mid-stream: ${message}`, { backend: backend.id, errorType });
       try { upRes.destroy(); } catch {}
     };
 

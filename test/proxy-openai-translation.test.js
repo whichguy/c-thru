@@ -181,6 +181,16 @@ async function main() {
       assert(post.status === 200 && post.events.some(e => e.event === 'message_start') && postErrors.length === 1
         && postErrors[0].data?.type === 'error' && !post.events.some(e => e.event === 'message_stop'), 'post-commit response.failed emits exactly one terminal SSE error');
 
+      stub.setHandler((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({ type: 'response.output_item.added', output_index: 0, item: { type: 'message' } })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'output_text' } })}\n\n`);
+        res.end(`data: ${JSON.stringify({ type: 'response.failed', response: { status: 'failed', error: { code: 'rate_limit_exceeded', message: 'quota after start' } } })}\n\n`); return true;
+      });
+      const classifiedPost = await httpStream(port, 'POST', '/v1/messages', request({ messages: [{ role: 'user', content: 'x' }], stream: true }));
+      const classifiedPostErrors = classifiedPost.events.filter(e => e.event === 'error');
+      assert(classifiedPostErrors.length === 1 && classifiedPostErrors[0].data?.error?.type === 'rate_limit_error', 'post-commit response.failed preserves classified OpenAI error type');
+
       // 5b. Truncated streams are failures, never synthetic completion ------
       console.log('\n5b. Truncated SSE does not synthesize success');
       stub.setHandler((req, res) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end(); return true; });
