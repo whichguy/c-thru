@@ -3,7 +3,7 @@
 #
 #   <model> | <cwd> | <served> <in>/<out> | [fallback] -> <m> | dash :PORT
 #
-# One cheap GET /c-thru/recent (≤0.25s). ASCII only — no OSC-8 links (Claude
+# One cheap GET /c-thru/recent (≤0.8s). ASCII only — no OSC-8 links (Claude
 # Code statusline hyperlink support is unreliable). Plain dashboard host:port
 # is printable so users can open it manually.
 #
@@ -81,8 +81,11 @@ if [[ "${C_THRU_STATUSLINE_OVERLAY:-1}" != "0" ]] && command -v jq >/dev/null 2>
     PORT="$(cthru_hook_listen_port)"
   fi
   if [ -n "$BASE_URL" ]; then
-    recent_json=$(curl -sf --max-time 0.25 --connect-timeout 0.15 \
-      "${BASE_URL}/c-thru/recent?n=5" 2>/dev/null)
+    # A failed/timed-out curl must not trip the ERR trap above — that would
+    # exit 0 with NO output, discarding the already-computed model|cwd line.
+    # The `|| true` keeps this an optional enrichment, not an all-or-nothing gate.
+    recent_json=$(curl -sf --max-time 0.8 --connect-timeout 0.3 \
+      "${BASE_URL}/c-thru/recent?n=5" 2>/dev/null || true)
     if [ -n "$recent_json" ]; then
       last=$(printf '%s' "$recent_json" | jq -c '.requests[0] // empty' 2>/dev/null)
       show_fallback=""
