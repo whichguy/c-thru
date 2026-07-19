@@ -83,6 +83,7 @@ scenario() {
         CLAUDE_PROXY_JOURNAL=1 \
         CLAUDE_PROXY_JOURNAL_DIR="$JOURNAL_DIR" \
         C_THRU_NO_UPDATE=1 \
+        C_THRU_NO_MARKETPLACE_UPDATE=1 \
         CLAUDE_BIN="$CLAUDE_BIN" \
         bash "$C_THRU" -p "$prompt" >/dev/null 2>&1 || true
 

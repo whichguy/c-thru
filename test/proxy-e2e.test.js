@@ -66,6 +66,7 @@ function runCThru(model, extraArgs = []) {
     // every missing local_models entry from /v1/active-models (e.g. qwen3.6:35b).
     const env = Object.assign({}, process.env, {
       C_THRU_NO_UPDATE: '1',
+      C_THRU_NO_MARKETPLACE_UPDATE: '1',
       C_THRU_SKIP_PREPULL: '1',
       C_THRU_SKIP_PREFLIGHT: '1',
     });

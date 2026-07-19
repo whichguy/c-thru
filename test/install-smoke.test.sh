@@ -49,6 +49,10 @@ assert_symlink "cthru"             "$REPO_DIR/tools/c-thru"   # convenience alia
 assert_symlink "c-thru-map-changed" "$REPO_DIR/tools/c-thru-map-changed.sh"
 assert_symlink "verify-lmstudio-ollama-compat" "$REPO_DIR/tools/verify-lmstudio-ollama-compat.sh"
 assert_symlink "c-thru-ollama-probe" "$REPO_DIR/tools/c-thru-ollama-probe.sh"
+assert_symlink "c-thru-self-update" "$REPO_DIR/tools/c-thru-self-update.sh"
+assert_symlink "c-thru-hygiene-check" "$REPO_DIR/tools/c-thru-hygiene-check.sh"
+assert_symlink "c-thru-contract-check" "$REPO_DIR/tools/c-thru-contract-check.sh"
+assert_symlink "c-thru-marketplace-update" "$REPO_DIR/tools/c-thru-marketplace-update.sh"
 
 # ---------------------------------------------------------------------------
 # model-map files

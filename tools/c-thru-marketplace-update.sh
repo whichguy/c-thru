@@ -35,6 +35,12 @@ _stamp_is_fresh() {
 # The flock branch deliberately mirrors c-thru-ollama-gc.sh. The mkdir fallback
 # is PID-aware rather than age-based: plugin refreshes can legitimately exceed
 # thirty seconds, so an age cutoff could steal a live updater's lock.
+# `flock -x` (no `-n`) blocks until acquired rather than failing fast -- this is
+# intentional, not a missed non-blocking flag: every caller already backgrounds
+# this whole script and disowns it, so a second trigger blocking here just
+# waits quietly in its own subshell. _critical_section re-checks the debounce
+# stamp immediately after acquiring the lock, so the waiter finds the stamp
+# already fresh and returns without duplicating the first runner's work.
 _with_lock() {
   if [[ "${C_THRU_MARKETPLACE_UPDATE_FORCE_MKDIR_LOCK:-}" != "1" ]] && command -v flock >/dev/null 2>&1; then
     (flock -x 9; "$@") 9>"$LOCK_FILE"
@@ -57,10 +63,19 @@ _with_lock() {
   fi
 }
 
+# Single source of truth for "which Claude profile root are we operating
+# against" — both the preflight safety scan and the installed-plugin
+# enumeration must resolve the SAME directory, or a non-default profile
+# (CLAUDE_DIR/CLAUDE_CONFIG_DIR/C_THRU_MARKETPLACE_CLAUDE_DIR override) would
+# silently scan one location for safety while updating plugins in another.
+_claude_root() {
+  printf '%s' "${C_THRU_MARKETPLACE_CLAUDE_DIR:-${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}}"
+}
+
 _scan_marketplaces() {
   local _root _entry _dirty _counts _behind _ahead
   local -a _unsafe=()
-  local _claude_root="${C_THRU_MARKETPLACE_CLAUDE_DIR:-${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}}"
+  local _claude_root; _claude_root="$(_claude_root)"
   local _grok_root="${C_THRU_MARKETPLACE_GROK_DIR:-$HOME/.grok}"
 
   for _root in "$_claude_root/plugins/marketplaces" "$_grok_root/marketplace-cache"; do
@@ -107,21 +122,31 @@ _scan_marketplaces() {
   return 0
 }
 
+# Accepted residual risk: a plugin update landing here can race a concurrently
+# starting Claude Code session's own plugin discovery/load. This isn't a new
+# hazard this script introduces -- it's the same race that already exists
+# between a manual `claude plugin update` and a session start in another
+# terminal -- only marginally more likely now that updates fire automatically.
+# An already-running session is unaffected (its plugin code is already loaded;
+# see the module header for why that's the real "restart boundary"). Not
+# fixable from this script: plugin-write atomicity is the native CLI's
+# responsibility, not something a caller can coordinate around.
 _run_updates() {
   command -v claude >/dev/null 2>&1 && claude plugin marketplace update </dev/null 2>&1 || true
   command -v grok >/dev/null 2>&1 && grok plugin marketplace update </dev/null 2>&1 || true
   command -v codex >/dev/null 2>&1 && codex plugin marketplace upgrade </dev/null 2>&1 || true
 
   if command -v claude >/dev/null 2>&1; then
-    local _plugin_id
+    local _plugin_id _installed_json
+    _installed_json="$(_claude_root)/plugins/installed_plugins.json"
     # while/read (not a word-splitting `for $(...)`) so a plugin id containing
     # whitespace or shell-glob characters can't corrupt iteration or cross the
     # `claude plugin update` argument boundary.
     while IFS= read -r _plugin_id; do
       [[ -n "$_plugin_id" ]] || continue
       claude plugin update -- "$_plugin_id" </dev/null 2>&1 || true
-    done < <(node -e '
-      const p = require(process.env.HOME + "/.claude/plugins/installed_plugins.json");
+    done < <(CTHRU_INSTALLED_PLUGINS_JSON="$_installed_json" node -e '
+      const p = require(process.env.CTHRU_INSTALLED_PLUGINS_JSON);
       console.log(Object.keys(p.plugins || {}).join("\n"));
     ' 2>/dev/null)
   fi

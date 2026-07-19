@@ -151,7 +151,7 @@ function runPrompt(prompt) {
     encoding: 'utf8',
     timeout: TIMEOUT_S * 1000,
     maxBuffer: 64 * 1024 * 1024,
-    env: Object.assign({}, process.env, { C_THRU_NO_UPDATE: '1', CLAUDE_BIN: claudeBin }),
+    env: Object.assign({}, process.env, { C_THRU_NO_UPDATE: '1', C_THRU_NO_MARKETPLACE_UPDATE: '1', CLAUDE_BIN: claudeBin }),
   });
   const objs = [];
   let initEvent = null;

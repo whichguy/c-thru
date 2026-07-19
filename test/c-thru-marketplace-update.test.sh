@@ -170,7 +170,10 @@ echo "6c. Detached-HEAD clone exactly matching a remote branch is safe"
 echo "6d. Installed-plugin enumeration updates every configured plugin id"
 {
   D="$BASE/plugin-enum"; make_case "$D" claude
-  cat > "$D/home/.claude/plugins/installed_plugins.json" <<'JSON'
+  # _claude_root() resolves via C_THRU_MARKETPLACE_CLAUDE_DIR (set by run_update to
+  # "$d/scan-claude"), the same root _scan_marketplaces() reads -- not $HOME/.claude.
+  mkdir -p "$D/scan-claude/plugins"
+  cat > "$D/scan-claude/plugins/installed_plugins.json" <<'JSON'
 {"version":2,"plugins":{"async-suite@claude-craft":[{"scope":"user"}],"chrome-devtools-mcp@claude-plugins-official":[{"scope":"user"}]}}
 JSON
   run_update "$D"

@@ -1535,6 +1535,8 @@ run_native_claude_subcommand() {
     ensure_proxy_http_base || return 1
     export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
     ensure_proxy_client_api_key
+    # Brand / routed --model is also the map default + generalist for this proxy.
+    set_launch_default_model "$route_model"
     apply_background_model_overrides "$route_model"
     # Re-insert --model after the subcommand so Claude agent-view defaults to
     # the c-thru route name; the proxy resolves it (e.g. grok → grok-4.5 @ xai).
@@ -1677,9 +1679,16 @@ if [[ -x "$_benchmarks_update_script" ]]; then
   disown 2>/dev/null || true
 fi
 # Daily-debounced marketplace refresh. Soft-fail; never blocks launch.
+# stdin/stdout/stderr are all detached here (not just stderr): a disowned
+# background child that still holds the launching shell's stdout fd open
+# would keep any command-substitution caller of `c-thru` (e.g. `out=$(c-thru
+# ...)`) from returning until this job exits — which, under this script's own
+# "never kill a slow update" policy, could be an unbounded wait. The script
+# itself also logs to its own file, so nothing meaningful is lost by cutting
+# these descriptors here.
 _marketplace_update_script="$CTHRU_SELF_DIR/c-thru-marketplace-update.sh"
 if [[ -x "$_marketplace_update_script" ]]; then
-  ( bash "$_marketplace_update_script" 2>/dev/null ) & disown
+  ( bash "$_marketplace_update_script" </dev/null >/dev/null 2>&1 ) & disown
 fi
 # Discover paths and environment via Node helper (single source of truth)
 eval "$(CLAUDE_MODEL_MAP_LAUNCH_CWD="$LAUNCH_CWD" node "$CTHRU_SELF_DIR/model-map-config.js" --shell-env 2>/dev/null || true)"
@@ -2829,6 +2838,43 @@ proxy_logging_enabled() {
   [[ -n "${CLAUDE_PROXY_LOG_FILE:-}" || -n "${CLAUDE_PROXY_LOG_DIR:-}" ]]
 }
 
+# In-memory proxy launch default only — never a disk stamp or map edit.
+# $1 = model name (e.g. grok). Empty string clears.
+# 1) export for new proxy spawns  2) POST /c-thru/launch-default if a proxy is live
+set_launch_default_model() {
+  local m="${1:-}"
+  local port body _ct_args=() _ct_line
+  if [[ -n "$m" ]]; then
+    export C_THRU_LAUNCH_DEFAULT_MODEL="$m"
+    if command -v node >/dev/null 2>&1; then
+      body="$(node -e 'process.stdout.write(JSON.stringify({model: process.argv[1]}))' "$m" 2>/dev/null || true)"
+    fi
+    [[ -n "$body" ]] || body="$(printf '{"model":"%s"}' "${m//\\/\\\\}")"
+  else
+    unset C_THRU_LAUNCH_DEFAULT_MODEL 2>/dev/null || true
+    body='{"model":null}'
+  fi
+  if [[ -n "${C_THRU_DEBUG:-}" && "${C_THRU_DEBUG}" != "0" ]]; then
+    echo "c-thru: launch default model=${m:-<cleared>} (in-memory proxy routes.default + generalist)" >&2
+  fi
+  # Best-effort push to a live proxy (reuse / already-up). Fail-open: spawn path
+  # seeds via C_THRU_LAUNCH_DEFAULT_MODEL env if the proxy is not up yet.
+  port="${PROXY_PORT:-${CLAUDE_PROXY_PORT:-}}"
+  if [[ -z "$port" ]] && declare -F claude_proxy_listen_port >/dev/null 2>&1; then
+    port="$(claude_proxy_listen_port 2>/dev/null || true)"
+  fi
+  if [[ -n "$port" ]]; then
+    _ct_args=()
+    while IFS= read -r _ct_line; do _ct_args+=("$_ct_line"); done < <(control_token_curl_args 2>/dev/null || true)
+    curl -sf --max-time 1 -X POST ${_ct_args[@]+"${_ct_args[@]}"} \
+      -H 'Content-Type: application/json' \
+      -d "$body" \
+      "http://127.0.0.1:${port}/c-thru/launch-default" >/dev/null 2>&1 || true
+  fi
+  # Drop legacy disk stamp from the previous file-based implementation.
+  rm -f "${HOME}/.claude/proxy.launch-default-model" 2>/dev/null || true
+}
+
 ensure_proxy_log_parent_dir() {
   local target="$1"
   [[ -n "$target" ]] || return 1
@@ -2953,6 +2999,7 @@ ensure_proxy_running() {
     printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} starting...\r" "proxy" >&2
     C_THRU_DEBUG="${C_THRU_DEBUG:-}" \
     CLAUDE_MODEL_MAP_PATH="$CONFIG" \
+    C_THRU_LAUNCH_DEFAULT_MODEL="${C_THRU_LAUNCH_DEFAULT_MODEL:-}" \
       "$proxy_js" >"$ready_pipe" 2>"$temp_log" &
     PROXY_STARTED_PID="$!"
     # Braille spinner during blocking READY wait — killed via global _PROXY_SPIN_PID
@@ -5537,6 +5584,13 @@ if [[ -f "$CONFIG" ]]; then
   EFFECTIVE_MODEL="$(resolve_routes_graph "$MODEL")" || exit 1
 fi
 EFFECTIVE_MODEL="$(resolve_profile_alias_model "$EFFECTIVE_MODEL")" || exit 1
+# User-specified --model (or explicit --route target) becomes proxy routes.default
+# last-resort + generalist. Auto-picked routes.default alone does not stamp.
+if [[ -n "${explicit_model:-}" ]]; then
+  set_launch_default_model "$explicit_model"
+elif [[ -n "${route_name:-}" && "$route_name" != "default" ]]; then
+  set_launch_default_model "$MODEL"
+fi
 log_llm_profile_selection "$EFFECTIVE_MODEL"
 if [[ -n "$print_routing_only" ]]; then
   printf "  ${GRAY}•${NC} ${BOLD}%-10s${NC} %s\n" "dry-run" "--print-routing — routing shown above; proxy/session NOT started" >&2

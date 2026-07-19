@@ -56,6 +56,7 @@ function runCthru({ modelArg, args, extraEnv = {}, ...config }) {
       PATH: `${fakeBin}:${process.env.PATH}`,
       CLAUDE_MODEL_MAP_PATH: configPath,
       C_THRU_NO_UPDATE: '1',
+      C_THRU_NO_MARKETPLACE_UPDATE: '1',
       C_THRU_SESSION_SCOPED_MODE: '1',
       C_THRU_SKIP_PREPULL: '1',
       CLAUDE_PROXY_STARTUP_PROBE: '0',

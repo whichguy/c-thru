@@ -121,6 +121,7 @@ async function main() {
         PATH: `${fakeBin}:${process.env.PATH}`,
         CLAUDE_MODEL_MAP_PATH: listConfig,
         CLAUDE_ROUTER_NO_UPDATE: '1',
+        C_THRU_NO_MARKETPLACE_UPDATE: '1',
         C_THRU_SKIP_PREPULL: '1',
         C_THRU_SKIP_PREFLIGHT: '1',
         CLAUDE_PROXY_STARTUP_PROBE: '0',
