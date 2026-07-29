@@ -1,74 +1,30 @@
-# TODO: Align README and install.sh with current c-thru code
+# Residual: installer / lifecycle (post README alignment)
 
-## Problem
+**Status:** user-facing README / onboarding alignment treated as current (Honest Onboarding docs tranche).  
+**This file tracks residual installer and lifecycle items only** — not a claim that the product README is outdated.
 
-Both `README.md` and `install.sh` were written earlier in the
-project's life and may no longer reflect the current code surface. Recent
-changes that likely need to be documented/installed:
+## Resolved (do not reopen as “README drift”)
 
-- `claude-proxy` migrated Ollama CLI spawns to HTTP (`/api/tags`,
-  `/api/pull`, `/api/ps`, `/api/generate`); the `ollama` CLI is no longer
-  a runtime dependency — README should stop implying it is.
-- New env vars: `CLAUDE_PROXY_OLLAMA_PULL_TIMEOUT_MS`,
-  `CLAUDE_PROXY_OLLAMA_WARM_TIMEOUT_MS`, `CLAUDE_PROXY_OLLAMA_KEEP_ALIVE`
-  (warm behavior) — document in the env-var table.
-- `llm-capabilities-mcp.js` MCP server registration — confirm installer
-  still wires it into `~/.claude.json` correctly.
-- Hook registrations (`c-thru-session-start.sh`,
-  `c-thru-proxy-health.sh`, `c-thru-classify.sh`, `c-thru-map-changed.sh`)
-  — installer should idempotently add/refresh the `hooks` entries in
-  `~/.claude/settings.json` (SessionStart, PostCompact, UserPromptSubmit,
-  FileChanged). Verify the hook-port plumbing (`CLAUDE_PROXY_HOOKS_PORT`,
-  default 9998) matches what the scripts expect.
-- `/hooks/context` HTTP hook registration (referenced in settings.json)
-  — confirm installer creates this entry.
+- Ephemeral fleet hooks + MCP inject on the CLI path; durable global fleet-hook re-wiring is not the primary design
+- Non-destructive model-map system / overrides seeding
+- Plugin hook inventory (including PostToolUse for map-changed) documented via plugin bundle + CLAUDE ephemeral surfaces
+- `uninstall.sh` exists (supports `--dry-run`); user-facing docs invoke via `bash uninstall.sh`
+- Ollama **wire** path is HTTP (`/v1/messages`); optional Ollama **CLI** remains for local model prep / lifecycle convenience, not as a required proxy runtime dependency for Messages translation
+- Env names `CLAUDE_PROXY_OLLAMA_PULL_TIMEOUT_MS` / `…_WARM_TIMEOUT_MS` are **gone** from code (do not re-document)
 
-## Deeply consider the Claude Code setup
+## Open residuals
 
-- Which hooks should be GLOBAL (fire on every Claude session) vs
-  SCOPED (only when `ANTHROPIC_BASE_URL` points at the proxy)? Today
-  some c-thru hooks fire globally and touch the proxy even on non-c-thru
-  sessions — see `TODO-user-hook-model-rewriting.md`. The installer
-  should reflect the scoping decision when it writes the settings
-  entries (e.g., add a trivial guard wrapper or let each script self-gate).
-- Which MCP servers does c-thru *require* (`llm-capabilities-mcp`) vs
-  *integrate with* (optional: chrome-devtools for UI debugging, gas
-  tooling for the user's adjacent work)? README should be explicit.
-- What is the uninstall path? Today `install.sh` has no paired
-  uninstaller — decide whether to add one or document manual removal
-  (delete symlinks in `~/.claude/tools/`, remove settings.json hook
-  entries, drop `~/.claude/model-map.json` if user-seeded).
-- Should install.sh verify `node >= <version>` and bail loudly if not
-  met? (Proxy uses `AbortController`, which requires Node >= 15.0.)
-- Does the installer touch `~/.claude/model-map.json` destructively or
-  additively? The 3-tier layered lookup (project -> user -> shipped)
-  means the user layer should be preserved across upgrades.
+| Item | Priority | Notes |
+|------|----------|-------|
+| Document `CLAUDE_PROXY_OLLAMA_KEEP_ALIVE` | P1 | Default `60m` in proxy; land in `docs/env-vars.md` with docs tranche |
+| User-facing uninstall docs | P0 | Code done; document `bash uninstall.sh [--dry-run]` in README / getting-started |
+| `install.sh` executable bit vs `bash install.sh` | P0 | Product chose **docs use `bash install.sh`** (no mode flip in docs tranche) |
+| `install.sh --dry-run` | P3 | Optional; uninstall already has dry-run |
+| Node missing/old: warn vs hard-fail | P3 | Product UX decision; installer currently warns |
+| Delete dead `install_skills_cthru()` | P2 | Separate code commit; docs already note no call site |
 
-## Deliverable
+## Non-goals for residual cleanup
 
-1. Walk the current `tools/`, `config/`, and `wiki/` trees; produce a
-   surface inventory.
-2. Diff that inventory against what `README.md` currently describes and
-   what `install.sh` currently installs.
-3. Update README.md: fix the install steps, env-var table, architecture
-   diagram, and hook inventory.
-4. Update install.sh: idempotent settings.json editing for hook/MCP
-   registration, Node version check, non-destructive model-map seeding,
-   and — explicitly — handle the "Claude Code setup" scoping question
-   resolved above.
-5. Add a `--uninstall` flag or a companion `uninstall.sh` that reverses
-   the installer's effects cleanly.
-6. Dry-run mode (`install.sh --dry-run`) that prints what *would*
-   change without mutating `~/.claude/`.
-
-## Recent changes that may require installer updates
-
-- `hookEventName` is now required in all `hookSpecificOutput` emissions
-  (Claude Code v2.1.114+). The four hook scripts (`c-thru-session-start.sh`,
-  `c-thru-classify.sh`, `c-thru-map-changed.sh`, `c-thru-proxy-health.sh`)
-  are fixed. Verify installer symlinks the updated versions and that
-  `~/.claude/settings.json` hook entries match the registered event names.
-- `c-thru-map-changed.sh` is registered as `PostToolUse` (not `FileChanged`).
-  Confirm the settings.json entry uses the correct event name.
-- Proxy `requestMeta` crash (fix: 35ccb58) — if any user has an older proxy
-  binary cached, `pkill -f claude-proxy` will force a respawn from the updated source.
+- Restoring a deleted `.githooks/` tree without a separate product decision
+- Reintroducing durable fleet hooks into profile settings as the default install path
+- Documenting unlanded launcher flags/routes ahead of their code commits

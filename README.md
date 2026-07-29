@@ -4,7 +4,7 @@
 
 `c-thru` slots between an unmodified Claude Code binary and your chosen backend(s). It selects models per hardware tier, translates Anthropic's Messages API to other wire protocols where needed, and forwards everything else verbatim. A single session can run a planner against cloud Sonnet and a coder against a local Qwen3.6.
 
-> **Intent.** c-thru is a transparent LLM router for Claude Code: it proxies the Anthropic Messages API and re-routes each request — by **capability**, **hardware tier**, and **connectivity mode** — to local Ollama, OSS cloud (OpenRouter), Gemini, Bedrock, or Anthropic, translating wire formats and orchestrating a **27-agent fleet** (22 pipeline/utility + 5 brand-name model pins), with no change to the Claude Code binary. See [Use cases](#use-cases) for what that buys you and [Agent routing reference](#agent-routing-reference) for the full agent→model→endpoint mapping.
+> **Intent.** c-thru is a transparent LLM router for Claude Code: it proxies the Anthropic Messages API and re-routes each request — by **capability**, **hardware tier**, and **connectivity mode** — to local Ollama, OSS cloud (OpenRouter), Gemini, xAI Responses, Bedrock, or Anthropic, translating wire formats and orchestrating a **27-agent fleet** (22 pipeline/utility + 5 brand-name model pins), with no change to the Claude Code binary. See [Use cases](#use-cases) for what that buys you and [Agent routing reference](#agent-routing-reference) for the full agent→model→endpoint mapping.
 
 ---
 
@@ -20,7 +20,7 @@ Install the plugin from the `claude-craft` marketplace:
 
 > **`planning-suite` is required** for `/cplan` and the wave-based plan scheduler. Skip it only if you don't intend to use the agentic planning skill.
 
-Restart Claude Code. The `SessionStart` hook spawns the proxy on a fixed port and writes `ANTHROPIC_BASE_URL` into your settings; subsequent launches pick it up automatically. Verify with:
+Restart Claude Code so the plugin loads. On the first SessionStart after install, the hook may spawn the proxy and write `ANTHROPIC_BASE_URL` into your settings — that settings change applies on the **next** launch, so you may need a **second** restart (or a new session) before the client honors the base URL. Then verify with:
 
 ```
 /c-thru-status
@@ -45,20 +45,21 @@ export XAI_API_KEY="xai-..."              # Grok brand leaf + gov generalist/wri
 
 **Brand-name agents** (CLI install / `c-thru` only): say *“ask agent grok …”*, *“ask deepseek …”*, *“use qwen …”*, *“ask kimi …”*, *“use gemini …”*. Definitions live in repo `agents/*.md` and are **runtime-injected** each launch via ephemeral `--agents` JSON — they are **not** installed into Claude’s durable agent store (`~/.claude/agents/`). Plain `claude` without `c-thru` does not load them. Each is a leaf agent whose `model:` pin resolves to that vendor’s concrete model (Grok needs `XAI_API_KEY`). Chinese-origin brands (deepseek/qwen/kimi) are filtered under `best-cloud-gov` / `best-local-gov`.
 
-**Grok has three surfaces** (see [docs/agent-architecture.md § Grok surfaces](docs/agent-architecture.md#grok-surfaces-brand-vs-gov-vs-cli)): (A) the brand leaf above for short opinions via the proxy, (B) silent `best-cloud-gov` routing of `generalist`/`writer` to `grok-4.5` (same proxy path, same `XAI_API_KEY`), and (C) the separate **Grok Build CLI** via the marketplace `grok-cc` plugin (`grok login` and/or `XAI_API_KEY`) for implement/fix/review loops. Do not use the brand leaf for multi-file Grok coding work — use `coder` / Codex, or `grok-cc` when installed.
+**Grok has three surfaces** (see [docs/agent-architecture.md § Grok surfaces](docs/agent-architecture.md#grok-surfaces-brand-vs-gov-vs-cli)): (A) the brand leaf above for short opinions via c-thru's Anthropic↔xAI Responses translator, (B) silent `best-cloud-gov` routing of `generalist`/`writer` to the same `grok-4.5` API path (also `XAI_API_KEY`), and (C) the separate **Grok Build CLI** via the marketplace `grok-cc` plugin for subscription/login-backed implement/review loops. Prefer `grok-cc` for multi-file Grok-owned work; the brand leaf is for short opinions, not a full coding session. Anthropic does not officially support routing Claude Code to non-Claude models — any full-session non-Claude path is an opt-in compatibility surface, not an Anthropic-supported configuration.
 
 ---
 
 ## Plugin vs CLI: which install do I want?
 
-The marketplace plugin is the right starting point for most users. The CLI install path (`./install.sh`, see [Appendix A](#appendix-a-cli-install-for-contributors-and-advanced-users)) adds a `c-thru` terminal binary and the surfaces that need it: the agent fleet, the `llm-capabilities` MCP server, runtime control subcommands, and flag-driven mode/profile selection.
+The marketplace plugin is the right starting point for most users. The CLI install path (`bash install.sh`, see [Appendix A](#appendix-a-cli-install-for-contributors-and-advanced-users)) adds a `c-thru` terminal binary and the surfaces that need it: the agent fleet, the `llm-capabilities` MCP server, runtime control subcommands, and flag-driven mode/profile selection.
 
-| Surface | Plugin (marketplace) | CLI (`./install.sh`) |
+| Surface | Plugin (marketplace) | CLI (`bash install.sh`) |
 |---|:---:|:---:|
 | `claude-proxy` runtime + auto-spawn on session start | ✓ | ✓ |
 | Model-map seeding (`model-map.system.json`, overrides preserved) | ✓ | ✓ |
 | `ANTHROPIC_BASE_URL` auto-registration in settings | ✓ | (set per launch) |
-| Slash commands `/c-thru-status`, `/cplan` | ✓ | ✓ |
+| Slash command `/c-thru-status` | ✓ | ✓ |
+| Slash command `/cplan` (needs `planning-suite`; full 27-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
 | Skills `c-thru-plan`, `c-thru-config`, `c-thru-control` | ✓ | ✓ |
 | User-wide hooks — fire in every Claude Code session (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) | ✓ | — |
 | Ephemeral hooks — injected per `c-thru` launch only (no static project `.claude` hooks) | — | ✓ |
@@ -85,11 +86,11 @@ Hooks and agent scripts live **in the git repo** (`tools/c-thru-*.sh`, mirrored 
 | `cthru agents --model grok` | ✓ (brand models) | — (commander rejects) | Re-inserted; proxy resolves | No CLI ephemeral inject (plugin hooks only if installed) |
 | `cthru agents --model sonnet` | optional / not forced | — | Claude-native alias kept | No CLI ephemeral inject (plugin hooks only if installed) |
 | Brand Agent tool inside main `cthru` (“ask grok”) | ✓ (sentinel + map) | Parent has fleet; leaf is one-shot | Via `agent_to_capability` | Parent session hooks |
-| `grok-cc` / Grok Build CLI | external | n/a | CLI auth | n/a |
+| `grok-cc` / Grok Build CLI | external | n/a | CLI login (preferred) or API-key fallback | n/a |
 | Plain `claude` (no plugin, no `cthru`) | — | — | Anthropic only | none from c-thru |
 | Plain `claude` + marketplace plugin | ✓ (plugin SessionStart) | — (no CLI fleet inject) | map if proxy routes | Plugin always-on |
 
-**Pick the right entry point:** full planner/coder fleet → main `cthru` chat (CLI install). Brand opinion leaf → “ask agent grok” inside that chat. Agent-view UI with a non-Anthropic default → `cthru agents --model grok` (proxy yes, fleet no). Multi-file Grok implement/review → `coder` or `grok-cc`, not the brand leaf.
+**Pick the right entry point:** full planner/coder fleet → main `cthru` chat (CLI install). Brand opinion leaf → “ask agent grok” inside that chat. Subscription-backed Grok-owned implement/review loop → `grok-cc`.
 
 **Routing forensics without fleet inject:** use `c-thru list` or `/c-thru-status` (needs a live proxy — started by main `cthru` or a native brand `agents` launch). Port discovery uses `proxy.pid` / `CLAUDE_PROXY_PORT` / `ANTHROPIC_BASE_URL`; agent-view does not inject SessionStart control-plane hooks.
 
@@ -122,7 +123,7 @@ FIFO handshake failure modes): [docs/architecture-diagrams.md § 1](docs/archite
 claude-proxy (Node.js, stdlib only):
   - resolves capability alias → llm_profiles[capability][mode][tier] → concrete model
   - rewrites: model field, URL/Host, auth headers, model_overrides, @sigil
-  - translates Anthropic ↔ Gemini where needed (forwardGemini)
+  - translates Anthropic ↔ Gemini and OpenAI-compatible Responses (OpenAI/xAI)
   - forwards Ollama via /v1/messages (Ollama 0.4+) — preserves tool_use, thinking
   - catch-all passthrough for anything not explicitly handled
   - stamps x-c-thru-* response headers (resolved-via, translation-gap, …)
@@ -204,12 +205,12 @@ Agents are selected by matching the task against each agent's frontmatter `descr
 
 ### Agent routing reference
 
-The full mapping, all the way through the implementation: **agent → capability → concrete model (per mode) → endpoint**. Models shown at the reference tier **`64gb`**; the columns are the three primary [routing modes](#routing-modes). The endpoint column is for `best-cloud` (the default mode); `test/agent-mapping-complete.test.js` verifies that *every* agent resolves to a live endpoint across all 5 modes × 5 tiers, so this table can't silently drift.
+The full mapping, all the way through the implementation: **agent → capability → concrete model (per mode) → endpoint**. Models shown at the reference tier **`64gb`**; the columns are the three primary [routing modes](#routing-modes). The endpoint column is for `best-cloud` (**table column**; product default mode is [`best-cloud-oss`](#routing-modes)); `test/agent-mapping-complete.test.js` verifies that *every* agent resolves to a live endpoint across all 5 modes × 5 tiers, so this table can't silently drift.
 
-> This table is **generated** from `config/model-map.json` and verified on every commit — do not hand-edit
-> the rows between the sentinel markers. Regenerate after any config bump with `make docs`
-> (or `node tools/gen-routing-doc.js`); pre-commit runs `gen-routing-doc.js --check` and fails if it drifted.
-> See [`docs/derived-artifacts.md`](docs/derived-artifacts.md) for the self-update pattern and roadmap.
+> This table is **generated** from `config/model-map.json` — do not hand-edit the rows between the sentinel
+> markers. Regenerate after any config bump with `make docs` (or `node tools/gen-routing-doc.js`).
+> Drift is caught by `node tools/gen-routing-doc.js --check`, registered in the hermetic suite
+> (`make test` / `test/run-all.sh`). See [`docs/derived-artifacts.md`](docs/derived-artifacts.md).
 
 <!-- BEGIN routing-table (generated by tools/gen-routing-doc.js — run it, don't hand-edit) -->
 | Agent | Capability | `best-cloud` | `best-cloud-oss` | `best-local-oss` | Endpoint (`best-cloud`) |
@@ -282,8 +283,10 @@ Tests covering these surfaces:
 
 ## Further reading
 
+- [`docs/getting-started.md`](docs/getting-started.md) — onboarding for new contributors (clone → first change → green suite)
 - [`CLAUDE.md`](CLAUDE.md) — full developer reference (env vars, runtime control, model-map schema, contributor invariants)
 - [`docs/anthropic-api-coverage.md`](docs/anthropic-api-coverage.md) — endpoint × backend coverage matrix, content-block sub-matrix, server-tool sub-matrix
+- [`docs/openai-gap-roadmap.md`](docs/openai-gap-roadmap.md) — OpenAI / Responses-path coverage inventory and gap roadmap
 - [`docs/headers.md`](docs/headers.md) — every `x-c-thru-*` response header (routing, cache, translation gaps, thinking observability, deprecation)
 - [`docs/env-vars.md`](docs/env-vars.md) — full environment variable reference
 - [`docs/subscription-auth.md`](docs/subscription-auth.md) — using Claude.ai subscription instead of API billing
@@ -294,15 +297,24 @@ Tests covering these surfaces:
 
 ## Appendix A: CLI install (for contributors and advanced users)
 
-The CLI install adds the `c-thru` terminal binary and the surfaces that depend on it (agent fleet, MCP server, control subcommands, flag-driven routing). Use it if you want flag-driven mode/profile selection, want to inspect resolution with `c-thru explain`, or you're contributing to the repo.
+The CLI install adds the `c-thru` terminal binary and the surfaces that depend on it (agent fleet, MCP server, control subcommands, flag-driven routing). Use it if you want flag-driven mode/profile selection, want to inspect resolution with `c-thru explain`, or you're contributing to the repo. First-contribution walkthrough: [`docs/getting-started.md`](docs/getting-started.md).
 
 ```bash
 git clone https://github.com/whichguy/c-thru.git
 cd c-thru
-./install.sh
+bash install.sh
 ```
 
-`install.sh` symlinks `tools/` into `~/.claude/tools/` and seeds `~/.claude/model-map.system.json` from `config/model-map.json`. User overrides go in `~/.claude/model-map.overrides.json` and are preserved across upgrades. Full filesystem footprint: see the "Filesystem footprint" section of [`CLAUDE.md`](CLAUDE.md).
+(`install.sh` is invoked with `bash` so a fresh checkout works without a git executable bit.)
+
+`install.sh` symlinks a curated tool set into `~/.claude/tools/` and seeds `~/.claude/model-map.system.json` from `config/model-map.json`. User overrides go in `~/.claude/model-map.overrides.json` and are preserved across upgrades. Full filesystem footprint: see the "Filesystem footprint" section of [`CLAUDE.md`](CLAUDE.md).
+
+To reverse the install (overrides preserved):
+
+```bash
+bash uninstall.sh --dry-run
+bash uninstall.sh
+```
 
 Verify:
 
@@ -337,7 +349,7 @@ c-thru --route background --model gemma4:26b     # named route + explicit model
 | `--mode <m>` | `CLAUDE_LLM_MODE` | Routing mode |
 | `--profile <t>` | `CLAUDE_LLM_PROFILE` | Force hardware tier |
 | `--memory-gb <n>` | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection |
-| `--bypass-proxy` | `CLAUDE_PROXY_BYPASS=1` | Skip proxy entirely |
+| `--bypass-proxy` | `CLAUDE_PROXY_BYPASS=1` | Skip proxy entirely on the native `api.anthropic.com` path; other explicit routes fail fast because their protocol/auth/path adaptation requires the proxy |
 | `--journal` | `CLAUDE_PROXY_JOURNAL=1` | Per-request journaling |
 | `--proxy-debug [N]` | `CLAUDE_PROXY_DEBUG=N` | Proxy verbose logs |
 | `--router-debug [N]` | `C_THRU_DEBUG=N` | Router verbose logs |
@@ -358,6 +370,7 @@ Full env-var reference: [`docs/env-vars.md`](docs/env-vars.md). Runtime control 
 make check              # syntax checks (bash -n, node --check) + schema validation
 make test               # hermetic suite (proxy + model-map; skip slow smoke) (~2 min)
 make test-all           # full suite including smoke / long e2e
+make test-live-all      # strict full suite with every live/provider/model gate enabled
 make test-fast          # deprecated alias for `make test`
 
 # Targeted:
@@ -368,21 +381,21 @@ bash test/c-thru-bootstrap-auth-env.test.sh  # interactive auth bootstrap (TTY-m
 
 The plugin bundle at `plugins/c-thru/` must mirror the source `tools/` and `skills/` directories. After editing a source file, sync with `tools/sync-plugin-bundle.sh`.
 
-### Git gates (`.githooks/`, armed via `core.hooksPath`)
+### Suite gates (run by hand or via `make test`)
 
-Two tiers run automatically on commit and push — you don't have to remember them, but you can run any piece by hand:
+There is no required repo-local pre-commit / pre-push hook tree for c-thru today. The hermetic suite (`make test` / `test/run-all.sh --skip-smoke`) is the always-on gate and includes drift **Validators** such as:
 
-- **pre-commit** (fast, deterministic): bundle + routing-table sync (`sync-plugin-bundle.sh --check`, `gen-routing-doc.js --check`), `bash -n` / `node --check` syntax + `model-map` schema validation, and the agent/skill **contract check** (`c-thru-contract-check.sh`) with its guard-bite meta-test (`contract-check-guards-bite.test.sh`).
-- **pre-push** (broad): the hermetic suite via `test/run-all.sh --skip-smoke` (same as `make test`) — which includes the contract-check *harness* that exercises the `REPO_DIR` rewrite the commit-time checker alone cannot. Override with `git push --no-verify`.
+- `tools/sync-plugin-bundle.sh --check`
+- `node tools/gen-routing-doc.js --check`
+- `node tools/check-diagram-sync.js`
+- agent/skill **contract check** (`tools/c-thru-contract-check.sh`) and related harnesses
 
-A `gate-coverage` meta-test (`test/gate-coverage.test.js`) keeps the two tiers bound: every artifact pre-commit runs must also be a registered suite in `run-all.sh`, so a green commit can never mean less than a green suite.
-
-Run any check directly:
+Run any piece directly:
 
 ```bash
 bash tools/c-thru-contract-check.sh   # exit 0 = clean; exit 1 = contract violations
 bash tools/c-thru-hygiene-check.sh    # working-tree hygiene check (not gated)
-bash test/run-all.sh --skip-smoke     # the pre-push / default suite (or: make test)
+bash test/run-all.sh --skip-smoke     # default hermetic suite (or: make test)
 bash test/run-all.sh                  # full suite including smoke (or: make test-all)
 ```
 

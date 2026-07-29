@@ -15,10 +15,14 @@
 - **Launcher** `tools/c-thru` (dynamically exec's `c-thru-control`, `model-map-config.js`,
   `model-map-layered.js`; loads top-level `agents/*.md` only).
 - **Proxy** `tools/claude-proxy` (uses `model-map-resolve.js`).
-- **install.sh** symlinks a fixed tool subset + symlinks **all** of `skills/*/` into
-  `~/.claude/skills/c-thru/`.
+- **install.sh** symlinks a **curated** executable tool subset into `~/.claude/tools/`.
+  It does **not** durable-install `skills/*` into `~/.claude/skills/c-thru/` (that path is
+  actively cleaned by `cleanup_old_persistent_config()`; skills reach Claude via ephemeral
+  inject / marketplace plugin, not a persistent profile skills tree).
+  Note: `install_skills_cthru()` exists in `install.sh` but has **no call site** (dead helper;
+  track as separate code cleanup).
 - **Plugin bundle** `plugins/c-thru/` ships only `SKILLS=(c-thru-plan c-thru-config c-thru-control)` via
-  `tools/sync-plugin-bundle.sh`.
+  `tools/sync-plugin-bundle.sh` (allowlisted mirror, not a full tools/ tree copy).
 - **Tests** `test/run-all.sh` (non-recursive coverage; `supervisor-benchmark/` explicitly excluded).
 
 ---

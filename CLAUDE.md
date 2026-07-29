@@ -144,11 +144,11 @@ flowchart TD
 ```
 <!-- END shared-diagram:launch-flow -->
 
-Every backend (Anthropic, OpenRouter, Ollama) always routes through the spawned proxy unless
-`CLAUDE_PROXY_BYPASS=1` is set — the proxy passes real-Anthropic/OpenRouter/modern-Ollama
-requests through to `/v1/messages` near-verbatim (`forwardAnthropic`) and only does a legacy
-`/api/chat` translation for backends explicitly marked `format:"ollama-legacy"`
-(`forwardOllamaLegacy`). Ephemeral injection on exec:
+Every backend always routes through the spawned proxy unless `CLAUDE_PROXY_BYPASS=1` is set.
+The proxy passes real-Anthropic/OpenRouter/modern-Ollama requests through to `/v1/messages`
+near-verbatim (`forwardAnthropic`), translates `format:"openai"` endpoints (OpenAI and xAI)
+through `/v1/responses`, and only uses `/api/chat` for backends explicitly marked
+`format:"ollama-legacy"` (`forwardOllamaLegacy`). Ephemeral injection on exec:
   - `ANTHROPIC_BASE_URL=http://127.0.0.1:<proxy_port>`
   - `ANTHROPIC_AUTH_TOKEN="ollama"` (for local/spoofed backends)
   - `--settings <inline json>` (injects hooks & llm-capabilities MCP)
@@ -176,12 +176,12 @@ For endpoints with `format: "anthropic"` and a localhost URL (local Ollama), the
 ### model-map.json schema
 
 Top-level keys: `endpoints` (or legacy `backends`), `routes`, `models` (models is sparse — most resolution is done via endpoints + routes).
-- `endpoints`: connection metadata (format, url, auth). `format` defaults to `"anthropic"` when absent; valid values: `"anthropic"`, `"openai"`, `"ollama-legacy"`. Legacy `backends` key accepted as alias. For local Ollama, set `"auth": "none"`.
+- `endpoints`: connection metadata (format, url, auth). `format` defaults to `"anthropic"` when absent; valid values: `"anthropic"`, `"openai"`, `"ollama-legacy"`. Legacy `backends` key accepted as alias. For local Ollama, set `"auth": "none"`. Optional boolean `preserve_claude_code_correlation` explicitly trusts (`true`) or strips (`false`) Claude Code session/agent/parent correlation headers on Messages and catch-all requests. If absent, legacy behavior trusts only endpoint id `anthropic` or `anthropic.com` subdomains.
 - `auth` field: `"none"` (strip all auth), absent (passthrough — forward client's Authorization/x-api-key verbatim), `"auth_env": "KEY_NAME"` shorthand (inject `Authorization: Bearer $KEY_NAME`), or full object `{"header": "...", "scheme": "...", "env": "KEY_NAME"}`. Scheme defaults to `"Bearer"` when header is `"Authorization"`, empty otherwise.
 - `model_routes` entries: string `"backend-id"`, mode-conditional object `{"connected": "anthropic", "offline": "..."}`, or v2 alias object `{"endpoint": "anthropic", "name": "claude-opus-4-7"}` for model name aliasing.
 - `routes`: named presets → `{model, backend, env, …}`. `routes.default` is used when no flag is passed.
 - `model_overrides` (optional): flat `{"concrete-model": "replacement"}` map applied before route/alias resolution. Example: `{"gemma4:26b": "gemma4:31b"}` redirects all uses of the 26b model. Unconditional — covers primary requests and fallback candidates.
-- Model resolution order: `--route` flag → `routes.default` → `--model` flag → Ollama passthrough.
+- Model resolution order: `--model` flag → `--route` flag → `routes.default` → Ollama passthrough.
 
 ### model-map selection and layering
 
@@ -383,7 +383,7 @@ tier_budget values are hand-copied from each `agents/*.md` frontmatter — updat
 
 | Agent | Pin target |
 |---|---|
-| `grok` | `grok-4.5` @ `xai` (`XAI_API_KEY`) — opinion/critique leaf only; multi-file Grok implement/review → `coder` or external `grok-cc` CLI (see `docs/agent-architecture.md` § Grok surfaces) |
+| `grok` | `grok-4.5` @ xAI Responses (`XAI_API_KEY`) — opinion/critique leaf. Subscription-backed Grok-owned implement/review: external `grok-cc` CLI. |
 | `deepseek` | `deepseek-v4-pro:cloud` |
 | `qwen` | `qwen3.6:35b` |
 | `kimi` | `kimi-k2.7-code:cloud` |
