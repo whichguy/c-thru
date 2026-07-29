@@ -260,8 +260,8 @@ hooks, bundled runtime tools + config. Detail: README, plugin README.
 
 | Capability | Entrypoint | Status |
 |---|---|---|
-| install.sh (8 idempotent phases; `--skip-e2e`) | `./install.sh` | full |
-| uninstall.sh (reverses; preserves overrides) | `./uninstall.sh [--dry-run\|-y\|--purge-models]` | full |
+| install.sh (8 idempotent phases; `--skip-e2e`) | `bash install.sh` | full |
+| uninstall.sh (reverses; preserves overrides) | `bash uninstall.sh [--dry-run\|-y\|--purge-models]` | full |
 | sync-plugin-bundle.sh (15 source-of-truth artifacts → `plugins/c-thru/`; pre-commit gate) | `tools/sync-plugin-bundle.sh [--check]` | full |
 | self-update (debounced ff-only git pull) | `c-thru-self-update.sh` | full |
 

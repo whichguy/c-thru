@@ -25,7 +25,7 @@ const CONFIG = path.join(REPO_ROOT, 'config', 'model-map.json');
 const README = path.join(REPO_ROOT, 'README.md');
 
 // Columns are the three primary routing modes; models shown at the reference tier 64gb;
-// endpoint column reflects the default mode (best-cloud).
+// endpoint column is for mode best-cloud (table column only — product default mode is best-cloud-oss).
 const MODES = ['best-cloud', 'best-cloud-oss', 'best-local-oss'];
 const ENDPOINT_MODE = 'best-cloud';
 const TIER = '64gb';

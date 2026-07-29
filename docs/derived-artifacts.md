@@ -3,15 +3,16 @@
 Several files in this repo are **derived** from `config/model-map.json` (+ `agents/*.md`): they
 restate routing facts in a human-readable form. A derived artifact that is hand-maintained will
 silently drift the next time the config changes — exactly the failure mode that cost a session of
-snapshot archaeology. The fix is the **generate → verify-on-commit** pattern: a generator writes the
-artifact, and a `--check` mode in the pre-commit hook fails the commit if the committed copy differs
-from a fresh generation.
+snapshot archaeology. The fix is the **generate → verify-in-suite** pattern: a generator writes the
+artifact, and a `--check` mode is registered in the hermetic suite (`make test` /
+`test/run-all.sh` Validators) so a green full run fails if the committed copy differs from a
+fresh generation. There is no required repo-local `.githooks/pre-commit` for this gate today.
 
 ## Tier 1 — shipped
 
 | Artifact | Generator | Gate |
 |---|---|---|
-| README "Agent routing reference" table | `tools/gen-routing-doc.js` (wraps `c-thru-explain.js --all`) | `.githooks/pre-commit` runs `gen-routing-doc.js --check`; `make docs` regenerates |
+| README "Agent routing reference" table | `tools/gen-routing-doc.js` (wraps `c-thru-explain.js --all`) | `node tools/gen-routing-doc.js --check` in suite Validators; `make docs` regenerates |
 | Lineage snapshot (`test/model-map-lineage.test.js#SNAPSHOT`) | `node test/model-map-lineage.test.js --update` (anchors on the `const SNAPSHOT = {` … `};` block; exits 1 loudly if the block is not found — it must never silently no-op) | the test itself fails on any cell drift |
 
 `gen-routing-doc.js` pins `c-thru-explain.js` to the repo `config/model-map.json` via

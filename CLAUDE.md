@@ -25,7 +25,7 @@ rewriting path creates a silent source of drift from `config/model-map.json`.
 > Install separately: `claude /plugin install planning-suite@claude-craft`
 
 ```sh
-./install.sh                            # symlinks tools into ~/.claude/tools/, seeds model-map
+bash install.sh                         # symlinks tools into ~/.claude/tools/, seeds model-map
 bash -n tools/c-thru             # bash syntax check
 node --check tools/claude-proxy         # node syntax check
 node --check tools/model-map-*.js tools/llm-capabilities-mcp.js

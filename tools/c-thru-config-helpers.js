@@ -78,7 +78,7 @@ function loadResolve() {
   try {
     return require(resolvePath);
   } catch (e) {
-    die(`model-map-resolve.js not found at ${resolvePath} — run ./install.sh first`);
+    die(`model-map-resolve.js not found at ${resolvePath} — run bash install.sh first`);
   }
 }
 
@@ -88,7 +88,7 @@ function loadResolve() {
  */
 function runEdit(spec) {
   if (!fs.existsSync(EDIT_SCRIPT)) {
-    die(`model-map-edit not found at ${EDIT_SCRIPT} — run ./install.sh first`);
+    die(`model-map-edit not found at ${EDIT_SCRIPT} — run bash install.sh first`);
   }
   try {
     execFileSync(process.execPath, [EDIT_SCRIPT, SYSTEM_PATH, OVERRIDES_PATH, MAP_PATH, spec], {
