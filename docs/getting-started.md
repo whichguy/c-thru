@@ -244,7 +244,7 @@ The repo has a deliberately small surface area. Here is each directory and
   text, never to remap its model.
 - **`skills/`** — the agentic plan/wave system skills (`c-thru-plan`,
   `c-thru-config`, `c-thru-control`, etc.). Invoked via `/c-thru-plan`,
-  `/cplan`, `/c-thru-config`. See [`docs/agent-architecture.md`](agent-architecture.md)
+  `/cplan`, `/c-thru-config`, `/c-thru-advisors` (multi-model panel; requires `cthru`). See [`docs/agent-architecture.md`](agent-architecture.md)
   for the wave lifecycle.
 - **`docs/`** — the reference layer. Architecture diagrams, the
   endpoint × backend coverage matrix, env-var reference, headers reference,
