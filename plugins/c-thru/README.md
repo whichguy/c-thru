@@ -4,21 +4,25 @@ Surfaces c-thru as a Claude Code plugin. c-thru lets Claude Code talk to
 alternative model providers (Ollama, OpenRouter, Bedrock, Vertex, Gemini,
 LiteLLM) without changing the vendor CLI.
 
-This package lives in the **c-thru** git repository and is also listed from
-the [claude-craft](https://github.com/whichguy/claude-craft) family marketplace
-as a git-subdir. Install from **exactly one** marketplace source — installing
-both activates the plugin twice and double-fires its hooks.
+This package lives in the **c-thru** git repository (private/product marketplace
+root). It is also listed from the
+[claude-craft](https://github.com/whichguy/claude-craft) family catalog as a
+**git-subdir** of this repo — not vendored. Not submitted to Anthropic’s public
+plugin directories.
+
+Install from **exactly one** marketplace identity — installing both activates
+the plugin twice and double-fires its hooks.
 
 ## Install (pick one source)
 
-### From this repository (standalone)
+### From this repository (primary)
 
 ```
 /plugin marketplace add whichguy/c-thru
 /plugin install c-thru@c-thru
 ```
 
-### From the family marketplace
+### From the family marketplace (same package)
 
 ```
 /plugin marketplace add whichguy/claude-craft

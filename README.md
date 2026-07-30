@@ -37,17 +37,22 @@ cthru --mode best-cloud-oss     # cost-aware default
 
 ## Quick start
 
-**Pick exactly one** marketplace source. Installing both `c-thru@c-thru` and
+c-thru is offered from **private/product marketplaces you control** (this repo
+and optionally the claude-craft family catalog) — not Anthropic’s public plugin
+directories. Product code lives only in this repository; catalogs point at
+`plugins/c-thru`.
+
+**Pick exactly one** marketplace identity. Installing both `c-thru@c-thru` and
 `c-thru@claude-craft` activates the plugin twice and double-fires its hooks.
 
-### Option A — this repository (standalone)
+### Option A — this repository (primary)
 
 ```
 /plugin marketplace add whichguy/c-thru
 /plugin install c-thru@c-thru
 ```
 
-### Option B — family marketplace
+### Option B — family marketplace (same plugin package, git-subdir)
 
 ```
 /plugin marketplace add whichguy/claude-craft
@@ -60,6 +65,9 @@ If you already have the other identity installed, remove it first:
 /plugin uninstall c-thru@claude-craft
 # or: /plugin uninstall c-thru@c-thru
 ```
+
+Team repos can prompt collaborators to add the catalog via
+`extraKnownMarketplaces` — see [`docs/marketplace-release.md`](docs/marketplace-release.md).
 
 **`planning-suite` is optional** — only needed for plan-scheduler /
 `/schedule-plan-tasks`. Install separately from claude-craft if you want it:

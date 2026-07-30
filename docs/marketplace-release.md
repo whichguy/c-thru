@@ -1,6 +1,14 @@
-# Marketplace release checklist
+# Marketplace release checklist (private catalog)
 
-Short checklist before tagging a plugin package for community submission.
+c-thru is distributed from **your** marketplace(s), not Anthropic’s public
+`claude-plugins-community` / `claude-plugins-official` catalogs.
+
+| Catalog | Install id | Role |
+|---|---|---|
+| **whichguy/c-thru** (this repo) | `c-thru@c-thru` | Primary private/product marketplace |
+| **whichguy/claude-craft** | `c-thru@claude-craft` | Family discovery; **git-subdir** → this repo `plugins/c-thru` |
+
+Product code lives only here. Family catalog **points** at this repo; do not vendor a copy.
 
 ## 1. Package integrity
 
@@ -14,35 +22,76 @@ node -e 'const p=require("./plugins/c-thru/.claude-plugin/plugin.json");const m=
 ## 2. Version bump
 
 Bump `plugins/c-thru/.claude-plugin/plugin.json` **and** matching
-`.claude-plugin/marketplace.json` entry on every user-visible plugin change.
+`.claude-plugin/marketplace.json` on every user-visible plugin change.
+If the family catalog mirrors a version string, bump claude-craft’s entry too.
 
 ## 3. Smoke from published bytes
 
 ```sh
-# clean tree only — not a dirty worktree
 git archive HEAD | tar -x -C /tmp/c-thru-release
-# install marketplace from that path in an isolated CLAUDE_CONFIG_DIR
+export CLAUDE_CONFIG_DIR="$(mktemp -d)"
+claude plugin marketplace add /tmp/c-thru-release
+claude plugin install c-thru@c-thru
 ```
 
 Plugin-only status must not require `~/.claude/tools/c-thru`.
+Use `/c-thru:c-thru-status` (namespaced).
 
-## 4. Tag + push
+## 4. Tag + push (this repo)
 
 ```sh
 git tag -a vX.Y.Z -m "plugin package vX.Y.Z"
 git push origin main vX.Y.Z
 ```
 
-## 5. Community catalog
+## 5. Family catalog (optional)
 
-Submit/update via [Console](https://platform.claude.com/plugins/submit) or
-[clau.de/plugin-directory-submission](https://clau.de/plugin-directory-submission).
+In `claude-craft` `.claude-plugin/marketplace.json`, keep:
 
-Source path: `plugins/c-thru` on `https://github.com/whichguy/c-thru.git`.
+```json
+{
+  "name": "c-thru",
+  "version": "X.Y.Z",
+  "source": {
+    "source": "git-subdir",
+    "url": "https://github.com/whichguy/c-thru.git",
+    "path": "plugins/c-thru",
+    "ref": "main"
+  }
+}
+```
 
-## 6. Docs after listing
+Never copy `plugins/c-thru` into claude-craft.
 
-Flip README Quick start primary install to `c-thru@claude-community` when the
-catalog lists the plugin.
+## 6. Team auto-prompt (private marketplaces)
 
-See [SECURITY.md](../SECURITY.md) for uninstall / loopback base URL notes.
+Projects can prompt collaborators to add your catalog via
+`.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "c-thru": {
+      "source": {
+        "source": "github",
+        "repo": "whichguy/c-thru"
+      }
+    }
+  }
+}
+```
+
+For a **private** GitHub repo, users need git credentials that can clone it
+(SSH agent or HTTPS helper). See Claude Code docs on private marketplaces.
+
+## 7. Install (end users)
+
+```text
+/plugin marketplace add whichguy/c-thru
+/plugin install c-thru@c-thru
+```
+
+Pick **one** identity (`c-thru@c-thru` **or** `c-thru@claude-craft`), never both.
+Prefer **plugin or CLI inject**, not both (hooks double-fire).
+
+See [SECURITY.md](../SECURITY.md) for uninstall / loopback `ANTHROPIC_BASE_URL`.
