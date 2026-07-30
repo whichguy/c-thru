@@ -13,6 +13,7 @@ fresh generation. There is no required repo-local `.githooks/pre-commit` for thi
 | Artifact | Generator | Gate |
 |---|---|---|
 | README "Agent routing reference" table | `tools/gen-routing-doc.js` (wraps `c-thru-explain.js --all`) | `node tools/gen-routing-doc.js --check` in suite Validators; `make docs` regenerates |
+| README request-flow step-through (`<!-- BEGIN request-flow-steps -->` region) | `tools/gen-request-flow-doc.js` (reads the `SCENARIOS` object in `docs/request-flow.html`) | `node tools/gen-request-flow-doc.js --check` in suite Validators; `make docs` regenerates |
 | Lineage snapshot (`test/model-map-lineage.test.js#SNAPSHOT`) | `node test/model-map-lineage.test.js --update` (anchors on the `const SNAPSHOT = {` … `};` block; exits 1 loudly if the block is not found — it must never silently no-op) | the test itself fails on any cell drift |
 
 `gen-routing-doc.js` pins `c-thru-explain.js` to the repo `config/model-map.json` via

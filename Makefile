@@ -1,4 +1,4 @@
-.PHONY: test test-all test-fast test-live test-live-all check lint docs regen
+.PHONY: test test-all test-fast test-live test-live-shard test-live-artifacts test-live-all check lint docs regen
 
 # Default hermetic suite (CI / pre-push / everyday): skips slow smoke & long e2e.
 # Concurrent-safe (proxy unit tests use random free ports).
@@ -18,24 +18,72 @@ test-fast: test
 test-live:
 	C_THRU_LIVE_ANTHROPIC=1 node test/anthropic-api-coverage-live.test.js
 
-# Single entrypoint for ALL live / opt-in suites — the same command the scheduled
-# CI workflow (.github/workflows/live-suites.yml) runs and a human runs locally.
-# Exports every live/opt-in gate read by test/run-all.sh, then runs the FULL suite
-# so the live blocks register. Each gated suite self-skips when its
-# API key / creds are absent, so this stays green-but-skipping until secrets are
-# present. Gate names are kept in sync with the `if [[ "${...:-0}" == "1" ]]`
-# branches in test/run-all.sh.
+# Scheduled CI entrypoint. SHARD is required so provider integrity and agent
+# behavior are independently attributable and retryable. run-all.sh suppresses
+# the deterministic registry when a live shard is selected; `make test` owns
+# that coverage. Both shards are strict, and no child or aggregate may consume
+# more than the 55-minute execution budget inside the 70-minute CI lifecycle.
+test-live-shard:
+	@case "$(SHARD)" in \
+	  provider) \
+	    C_THRU_TEST_TIMEOUT_SECONDS=3300 \
+	    C_THRU_LIVE_SHARD=provider \
+	    C_THRU_STRICT_LIVE_PROVIDERS=1 \
+	    C_THRU_LIVE_ANTHROPIC=1 \
+	    C_THRU_LIVE_GEMINI=1 \
+	    C_THRU_LIVE_OPENAI=1 \
+	    C_THRU_LIVE_XAI=1 \
+	    C_THRU_LIVE_PARITY=1 \
+	    bash test/run-all.sh ;; \
+	  agent) \
+	    C_THRU_TEST_TIMEOUT_SECONDS=3300 \
+	    C_THRU_LIVE_SHARD=agent \
+	    C_THRU_STRICT_LIVE_PROVIDERS=1 \
+	    C_THRU_BEHAVIORAL_TESTS=1 \
+	    C_THRU_LIVE_AGENT_TESTS=1 \
+	    C_THRU_LIVE_CLAUDE_AGENT_ROUTE=1 \
+	    C_THRU_OFFLOAD=1 \
+	    C_THRU_LIVE_SELECTION=1 \
+	    bash test/run-all.sh ;; \
+	  *) \
+	    echo "test-live-shard: SHARD must be provider or agent" >&2; \
+	    exit 2 ;; \
+	esac
+
+# Manual/pilot lane for the six artifact-bearing selection cases. It is
+# intentionally separate from scheduled CI until repeated comparable campaigns
+# establish cost and variance. The explicit route pin keeps image/PDF/oversized
+# inputs on the intended connected multimodal capability instead of a
+# host-memory-dependent 16gb fallback.
+test-live-artifacts:
+	C_THRU_TEST_TIMEOUT_SECONDS=3300 \
+	C_THRU_LIVE_SHARD=agent \
+	C_THRU_STRICT_LIVE_PROVIDERS=1 \
+	C_THRU_OFFLOAD=1 \
+	C_THRU_OFFLOAD_ARTIFACTS=1 \
+	CLAUDE_LLM_MODE=best-cloud \
+	CLAUDE_LLM_PROFILE=32gb \
+	bash test/run-all.sh
+
+# Compatibility entrypoint for a human who wants one local aggregate. Scheduled
+# CI uses `test-live-shard` instead so it does not duplicate the deterministic
+# suite or blur provider failures together with stochastic agent failures.
+# The compatibility aggregate remains strict and shares the 3,300-second cap.
 test-live-all:
+	C_THRU_TEST_TIMEOUT_SECONDS=3300 \
+	C_THRU_STRICT_LIVE_PROVIDERS=1 \
 	C_THRU_LIVE_ANTHROPIC=1 \
 	C_THRU_LIVE_GEMINI=1 \
 	C_THRU_LIVE_OPENAI=1 \
+	C_THRU_LIVE_XAI=1 \
 	C_THRU_LIVE_PARITY=1 \
 	C_THRU_BEHAVIORAL_TESTS=1 \
 	C_THRU_LIVE_AGENT_TESTS=1 \
+	C_THRU_LIVE_CLAUDE_AGENT_ROUTE=1 \
 	C_THRU_HIERARCHY_TESTS=1 \
 	C_THRU_E2E=1 \
 	C_THRU_OFFLOAD=1 \
-	C_THRU_OFFLOAD_GATE=1 \
+	C_THRU_COORDINATOR=1 \
 	C_THRU_LIVE_SELECTION=1 \
 	bash test/run-all.sh
 
@@ -50,20 +98,24 @@ check:
 lint:
 	@if [ -d node_modules ]; then npx eslint tools test; else echo "lint: run 'npm install' first to install eslint"; exit 0; fi
 
-# Regenerate derived docs (the README "Agent routing reference" table) from config/model-map.json.
-# The pre-commit hook runs `gen-routing-doc.js --check`, so run this after any config bump.
+# Regenerate derived docs: the README "Agent routing reference" table (from config/model-map.json)
+# and the README request-flow step-through (from docs/request-flow.html).
+# Drift is checked by suite Validators (`node tools/gen-routing-doc.js --check` in make test);
+# run this after any config bump that should rewrite the table.
 docs:
 	node tools/gen-routing-doc.js
+	node tools/gen-request-flow-doc.js
 
 # Tier-2 regen (docs/derived-artifacts.md): rebuild ALL derived artifacts after a config bump,
 # then show the diff — the human intent-gate stays: review the diff, confirm it is the
 # *intended* change (e.g. only a model-id bump, no null/route-drop transitions), then commit.
-# Honest scope: 2 of 3 derived artifacts regenerate (lineage snapshot, README table);
-# test/resolve-capability.test.js has hand-authored pins with no generator, so the last
-# step self-reports stale ids instead of rewriting them.
+# Honest scope: 3 of 4 derived artifacts regenerate (lineage snapshot, README routing table,
+# README request-flow step-through); test/resolve-capability.test.js has hand-authored pins
+# with no generator, so the last step self-reports stale ids instead of rewriting them.
 regen:
 	node test/model-map-lineage.test.js --update
 	node tools/gen-routing-doc.js
+	node tools/gen-request-flow-doc.js
 	node tools/check-pinned-model-ids.js
 	@echo ""
 	@echo "regen diff (review before committing):"

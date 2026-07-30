@@ -388,6 +388,14 @@
     decides which model should serve it, and translates the call.
   </p>
   <p>
+    <strong>You rarely name an agent yourself.</strong> Each agent file carries a description
+    — <code>coder</code>'s begins “MUST BE USED for all code implementation tasks” — and the injected
+    system prompt tells the main loop to read those descriptions and delegate before doing
+    non-trivial work itself. So you type “implement the JWT middleware” and the main loop picks
+    <code>coder</code>. You can also ask directly: <em>“use the tester agent on this”</em>, or, for
+    the five that name a model, <em>“ask agent grok to critique this plan”</em>.
+  </p>
+  <p>
     The trick is that <strong>most agent names describe a job, not a model</strong>. <code>coder</code>
     says what the work is; which model does it is decided at request time from the capability, the
     routing mode, and your hardware. Five agents — <code>grok</code>, <code>gemini</code>,
@@ -426,6 +434,31 @@
       <div class="rnotes" id="r-notes"></div>
     </div>
   </div>
+  <details class="mapwrap" style="margin-top:16px">
+    <summary>Where these values live <span class="hintline">the shape of config/model-map.json</span></summary>
+    <div class="mapbox" style="background:var(--code-bg)">
+      <pre class="plain" style="border:0;background:transparent">{
+  <span class="c">// the four keys the resolver above walks, in order</span>
+  "agent_to_capability": { "coder": "coder", "reviewer-plan": "code-reviewer",
+                           "grok": "model:grok-4.5" },
+  "llm_profiles":        { "coder": { "best-cloud":     { "64gb": "gemini-pro" },
+                                      "best-cloud-oss": { "64gb": "kimi-k2.7-code:cloud" },
+                                      "on_failure": "cascade",
+                                      "fallback_to": "coder-fallback" } },
+  "model_routes":        { "gemini-pro": { "endpoint": "gemini_ai" } },
+  "endpoints":           { "gemini_ai": { "url": "https://generativelanguage.googleapis.com",
+                                          "format": "gemini",
+                                          "fallback_to": "claude-sonnet-5" } },
+
+  <span class="c">// also present, out of scope for this page</span>
+  "routes": {}, "models": [], "model_overrides": {}, "custom_modes": {},
+  "llm_capabilities": {}, "tool_capability_to_profile": {}, "ollama_defaults": {},
+  "quality_tolerance_pct": 0, "capability_sampling_defaults": {}, "model_extra_params": {},
+  "llm_active_profile": "", "llm_mode": ""
+}</pre>
+    </div>
+  </details>
+
   <p class="dim" style="margin-top:12px">
     These are the defaults shipped in <code>config/model-map.json</code>, generated from that file and
     checked cell-by-cell against <code>c-thru explain</code> — 500 combinations, no disagreements. Your

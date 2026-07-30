@@ -11,6 +11,28 @@
 set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEST_SUPERVISOR="$REPO_DIR/tools/run-with-hard-timeout.js"
+TEST_SUPERVISOR_CAPABILITY="$REPO_DIR/tools/test-supervisor-capability.js"
+TEST_EVIDENCE_TOOL="$REPO_DIR/tools/test-run-evidence.js"
+TEST_TIMEOUT_SECONDS="${C_THRU_TEST_TIMEOUT_SECONDS:-3600}"
+if [[ ! "$TEST_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] \
+  || (( ${#TEST_TIMEOUT_SECONDS} > 4 )) \
+  || { (( ${#TEST_TIMEOUT_SECONDS} == 4 )) && [[ "$TEST_TIMEOUT_SECONDS" > "3600" ]]; }; then
+  echo "run-all: C_THRU_TEST_TIMEOUT_SECONDS must be an integer from 1 to 3600" >&2
+  exit 2
+fi
+
+has_active_test_supervisor() {
+  node "$TEST_SUPERVISOR_CAPABILITY" --verify-shell-child
+}
+
+if ! has_active_test_supervisor; then
+  exec node "$TEST_SUPERVISOR" \
+    --timeout-seconds "$TEST_TIMEOUT_SECONDS" \
+    -- bash "$0" "$@"
+fi
+export C_THRU_TEST_TIMEOUT_SECONDS="$TEST_TIMEOUT_SECONDS"
+
 FAST=0
 # FAST=1 means skip smoke/long-e2e (the hermetic suite). Preferred flag is
 # --skip-smoke; --fast remains accepted as a deprecated synonym.
@@ -18,9 +40,55 @@ case "${1:-}" in
   --skip-smoke|--fast) FAST=1 ;;
 esac
 
+LIVE_SHARD="${C_THRU_LIVE_SHARD:-}"
+case "$LIVE_SHARD" in
+  ""|provider|agent) ;;
+  *)
+    echo "run-all: C_THRU_LIVE_SHARD must be provider or agent" >&2
+    exit 2
+    ;;
+esac
+
 PASS=0
 FAIL=0
 SKIP=0
+BLOCKED=0
+STRICT_LIVE_PROVIDERS=0
+if [[ "${C_THRU_STRICT_LIVE_PROVIDERS:-0}" == "1" ]]; then
+  STRICT_LIVE_PROVIDERS=1
+fi
+
+# EXCLUDED: provider-live-prerequisites.js — shared billing/quota classifier imported by live suites
+# EXCLUDED: agent-contract-fixtures.js — shared current-agent roster/parser library imported by suites
+# EXCLUDED: offload-artifact-fixtures.js — generated-artifact helper covered by its registered test
+
+# Every aggregate run leaves a sanitized, incrementally durable evidence file.
+# Initialize it before any full-run lock wait so an outer hard timeout still
+# leaves a parseable running artifact at the configured path.
+if [[ -n "${C_THRU_TEST_EVIDENCE_PATH:-}" ]]; then
+  TEST_EVIDENCE_PATH=$(node "$TEST_EVIDENCE_TOOL" allocate \
+    --path "$C_THRU_TEST_EVIDENCE_PATH") || exit 1
+else
+  TEST_EVIDENCE_PATH=$(node "$TEST_EVIDENCE_TOOL" allocate) || exit 1
+fi
+export C_THRU_TEST_EVIDENCE_PATH="$TEST_EVIDENCE_PATH"
+EVIDENCE_ENABLED=1
+EVIDENCE_FAILURE=0
+RUN_EVIDENCE_MODE="full"
+[[ $FAST -eq 1 ]] && RUN_EVIDENCE_MODE="hermetic"
+[[ -n "$LIVE_SHARD" ]] && RUN_EVIDENCE_MODE="live-${LIVE_SHARD}"
+EVIDENCE_INIT_ARGS=(
+  init
+  --path "$TEST_EVIDENCE_PATH"
+  --repo "$REPO_DIR"
+  --mode "$RUN_EVIDENCE_MODE"
+)
+[[ -n "$LIVE_SHARD" ]] && EVIDENCE_INIT_ARGS+=(--shard "$LIVE_SHARD")
+if ! node "$TEST_EVIDENCE_TOOL" "${EVIDENCE_INIT_ARGS[@]}"; then
+  echo "run-all: failed to initialize test evidence" >&2
+  exit 1
+fi
+echo "C_THRU_TEST_EVIDENCE_PATH=$TEST_EVIDENCE_PATH"
 
 # ── Exclusive lock for full runs ───────────────────────────────────────────────
 # Two concurrent full runs cross-fail: proxy-e2e talks to the live Ollama backend
@@ -30,7 +98,112 @@ SKIP=0
 # mkdir-lock with a stale-pid check — NOT flock(1), which is absent on stock
 # macOS (this repo's primary dev machine); flock may be added as a parenthetical
 # fast-path for Linux CI only.
-LOCK_DIR="${TMPDIR:-/tmp}/c-thru-run-all.lock"
+resolve_test_lock_root() {
+  local requested="${C_THRU_TEST_LOCK_ROOT:-}"
+  local selection="override"
+  if [[ -z "$requested" ]]; then
+    selection="default"
+  fi
+
+  C_THRU_LOCK_ROOT_REQUESTED="$requested" \
+  C_THRU_LOCK_ROOT_SELECTION="$selection" \
+    node <<'NODE'
+'use strict';
+const fs = require('fs');
+const path = require('path');
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function validateOwnedDirectory(requested, label, { privateDirectory }) {
+  let entry;
+  try {
+    entry = fs.lstatSync(requested);
+  } catch {
+    fail(`${label} does not exist`);
+  }
+  if (!entry.isDirectory() || entry.isSymbolicLink()) {
+    fail(`${label} must be a real directory, not a symlink`);
+  }
+  const real = fs.realpathSync(requested);
+  const stats = fs.statSync(real);
+  if (stats.uid !== process.geteuid()) {
+    fail(`${label} must be owned by the current user`);
+  }
+  const permissions = stats.mode & 0o777;
+  if (privateDirectory ? permissions !== 0o700 : (permissions & 0o022) !== 0) {
+    fail(privateDirectory
+      ? `${label} must have mode 0700`
+      : `${label} must not be group- or world-writable`);
+  }
+  return real;
+}
+
+function createDirectoryExclusive(directory, label) {
+  try {
+    fs.mkdirSync(directory, { mode: 0o700 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') {
+      fail(`could not create ${label}: ${error.message}`);
+    }
+  }
+}
+
+try {
+  const selection = process.env.C_THRU_LOCK_ROOT_SELECTION;
+  let root;
+  if (selection === 'override') {
+    const requested = process.env.C_THRU_LOCK_ROOT_REQUESTED || '';
+    if (!path.isAbsolute(requested) ||
+        requested === path.parse(requested).root ||
+        /[\u0000-\u001f\u007f]/.test(requested)) {
+      fail('C_THRU_TEST_LOCK_ROOT must be an absolute non-root path');
+    }
+    root = validateOwnedDirectory(
+      requested,
+      'C_THRU_TEST_LOCK_ROOT',
+      { privateDirectory: true },
+    );
+  } else {
+    const home = process.env.HOME || '';
+    if (!path.isAbsolute(home) ||
+        home === path.parse(home).root ||
+        /[\u0000-\u001f\u007f]/.test(home)) {
+      fail('HOME must be an absolute non-root path for the full-run lock');
+    }
+    const homeReal = fs.realpathSync(home);
+    const homeStats = fs.statSync(homeReal);
+    if (!homeStats.isDirectory() ||
+        homeStats.uid !== process.geteuid() ||
+        (homeStats.mode & 0o022) !== 0) {
+      fail('HOME must be an owner-controlled directory for the full-run lock');
+    }
+    const stateDirectory = path.join(homeReal, '.claude');
+    createDirectoryExclusive(stateDirectory, 'the c-thru state directory');
+    const stateReal = validateOwnedDirectory(
+      stateDirectory,
+      'the c-thru state directory',
+      { privateDirectory: false },
+    );
+    const defaultRoot = path.join(stateReal, 'c-thru-run-locks');
+    createDirectoryExclusive(defaultRoot, 'the c-thru full-run lock root');
+    root = validateOwnedDirectory(
+      defaultRoot,
+      'the c-thru full-run lock root',
+      { privateDirectory: true },
+    );
+  }
+  process.stdout.write(`${root}\n`);
+} catch (error) {
+  console.error(`run-all: ${error.message}`);
+  process.exit(1);
+}
+NODE
+}
+
+LOCK_ROOT=""
+LOCK_DIR=""
 LOCK_HELD=""
 
 release_lock() {
@@ -38,7 +211,7 @@ release_lock() {
 }
 
 acquire_lock() {
-  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+  while ! (umask 077; mkdir -m 700 "$LOCK_DIR") 2>/dev/null; do
     local owner=""
     owner=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
     if [[ -n "$owner" ]] && ! kill -0 "$owner" 2>/dev/null; then
@@ -67,9 +240,15 @@ acquire_lock() {
   trap release_lock EXIT
 }
 
+prepare_full_run_lock() {
+  LOCK_ROOT=$(resolve_test_lock_root) || return 1
+  LOCK_DIR="$LOCK_ROOT/c-thru-run-all.lock"
+  acquire_lock
+}
+
 # Full runs are exclusive; hermetic (--skip-smoke) runs are concurrency-safe and skip the lock.
 if [[ $FAST -eq 0 ]]; then
-  acquire_lock
+  prepare_full_run_lock || exit 1
 fi
 
 # ── Proxy-spawn serialization (assessed, intentionally NOT forced) ──────────────
@@ -95,41 +274,415 @@ fi
 # If a future change adds intra-run parallelism (e.g. a `&`+`wait` fan-out for the
 # non-spawn unit suites), the spawn suites MUST stay in a sequential group here.
 
-# Failing-suite output is also persisted here (lazily created on first failure)
-# so a flake in a long full run stays diagnosable after the terminal scrolls.
-# Green runs create nothing.
-FAIL_LOG_DIR="${TMPDIR:-/tmp}/c-thru-runall-$$"
-# Failed runs leave their dir behind by design (that's the point) — prune only
-# week-old leftovers so they don't accumulate forever. Prefix can't collide with
-# the c-thru-run-all.lock dir; -mtime +7 never touches a live run's dir.
-find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'c-thru-runall-*' -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+# Failing-suite output is persisted under one directory owned exclusively by
+# this aggregate. CI supplies an exact non-existing leaf so its later artifact
+# step never needs a broad temp-directory glob; local runs use mktemp. These
+# files contain raw, unsanitized child output and therefore stay private on disk.
+failure_log_root() {
+  local requested_root="${TMPDIR:-/tmp}"
+  local resolved_root
+  if [[ "$requested_root" != /* || ! -d "$requested_root" ||
+        ! -w "$requested_root" || ! -x "$requested_root" ]]; then
+    echo "run-all: TMPDIR must name an absolute, writable directory" >&2
+    return 1
+  fi
+  resolved_root=$(cd -P "$requested_root" 2>/dev/null && pwd) || {
+    echo "run-all: could not resolve TMPDIR" >&2
+    return 1
+  }
+  if [[ "$resolved_root" == "/" ]]; then
+    echo "run-all: refusing to allocate failure logs directly under /" >&2
+    return 1
+  fi
+  if ! C_THRU_FAILURE_LOG_ROOT="$resolved_root" node -e '
+    const fs = require("fs");
+    const stats = fs.statSync(process.env.C_THRU_FAILURE_LOG_ROOT);
+    const sticky = (stats.mode & 0o1000) !== 0;
+    const sharedWritable = (stats.mode & 0o022) !== 0;
+    if ((!sticky && sharedWritable) ||
+        (!sticky && stats.uid !== process.geteuid())) {
+      process.exit(1);
+    }
+  '; then
+    echo "run-all: TMPDIR must be owner-controlled or a sticky temporary directory" >&2
+    return 1
+  fi
+  printf '%s\n' "$resolved_root"
+}
+
+allocate_failure_log_dir() {
+  local root trusted_parent requested requested_parent resolved_parent leaf allocated
+  root=$(failure_log_root) || return 1
+  trusted_parent="${TMPDIR:-/tmp}"
+  [[ "$trusted_parent" == "/" ]] || trusted_parent="${trusted_parent%/}"
+  requested="${C_THRU_TEST_FAILURE_LOG_DIR:-}"
+
+  if [[ -n "$requested" ]]; then
+    if [[ "$requested" != /* || "$requested" == */ ]]; then
+      echo "run-all: C_THRU_TEST_FAILURE_LOG_DIR must be an absolute non-existing leaf" >&2
+      return 1
+    fi
+    requested_parent="${requested%/*}"
+    leaf="${requested##*/}"
+    if [[ -z "$requested_parent" || "$leaf" != c-thru-runall-* ||
+          "$leaf" == *[!A-Za-z0-9._-]* ]]; then
+      echo "run-all: C_THRU_TEST_FAILURE_LOG_DIR must be a c-thru-runall-* leaf under TMPDIR" >&2
+      return 1
+    fi
+    if [[ "$requested_parent" != "$trusted_parent" &&
+          "$requested_parent" != "$root" ]]; then
+      echo "run-all: C_THRU_TEST_FAILURE_LOG_DIR parent must be TMPDIR itself" >&2
+      return 1
+    fi
+    resolved_parent=$(cd -P "$requested_parent" 2>/dev/null && pwd) || {
+      echo "run-all: C_THRU_TEST_FAILURE_LOG_DIR parent does not exist" >&2
+      return 1
+    }
+    if [[ "$resolved_parent" != "$root" ]]; then
+      echo "run-all: C_THRU_TEST_FAILURE_LOG_DIR must be a direct child of TMPDIR" >&2
+      return 1
+    fi
+    if ! (umask 077; mkdir -m 700 "$requested") 2>/dev/null; then
+      echo "run-all: refusing pre-existing C_THRU_TEST_FAILURE_LOG_DIR: $requested" >&2
+      return 1
+    fi
+    if ! chmod 700 "$requested"; then
+      rmdir "$requested" 2>/dev/null || true
+      echo "run-all: could not set failure-log directory mode 0700" >&2
+      return 1
+    fi
+    printf '%s\n' "$requested"
+    return 0
+  fi
+
+  allocated=$(umask 077; mktemp -d "$root/c-thru-runall.XXXXXXXXXX") || {
+    echo "run-all: could not allocate a private failure-log directory" >&2
+    return 1
+  }
+  if ! chmod 700 "$allocated"; then
+    rmdir "$allocated" 2>/dev/null || true
+    echo "run-all: could not set failure-log directory mode 0700" >&2
+    return 1
+  fi
+  printf '%s\n' "$allocated"
+}
+
+save_suite_output() {
+  local label="$1"
+  local out="$2"
+  local slug staging token log_path
+  slug=$(printf '%s' "$label" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/--*/-/g; s/^-//; s/-$//')
+  [[ -n "$slug" ]] || slug="suite"
+  staging=$(umask 077; mktemp "$FAIL_LOG_DIR/.pending.XXXXXXXXXX") || {
+    echo "    could not allocate a private failure log for: $label" >&2
+    return 1
+  }
+  if ! chmod 600 "$staging" || ! printf '%s\n' "$out" > "$staging"; then
+    rm -f "$staging"
+    echo "    could not write private failure log for: $label" >&2
+    return 1
+  fi
+
+  token="${staging##*.pending.}"
+  log_path="$FAIL_LOG_DIR/${slug}-${token}.log"
+  if ! C_THRU_FAILURE_LOG_STAGING="$staging" \
+       C_THRU_FAILURE_LOG_DEST="$log_path" \
+       node -e '
+         const fs = require("fs");
+         fs.linkSync(
+           process.env.C_THRU_FAILURE_LOG_STAGING,
+           process.env.C_THRU_FAILURE_LOG_DEST,
+         );
+         fs.unlinkSync(process.env.C_THRU_FAILURE_LOG_STAGING);
+       '; then
+    rm -f "$staging"
+    echo "    refusing to replace pre-existing failure log: $log_path" >&2
+    return 1
+  fi
+  echo "    output saved: $log_path" >&2
+}
+# End failure-log helpers.
+
+FAIL_LOG_DIR=$(allocate_failure_log_dir) || exit 1
+export C_THRU_TEST_FAILURE_LOG_DIR="$FAIL_LOG_DIR"
+echo "C_THRU_TEST_FAILURE_LOG_DIR=$FAIL_LOG_DIR"
+
+SUITE_EVIDENCE_ID=""
+record_evidence_write_failure() {
+  if [[ $EVIDENCE_FAILURE -eq 0 ]]; then
+    echo "run-all: test evidence update failed; aggregate will fail closed" >&2
+  fi
+  EVIDENCE_FAILURE=1
+}
+
+start_suite_evidence() {
+  local kind="$1"
+  local label="$2"
+  local provider="${3:-}"
+  local suite="${4:-}"
+  SUITE_EVIDENCE_ID=""
+  [[ $EVIDENCE_ENABLED -eq 1 ]] || return 0
+  local -a args=(
+    suite-start
+    --path "$TEST_EVIDENCE_PATH"
+    --kind "$kind"
+    --label "$label"
+  )
+  [[ -n "$provider" ]] && args+=(--provider "$provider")
+  [[ -n "$suite" ]] && args+=(--suite "$suite")
+  if ! SUITE_EVIDENCE_ID=$(node "$TEST_EVIDENCE_TOOL" "${args[@]}"); then
+    record_evidence_write_failure
+    SUITE_EVIDENCE_ID=""
+    return 1
+  fi
+}
+
+finish_suite_evidence() {
+  local id="$1"
+  local status="$2"
+  local exit_code="${3:-}"
+  local reason="${4:-}"
+  [[ $EVIDENCE_ENABLED -eq 1 && -n "$id" ]] || return 0
+  local -a args=(
+    suite-finish
+    --path "$TEST_EVIDENCE_PATH"
+    --id "$id"
+    --status "$status"
+  )
+  [[ -n "$exit_code" ]] && args+=(--exit-code "$exit_code")
+  [[ -n "$reason" ]] && args+=(--reason "$reason")
+  if ! node "$TEST_EVIDENCE_TOOL" "${args[@]}"; then
+    record_evidence_write_failure
+    return 1
+  fi
+}
+
+sanitize_suite_reason() {
+  local reason
+  reason=$(printf '%s' "$1" | tr -c 'A-Za-z0-9_.:/+-' '_' | cut -c 1-160)
+  if printf '%s' "$reason" |
+      grep -Eq 'AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[0-9A-Za-z]{20,}|sk-[0-9A-Za-z_-]{16,}|Bearer_|SECRET_CANARY'; then
+    printf '%s' "redacted_sensitive_reason"
+  else
+    printf '%s' "$reason"
+  fi
+}
+
+live_suite_class() {
+  local provider="$1"
+  local suite="$2"
+  if [[ "$provider" == "agent" || "$suite" == "agent-selection-llm-judge" ]]; then
+    printf '%s' "agent"
+  else
+    printf '%s' "provider"
+  fi
+}
+
+live_suite_selected() {
+  local provider="$1"
+  local suite="$2"
+  [[ -z "$LIVE_SHARD" ]] && return 0
+  [[ "$(live_suite_class "$provider" "$suite")" == "$LIVE_SHARD" ]]
+}
+
+run_test_command() {
+  node "$TEST_SUPERVISOR" \
+    --timeout-seconds "$TEST_TIMEOUT_SECONDS" \
+    -- "$@"
+}
 
 run_suite() {
   local label="$1"
   shift
+  [[ -n "$LIVE_SHARD" ]] && return 0
+  start_suite_evidence "ordinary" "$label" || true
+  local evidence_id="$SUITE_EVIDENCE_ID"
   printf "  %-55s" "$label"
   local out ec=0
-  out=$("$@" 2>&1) || ec=$?
+  out=$(run_test_command "$@" 2>&1) || ec=$?
   if [[ $ec -eq 0 ]]; then
     echo "✓"
     PASS=$(( PASS + 1 ))
+    finish_suite_evidence "$evidence_id" "passed" "$ec" || true
   else
     echo "✗"
     FAIL=$(( FAIL + 1 ))
     echo "$out" | sed 's/^/    /' >&2
-    mkdir -p "$FAIL_LOG_DIR"
-    local slug
-    slug=$(printf '%s' "$label" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/--*/-/g; s/^-//; s/-$//')
-    printf '%s\n' "$out" > "$FAIL_LOG_DIR/$slug.log"
-    echo "    output saved: $FAIL_LOG_DIR/$slug.log" >&2
+    save_suite_output "$label" "$out"
+    finish_suite_evidence "$evidence_id" "failed" "$ec" || true
   fi
+}
+
+# Provider-aware runner. Every child registered here must emit exactly one
+# terminal line using this stable protocol:
+#   C_THRU_LIVE_OUTCOME|provider=...|suite=...|status=...|reason=...
+#
+# `skipped` is reserved for a mandatory advertised contract that the child
+# could not exercise. Trigger-dependent probes (for example, "did a 429 happen
+# under load?") are opportunistic and do not make the whole child `skipped`;
+# their child emits `passed` once all mandatory contracts were exercised.
+# Strict aggregate runs turn blocked and mandatory-skip outcomes into failures.
+# Missing, duplicate, mismatched, or exit-incoherent markers are always harness
+# failures so an exit-0 child can never synthesize provider coverage.
+record_live_protocol_failure() {
+  local provider="$1"
+  local suite="$2"
+  local label="$3"
+  local reason="$4"
+  local out="$5"
+  local evidence_id="${6:-}"
+  local exit_code="${7:-}"
+  local outcome
+  reason=$(sanitize_suite_reason "$reason")
+  outcome="C_THRU_LIVE_OUTCOME|provider=${provider}|suite=${suite}|status=failed|reason=${reason}"
+  echo "✗ OUTCOME"
+  FAIL=$(( FAIL + 1 ))
+  printf '%s\n' "$outcome"
+  [[ -n "$out" ]] && printf '%s\n' "$out" | sed 's/^/    /' >&2
+  save_suite_output "$label" "${out:-$outcome}"
+  finish_suite_evidence "$evidence_id" "failed" "$exit_code" "$reason" || true
+}
+
+run_live_suite() {
+  local provider="$1"
+  local suite="$2"
+  local label="$3"
+  shift 3
+  live_suite_selected "$provider" "$suite" || return 0
+  start_suite_evidence "live" "$label" "$provider" "$suite" || true
+  local evidence_id="$SUITE_EVIDENCE_ID"
+  printf "  %-55s" "$label"
+
+  local out ec=0 child_outcome="" outcome_count=0
+  out=$(run_test_command "$@" 2>&1) || ec=$?
+  outcome_count=$(printf '%s\n' "$out" | awk '/^C_THRU_LIVE_OUTCOME\|/{count++} END{print count+0}')
+  child_outcome=$(printf '%s\n' "$out" | awk '/^C_THRU_LIVE_OUTCOME\|/{line=$0} END{print line}')
+
+  if [[ $outcome_count -ne 1 ]]; then
+    if [[ $outcome_count -eq 0 ]]; then
+      record_live_protocol_failure "$provider" "$suite" "$label" \
+        "missing_outcome_marker_exit_${ec}" "$out" "$evidence_id" "$ec"
+    else
+      record_live_protocol_failure "$provider" "$suite" "$label" \
+        "multiple_outcome_markers_${outcome_count}_exit_${ec}" "$out" "$evidence_id" "$ec"
+    fi
+    return
+  fi
+
+  local expected_prefix outcome_status="" outcome_reason evidence_reason
+  expected_prefix="C_THRU_LIVE_OUTCOME|provider=${provider}|suite=${suite}|status="
+  case "$child_outcome" in
+    "${expected_prefix}passed|reason="*) outcome_status="passed" ;;
+    "${expected_prefix}skipped|reason="*) outcome_status="skipped" ;;
+    "${expected_prefix}blocked|reason="*) outcome_status="blocked" ;;
+    "${expected_prefix}failed|reason="*) outcome_status="failed" ;;
+  esac
+  outcome_reason="${child_outcome#*|reason=}"
+  if [[ -z "$outcome_status" || "$child_outcome" != *"|reason="* ||
+        -z "$outcome_reason" || "$outcome_reason" == *"|"* ]]; then
+    record_live_protocol_failure "$provider" "$suite" "$label" \
+      "invalid_or_mismatched_outcome_marker_exit_${ec}" "$out" "$evidence_id" "$ec"
+    return
+  fi
+  evidence_reason=$(sanitize_suite_reason "$outcome_reason")
+
+  if [[ "$outcome_status" == "passed" && $ec -ne 0 ]]; then
+    record_live_protocol_failure "$provider" "$suite" "$label" \
+      "passed_outcome_with_exit_${ec}" "$out" "$evidence_id" "$ec"
+    return
+  fi
+  if [[ ( "$outcome_status" == "skipped" || "$outcome_status" == "blocked" ) &&
+        $ec -ne 0 && $ec -ne 2 ]]; then
+    record_live_protocol_failure "$provider" "$suite" "$label" \
+      "${outcome_status}_outcome_with_exit_${ec}" "$out" "$evidence_id" "$ec"
+    return
+  fi
+  if [[ "$outcome_status" == "failed" && $ec -eq 0 ]]; then
+    record_live_protocol_failure "$provider" "$suite" "$label" \
+      "failed_outcome_with_exit_0" "$out" "$evidence_id" "$ec"
+    return
+  fi
+
+  if [[ "$outcome_status" == "blocked" ]]; then
+    BLOCKED=$(( BLOCKED + 1 ))
+    if [[ $STRICT_LIVE_PROVIDERS -eq 1 ]]; then
+      echo "✗ BLOCKED"
+      FAIL=$(( FAIL + 1 ))
+      save_suite_output "$label" "$out"
+    else
+      echo "BLOCKED"
+    fi
+    printf '%s\n' "$child_outcome"
+    [[ -n "$out" ]] && printf '%s\n' "$out" | sed 's/^/    /'
+    finish_suite_evidence "$evidence_id" "blocked" "$ec" "$evidence_reason" || true
+    return
+  fi
+
+  if [[ "$outcome_status" == "skipped" ]]; then
+    SKIP=$(( SKIP + 1 ))
+    if [[ $STRICT_LIVE_PROVIDERS -eq 1 ]]; then
+      echo "✗ SKIPPED"
+      FAIL=$(( FAIL + 1 ))
+      save_suite_output "$label" "$out"
+    else
+      echo "SKIP"
+    fi
+    printf '%s\n' "$child_outcome"
+    [[ -n "$out" ]] && printf '%s\n' "$out" | sed 's/^/    /'
+    finish_suite_evidence "$evidence_id" "skipped" "$ec" "$evidence_reason" || true
+    return
+  fi
+
+  if [[ "$outcome_status" == "failed" ]]; then
+    echo "✗"
+    FAIL=$(( FAIL + 1 ))
+    printf '%s\n' "$child_outcome"
+    [[ -n "$out" ]] && printf '%s\n' "$out" | sed 's/^/    /' >&2
+    save_suite_output "$label" "$out"
+    finish_suite_evidence "$evidence_id" "failed" "$ec" "$evidence_reason" || true
+    return
+  fi
+
+  echo "✓"
+  PASS=$(( PASS + 1 ))
+  printf '%s\n' "$child_outcome"
+  [[ -n "$out" ]] && printf '%s\n' "$out" | sed 's/^/    /'
+  finish_suite_evidence "$evidence_id" "passed" "$ec" "$evidence_reason" || true
+}
+
+block_live_suite() {
+  local provider="$1"
+  local suite="$2"
+  local label="$3"
+  local reason="$4"
+  live_suite_selected "$provider" "$suite" || return 0
+  start_suite_evidence "live-blocked" "$label" "$provider" "$suite" || true
+  local evidence_id="$SUITE_EVIDENCE_ID"
+  local outcome
+  reason=$(sanitize_suite_reason "$reason")
+  outcome="C_THRU_LIVE_OUTCOME|provider=${provider}|suite=${suite}|status=blocked|reason=${reason}"
+  printf "  %-55s" "$label"
+  BLOCKED=$(( BLOCKED + 1 ))
+  if [[ $STRICT_LIVE_PROVIDERS -eq 1 ]]; then
+    echo "✗ BLOCKED"
+    FAIL=$(( FAIL + 1 ))
+    save_suite_output "$label" "$outcome"
+  else
+    echo "BLOCKED"
+  fi
+  printf '%s\n' "$outcome"
+  finish_suite_evidence "$evidence_id" "blocked" "2" "$reason" || true
 }
 
 skip_suite() {
   local label="$1"
+  [[ -n "$LIVE_SHARD" ]] && return 0
+  start_suite_evidence "skipped" "$label" || true
+  local evidence_id="$SUITE_EVIDENCE_ID"
   printf "  %-55s" "$label"
   echo "SKIP"
   SKIP=$(( SKIP + 1 ))
+  finish_suite_evidence "$evidence_id" "skipped" || true
 }
 
 echo ""
@@ -153,7 +706,7 @@ run_suite "contract-check-guards-bite (10/11/14/15 fail-loud guards bite on muta
   bash "$REPO_DIR/test/contract-check-guards-bite.test.sh"
 run_suite "c-thru-explain-bash (bash integration: _explain_all_json cache + TSV contracts)" \
   bash "$REPO_DIR/test/c-thru-explain-bash.test.sh"
-run_suite "model-route-parity (bash jq resolver ≡ shared JS resolver)" \
+run_suite "model-route shared adapter (shell + CLI + JS golden contract)" \
   bash "$REPO_DIR/test/model-route-parity.test.sh"
 run_suite "c-thru-bootstrap-auth-env (bootstrap auth env helper)" \
   bash "$REPO_DIR/test/c-thru-bootstrap-auth-env.test.sh"
@@ -205,9 +758,9 @@ run_suite "c-thru-ephemeral-settings (user preferences + denylist)" \
   bash "$REPO_DIR/test/c-thru-ephemeral-settings.test.sh"
 run_suite "c-thru-strip-args (allowlist strip c-thru flags; keep -p/prompts)" \
   bash "$REPO_DIR/test/c-thru-strip-args.test.sh"
-run_suite "launcher-secret-gen-proxy-enforcement (C19/C23 secret-gen → live proxy enforces)" \
+run_suite "launcher-secret-gen-proxy-enforcement (distinct agent/control tokens → live proxy enforces)" \
   bash "$REPO_DIR/test/launcher-secret-gen-proxy-enforcement.test.sh"
-run_suite "cross-session-secret-stability (HMAC key stable across sessions → A-signed marker verifies in B)" \
+run_suite "cross-session-secret-stability (stable agent token supports fixed-proxy reuse)" \
   bash "$REPO_DIR/test/cross-session-secret-stability.test.sh"
 run_suite "proxy-reuse-lock (explicit-port cross-session reuse: 2nd attach, no duplicate spawn)" \
   bash "$REPO_DIR/test/proxy-reuse-lock.test.sh"
@@ -222,6 +775,12 @@ run_suite "exit-code-gating (every Node suite ties exit code to its failure coun
   node "$REPO_DIR/test/exit-code-gating.test.js"
 run_suite "helpers (self-test: waitForPing ECONNRESET retry, stub routing, spawnCapture)" \
   node "$REPO_DIR/test/helpers.test.js"
+run_suite "hard-timeout-supervisor (wall cap + owned process-group cleanup)" \
+  node "$REPO_DIR/test/hard-timeout-supervisor.test.js"
+run_suite "test-run-evidence (atomic sanitized aggregate manifest)" \
+  node "$REPO_DIR/test/test-run-evidence.test.js"
+run_suite "hierarchy-runtime-contract (managed proxy + one-hour timeout propagation)" \
+  node "$REPO_DIR/test/hierarchy-runtime-contract.test.js"
 run_suite "hooks-declaration-parity (ephemeral c-thru ↔ plugin hooks.json drift)" \
   node "$REPO_DIR/test/hooks-declaration-parity.test.js"
 run_suite "hook-port-resolution (proxy-health + classify spawn, tools + plugin, fail-open)" \
@@ -236,6 +795,8 @@ run_suite "model-map-v12-adapter (regression)" \
   node "$REPO_DIR/test/model-map-v12-adapter.test.js"
 run_suite "proxy-lifecycle (startup, /ping, loopback bind)" \
   node "$REPO_DIR/test/proxy-lifecycle.test.js"
+run_suite "c-thru-proxy-lifecycle (launcher exit/signal/readiness cleanup)" \
+  node "$REPO_DIR/test/c-thru-proxy-lifecycle.test.js"
 run_suite "proxy-unhandled-rejection (unhandledRejection handler + log)" \
   node "$REPO_DIR/test/proxy-unhandled-rejection.test.js"
 run_suite "proxy-body-size-cap (MAX_BODY_BYTES 413 guard)" \
@@ -280,7 +841,7 @@ run_suite "agent-description-quality (description discoverability lint)" \
   node "$REPO_DIR/test/agent-description-quality.test.js"
 run_suite "agent-selection-discriminability (descriptions discriminable per the selection corpus)" \
   node "$REPO_DIR/test/agent-selection-discriminability.test.js"
-run_suite "proxy-sentinel-detection (per-agent marker: header + byte-scan + window + HMAC)" \
+run_suite "proxy-sentinel-detection (structured prompt scan + HMAC + legacy rejection)" \
   node "$REPO_DIR/test/proxy-sentinel-detection.test.js"
 run_suite "proxy-control-auth (control-token gate on mutating routes)" \
   node "$REPO_DIR/test/proxy-control-auth.test.js"
@@ -288,12 +849,18 @@ run_suite "c-thru-control-skill-modes (SKILL.md mode vocabulary matches runtime 
   node "$REPO_DIR/test/c-thru-control-skill-modes.test.js"
 run_suite "proxy-auth-strip-e2e (C12: incoming Anthropic auth stripped to unknown host)" \
   node "$REPO_DIR/test/proxy-auth-strip-e2e.test.js"
-run_suite "proxy-agent-sentinel-e2e (live proxy: signed/unsigned/forged marker, fail-open, by_agent)" \
+run_suite "proxy-agent-sentinel-e2e (HMAC + spawned-agent ID + optional nested parent + replay rejection + fallback attribution)" \
   node "$REPO_DIR/test/proxy-agent-sentinel-e2e.test.js"
 run_suite "c-thru-verify-routing (live-smoke tool: resolved-via header + usage-stats cross-check)" \
   node "$REPO_DIR/test/c-thru-verify-routing.test.js"
 run_suite "agent-offload-lib (delegation parser: parse-not-grep, call↔result join)" \
   node "$REPO_DIR/test/agent-offload-lib.test.js"
+run_suite "offload-evidence (selection evidence persistence and validation)" \
+  node "$REPO_DIR/test/offload-evidence.test.js"
+run_suite "offload-artifact-fixtures (real PNG/PDF/large-context generation)" \
+  node "$REPO_DIR/test/offload-artifact-fixtures.test.js"
+run_suite "agent-offload-failure-integration (failed Claude runs cannot enter selection scoring)" \
+  node "$REPO_DIR/test/agent-offload-failure-integration.test.js"
 run_suite "c-thru-agent-usage (per-agent transcript telemetry CLI)" \
   node "$REPO_DIR/test/c-thru-agent-usage.test.js"
 run_suite "llm-mode-resolution-matrix (16-mode matrix)" \
@@ -428,8 +995,19 @@ run_suite "resolution-coverage (full resolution coverage)" \
   node "$REPO_DIR/test/resolution-coverage.test.js"
 run_suite "proxy-model-pin-routing (model pin + routing)" \
   node "$REPO_DIR/test/proxy-model-pin-routing.test.js"
-run_suite "proxy-cross-provider-parity (live parity — skipped unless C_THRU_LIVE_PARITY=1)" \
-  node "$REPO_DIR/test/proxy-cross-provider-parity.test.js"
+if [[ "${C_THRU_LIVE_PARITY:-0}" == "1" ]]; then
+  if [[ -n "${ANTHROPIC_API_KEY:-}" && -n "${GOOGLE_API_KEY:-}" && -n "${OPENROUTER_API_KEY:-}" ]]; then
+    run_live_suite "cross-provider" "proxy-cross-provider-parity" \
+      "proxy-cross-provider-parity (real Anthropic/Gemini/OpenRouter tool parity)" \
+      node "$REPO_DIR/test/proxy-cross-provider-parity.test.js"
+  else
+    block_live_suite "cross-provider" "proxy-cross-provider-parity" \
+      "proxy-cross-provider-parity (real Anthropic/Gemini/OpenRouter tool parity)" \
+      "missing_required_provider_credentials"
+  fi
+else
+  skip_suite "proxy-cross-provider-parity (set C_THRU_LIVE_PARITY=1 + provider keys to enable)"
+fi
 run_suite "proxy-gemini-routing (Gemini routing + picker aliases)" \
   node "$REPO_DIR/test/proxy-gemini-routing.test.js"
 run_suite "proxy-gemini-translation (Anthropic→Gemini translation)" \
@@ -438,6 +1016,10 @@ run_suite "proxy-openai-routing (OpenAI Responses routing + fallback)" \
   node "$REPO_DIR/test/proxy-openai-routing.test.js"
 run_suite "proxy-openai-translation (Anthropic→OpenAI Responses translation)" \
   node "$REPO_DIR/test/proxy-openai-translation.test.js"
+run_suite "proxy-responses-reasoning-cache (privacy scope + finite bounds)" \
+  node "$REPO_DIR/test/proxy-responses-reasoning-cache.test.js"
+run_suite "proxy-responses-timeout (Responses watchdog + Gemini isolation)" \
+  node "$REPO_DIR/test/proxy-responses-timeout.test.js"
 run_suite "proxy-gemini-timeout (C32: hang-on-headers → timeout listener fires)" \
   node "$REPO_DIR/test/proxy-gemini-timeout.test.js"
 
@@ -461,17 +1043,12 @@ run_suite "proxy-log-write-warn (unwritable ops log → stderr warn, proxy stays
   node "$REPO_DIR/test/proxy-log-write-warn.test.js"
 run_suite "proxy-brand-agent-routing (agent name → concrete model + correct API path)" \
   node "$REPO_DIR/test/proxy-brand-agent-routing.test.js"
-# EXCLUDED unless live: proxy-xai-live.test.js — needs C_THRU_LIVE_XAI=1 + XAI_API_KEY
-# (Anthropic Messages + stream dialect smoke against api.x.ai; skip-by-default).
 run_suite "proxy-ollama-fallback-url (OLLAMA_URL honored in not-in-routes fallback)" \
   node "$REPO_DIR/test/proxy-ollama-fallback-url.test.js"
 
-# EXCLUDED (tests for features not yet implemented / low value):
-# proxy-targets.test.js:   targets{} config section (request_defaults per model) not implemented
-# benchmark-coverage.test.js: passes now, but low value (0 cells checked since modes not in fixture)
-# proxy-autodetect.test.sh: machine-RAM-dependent wrapper (asserts against the host's
-#   physical memory tier); the hermetic .js variant is registered above
-# proxy-classify.test.js: removed — in-proxy dynamic classifier was never implemented
+# EXCLUDED: proxy-targets.test.js — targets{} request_defaults are not implemented
+# EXCLUDED: benchmark-coverage.test.js — low value while its mode fixture checks zero cells
+# EXCLUDED: proxy-autodetect.test.sh — host-RAM-dependent; hermetic .js variant is registered
 skip_suite "benchmark-coverage (excluded — 0 cells checked, mode fixture not populated)"
 skip_suite "proxy-targets (excluded — targets{} config feature not implemented in proxy)"
 skip_suite "proxy-autodetect.test.sh (excluded — machine-RAM-dependent; .js variant registered)"
@@ -479,10 +1056,21 @@ skip_suite "proxy-autodetect.test.sh (excluded — machine-RAM-dependent; .js va
 if [[ "${C_THRU_LIVE_ANTHROPIC:-0}" == "1" ]]; then
   echo ""
   echo "Live API tests (C_THRU_LIVE_ANTHROPIC=1):"
-  run_suite "anthropic-api-coverage-live (real api.anthropic.com via proxy)" \
-    node "$REPO_DIR/test/anthropic-api-coverage-live.test.js"
-  run_suite "judge-canary (one real judge call — judge path health)" \
-    node "$REPO_DIR/test/judge-canary.test.js"
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    run_live_suite "anthropic" "anthropic-api-coverage-live" \
+      "anthropic-api-coverage-live (real api.anthropic.com via proxy)" \
+      node "$REPO_DIR/test/anthropic-api-coverage-live.test.js"
+    run_live_suite "anthropic" "judge-canary" \
+      "judge-canary (one real judge call — judge path health)" \
+      node "$REPO_DIR/test/judge-canary.test.js"
+  else
+    block_live_suite "anthropic" "anthropic-api-coverage-live" \
+      "anthropic-api-coverage-live (real api.anthropic.com via proxy)" \
+      "missing_ANTHROPIC_API_KEY"
+    block_live_suite "anthropic" "judge-canary" \
+      "judge-canary (one real judge call — judge path health)" \
+      "missing_ANTHROPIC_API_KEY"
+  fi
 else
   skip_suite "anthropic-api-coverage-live (set C_THRU_LIVE_ANTHROPIC=1 + ANTHROPIC_API_KEY to enable)"
   skip_suite "judge-canary (set C_THRU_LIVE_ANTHROPIC=1 + ANTHROPIC_API_KEY to enable)"
@@ -491,57 +1079,103 @@ fi
 if [[ "${C_THRU_LIVE_SELECTION:-0}" == "1" ]]; then
   echo ""
   echo "Live agent-selection judge (C_THRU_LIVE_SELECTION=1):"
-  run_suite "agent-selection-llm-judge (descriptions → right subagent, LLM judge, threshold-gated)" \
-    node "$REPO_DIR/test/agent-selection-llm-judge.test.js"
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    run_live_suite "anthropic" "agent-selection-llm-judge" \
+      "agent-selection-llm-judge (descriptions → right subagent, LLM judge, threshold-gated)" \
+      node "$REPO_DIR/test/agent-selection-llm-judge.test.js"
+  else
+    block_live_suite "anthropic" "agent-selection-llm-judge" \
+      "agent-selection-llm-judge (descriptions → right subagent, LLM judge, threshold-gated)" \
+      "missing_ANTHROPIC_API_KEY"
+  fi
 else
   skip_suite "agent-selection-llm-judge (set C_THRU_LIVE_SELECTION=1 + ANTHROPIC_API_KEY to enable)"
 fi
 
-# Proxy-required agent tests: each needs a running proxy (and for live/judge
-# variants, real API spend), so each is opt-in behind its own gate.
+# Agent-facing live tests are opt-in behind their own gates. The contract suites
+# own a wide-watchdog proxy; the Claude route/offload suites make c-thru own one.
 echo ""
 echo "Proxy-required agent tests (opt-in):"
 if [[ "${C_THRU_BEHAVIORAL_TESTS:-0}" == "1" ]]; then
-  run_suite "agent-contract-behavioral (behavioral contracts via proxy)" \
+  run_live_suite "agent" "agent-contract-behavioral" \
+    "agent-contract-behavioral (behavioral contracts via managed proxy)" \
     node "$REPO_DIR/test/agent-contract-behavioral.test.js"
 else
-  skip_suite "agent-contract-behavioral (set C_THRU_BEHAVIORAL_TESTS=1 + running proxy to enable)"
+  skip_suite "agent-contract-behavioral (set C_THRU_BEHAVIORAL_TESTS=1 to enable; proxy is managed)"
 fi
 if [[ "${C_THRU_LIVE_AGENT_TESTS:-0}" == "1" ]]; then
-  run_suite "agent-contract-live (live agent contract smoke)" \
+  run_live_suite "agent" "agent-contract-live" \
+    "agent-contract-live (live agent contract smoke via managed proxy)" \
     node "$REPO_DIR/test/agent-contract-live.test.js"
 else
   skip_suite "agent-contract-live (set C_THRU_LIVE_AGENT_TESTS=1 to enable)"
 fi
-# Advisory: drives real `claude -p` sessions on NATURAL prompts and scores whether
-# the injected descriptions make Claude delegate to the right subagent. Never fails
-# the suite (the harness exits 0). Self-skips unless C_THRU_OFFLOAD=1 + a claude binary.
-if [[ "${C_THRU_OFFLOAD:-0}" == "1" ]]; then
-  run_suite "agent-offload-coverage (natural-prompt offload scorecard, advisory)" \
+if [[ "${C_THRU_LIVE_CLAUDE_AGENT_ROUTE:-0}" == "1" ]]; then
+  run_live_suite "agent" "claude-agent-route-live" \
+    "claude-agent-route-live (real Claude Agent header → mapped backend)" \
+    node "$REPO_DIR/test/claude-agent-route-live.test.js"
+else
+  skip_suite "claude-agent-route-live (set C_THRU_LIVE_CLAUDE_AGENT_ROUTE=1 to enable)"
+fi
+# Drives real `claude -p` sessions on NATURAL prompts and scores whether the
+# injected descriptions make Claude delegate to the right subagent. The
+# generated-artifact lane is intentionally disjoint so its six expensive cases
+# can be piloted and repeated independently. Quality is advisory unless
+# C_THRU_OFFLOAD_GATE=1; integrity failures always fail.
+if [[ "${C_THRU_OFFLOAD_ARTIFACTS:-0}" == "1" ]]; then
+  run_live_suite "agent" "agent-offload-artifacts" \
+    "agent-offload-artifacts (real PNG/PDF/large-context selection scorecard)" \
     node "$REPO_DIR/test/agent-offload-coverage.js"
 else
-  skip_suite "agent-offload-coverage (set C_THRU_OFFLOAD=1 + a claude binary to enable)"
+  if [[ "${C_THRU_OFFLOAD:-0}" == "1" ]]; then
+    run_live_suite "agent" "agent-offload-coverage" \
+      "agent-offload-coverage (natural-prompt offload scorecard)" \
+      node "$REPO_DIR/test/agent-offload-coverage.js"
+  else
+    skip_suite "agent-offload-coverage (set C_THRU_OFFLOAD=1 + a claude binary to enable)"
+  fi
+  skip_suite "agent-offload-artifacts (use make test-live-artifacts to enable real generated inputs)"
 fi
 if [[ "${C_THRU_HIERARCHY_TESTS:-0}" == "1" ]]; then
   run_suite "agent-prompt-hierarchy (prompt hierarchy via proxy)" \
     node "$REPO_DIR/test/agent-prompt-hierarchy.test.js"
 else
-  skip_suite "agent-prompt-hierarchy (set C_THRU_HIERARCHY_TESTS=1 + running proxy to enable)"
+  skip_suite "agent-prompt-hierarchy (set C_THRU_HIERARCHY_TESTS=1 to enable; proxy is managed)"
 fi
 
 if [[ "${C_THRU_LIVE_GEMINI:-0}" == "1" ]]; then
   echo ""
   echo "Live Gemini tests (C_THRU_LIVE_GEMINI=1):"
-  run_suite "proxy-gemini-live-shapes (real Gemini API response shapes)" \
-    node "$REPO_DIR/test/proxy-gemini-live-shapes.test.js"
-  run_suite "proxy-gemini-live-thinking (real Gemini thinking blocks)" \
-    node "$REPO_DIR/test/proxy-gemini-live-thinking.test.js"
-  run_suite "proxy-gemini-live-e2e (Gemini end-to-end via proxy)" \
-    bash "$REPO_DIR/test/proxy-gemini-live-e2e.test.sh"
-  # vertex needs GOOGLE_CLOUD_TOKEN/PROJECT/REGION on top of the gate — it
-  # self-skips inside the gate when those are absent.
-  run_suite "proxy-gemini-live-vertex (Vertex AI endpoint)" \
-    bash "$REPO_DIR/test/proxy-gemini-live-vertex.test.sh"
+  if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
+    run_live_suite "gemini" "proxy-gemini-live-shapes" \
+      "proxy-gemini-live-shapes (real Gemini API response shapes)" \
+      node "$REPO_DIR/test/proxy-gemini-live-shapes.test.js"
+    run_live_suite "gemini" "proxy-gemini-live-thinking" \
+      "proxy-gemini-live-thinking (real Gemini thinking blocks)" \
+      node "$REPO_DIR/test/proxy-gemini-live-thinking.test.js"
+    run_live_suite "gemini" "proxy-gemini-live-e2e" \
+      "proxy-gemini-live-e2e (Gemini end-to-end via proxy)" \
+      bash "$REPO_DIR/test/proxy-gemini-live-e2e.test.sh"
+  else
+    block_live_suite "gemini" "proxy-gemini-live-shapes" \
+      "proxy-gemini-live-shapes (real Gemini API response shapes)" \
+      "missing_GOOGLE_API_KEY"
+    block_live_suite "gemini" "proxy-gemini-live-thinking" \
+      "proxy-gemini-live-thinking (real Gemini thinking blocks)" \
+      "missing_GOOGLE_API_KEY"
+    block_live_suite "gemini" "proxy-gemini-live-e2e" \
+      "proxy-gemini-live-e2e (Gemini end-to-end via proxy)" \
+      "missing_GOOGLE_API_KEY"
+  fi
+  if [[ -n "${GOOGLE_CLOUD_TOKEN:-}" && -n "${GOOGLE_CLOUD_PROJECT:-}" && -n "${GOOGLE_CLOUD_REGION:-}" ]]; then
+    run_live_suite "vertex" "proxy-gemini-live-vertex" \
+      "proxy-gemini-live-vertex (Vertex AI endpoint)" \
+      bash "$REPO_DIR/test/proxy-gemini-live-vertex.test.sh"
+  else
+    block_live_suite "vertex" "proxy-gemini-live-vertex" \
+      "proxy-gemini-live-vertex (Vertex AI endpoint)" \
+      "missing_GOOGLE_CLOUD_TOKEN_PROJECT_or_REGION"
+  fi
 else
   skip_suite "proxy-gemini-live-shapes (set C_THRU_LIVE_GEMINI=1 + GOOGLE_API_KEY to enable)"
   skip_suite "proxy-gemini-live-thinking (set C_THRU_LIVE_GEMINI=1 + GOOGLE_API_KEY to enable)"
@@ -552,10 +1186,33 @@ fi
 if [[ "${C_THRU_LIVE_OPENAI:-0}" == "1" ]]; then
   echo ""
   echo "Live OpenAI tests (C_THRU_LIVE_OPENAI=1):"
-  run_suite "proxy-openai-live-shapes (real OpenAI Responses API response shapes)" \
-    node "$REPO_DIR/test/proxy-openai-live-shapes.test.js"
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    run_live_suite "openai" "proxy-openai-live-shapes" \
+      "proxy-openai-live-shapes (real OpenAI Responses API response shapes)" \
+      node "$REPO_DIR/test/proxy-openai-live-shapes.test.js"
+  else
+    block_live_suite "openai" "proxy-openai-live-shapes" \
+      "proxy-openai-live-shapes (real OpenAI Responses API response shapes)" \
+      "missing_OPENAI_API_KEY"
+  fi
 else
   skip_suite "proxy-openai-live-shapes (set C_THRU_LIVE_OPENAI=1 + OPENAI_API_KEY to enable)"
+fi
+
+if [[ "${C_THRU_LIVE_XAI:-0}" == "1" ]]; then
+  echo ""
+  echo "Live xAI tests (C_THRU_LIVE_XAI=1):"
+  if [[ -n "${XAI_API_KEY:-}" ]]; then
+    run_live_suite "xai" "proxy-xai-live" \
+      "proxy-xai-live (real xAI Responses + proxy translation)" \
+      node "$REPO_DIR/test/proxy-xai-live.test.js"
+  else
+    block_live_suite "xai" "proxy-xai-live" \
+      "proxy-xai-live (real xAI Responses + proxy translation)" \
+      "missing_XAI_API_KEY"
+  fi
+else
+  skip_suite "proxy-xai-live (set C_THRU_LIVE_XAI=1 + XAI_API_KEY to enable)"
 fi
 
 echo ""
@@ -568,19 +1225,25 @@ run_suite "bash -n tools/c-thru" \
   bash -n "$REPO_DIR/tools/c-thru"
 run_suite "node --check tools/claude-proxy" \
   node --check "$REPO_DIR/tools/claude-proxy"
-# Drift checks duplicated from .githooks/pre-commit: the hook only runs when
-# core.hooksPath is armed (per-clone, manual, silently lost), so a green full
-# run must prove bundle/README sync regardless of hook activation.
+# Drift Validators (always-on for hermetic runs). A former .githooks/pre-commit
+# mirrored these; that hook tree is not required. A green full run must still
+# prove bundle/README/diagram sync here.
 run_suite "sync-plugin-bundle --check (bundle drift)" \
   bash "$REPO_DIR/tools/sync-plugin-bundle.sh" --check
 run_suite "gen-routing-doc --check (README routing table drift)" \
   node "$REPO_DIR/tools/gen-routing-doc.js" --check
+run_suite "gen-request-flow-doc --check (README step-through vs docs/request-flow.html)" \
+  node "$REPO_DIR/tools/gen-request-flow-doc.js" --check
 run_suite "check-diagram-sync (shared launch-flow diagram: README ↔ CLAUDE.md)" \
   node "$REPO_DIR/tools/check-diagram-sync.js"
 run_suite "hooks-armed (core.hooksPath → .githooks, fail-closed)" \
   bash "$REPO_DIR/test/hooks-armed.test.sh"
 run_suite "run-all-coverage (every test/ runnable referenced in this registry)" \
   node "$REPO_DIR/test/run-all-coverage.test.js"
+run_suite "live-suite-wiring (aggregate gates, workflow secrets, fresh-checkout smoke config)" \
+  node "$REPO_DIR/test/live-suite-wiring.test.js"
+run_suite "run-all-live-outcome (provider pass/skip/blocked/failed accounting)" \
+  node "$REPO_DIR/test/run-all-live-outcome.test.js"
 run_suite "gate-coverage (every pre-commit artifact registered in this suite)" \
   node "$REPO_DIR/test/gate-coverage.test.js"
 
@@ -621,15 +1284,33 @@ fi
 
 echo ""
 echo "-----------------"
+if [[ $EVIDENCE_FAILURE -ne 0 ]]; then
+  FAIL=$(( FAIL + 1 ))
+fi
+FINAL_EVIDENCE_STATUS="passed"
+[[ $FAIL -ne 0 ]] && FINAL_EVIDENCE_STATUS="failed"
+if ! node "$TEST_EVIDENCE_TOOL" finalize \
+  --path "$TEST_EVIDENCE_PATH" \
+  --repo "$REPO_DIR" \
+  --passed "$PASS" \
+  --failed "$FAIL" \
+  --skipped "$SKIP" \
+  --blocked "$BLOCKED" \
+  --status "$FINAL_EVIDENCE_STATUS"; then
+  echo "run-all: evidence finalization failed (snapshot changed or evidence is incomplete)" >&2
+  if [[ $EVIDENCE_FAILURE -eq 0 ]]; then
+    FAIL=$(( FAIL + 1 ))
+  fi
+  EVIDENCE_FAILURE=1
+fi
 TOTAL=$(( PASS + FAIL ))
 if [[ $FAIL -eq 0 ]]; then
-  # ${SKIP:+...} alone always expands (SKIP=0 is non-empty) — guard on count
-  if [[ $SKIP -gt 0 ]]; then
-    echo "✓ $TOTAL/$TOTAL suites passed ($SKIP skipped)"
+  if [[ $SKIP -gt 0 || $BLOCKED -gt 0 ]]; then
+    echo "✓ $TOTAL/$TOTAL suites passed ($SKIP skipped, $BLOCKED blocked)"
   else
     echo "✓ $TOTAL/$TOTAL suites passed"
   fi
 else
-  echo "✗ $FAIL/$TOTAL suites failed (failing output saved under $FAIL_LOG_DIR)"
+  echo "✗ $FAIL/$TOTAL suites failed ($SKIP skipped, $BLOCKED blocked; failing output saved under $FAIL_LOG_DIR)"
   exit 1
 fi
