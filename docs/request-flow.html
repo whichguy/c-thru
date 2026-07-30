@@ -123,6 +123,19 @@
   .rnote b { color: var(--ink); font-weight: 600; }
   .rnote.warn { color: var(--warn); }
 
+  /* ---- glossary + commands ---- */
+  .terms { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2px 22px; }
+  .term { padding: 9px 0; border-bottom: 1px solid var(--line); }
+  .term dt {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+    font-weight: 600; margin-bottom: 3px;
+  }
+  .term dd { margin: 0; font-size: 13.5px; color: var(--muted); }
+  pre.plain {
+    padding: 14px 16px; white-space: pre; line-height: 1.75;
+  }
+  pre.plain .c { color: var(--muted); }
+
   .scenarios { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
   .scenario {
     appearance: none; cursor: pointer; font: inherit; font-size: 13.5px;
@@ -347,6 +360,37 @@
 </details>
 
 <section class="sec">
+  <h2>Key terms</h2>
+  <p class="dim">Six words do most of the work from here on.</p>
+  <dl class="terms">
+    <div class="term">
+      <dt>agent</dt>
+      <dd>A named worker you can hand a task to. Most name a <em>job</em>; five name a model.</dd>
+    </div>
+    <div class="term">
+      <dt>capability</dt>
+      <dd>The role an agent resolves to, and what routing is actually keyed on. Usually the same word as the agent.</dd>
+    </div>
+    <div class="term">
+      <dt>routing mode</dt>
+      <dd>Which family of models you want: frontier cloud, open-weights cloud, fully local, or origin-filtered. Five values.</dd>
+    </div>
+    <div class="term">
+      <dt>hardware tier</dt>
+      <dd>Detected from your RAM — 16, 32, 48, 64 or 128&nbsp;GB. Lets one config serve a laptop and a workstation.</dd>
+    </div>
+    <div class="term">
+      <dt>endpoint</dt>
+      <dd>A configured backend: its URL, its auth, and the wire format it speaks.</dd>
+    </div>
+    <div class="term">
+      <dt>wire format</dt>
+      <dd>The request shape a backend expects — Anthropic, Gemini, or OpenAI Responses. The proxy translates between them.</dd>
+    </div>
+  </dl>
+</section>
+
+<section class="sec">
   <h2>See it resolve</h2>
   <p>
     This is the part worth playing with. Pick an agent, a routing mode, and a machine size, and watch
@@ -417,6 +461,35 @@
     <p class="hint">Use <kbd>&larr;</kbd> <kbd>&rarr;</kbd> to step, <kbd>Space</kbd> to play or pause.</p>
   </div>
 </div>
+
+<section class="sec">
+  <h2>What you actually type</h2>
+  <p>
+    Routing is a launch-time choice, so most of this is one flag. Nothing below changes any agent file.
+  </p>
+  <pre class="plain"><span class="c"># launch Claude Code through c-thru (cthru is an alias for c-thru)</span>
+cthru                              <span class="c"># the default mode</span>
+cthru --mode best-local-oss        <span class="c"># nothing leaves the machine</span>
+cthru --mode best-cloud-oss        <span class="c"># open-weights for the bulk work</span>
+
+<span class="c"># "why did it pick that?" — pure config lookup, no proxy, no request sent</span>
+c-thru explain --agent coder --mode best-cloud --tier 64gb
+
+<span class="c"># active profile, routes, backend health</span>
+c-thru list
+
+<span class="c"># edit the model-map, then reload a running session in place</span>
+c-thru reload</pre>
+  <p style="margin-top:14px">
+    Then, inside the session, you address the fleet in plain language — <em>“ask agent grok to
+    critique this plan”</em> — or run <code>/cplan "add JWT auth"</code> to drive the full
+    planner → coder → reviewer → tester wave.
+  </p>
+  <p class="dim">
+    The agent fleet, the <code>explain</code> subcommand and the MCP server come with the CLI install.
+    Installing the marketplace plugin instead gives you the proxy and routing, but not the fleet.
+  </p>
+</section>
 
 <details class="mapwrap">
   <summary>Component map — every box and every arrow <span class="hintline">the whole system, not just the request path</span></summary>
