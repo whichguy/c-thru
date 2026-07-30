@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>c-thru — request flow step-through</title>
+<style>
+  :root {
+    --bg: #fbfbfa;
+    --panel: #ffffff;
+    --ink: #1c1b19;
+    --muted: #6b6a66;
+    --line: #e3e2de;
+    --accent: #b5502a;
+    --accent-soft: #fbeee8;
+    --ok: #2f7d54;
+    --ok-soft: #e9f4ee;
+    --warn: #a8710f;
+    --warn-soft: #fdf3e0;
+    --code-bg: #f5f4f1;
+    --add: #e6f2ea;
+    --add-bar: #2f7d54;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a;
+      --panel: #1e1e23;
+      --ink: #eceae5;
+      --muted: #9d9b95;
+      --line: #33333a;
+      --accent: #e08a62;
+      --accent-soft: #33231c;
+      --ok: #6bc191;
+      --ok-soft: #1c2b23;
+      --warn: #e0b25f;
+      --warn-soft: #2e2517;
+      --code-bg: #141418;
+      --add: #1c2b23;
+      --add-bar: #6bc191;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 64px; }
+
+  header { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 24px; }
+  h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0; }
+  .sub code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+
+  .scenarios { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+  .scenario {
+    appearance: none; cursor: pointer; font: inherit; font-size: 13.5px;
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 999px; padding: 7px 15px;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .scenario:hover { border-color: var(--accent); }
+  .scenario[aria-pressed="true"] {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+
+  .grid { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); gap: 24px; align-items: start; }
+  @media (max-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+
+  /* ---- pipeline ---- */
+  .rail { display: flex; flex-direction: column; gap: 0; }
+  .node {
+    position: relative; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 11px 13px; opacity: .45;
+    transition: opacity .25s, border-color .25s, background .25s, transform .25s;
+  }
+  .node + .node { margin-top: 22px; }
+  .node + .node::before {
+    content: ""; position: absolute; left: 22px; top: -22px; height: 22px;
+    width: 2px; background: var(--line);
+  }
+  .node.done { opacity: .8; }
+  .node.done + .node::before, .node.active + .node::before { background: var(--accent); }
+  .node.active {
+    opacity: 1; border-color: var(--accent); background: var(--accent-soft);
+    transform: translateX(3px);
+  }
+  .node.active.tone-ok { border-color: var(--ok); background: var(--ok-soft); }
+  .node.active.tone-warn { border-color: var(--warn); background: var(--warn-soft); }
+  .node.dimmed { opacity: .2; }
+  .node .who { font-size: 11.5px; letter-spacing: .03em; font-weight: 600; color: var(--muted); }
+  .node .what { font-size: 14px; margin-top: 2px; }
+  .node .meta { font-size: 12px; color: var(--muted); margin-top: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .node.sub { margin-left: 26px; }
+  .node.sub + .node.sub::before { left: 22px; }
+
+  /* ---- detail ---- */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .stepno { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  .panel h2 { font-size: 18px; margin: 6px 0 10px; letter-spacing: -0.01em; }
+  .panel p { margin: 0 0 14px; color: var(--ink); }
+  .panel p.note { color: var(--muted); font-size: 13.5px; }
+
+  .caption { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin: 18px 0 6px; }
+  pre {
+    margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 0; overflow-x: auto;
+    font: 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  pre .ln { display: block; padding: 0 14px; white-space: pre; }
+  pre .ln.hi { background: var(--add); box-shadow: inset 2px 0 0 var(--add-bar); }
+
+  /* ---- controls ---- */
+  .controls {
+    display: flex; align-items: center; gap: 10px; margin-top: 20px; flex-wrap: wrap;
+  }
+  button.ctl {
+    appearance: none; cursor: pointer; font: inherit; font-size: 13.5px;
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
+    transition: border-color .15s, background .15s;
+  }
+  button.ctl:hover:not(:disabled) { border-color: var(--accent); }
+  button.ctl:disabled { opacity: .35; cursor: default; }
+  button.ctl.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .progress { flex: 1; min-width: 120px; height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  .progress > i { display: block; height: 100%; background: var(--accent); transition: width .25s; }
+  .count { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 12px; }
+  kbd {
+    font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line);
+    border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; background: var(--panel);
+  }
+  footer { margin-top: 36px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>c-thru — how a prompt becomes a model call</h1>
+  <p class="sub">
+    One agent name travels from the context window to an upstream API and back.
+    Follows the shipped <code>config/model-map.json</code>, mode <code>best-cloud</code>, tier <code>64gb</code>.
+  </p>
+  <div class="scenarios" role="group" aria-label="Scenario">
+    <button class="scenario" data-scenario="happy" aria-pressed="true">Happy path</button>
+    <button class="scenario" data-scenario="failover" aria-pressed="false">Backend failure → failover</button>
+    <button class="scenario" data-scenario="pinned" aria-pressed="false">Named agent (grok)</button>
+  </div>
+</header>
+
+<div class="grid">
+  <div class="rail" id="rail"></div>
+
+  <div>
+    <div class="panel">
+      <div class="stepno" id="stepno"></div>
+      <h2 id="title"></h2>
+      <p id="body"></p>
+      <div id="codewrap" hidden>
+        <div class="caption" id="codecap"></div>
+        <pre id="code"></pre>
+      </div>
+      <p class="note" id="note" hidden></p>
+    </div>
+
+    <div class="controls">
+      <button class="ctl" id="prev">&larr; Prev</button>
+      <button class="ctl primary" id="next">Next &rarr;</button>
+      <button class="ctl" id="play">Play</button>
+      <div class="progress"><i id="bar"></i></div>
+      <span class="count" id="count"></span>
+    </div>
+    <p class="hint">Use <kbd>&larr;</kbd> <kbd>&rarr;</kbd> to step, <kbd>Space</kbd> to play or pause.</p>
+  </div>
+</div>
+
+<footer>
+  Static views of the same path live in the
+  <a href="../README.md#architecture-how-a-prompt-becomes-a-model-call">README</a>.
+  Every branch and guard, with source anchors:
+  <a href="architecture-diagrams.md#2-model-resolution--fallback-cascade">architecture-diagrams.md &sect;&nbsp;2</a>.
+</footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // Pipeline nodes. Each step activates one of these by id.
+  var NODES = [
+    { id: "you",      who: "You",                     what: "A prompt in the context window" },
+    { id: "harness",  who: "Claude Code harness",     what: "Picks an agent from the injected fleet" },
+    { id: "hook",     who: "PreToolUse hook",         what: "Tags the prompt with the agent name", meta: "c-thru-agent-router-hook.sh" },
+    { id: "parse",    who: "claude-proxy · 1",        what: "Read the prefix, verify HMAC, strip it", sub: true },
+    { id: "cap",      who: "claude-proxy · 2",        what: "Agent → capability",                    sub: true, meta: "agent_to_capability" },
+    { id: "model",    who: "claude-proxy · 3",        what: "Capability → concrete model",           sub: true, meta: "llm_profiles → mode → tier" },
+    { id: "endpoint", who: "claude-proxy · 4",        what: "Model → endpoint, auth, wire format",   sub: true, meta: "endpoints" },
+    { id: "upstream", who: "Upstream API",            what: "The provider that actually answers" },
+    { id: "back",     who: "claude-proxy",            what: "Normalize the response to Anthropic SSE" },
+    { id: "done",     who: "You",                     what: "The agent's answer" }
+  ];
+
+  // Lines prefixed with "~" render highlighted.
+  var SCENARIOS = {
+    happy: [
+      { node: "you", title: "A prompt arrives",
+        body: "Nothing about routing has happened yet. This is an ordinary turn in an ordinary context window.",
+        cap: "What you typed",
+        code: "implement the JWT middleware" },
+
+      { node: "harness", title: "The main loop picks an agent",
+        body: "The fleet was injected at launch as ephemeral --agents JSON. The main loop selects coder — a role, not a model. Nothing here knows which vendor will serve it.",
+        cap: "Agent tool call",
+        code: '{\n~  "subagent_type": "coder",\n  "prompt": "implement the JWT middleware"\n}' },
+
+      { node: "hook", title: "The hook tags the prompt", tone: "warn",
+        body: "This is the whole trick. Claude Code validates the Agent tool's model field against a fixed enum, and c-thru forbids hooks from rewriting body.model — a second rewriting path would drift from model-map.json. So the hook prepends a signed marker to the prompt text instead.",
+        cap: "Prompt after the hook rewrites it",
+        code: '~[[c-thru-agent:coder:9f3c1ab8...]]\n\nimplement the JWT middleware',
+        note: "model is set to \"sonnet\" purely to satisfy the harness enum. It is a placeholder, not a routing decision." },
+
+      { node: "parse", title: "The proxy reads the prefix",
+        body: "ANTHROPIC_BASE_URL points at the local proxy, so the subagent's request lands here. The proxy parses the sentinel, verifies the HMAC against a 0600 secret at ~/.claude/proxy.agent-token, and strips it back out of the body.",
+        cap: "Recovered identity",
+        code: 'agent      coder\nsignature  verified\nbody       sentinel removed — the model never sees it' },
+
+      { node: "cap", title: "Agent → capability",
+        body: "Most agents map to a capability of the same name. Two alias deliberately: reviewer-plan → code-reviewer, plan-scheduler → fast-generalist.",
+        cap: "config/model-map.json",
+        code: '"agent_to_capability": {\n~  "coder": "coder",\n  "reviewer-plan": "code-reviewer",\n  "plan-scheduler": "fast-generalist"\n}' },
+
+      { node: "model", title: "Capability → concrete model",
+        body: "Three inputs decide it: the capability, the routing mode, and the detected hardware tier. This is the only place in the system where a model gets chosen.",
+        cap: "llm_profiles.coder",
+        code: '"coder": {\n  "best-cloud": {\n~    "64gb": "gemini-pro"\n  },\n  "best-cloud-oss": {\n    "64gb": "kimi-k2.7-code:cloud"\n  }\n}' },
+
+      { node: "endpoint", title: "Model → endpoint",
+        body: "The concrete model resolves to an endpoint entry carrying the URL, the auth scheme, and the wire format. Format picks the translator.",
+        cap: "endpoints.gemini_ai",
+        code: '{\n  "call_style": "gemini",\n~  "fallback_to": "claude-sonnet-5",\n  "auth_env": "GOOGLE_API_KEY"\n}',
+        note: "Note that fallback_to line — it does nothing today, and everything in the failover scenario." },
+
+      { node: "upstream", title: "Translate and send", tone: "warn",
+        body: "The request arrived in Anthropic wire format. forwardGemini rewrites it into a Gemini generateContent call: system prompt, tool schemas, and content blocks all get remapped.",
+        cap: "Outbound",
+        code: 'POST  generativelanguage.googleapis.com\n      /v1beta/models/gemini-pro:streamGenerateContent\n~via   forwardGemini()' },
+
+      { node: "back", title: "Normalize the response", tone: "ok",
+        body: "Coming back, the proxy does the inverse: Gemini SSE is translated into Anthropic SSE, so the harness never learns it was talking to anything else. Because headers cannot be set once streaming has begun, Gemini thinking-token counts ride along as a custom SSE event instead.",
+        cap: "Response headers",
+        code: '~x-c-thru-resolved-via: {"capability":"coder",\n~  "served_by":"gemini-pro","tier":"64gb",\n~  "mode":"best-cloud"}\nevent: c-thru-thinking-tokens' },
+
+      { node: "done", title: "The answer lands", tone: "ok",
+        body: "The subagent got a normal Anthropic-shaped response. It never knew it was served by Gemini — and it did not have to.",
+        cap: "How to check after the fact",
+        code: 'x-c-thru-resolved-via  →  served_by: gemini-pro' }
+    ],
+
+    failover: [
+      { node: "endpoint", title: "Same request, up to the send",
+        body: "Steps 1 through 7 are identical to the happy path: coder → capability coder → gemini-pro → the gemini_ai endpoint. We rejoin the story at the moment of the outbound call.",
+        cap: "endpoints.gemini_ai",
+        code: '{\n  "call_style": "gemini",\n~  "fallback_to": "claude-sonnet-5"\n}' },
+
+      { node: "upstream", title: "The backend fails", tone: "warn",
+        body: "Gemini returns a 503. In a system without indirection this is where the subagent gets an error and the turn dies.",
+        cap: "Upstream response",
+        code: '~HTTP/1.1 503 Service Unavailable' },
+
+      { node: "upstream", title: "Guard one — has anything streamed yet?", tone: "warn",
+        body: "The proxy checks whether bytes have already gone back to the client. A half-sent stream cannot be rewound, so mid-stream failures surface rather than reroute. Here nothing has been sent, so failover is still on the table.",
+        cap: "Guard",
+        code: 'res.headersSent  →  false   (safe to reroute)' },
+
+      { node: "upstream", title: "Guard two — is this capability allowed to degrade?", tone: "warn",
+        body: "reviewer-security and debugger-hard ship with on_failure: hard_fail. For a security review, a quietly-substituted weaker model is a worse outcome than a visible failure, so those skip the cascade entirely. coder is cascade, the default.",
+        cap: "llm_profiles.coder",
+        code: '~"on_failure": "cascade"\n"fallback_to": "coder-fallback"',
+        note: "A 400 would not reach this point at all — a malformed request fails the same way on every backend, so retrying would only multiply the error." },
+
+      { node: "endpoint", title: "Stage 1 — endpoint fallback_to", tone: "warn",
+        body: "The first cascade stage reads fallback_to off the failed endpoint and re-resolves from scratch. This hop crosses vendors, not just models — which is only possible because the proxy owns translation in both directions.",
+        cap: "Re-resolution",
+        code: 'gemini_ai.fallback_to  →  claude-sonnet-5\n~endpoint               →  anthropic\n~wire format            →  forwardAnthropic' },
+
+      { node: "upstream", title: "Retry against Anthropic", tone: "ok",
+        body: "The same original request — sentinel already stripped, content untouched — is sent to a completely different provider in a completely different wire format.",
+        cap: "Outbound, second attempt",
+        code: '~POST api.anthropic.com/v1/messages\n     model: claude-sonnet-5\n~HTTP/1.1 200 OK' },
+
+      { node: "back", title: "Later stages, if that had failed too", tone: "ok",
+        body: "Stage 1 answered, so the cascade stops. Had it not, the proxy would keep walking: capability fallback_to, then the tier's fallback chain ordered by quality tolerance, then local modes stepping out to cloud, then the global default route.",
+        cap: "The full cascade order",
+        code: '1  endpoint fallback_to        ← answered here\n2  capability fallback_to      coder → coder-fallback\n3  capability fallback chain   by quality_tolerance_pct\n4  local terminal fallback     best-local → best-cloud\n5  global default route' },
+
+      { node: "done", title: "The subagent never saw the failure", tone: "ok",
+        body: "It asked for coder. It never asked for Gemini. The only trace that anything went sideways is the resolved-via header naming a different model than the happy path.",
+        cap: "Response header",
+        code: 'x-c-thru-resolved-via: {"capability":"coder",\n~  "served_by":"claude-sonnet-5",\n  "mode":"best-cloud"}' }
+    ],
+
+    pinned: [
+      { node: "harness", title: "You name a model, not a job",
+        body: "Five agents are the deliberate exception to the whole capability scheme: grok, deepseek, qwen, kimi and gemini. Asking for grok means you want Grok specifically — a second opinion from a different vendor is the entire point.",
+        cap: "What you typed",
+        code: "ask agent grok to critique this plan" },
+
+      { node: "hook", title: "The hook tags it exactly the same way",
+        body: "No special case here. The hook does not know or care whether the agent is logical or pinned; it prepends the same signed marker.",
+        cap: "Prompt after the hook",
+        code: '~[[c-thru-agent:grok:41d7e0c2...]]\n\ncritique this plan' },
+
+      { node: "cap", title: "The lookup returns a pin, not a capability", tone: "warn",
+        body: "This is where the two kinds of agent diverge. A model: prefix in agent_to_capability tells the proxy to skip capability resolution entirely and resolve the pinned model directly.",
+        cap: "config/model-map.json",
+        code: '"agent_to_capability": {\n  "coder": "coder",\n~  "grok": "model:grok-4.5",\n~  "gemini": "model:gemini-pro",\n~  "kimi": "model:kimi-k2.7-code:cloud"\n}' },
+
+      { node: "endpoint", title: "Straight to the endpoint",
+        body: "No llm_profiles lookup, no mode, no hardware tier. Those three inputs are exactly what a pin opts out of — which is why grok reaches Grok no matter how the rest of the fleet is configured.",
+        cap: "Resolution, short-circuited",
+        code: 'grok-4.5  →  endpoints.xai\n~mode and tier are not consulted' },
+
+      { node: "upstream", title: "Translate to the Responses API",
+        body: "xAI speaks the OpenAI-compatible Responses format, so forwardOpenAI handles the translation. Different vendor, different wire format, same Anthropic-shaped request on the way in.",
+        cap: "Outbound",
+        code: 'POST api.x.ai/v1/responses\n~via  forwardOpenAI()' },
+
+      { node: "done", title: "Same normalized response", tone: "ok",
+        body: "The answer comes back through the same translation layer as every other route. The pin changed which model answered — not how anything downstream works.",
+        cap: "Response header",
+        code: 'x-c-thru-resolved-via: {"served_by":"grok-4.5"}' }
+    ]
+  };
+
+  var rail = document.getElementById("rail");
+  var els = {};
+  NODES.forEach(function (n) {
+    var d = document.createElement("div");
+    d.className = "node" + (n.sub ? " sub" : "");
+    var meta = n.meta ? '<div class="meta">' + n.meta + "</div>" : "";
+    d.innerHTML = '<div class="who">' + n.who + '</div><div class="what">' + n.what + "</div>" + meta;
+    rail.appendChild(d);
+    els[n.id] = d;
+  });
+
+  var order = NODES.map(function (n) { return n.id; });
+  var scenario = "happy";
+  var i = 0;
+  var timer = null;
+
+  var ui = {
+    stepno: document.getElementById("stepno"),
+    title: document.getElementById("title"),
+    body: document.getElementById("body"),
+    codewrap: document.getElementById("codewrap"),
+    codecap: document.getElementById("codecap"),
+    code: document.getElementById("code"),
+    note: document.getElementById("note"),
+    prev: document.getElementById("prev"),
+    next: document.getElementById("next"),
+    play: document.getElementById("play"),
+    bar: document.getElementById("bar"),
+    count: document.getElementById("count")
+  };
+
+  function steps() { return SCENARIOS[scenario]; }
+
+  function renderCode(src) {
+    ui.code.textContent = "";
+    src.split("\n").forEach(function (line) {
+      var hi = line.charAt(0) === "~";
+      var s = document.createElement("span");
+      s.className = "ln" + (hi ? " hi" : "");
+      s.textContent = (hi ? line.slice(1) : line) || " ";
+      ui.code.appendChild(s);
+    });
+  }
+
+  function render() {
+    var list = steps();
+    var st = list[i];
+    var activeIdx = order.indexOf(st.node);
+    var visited = list.slice(0, i + 1).map(function (s) { return order.indexOf(s.node); });
+    var maxSeen = Math.max.apply(null, visited);
+
+    NODES.forEach(function (n, idx) {
+      var el = els[n.id];
+      el.className = "node" + (n.sub ? " sub" : "");
+      if (idx === activeIdx) {
+        el.classList.add("active");
+        if (st.tone) el.classList.add("tone-" + st.tone);
+      } else if (idx < maxSeen) {
+        el.classList.add("done");
+      } else {
+        el.classList.add("dimmed");
+      }
+    });
+
+    ui.stepno.textContent = "Step " + (i + 1);
+    ui.title.textContent = st.title;
+    ui.body.textContent = st.body;
+
+    if (st.code) {
+      ui.codewrap.hidden = false;
+      ui.codecap.textContent = st.cap || "";
+      renderCode(st.code);
+    } else {
+      ui.codewrap.hidden = true;
+    }
+
+    if (st.note) { ui.note.hidden = false; ui.note.textContent = st.note; }
+    else { ui.note.hidden = true; }
+
+    ui.prev.disabled = i === 0;
+    ui.next.disabled = i === list.length - 1;
+    ui.count.textContent = (i + 1) + " / " + list.length;
+    ui.bar.style.width = ((i + 1) / list.length * 100) + "%";
+
+    els[st.node].scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  function go(n) {
+    var list = steps();
+    i = Math.max(0, Math.min(list.length - 1, n));
+    render();
+  }
+
+  function stop() {
+    if (timer) { clearInterval(timer); timer = null; }
+    ui.play.textContent = "Play";
+  }
+
+  function togglePlay() {
+    if (timer) { stop(); return; }
+    if (i === steps().length - 1) i = 0;
+    ui.play.textContent = "Pause";
+    render();
+    timer = setInterval(function () {
+      if (i >= steps().length - 1) { stop(); return; }
+      go(i + 1);
+    }, 2600);
+  }
+
+  ui.prev.addEventListener("click", function () { stop(); go(i - 1); });
+  ui.next.addEventListener("click", function () { stop(); go(i + 1); });
+  ui.play.addEventListener("click", togglePlay);
+
+  Array.prototype.forEach.call(document.querySelectorAll(".scenario"), function (btn) {
+    btn.addEventListener("click", function () {
+      stop();
+      scenario = btn.getAttribute("data-scenario");
+      Array.prototype.forEach.call(document.querySelectorAll(".scenario"), function (b) {
+        b.setAttribute("aria-pressed", String(b === btn));
+      });
+      go(0);
+    });
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowRight") { stop(); go(i + 1); e.preventDefault(); }
+    else if (e.key === "ArrowLeft") { stop(); go(i - 1); e.preventDefault(); }
+    else if (e.key === " ") { togglePlay(); e.preventDefault(); }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
