@@ -164,38 +164,75 @@ Two components, both in `tools/`:
 
 **Why bother at all.** Not to pick a better model — to stop switching tools to reach one. Normally
 each model lives behind its own CLI or chat window, so consulting a second one means copying context
-across and losing the thread. c-thru makes them callable **from inside a single conversation**: the
-reasoning stays in one context window, and every answer lands back in it.
+across and losing the thread. c-thru makes them callable **from inside a single conversation**, and
+what you call are not models but **agents named for the job they do**.
 
 <!-- diagram-source: ctxmap-svg (rendered into docs/request-flow.html by tools/gen-request-flow-svgs.js) -->
 ```mermaid
 flowchart LR
-    subgraph ONE["ONE context window — everything below stays in this conversation"]
-        R["Your reasoning thread<br/><br/>plan it · build it · critique it · decide<br/>every answer lands back here"]
+    subgraph ONE["ONE context window — the agents live in here, with you"]
+        R["Your reasoning thread<br/><br/>every answer lands back here"]
+        subgraph FLEET["You call the JOB, by name"]
+            A1["planner"]
+            A2["coder"]
+            A3["tester"]
+            A4["reviewer-security"]
+            A5["grok<br/>names a model instead"]
+        end
     end
 
-    subgraph MODELS["Models you consult from inside it"]
-        A["Claude"]
-        B["Qwen<br/>on your machine"]
-        C["Grok"]
-        D["Gemini"]
+    subgraph MODELS["c-thru decides what actually serves it"]
+        M1["claude-fable-5"]
+        M2["gemini-pro"]
+        M3["qwen3.6<br/>on your machine"]
+        M4["claude-opus-4-8"]
+        M5["grok-4.5"]
     end
 
-    R <-->|"plan"| A
-    R <-->|"implement"| B
-    R <-->|"critique"| C
-    R <-->|"debug"| D
+    R <--> A1 --> M1
+    R <--> A2 --> M2
+    R <--> A3 --> M3
+    R <--> A4 --> M4
+    R <--> A5 --> M5
 
     classDef harness  fill:#E8F0FE,stroke:#4285F4,stroke-width:1.5px,color:#111
     classDef provider fill:#E6F4EA,stroke:#137333,stroke-width:1.5px,color:#111
-    class R harness
-    class A,B,C,D provider
+    class R,A1,A2,A3,A4,A5 harness
+    class M1,M2,M3,M4,M5 provider
 ```
 
-That is the part worth internalising: Claude can plan a change, a local model can write it, and Grok
-can attack it — **without you leaving the session or re-explaining the problem three times.** Each
-model sees the accumulated context, and its answer becomes part of the same thread the next one
-reads. Everything below is the machinery that makes that possible.
+Read that middle column first. `planner`, `coder`, `tester`, `reviewer-security` are **agents living
+in your context**, and their names describe *work*, not vendors. You ask for a plan; you do not ask
+for Fable. Which model answers is a separate decision c-thru makes at request time — the pairs above
+are the real ones under mode `best-cloud` on a 64 GB machine, and they would differ on a laptop or in
+a local-only mode without a single word of your request changing.
+
+That indirection is what buys the rest: Claude can plan a change, a local model can write it, and a
+security reviewer can run on Opus — **without you leaving the session or re-explaining the problem
+three times.** Each agent sees the accumulated context, and its answer becomes part of the same
+thread the next one reads.
+
+`grok` is the deliberate exception, and it is in the picture on purpose: five agents name a model
+instead of a job, for when *which vendor answers* is the entire point of asking. Everything below is
+the machinery that makes both kinds work.
+
+**How this differs from a model gateway.** OpenRouter and friends solve *reach*: one key, hundreds of
+models. But you still name a concrete model on every call — `deepseek/deepseek-r2` is a fixed choice,
+the same string on a 16 GB laptop as on a workstation, online or offline. And a gateway sees one
+request, not your session, so nothing accumulates between calls.
+
+| | Gateway alone | c-thru |
+|---|---|---|
+| What you name | a model — `deepseek/deepseek-r2` | a job — `coder` |
+| When it is decided | when you write the call | at request time |
+| Changes with machine or mode | no — the string is the string | yes — same config, different model |
+| Sees your session | no — one request at a time | yes — agents share the thread |
+| Backend goes down | the call fails | cascades to another provider mid-request |
+
+These are not alternatives: **OpenRouter is one of c-thru's nine endpoints**, with routes configured
+for DeepSeek and GLM. It is a perfectly good way to *reach* a model. c-thru adds the layer above it —
+deciding *which* model a given job should reach, and keeping the whole conversation in one place
+while it happens.
 
 **The short version.** You call an agent by name. A hook tags the request with that name. The proxy
 looks the name up, decides which model should serve it, and translates the call. The answer comes
