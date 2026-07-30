@@ -49,15 +49,22 @@ On your first Claude Code session after install, the SessionStart hook may:
 
 That settings change applies on the **next** launch, so you may need a
 **second** restart before the client honors the base URL. Then verify with
-`/c-thru-status`.
+the **namespaced** command:
+
+```
+/c-thru:c-thru-status
+```
+
+(Plugin skills are namespaced. The command uses the live proxy HTTP API and
+bundled tools under `${CLAUDE_PLUGIN_ROOT}` — it does not require the CLI.)
 
 ## What this plugin gives you
 
 | Surface | What it adds |
 |---|---|
-| `/c-thru-status` | Show active profile, agent → model assignments, proxy URL, Ollama state, per-model usage stats |
-| `/cplan <intent>` | Planner skill (full multi-agent waves need CLI fleet inject) |
-| Skills | `c-thru-plan` (planner/coder/tester/reviewer pipeline), `c-thru-config`, `c-thru-control` |
+| `/c-thru:c-thru-status` | Proxy status, recent requests, dashboard URL (plugin-root tools) |
+| `/cplan` skill files | Present; full multi-agent waves need CLI fleet inject |
+| Skills | `c-thru-plan`, `c-thru-config`, `c-thru-control` (config/control prefer CLI tools when present) |
 | Hooks | SessionStart proxy+Ollama health check, UserPromptSubmit proxy-health gate + static control-plane context injection, PostToolUse model-map.json validation, PreCompact context re-injection |
 
 ## Plugin-only limitations
@@ -79,10 +86,21 @@ cd c-thru
 bash install.sh
 ```
 
+## Removing c-thru
+
+1. `/plugin uninstall c-thru@c-thru` (or `c-thru@claude-craft` if that identity).
+2. Clear durable loopback base URL if still set — otherwise plain `claude` targets a dead port:
+   - Remove `env.ANTHROPIC_BASE_URL` from `~/.claude/settings.json` when it is
+     `http://127.0.0.1:…` or `http://localhost:…`.
+   - CLI users: `bash uninstall.sh` does this automatically for loopback URLs.
+3. Optional: `pkill -f claude-proxy`
+
+See also [SECURITY.md](../../SECURITY.md) in the repo root.
+
 ## Plugin bundle maintenance
 
-`plugins/c-thru/hooks/` and `plugins/c-thru/skills/` are copies of the
-canonical files in `tools/` and `skills/`. Keep them in sync by running:
+`plugins/c-thru/{hooks,skills,tools,config,commands}/` are synced from
+`tools/`, `skills/`, `config/`, and `commands/`. Keep them in sync:
 
 ```sh
 tools/sync-plugin-bundle.sh

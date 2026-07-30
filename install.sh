@@ -184,51 +184,39 @@ migrate_providers_schema() {
     echo -e "  ${GREEN}✅ Migrated legacy provider schema${NC}"
 }
 
-# --- Skill: /c-thru-status command file ---
+# --- Commands: install from canonical repo commands/ (same source as plugin bundle) ---
 install_skill() {
     local commands_dir="$CLAUDE_DIR/commands"
+    local src="$REPO_DIR/commands/c-thru-status.md"
     local skill_file="$commands_dir/c-thru-status.md"
-    local canonical_line='Show c-thru routes, proxy URL, per-model usage stats'
     mkdir -p "$commands_dir"
-    if [ -f "$skill_file" ] && grep -qF "$canonical_line" "$skill_file" 2>/dev/null; then
+    if [ ! -f "$src" ]; then
+        echo -e "  ${YELLOW}⚠️  missing $src — skip /c-thru-status install${NC}"
+        return 0
+    fi
+    if [ -f "$skill_file" ] && cmp -s "$src" "$skill_file" 2>/dev/null; then
         echo -e "  ${GRAY}✓  /c-thru-status${NC}"
         return 0
     fi
-    cat > "$skill_file" << 'SKILL_EOF'
----
-description: "Show c-thru routes, proxy URL, per-model usage stats (calls, tokens, last call time), and backend health. Use 'fix' to pull missing models and reload."
-allowed-tools: "Bash"
----
-# c-thru Status
-Run the list command. It shows: active profile, all 20 agents with model assignments and endpoints,
-proxy URL with tier/mode, Ollama model count, backend health, and per-model usage stats
-(call count, total tokens, timestamp of last call).
-
-If `$ARGUMENTS` is empty or `--verbose`, run:
-```bash
-~/.claude/tools/c-thru --list $ARGUMENTS
-```
-SKILL_EOF
+    cp "$src" "$skill_file"
     echo -e "  ${GREEN}✅ installed skill: /c-thru-status${NC}"
 }
 
 # --- /cplan command shortcut ---
 install_cplan_command() {
     local commands_dir="$CLAUDE_DIR/commands"
+    local src="$REPO_DIR/commands/cplan.md"
     local cmd_file="$commands_dir/cplan.md"
-    local canonical_line='skill="c-thru-plan"'
     mkdir -p "$commands_dir"
-    if [ -f "$cmd_file" ] && grep -qF "$canonical_line" "$cmd_file" 2>/dev/null; then
+    if [ ! -f "$src" ]; then
+        echo -e "  ${YELLOW}⚠️  missing $src — skip /cplan install${NC}"
+        return 0
+    fi
+    if [ -f "$cmd_file" ] && cmp -s "$src" "$cmd_file" 2>/dev/null; then
         echo -e "  ${GRAY}✓  /cplan${NC}"
         return 0
     fi
-    cat > "$cmd_file" << 'CPLAN_EOF'
----
-description: "Shortcut for /c-thru-plan — wave-based agentic planner"
-allowed-tools: "Skill"
----
-Invoke Skill(skill="c-thru-plan")
-CPLAN_EOF
+    cp "$src" "$cmd_file"
     echo -e "  ${GREEN}✅ installed command: /cplan${NC}"
 }
 
@@ -398,7 +386,9 @@ if ! find "$CLAUDE_DIR/skills" -type d -name "schedule-plan-tasks" 2>/dev/null |
     echo -e "${YELLOW}            /plugin install planning-suite@claude-craft${NC}"
 fi
 
-# Opt-in: register this clone as a local marketplace (never auto without flag).
+# Opt-in: register this clone as a local marketplace catalog only.
+# Does NOT install the plugin — combining CLI inject + marketplace hooks double-fires.
+# For catalog validation / contributor smoke, not for end-user dual activation.
 if [ "$REGISTER_LOCAL_MARKETPLACE" = "1" ]; then
     echo ""
     if ! command -v claude >/dev/null 2>&1; then
@@ -408,8 +398,9 @@ if [ "$REGISTER_LOCAL_MARKETPLACE" = "1" ]; then
         echo -e "  ${YELLOW}⚠️  --register-local-marketplace: missing .claude-plugin/marketplace.json in repo root${NC}"
     else
         if claude plugin marketplace add "$REPO_DIR" </dev/null 2>/dev/null; then
-            echo -e "  ${GREEN}✅ registered local marketplace: ${REPO_DIR}${NC}"
-            echo -e "  ${GRAY}   then: /plugin install c-thru@c-thru${NC}"
+            echo -e "  ${GREEN}✅ registered local marketplace catalog: ${REPO_DIR}${NC}"
+            echo -e "  ${YELLOW}   Catalog only — do not install c-thru@c-thru while using this CLI install${NC}"
+            echo -e "  ${GRAY}   (plugin + CLI inject double-fires hooks). Use a clean profile for plugin-only tests.${NC}"
         else
             echo -e "  ${YELLOW}⚠️  marketplace add failed; try manually:${NC}"
             echo -e "  ${YELLOW}   claude plugin marketplace add \"${REPO_DIR}\"${NC}"

@@ -76,6 +76,14 @@ done
 # Shipped config (model routing defaults)
 check_or_copy "$ROOT/config/model-map.json"            "$BUNDLE/config/model-map.json"
 
+# Slash commands (canonical under repo commands/; install.sh + plugin bundle both consume these)
+COMMANDS=(c-thru-status.md cplan.md)
+for c in "${COMMANDS[@]}"; do
+  if [ -f "$ROOT/commands/$c" ]; then
+    check_or_copy "$ROOT/commands/$c" "$BUNDLE/commands/$c"
+  fi
+done
+
 # Reverse-drift pass (--check only): a forward sync proves every source has a
 # matching destination, but never catches a STALE bundle file that lingers after
 # its source was dropped from a list. Walk the bundle's synced subtrees and flag
@@ -96,7 +104,7 @@ if [ "$mode" = "--check" ]; then
       echo "STALE: $f (no corresponding source entry in sync lists)"
       drift=1
     fi
-  done < <(find "$BUNDLE"/tools "$BUNDLE"/hooks "$BUNDLE"/skills "$BUNDLE"/config -type f -print0 2>/dev/null)
+  done < <(find "$BUNDLE"/tools "$BUNDLE"/hooks "$BUNDLE"/skills "$BUNDLE"/config "$BUNDLE"/commands -type f -print0 2>/dev/null)
 fi
 
 [ "$drift" -eq 0 ] || { echo "Run tools/sync-plugin-bundle.sh to fix drift."; exit 1; }

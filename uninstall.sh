@@ -5,6 +5,7 @@
 #   - Symlinks under ~/.claude/tools/ that point back into THIS repo
 #   - ~/.claude/model-map.json (derived) and ~/.claude/model-map.system.json (install copy)
 #   - c-thru hook entries from ~/.claude/settings.json (preserves user-added hooks)
+#   - env.ANTHROPIC_BASE_URL when it is a c-thru loopback proxy URL (127.0.0.1/localhost)
 #   - llm-capabilities entry from ~/.claude.json mcpServers (if present)
 #   - Skill/command files install.sh creates (c-thru-status.md, cplan.md)
 #   - Cache/state files (proxy.pid, proxy.log, usage-stats.json, prepull stamps, etc.)
@@ -314,6 +315,35 @@ else
     else
         say_skip "no .hooks key in settings.json"
     fi
+
+    # Scrub durable ANTHROPIC_BASE_URL only when it points at a local c-thru
+    # proxy. Leaving it after plugin/CLI uninstall bricks plain `claude`
+    # (client talks to a dead 127.0.0.1 port). Never delete non-loopback URLs.
+    if jq -e '.env.ANTHROPIC_BASE_URL // empty' "$SETTINGS_FILE" >/dev/null 2>&1; then
+        base_url=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$SETTINGS_FILE" 2>/dev/null || true)
+        case "$base_url" in
+            http://127.0.0.1:*|http://localhost:*|https://127.0.0.1:*|https://localhost:*)
+                if [ "$DRY_RUN" -eq 1 ]; then
+                    echo -e "  ${YELLOW}[dry-run] would remove env.ANTHROPIC_BASE_URL ($base_url) from settings.json${NC}"
+                    COUNT_REMOVED=$((COUNT_REMOVED + 1))
+                else
+                    tmp="${SETTINGS_FILE}.tmp.$$"
+                    jq '
+                      if .env and .env.ANTHROPIC_BASE_URL then
+                        del(.env.ANTHROPIC_BASE_URL)
+                        | (if (.env | length) == 0 then del(.env) else . end)
+                      else . end
+                    ' "$SETTINGS_FILE" > "$tmp" && mv "$tmp" "$SETTINGS_FILE"
+                    echo -e "  ${GREEN}[ok] removed env.ANTHROPIC_BASE_URL ($base_url) from settings.json${NC}"
+                    COUNT_REMOVED=$((COUNT_REMOVED + 1))
+                fi
+                ;;
+            *)
+                say_skip "env.ANTHROPIC_BASE_URL is not a c-thru loopback URL (left alone)"
+                ;;
+        esac
+    fi
+
     # Also scrub any leftover llm-capabilities MCP from ~/.claude.json
     claude_json="$HOME/.claude.json"
     if [ -f "$claude_json" ]; then

@@ -1,7 +1,7 @@
 {
   "name": "c-thru",
-  "version": "0.2.0",
-  "description": "Router/proxy that lets Claude Code talk to alternative model providers (Ollama, OpenRouter, Bedrock, Vertex, Gemini, LiteLLM) without changing the vendor CLI. Plugin: /c-thru-status, proxy-health hooks, plan skills. Full agentic /cplan waves need the CLI fleet from this repo. Optional planning-suite for /schedule-plan-tasks.",
+  "version": "0.2.1",
+  "description": "Router/proxy that lets Claude Code talk to alternative model providers (Ollama, OpenRouter, Bedrock, Vertex, Gemini, LiteLLM) without changing the vendor CLI. Plugin: proxy hooks, /c-thru:c-thru-status via local proxy API. Full agentic /cplan waves need the CLI fleet from this repo. Optional planning-suite for /schedule-plan-tasks.",
   "author": {
     "name": "whichguy",
     "url": "https://github.com/whichguy"

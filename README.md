@@ -75,18 +75,26 @@ that settings change applies on the **next** launch, so you may need a **second*
 restart (or a new session) before the client honors the base URL. Then verify:
 
 ```
-/c-thru-status
+/c-thru:c-thru-status
 ```
 
-You should see the active routing profile, proxy URL, configured routes, and
-(if reachable) local Ollama models. If the proxy isn't reachable or the model-map
-is missing, run `/c-thru-status fix`.
+(Plugin installs namespace the command. It uses the live proxy HTTP API — no CLI
+required. CLI installs may also expose `/c-thru-status`.)
 
 > **The marketplace plugin gives you proxy + routing, not the full agentic
 > workflow.** `/cplan` and the 27-agent fleet depend on agent files injected via
 > `--agents` on the CLI path. See [Appendix A](#appendix-a-cli-install-for-contributors-and-advanced-users).
 > Prefer **one** of plugin vs CLI inject — both together can double-fire hooks.
 > Details: [Appendix C](#appendix-c-plugin-vs-cli--entry-points).
+> Safety / remove: [SECURITY.md](SECURITY.md).
+
+### Removing c-thru
+
+1. Uninstall the plugin: `/plugin uninstall c-thru@c-thru` (or the family identity).
+2. Clear loopback `env.ANTHROPIC_BASE_URL` from `~/.claude/settings.json` if still
+   set — otherwise plain `claude` talks to a dead port. CLI `bash uninstall.sh`
+   scrubs loopback URLs automatically.
+3. Optional: `pkill -f claude-proxy`
 
 ### Cloud backends (optional)
 
@@ -149,13 +157,52 @@ Two components, both in `tools/`:
 
 ## Architecture: how a prompt becomes a model call
 
-Four views. **View 1** is the map of the hot path. **View 2** walks a single request end to end.
-**View 3** shows what happens when the chosen backend fails. **View 4** is the complete component
-map — every box and every arrow, including the launch, config, hook and control planes that the
-first three deliberately leave out.
+**The short version.** You call an agent by name. A hook tags the request with that name. The proxy
+looks the name up, decides which model should serve it, and translates the call. The answer comes
+back in Anthropic format, so nothing downstream needs to know where it came from.
 
-Views 1–3 follow the same real request — the `coder` agent under the default shipped config — so
-the names line up across diagrams.
+```mermaid
+flowchart LR
+    subgraph CC["Claude Code — one context window"]
+        AGENTS["Agents you call by name<br/><br/>coder · tester · reviewer<br/>grok · gemini · kimi"]
+    end
+
+    HOOK["Hook<br/><br/>tags the request<br/>with the agent name"]
+
+    PROXY["c-thru proxy<br/><br/>looks the name up<br/>picks a model<br/>translates the call"]
+
+    subgraph MODELS["Whatever should actually answer"]
+        M1["Claude"]
+        M2["Gemini"]
+        M3["Grok"]
+        M4["Ollama<br/>on your machine"]
+    end
+
+    AGENTS -->|"coder"| HOOK
+    HOOK -->|"coder"| PROXY
+    PROXY -->|"gemini-pro"| M2
+    PROXY --> M1
+    PROXY --> M3
+    PROXY --> M4
+    M2 -.->|"the answer, in Anthropic format"| AGENTS
+
+    linkStyle 0,1,2 stroke-width:2.5px
+```
+
+The bold path is one real request under the shipped config: you ask for `coder`, and Gemini answers.
+
+Two things in that picture carry the whole design. **Most agent names are roles, not models** —
+`coder` says what the job is; which model serves it is decided at request time. And **the name is
+the only thing that has to travel**, which is what lets a hook do the tagging while the proxy stays
+the single place a model is ever chosen.
+
+Four views add the detail. **View 1** is the map of the hot path. **View 2** walks a single request
+end to end. **View 3** shows what happens when the chosen backend fails. **View 4** is the complete
+component map — every box and every arrow, including the launch, config, hook and control planes
+that the first three deliberately leave out.
+
+Views 1–3 follow the same request as the picture above — the `coder` agent under the default
+shipped config — so the names line up across every diagram.
 
 > **The same material exists in both formats.** Everything is on this page, including a
 > click-to-expand step-through under View 2. [`docs/request-flow.html`](docs/request-flow.html) is a
