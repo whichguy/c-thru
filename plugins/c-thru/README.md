@@ -56,7 +56,7 @@ That settings change applies on the **next** launch, so you may need a
 | Surface | What it adds |
 |---|---|
 | `/c-thru-status` | Show active profile, agent → model assignments, proxy URL, Ollama state, per-model usage stats |
-| `/cplan <intent>` | Wave-based agentic planner (shortcut for `/c-thru-plan`) |
+| `/cplan <intent>` | Planner skill (full multi-agent waves need CLI fleet inject) |
 | Skills | `c-thru-plan` (planner/coder/tester/reviewer pipeline), `c-thru-config`, `c-thru-control` |
 | Hooks | SessionStart proxy+Ollama health check, UserPromptSubmit proxy-health gate + static control-plane context injection, PostToolUse model-map.json validation, PreCompact context re-injection |
 

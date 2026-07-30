@@ -10,7 +10,7 @@
       "name": "c-thru",
       "source": "./plugins/c-thru",
       "version": "0.2.0",
-      "description": "Router/proxy for alternative model providers behind Claude Code. Proxy, hooks, /c-thru-status, /cplan skills. Optional planning-suite for wave scheduling."
+      "description": "Router/proxy for alternative model providers behind Claude Code. Plugin: proxy, hooks, /c-thru-status. Full /cplan agent fleet needs CLI install from this repo. Optional planning-suite for plan-scheduler."
     }
   ]
 }
