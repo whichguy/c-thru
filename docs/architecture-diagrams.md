@@ -10,6 +10,17 @@ If you're updating one of these flows, update the diagram in the same commit (se
 [`docs/review-methodology.md`](review-methodology.md) rule 9 — doc/code drift after a change is
 the default expected outcome unless you actively prevent it).
 
+> **Looking for the explanation rather than the reference?** The README's
+> [Architecture section](../README.md#architecture-how-a-prompt-becomes-a-model-call) covers the same
+> request path in four views — a one-picture summary, a step-through of a single request, the failure
+> cascade, and a complete component map — all following one real request (`coder` under the shipped
+> config) so the names line up. **That doc teaches the path; this one is the exhaustive per-subsystem
+> reference with source anchors.** [`request-flow.html`](request-flow.html) is an interactive,
+> dependency-free version of the same walkthrough — open it in any browser.
+>
+> Diagrams 1 and 2 below are the deep versions of README views 1–3; keep them consistent when either
+> side changes.
+
 ---
 
 ## 1. CLI launch → proxy spawn → claude exec

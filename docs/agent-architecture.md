@@ -11,6 +11,14 @@ request time.
 > (verified live by `test/agent-mapping-complete.test.js`). The dispatch edges below are verified by
 > `test/agent-dispatch-graph.test.js`. If this section disagrees with those, they win.
 
+> **How the agent name actually reaches the proxy.** An agent's `model:` frontmatter is not sent to
+> the backend, and hooks are forbidden from rewriting `body.model`. Instead the `PreToolUse` hook
+> ([`tools/c-thru-agent-router-hook.sh`](../tools/c-thru-agent-router-hook.sh)) prepends a signed
+> sentinel — `[[c-thru-agent:<name>:<hmac>]]` — to the *prompt text*; the proxy verifies the HMAC,
+> strips it, and only then resolves agent → capability → model. This is illustrated end to end in the
+> README's [Architecture section](../README.md#architecture-how-a-prompt-becomes-a-model-call), and
+> steppable in [`docs/request-flow.html`](request-flow.html).
+
 ## Agent roster
 
 The fleet is **27 agents**: 22 pipeline/utility roles plus **5 brand-name agents**
@@ -71,25 +79,30 @@ Grok appears in **three** places. Parents and operators must not treat them as o
 
 | Surface | How it is reached | Runtime | Auth | c-thru owns it? |
 |---|---|---|---|---|
-| **A — Brand leaf** `agents/grok` | User says *ask grok / what does Grok think / grok critique* → parent spawns `subagent_type: grok` | Proxy → Anthropic Messages → `api.x.ai/v1/messages` + **Claude Code tools** (full inherit) | `XAI_API_KEY` | Yes |
+| **A — xAI Responses gateway** | Opinion leaf: `Agent(grok)`. Full Claude Code session: `cthru --model grok-build` (or agent view with `cthru agents --model grok-build`). | Claude Code sends Anthropic Messages → c-thru's shared Responses translator → `api.x.ai/v1/responses`; **Claude Code owns and executes the client tools** | `XAI_API_KEY` (metered API billing) | Yes |
 | **B — Capability pin** | Mode `best-cloud-gov`, tier ≥ 32gb: `generalist` / `writer` cells → `grok-4.5` | Same proxy path as A | `XAI_API_KEY` | Yes (`llm_profiles`) |
-| **C — Grok Build CLI** | `grok-cc` plugin / `/grok-cc:rescue` / global Claude policy (stuck, review, explicit implement) | Separate `grok -p` process — **not** the c-thru proxy | `grok login` preferred (pooled subscription usage); `XAI_API_KEY` explicit fallback only when no login session exists — an ambient key is stripped from the child env when login is present, closing an inversion risk. See `docs/subscription-auth.md` § Delegate CLIs. | No (marketplace plugin) |
+| **C — Grok Build CLI** | `grok-cc` plugin / `/grok-cc:rescue` / global Claude policy (stuck, review, explicit implement) | Separate `grok -p` process (or ACP client) — **Grok owns its session and tools; it is not the c-thru proxy** | `grok login` preferred (pooled subscription usage); `XAI_API_KEY` explicit fallback only when no login session exists — an ambient key is stripped from the child env when login is present, closing an inversion risk. See `docs/subscription-auth.md` § Delegate CLIs. | No (marketplace plugin) |
 
-**Install conditions.** Surface A needs the **CLI install** path (`c-thru` injects `--agents`). Marketplace-plugin-only sessions do not load brand agents. Surface C needs the **grok-cc** plugin and a working Grok CLI; it works without c-thru fleet injection. Surfaces A and B share xAI’s **legacy Anthropic Messages** compatibility endpoint (proxy-sanitized); live canary: `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js`. Surface C does not use that path.
+**Install and auth conditions.** Surface A's named leaf needs the **CLI install** path (`c-thru` injects `--agents`); the full-session `--model grok-build` route only needs c-thru plus a usable `XAI_API_KEY`. Surface C needs the **grok-cc** plugin and a working Grok CLI; it works without c-thru fleet injection. Surfaces A and B use xAI's OpenAI-compatible Responses API, including stateless `function_call` / `function_call_output` round trips and Responses SSE translation. Live canary: `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js`. A cached `grok login` session cannot authenticate the API route, and an `XAI_API_KEY` cannot be silently replaced with CLI subscription auth.
+
+**Support boundary.** Anthropic does not officially support substituting a
+non-Claude model behind Claude Code. Surface A is therefore an opt-in c-thru
+compatibility layer: its contract is the checked request/response translation
+and live canary above, not an upstream Anthropic compatibility guarantee.
 
 ### Dispatch ladder (first match wins)
 
 | Priority | Signal | Route |
 |---|---|---|
-| 1 | Explicit Grok implement / fix / multi-step write | **C** CLI (bounded brief), or `coder` / Codex per global policy |
+| 1 | Explicit Grok implement / fix / multi-step write | **C** CLI for subscription-backed Grok-owned execution; **A** via `cthru --model grok-build` when the user explicitly wants Claude Code tools/API routing; otherwise `coder` / Codex per global policy |
 | 2 | Explicit Grok review / diagnose, no edits | **C** CLI `--read` / `/grok-cc:review` |
 | 3 | *Ask Grok* opinion / critique (no multi-file edit contract) | **A** brand leaf |
 | 4 | Normal Sonnet/Opus/Fable implementation | Codex / native — **not** Grok |
 | 5 | Stuck or Codex path blocked | **C** CLI (report prior failure first) |
 | 6 | Silent `best-cloud-gov` generalist/writer | **B** capability pin |
-| 7 | New app LLM features | xAI Responses API — not brand agent |
+| 7 | New app LLM features | xAI Responses API directly; do not shell through the Grok CLI as a faux stateless model API |
 
-**Hard rules.** Brand leaf failures do not prove the CLI works (different auth stacks). Never silent-fallback “as Grok” while answering with Claude. Brand remains a **leaf** (one spawn, no chains). “Not for patches” on the brand leaf is **policy** (description + fleet prompt), not a tool denylist — the subagent still inherits Claude Code tools.
+**Hard rules.** API-route failures do not prove the CLI works, and CLI success does not prove `XAI_API_KEY` billing is usable: they are different auth stacks. Never silent-fallback “as Grok” while answering with Claude. The named `grok` brand agent remains an opinion **leaf** (one spawn, no chains); use the explicit full-session route for Grok-backed patch work. Do not adapt `grok -p` or ACP into `/v1/messages`: Grok Build is already a tool-owning coding agent, while Claude's gateway contract expects model-emitted tool calls for Claude Code to execute.
 
 Fleet `--append-system-prompt` tells the parent to spawn brand agents for *ask &lt;name&gt;* opinion asks; multi-file Grok implement/review should not default to the brand leaf. See also `docs/connectivity-modes.md` (gov Grok cells) and `docs/env-vars.md` (`XAI_API_KEY`, live canary).
 

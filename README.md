@@ -1037,6 +1037,8 @@ Tests: `test/agent-mapping-complete.test.js`, `test/agent-invocation-headers.tes
 - [`docs/headers.md`](docs/headers.md) — every `x-c-thru-*` response header (routing, cache, translation gaps, thinking observability, deprecation)
 - [`docs/env-vars.md`](docs/env-vars.md) — full environment variable reference
 - [`docs/subscription-auth.md`](docs/subscription-auth.md) — using Claude.ai subscription instead of API billing
+- [`docs/request-flow.html`](docs/request-flow.html) — interactive step-through of a request: agent name → hook → proxy → model → response, plus the failover and named-pin paths and the full component map. Self-contained; open in any browser
+- [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) — the six per-subsystem flow diagrams, each with file:line source anchors
 - [`docs/agent-architecture.md`](docs/agent-architecture.md) — wave lifecycle, STATUS contracts, escalation chain
 - [`docs/journaling.md`](docs/journaling.md) — per-request JSONL schema and storage layout
 
