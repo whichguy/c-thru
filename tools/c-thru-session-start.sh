@@ -31,16 +31,9 @@ done
 _script_dir=$(cd -P "$(dirname "$_src")" && pwd)
 ROUTER_REPO_ROOT=$(cd -P "$_script_dir/.." && pwd)
 
-# Plugin-manifest invocations set C_THRU_PLUGIN_HOOK=1 (see hooks.json).
-if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-plugin-hook-gate.sh" ]; then
-    # shellcheck source=c-thru-plugin-hook-gate.sh
-    . "$ROUTER_REPO_ROOT/tools/c-thru-plugin-hook-gate.sh"
-    if cthru_plugin_hook_should_skip; then
-        exit 0
-    fi
-fi
-
 # --- Shape C (plugin path): do NOT git-clone in SessionStart (10s timeout). ---
+# Install-cli prompt runs *before* the double-fire gate so a Claude-payload
+# session_id cannot suppress the bootstrap message (gate is stamp / FROM_CLI).
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 _cli_stamp="$CLAUDE_DIR/.c-thru-cli-installed"
 if [ "${C_THRU_PLUGIN_HOOK:-0}" = "1" ]; then
@@ -48,6 +41,15 @@ if [ "${C_THRU_PLUGIN_HOOK:-0}" = "1" ]; then
         # Tell the user to run the blocking install command (not a network hook).
         printf '%s\n' \
           "c-thru: CLI not installed yet. Run /c-thru:install-cli (or from a checkout: bash install.sh), then launch with: cthru" >&2
+        exit 0
+    fi
+fi
+
+# Plugin-manifest invocations set C_THRU_PLUGIN_HOOK=1 (see hooks.json).
+if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-plugin-hook-gate.sh" ]; then
+    # shellcheck source=c-thru-plugin-hook-gate.sh
+    . "$ROUTER_REPO_ROOT/tools/c-thru-plugin-hook-gate.sh"
+    if cthru_plugin_hook_should_skip; then
         exit 0
     fi
 fi

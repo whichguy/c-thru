@@ -18,7 +18,8 @@
 #        c-thru --list                    — show all available models
 #        c-thru --help                    — show usage
 #
-# Escape hatch: CLAUDE_PROXY_BYPASS=1 — skip proxy URL (transparent path only).
+# Escape hatch: CLAUDE_PROXY_BYPASS=1 — skip the proxy for a transparent
+# launch or a model resolved to the native Anthropic API.
 # For Ollama-bound launches, match the direct Claude→Ollama client env as closely as possible:
 #   ANTHROPIC_AUTH_TOKEN=ollama
 #   ANTHROPIC_API_KEY=""
@@ -45,6 +46,9 @@ CONFIG_SOURCE="absent"
 LAUNCH_CWD="$(pwd -P 2>/dev/null || pwd)"
 LAUNCH_PROJECT_DIR=""
 ORIGINAL_CLAUDE_PROFILE_DIR="${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
+# Exported early so child tools always have a durable target even before
+# setup_ephemeral_session re-exports it (and even when bypass skips the shadow).
+export C_THRU_ORIGINAL_PROFILE_DIR="$ORIGINAL_CLAUDE_PROFILE_DIR"
 CLAUDE_PROFILE_DIR="$ORIGINAL_CLAUDE_PROFILE_DIR"
 OLLAMA_URL="${OLLAMA_URL:-${OLLAMA_BASE_URL:-http://localhost:11434}}"
 # Number of models Ollama keeps loaded in parallel (default 4).
@@ -86,6 +90,12 @@ PROXY_PROFILE_SUMMARY_LOGGED=0
 EPHEMERAL_SESSION_DIR=""
 EPHEMERAL_SETTINGS_JSON=""
 EPHEMERAL_AGENTS_JSON=""
+C_THRU_COORDINATOR_REQUESTED="${C_THRU_COORDINATOR:-0}"
+C_THRU_COORDINATOR_FORCED_OFF=0
+C_THRU_COORDINATOR_INCOMPATIBLE=0
+C_THRU_COORDINATOR_TOOL_BLOCK=""
+C_THRU_COORDINATOR_ACTIVE=0
+CALLER_AGENTS_COORDINATOR_COLLISION=0
 
 # Canonical path of this script (for PATH walk — skip ourselves when installed as `claude`).
 CTHRU_SELF_REAL="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
@@ -103,7 +113,9 @@ fi
 # Tag every child invocation of model-map-validate with this c-thru session id.
 # The validator dedupes warnings per-session via a stamp file at
 # ${TMPDIR}/c-thru-warned.<sid>; the EXIT trap below removes it on exit.
+# C_THRU_FROM_CLI marks plugin hooks to no-op (avoid double-fire with inject).
 export C_THRU_SESSION_ID="$$"
+export C_THRU_FROM_CLI=1
 MODEL_MAP_DEFAULTS_FILE="${CLAUDE_MODEL_MAP_DEFAULTS_PATH:-$CTHRU_REPO_ROOT/config/model-map.json}"
 MODEL_MAP_OVERRIDES_FILE="${CLAUDE_MODEL_MAP_OVERRIDES_PATH:-$CLAUDE_PROFILE_DIR/model-map.overrides.json}"
 MODEL_MAP_SYNC_STATE_FILE="${CLAUDE_MODEL_MAP_SYNC_STATE_FILE:-$CLAUDE_PROFILE_DIR/model-map-defaults-sync.json}"
@@ -370,7 +382,11 @@ build_ephemeral_agents() {
         if (fs.lstatSync(mdPath).isSymbolicLink()) fs.unlinkSync(mdPath);
       } catch (_) {}
     }
-    process.stdout.write(JSON.stringify({ agents, callerParseable }));
+    process.stdout.write(JSON.stringify({
+      agents,
+      callerParseable,
+      coordinatorCollision: callerNames.has("c-thru-coordinator"),
+    }));
   ' "$EPHEMERAL_SESSION_DIR/agents" "${NO_AGENTS:-0}" "$caller_agents_payloads_json")"; then
     echo "c-thru: failed to build ephemeral agents JSON" >&2
     exit 1
@@ -389,6 +405,51 @@ build_ephemeral_agents() {
   for ((caller_payload_index = 0; caller_payload_index < ${#caller_agents_payloads[@]}; caller_payload_index++)); do
     CALLER_AGENTS_PARSEABLE+=("${caller_agents_parseable:caller_payload_index:1}")
   done
+  CALLER_AGENTS_COORDINATOR_COLLISION="$(node -e '
+    process.stdout.write(JSON.parse(process.argv[1]).coordinatorCollision ? "1" : "0")
+  ' "$agents_result")" || {
+    echo "c-thru: failed to inspect caller --agents names" >&2
+    exit 1
+  }
+}
+
+# ARCH: setup_ephemeral_coordinator — opt-in session-level default agent.
+# Fleet JSON must already be finalized before this runs: the coordinator is a
+# launcher-only main-session profile, never a routable member of agents/*.md.
+setup_ephemeral_coordinator() {
+  [[ "${C_THRU_COORDINATOR_REQUESTED:-0}" == "1" ]] || return 0
+  [[ "${C_THRU_COORDINATOR_FORCED_OFF:-0}" != "1" ]] || return 0
+  [[ "${C_THRU_COORDINATOR_INCOMPATIBLE:-0}" != "1" ]] || return 0
+  [[ "${CLAUDE_PROXY_BYPASS:-0}" != "1" ]] || return 0
+  [[ "${NO_AGENTS:-0}" != "1" ]] || return 0
+
+  if [[ "${CALLER_AGENTS_COORDINATOR_COLLISION:-0}" == "1" ]]; then
+    echo "c-thru: caller --agents defines reserved name 'c-thru-coordinator'; coordinator disabled" >&2
+    return 0
+  fi
+
+  local coordinator_src="$CTHRU_REPO_ROOT/session-agents/c-thru-coordinator.md"
+  local coordinator_dest="$EPHEMERAL_SESSION_DIR/agents/c-thru-coordinator.md"
+  if [[ ! -f "$coordinator_src" ]]; then
+    echo "c-thru: coordinator requested but profile is missing: $coordinator_src" >&2
+    return 0
+  fi
+  if [[ -e "$coordinator_dest" || -L "$coordinator_dest" ]]; then
+    echo "c-thru: ephemeral agent name 'c-thru-coordinator' is already defined; coordinator disabled" >&2
+    return 0
+  fi
+
+  ln -s "$coordinator_src" "$coordinator_dest" || {
+    echo "c-thru: failed to link coordinator profile into ephemeral session" >&2
+    return 0
+  }
+  # Physical user-scope settings are intentionally lower priority than the
+  # existing inline --settings merge, project/local/managed settings, and a
+  # caller --agent flag. The deny also prevents recursive self-delegation.
+  printf '%s\n' '{"agent":"c-thru-coordinator","permissions":{"deny":["Agent(c-thru-coordinator)"]}}' \
+    > "$EPHEMERAL_SESSION_DIR/settings.json"
+  C_THRU_COORDINATOR_ACTIVE=1
+  export C_THRU_COORDINATOR_ACTIVE
 }
 
 # ARCH: setup_ephemeral_session — creates a per-session tmpdir that shadows ~/.claude so
@@ -401,8 +462,9 @@ setup_ephemeral_session() {
   [[ "${CLAUDE_PROXY_BYPASS:-0}" == "1" ]] && return 0
   
   EPHEMERAL_SESSION_DIR=$(mktemp -d "${TMPDIR:-/tmp}/c-thru-session.XXXXXXXX")
-  # settings.json is no longer materialized on disk — write_ephemeral_settings()
-  # builds it into EPHEMERAL_SETTINGS_JSON and it is passed inline via --settings.
+  # Normal settings are built later into EPHEMERAL_SETTINGS_JSON and passed
+  # inline via --settings. The opt-in coordinator pilot is the sole exception:
+  # it writes a lower-priority physical settings.json after fleet JSON exists.
 
   # 1. Shadow the entire .claude directory to make the session fully ephemeral
   # Link everything except what we override (settings files, agents, skills) or what causes noise (backups).
@@ -455,12 +517,18 @@ setup_ephemeral_session() {
 
   # 4. Additive Agents: link c-thru/profile agents and build the merged --agents JSON.
   build_ephemeral_agents
+  # Coordinator setup intentionally follows fleet JSON generation so the
+  # launcher-only profile never appears in the routable --agents inventory.
+  setup_ephemeral_coordinator
 
-  # 5. Export the ephemeral config dir for the child process
+  # 5. Export the ephemeral config dir for the child process.
+  # Durable original must be exported BEFORE shadow assignment so skills/helpers
+  # that write settings/statusline prefs never land in the rm -rf'd mktemp.
+  export C_THRU_ORIGINAL_PROFILE_DIR="$ORIGINAL_CLAUDE_PROFILE_DIR"
   export CLAUDE_CONFIG_DIR="$EPHEMERAL_SESSION_DIR"
   export CLAUDE_PROFILE_DIR="$EPHEMERAL_SESSION_DIR"
-  # the settings JSON is built later by write_ephemeral_settings() and passed
-  # inline via --settings (after the READY handshake); nothing is written here.
+  # The high-priority settings JSON is built later by write_ephemeral_settings()
+  # and passed inline via --settings after the READY handshake.
 }
 
 cleanup_ephemeral_session() {
@@ -574,7 +642,7 @@ write_ephemeral_settings() {
   # Paths are passed as argv so node handles all escaping.
   EPHEMERAL_SETTINGS_JSON=$(node -e '
     const fs = require("fs");
-    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, planVisibilityCmd, agentRouterCmd, plannerHintCmd, userSettingsPath, callerSettingsPayloadsJson, stopHookCmd, stopFailureCmd, statuslineCmd, userLocalSettingsPath, autonomousGateCmd] = process.argv.slice(1);
+    const [mcpJs, sessionCmd, postcompactCmd, healthCmd, classifyCmd, mapChangedCmd, planVisibilityCmd, agentRouterCmd, plannerHintCmd, userSettingsPath, callerSettingsPayloadsJson, stopHookCmd, stopFailureCmd, statuslineCmd, userLocalSettingsPath, autonomousGateCmd, coordinatorActive] = process.argv.slice(1);
     const USER_SETTINGS_DENYLIST = new Set([
       // c-thru injects an ephemeral MCP server; a user original would fight it.
       "mcpServers",
@@ -827,7 +895,10 @@ write_ephemeral_settings() {
           { matcher: "EnterPlanMode", hooks: [cmdHook(plannerHintCmd, 3)] },
         ],
       },
-      permissions: { allow: ["mcp__llm-capabilities__*"] },
+      permissions: {
+        allow: ["mcp__llm-capabilities__*"],
+        ...(coordinatorActive === "1" ? { deny: ["Agent(c-thru-coordinator)"] } : {}),
+      },
     };
     let callerSettingsPayloads = [];
     let callerSettingsPayloadsAreSerialized = false;
@@ -874,7 +945,7 @@ write_ephemeral_settings() {
     process.stdout.write(JSON.stringify(callerSettingsPayloadsAreSerialized ? {
       settings, callerSettingsParseable,
     } : settings));
-  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$plan_visibility_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path" "$caller_settings_payloads_json" "$stop_hook_cmd" "$stop_failure_cmd" "$statusline_cmd" "$user_local_settings_path" "$autonomous_gate_cmd") || {
+  ' "$mcp_js" "$session_cmd" "$postcompact_cmd" "$health_cmd" "$classify_cmd" "$map_changed_cmd" "$plan_visibility_cmd" "$agent_router_cmd" "$planner_hint_cmd" "$user_settings_path" "$caller_settings_payloads_json" "$stop_hook_cmd" "$stop_failure_cmd" "$statusline_cmd" "$user_local_settings_path" "$autonomous_gate_cmd" "${C_THRU_COORDINATOR_ACTIVE:-0}") || {
     echo "c-thru: failed to build ephemeral settings JSON" >&2
     exit 1
   }
@@ -920,6 +991,8 @@ cmd_help() {
   echo "  restart [--force]         stop and re-spawn proxy (--force escalates to SIGKILL)"
   echo -e "  ${GRAY}Audit:${NC}"
   echo "  check-deps [--fix]        audit system deps; --fix installs missing optional tools via brew"
+  echo -e "  ${GRAY}Observability:${NC}"
+  echo "  stats [show|clear]        per-model usage tables from the running proxy; 'clear' resets them"
   echo -e "  ${GRAY}Introspection:${NC}"
   echo "  list                      show active hw profile, routes, and local Ollama models"
   echo "  explain <args>            print resolution chain for a hypothetical request (--help for args)"
@@ -957,6 +1030,8 @@ cmd_help() {
   echo "  --router-debug [N]        router verbose logs (= C_THRU_DEBUG=N; default 1; CLAUDE_ROUTER_DEBUG still accepted)"
   echo "  --no-update               skip git self-update (= C_THRU_NO_UPDATE=1)"
   echo "  --no-agents               skip agent injection (= NO_AGENTS=1)"
+  echo "  --coordinator             opt into the experimental c-thru session coordinator"
+  echo "  --no-coordinator          disable the coordinator even when C_THRU_COORDINATOR=1"
   echo ""
   echo -e "${BOLD}Key environment variables:${NC}"
   echo "  CLAUDE_PROXY_BYPASS=1         skip proxy entirely (direct Anthropic path)"
@@ -966,6 +1041,7 @@ cmd_help() {
   echo -e "  ${GRAY}    best-cloud|best-cloud-oss|best-local-oss|best-cloud-gov|best-local-gov${NC}"
   echo "  CLAUDE_LLM_MEMORY_GB=<n>      override RAM detection for hw tier selection"
   echo "  C_THRU_NO_UPDATE=1     disable git self-update at startup"
+  echo "  C_THRU_COORDINATOR=1      opt into the experimental session coordinator"
   echo "  CLAUDE_PROXY_JOURNAL=1        record every request/response to ~/.claude/journal/"
   echo "  NO_COLOR=1                    disable colored output"
   echo ""
@@ -1249,6 +1325,36 @@ cthru_flag_width() {
   esac
 }
 
+coordinator_tools_allow_agent() {
+  local value normalized token
+  local -a tokens=()
+  for value in "$@"; do
+    normalized="${value//,/ }"
+    read -r -a tokens <<< "$normalized"
+    for token in "${tokens[@]}"; do
+      case "$token" in
+        default|Agent|Agent\(*) return 0 ;;
+      esac
+    done
+  done
+  return 1
+}
+
+coordinator_tools_deny_agent() {
+  local value normalized token
+  local -a tokens=()
+  for value in "$@"; do
+    normalized="${value//,/ }"
+    read -r -a tokens <<< "$normalized"
+    for token in "${tokens[@]}"; do
+      case "$token" in
+        '*'|Agent|Agent\(*) return 0 ;;
+      esac
+    done
+  done
+  return 1
+}
+
 # True if $1 is a Claude-native / first-party model id or alias that Claude Code
 # agent-view --model may accept (sonnet, opus, fable, haiku, claude-*, …).
 # Used only on native_subcmd path: forward these --model values; strip c-thru
@@ -1275,7 +1381,8 @@ is_claude_native_model_name() {
 #   Policies:
 #     main          — used by build_forwarded_args: strip private flags; reinject
 #                     resolved --model; strip parseable caller --settings/--agents
-#                     that the ephemeral merge will re-inject.
+#                     that the ephemeral merge will re-inject. Direct bypass has
+#                     no ephemeral merge, so caller payloads remain untouched.
 #     native_subcmd — used before exec of claude agents|mcp|…: strip private flags;
 #                     strip --model only when the value is NOT Claude-native
 #                     (sonnet/opus/fable/haiku/claude-*); forward Claude-native
@@ -1331,7 +1438,7 @@ strip_cthru_cli_args() {
         i=$((i + 1))
         continue
         ;;
-      --bypass-proxy | --journal | --no-update | --no-agents | --debug | --thinking | \
+      --bypass-proxy | --journal | --no-update | --no-agents | --coordinator | --no-coordinator | --debug | --thinking | \
       --local-only | --best-cloud | --best-opensource-cloud | --best-opensource-local | \
       --best-opensource | --offline)
         i=$((i + 1))
@@ -1404,7 +1511,7 @@ strip_cthru_cli_args() {
         else
           _w="$(cthru_flag_width "$arg" "" 0)"
         fi
-        if [[ "$policy" == "main" && "$_w" == "2" && "${CALLER_SETTINGS_PARSEABLE[caller_settings_index]:-0}" == "1" ]]; then
+        if [[ "$policy" == "main" && "${CLAUDE_PROXY_BYPASS:-0}" != "1" && "$_w" == "2" && "${CALLER_SETTINGS_PARSEABLE[caller_settings_index]:-0}" == "1" ]]; then
           i=$((i + _w))
         else
           FORWARDED_ARGS+=("$arg")
@@ -1415,7 +1522,7 @@ strip_cthru_cli_args() {
         continue
         ;;
       --settings=*)
-        if [[ "$policy" == "main" && "${CALLER_SETTINGS_PARSEABLE[caller_settings_index]:-0}" == "1" ]]; then
+        if [[ "$policy" == "main" && "${CLAUDE_PROXY_BYPASS:-0}" != "1" && "${CALLER_SETTINGS_PARSEABLE[caller_settings_index]:-0}" == "1" ]]; then
           i=$((i + 1))
         else
           FORWARDED_ARGS+=("$arg")
@@ -1431,7 +1538,7 @@ strip_cthru_cli_args() {
         else
           _w="$(cthru_flag_width "$arg" "" 0)"
         fi
-        if [[ "$policy" == "main" && "$_w" == "2" && "${CALLER_AGENTS_PARSEABLE[caller_agents_index]:-0}" == "1" ]]; then
+        if [[ "$policy" == "main" && "${CLAUDE_PROXY_BYPASS:-0}" != "1" && "$_w" == "2" && "${CALLER_AGENTS_PARSEABLE[caller_agents_index]:-0}" == "1" ]]; then
           i=$((i + _w))
         else
           FORWARDED_ARGS+=("$arg")
@@ -1442,7 +1549,7 @@ strip_cthru_cli_args() {
         continue
         ;;
       --agents=*)
-        if [[ "$policy" == "main" && "${CALLER_AGENTS_PARSEABLE[caller_agents_index]:-0}" == "1" ]]; then
+        if [[ "$policy" == "main" && "${CLAUDE_PROXY_BYPASS:-0}" != "1" && "${CALLER_AGENTS_PARSEABLE[caller_agents_index]:-0}" == "1" ]]; then
           i=$((i + 1))
         else
           FORWARDED_ARGS+=("$arg")
@@ -2385,7 +2492,7 @@ model_pattern_matches() {
 }
 
 lookup_model_pattern_value() {
-  local section="$1" model="$2"
+  local section="$1" model="$2" encode_json="${3:-0}"
   [[ ! -f "$CONFIG" ]] && return 0
 
   local key value
@@ -2396,10 +2503,10 @@ lookup_model_pattern_value() {
       return 0
     fi
   done < <(
-    jq -r --arg s "$section" '
+    jq -r --arg s "$section" --arg encode_json "$encode_json" '
       .[$s] // {} |
       to_entries[] |
-      [.key, (.value | if type == "string" then . else @json end)] |
+      [.key, (.value | if $encode_json == "1" then @json elif type == "string" then . else @json end)] |
       @tsv
     ' "$CONFIG" 2>/dev/null
   )
@@ -2407,86 +2514,35 @@ lookup_model_pattern_value() {
   return 0
 }
 
-lookup_model_pattern_json_value() {
-  local section="$1" model="$2"
-  [[ ! -f "$CONFIG" ]] && return 0
+# Bash selects with its legacy pattern dialect; the canonical JavaScript graph
+# resolver returns <endpoint-id>\t<served-model>. Backend effects remain here.
+resolve_model_route_value() {
+  local model="$1" llm_mode="$2"
+  local resolver="$CTHRU_SELF_DIR/c-thru-resolve"
+  local route_json resolved status
+  [[ -f "$CONFIG" && -n "$model" ]] || return 1
 
-  local key value
-  while IFS=$'\t' read -r key value; do
-    looks_like_model_pattern_key "$key" || continue
-    if model_pattern_matches "$key" "$model"; then
-      printf '%s' "$value"
-      return 0
-    fi
-  done < <(
-    jq -r --arg s "$section" '
-      .[$s] // {} |
-      to_entries[] |
-      [.key, (.value | @json)] |
-      @tsv
-    ' "$CONFIG" 2>/dev/null
-  )
+  route_json="$(jq -r --arg model "$model" '
+    (.model_routes // {}) | if has($model) then .[$model] | @json else empty end
+  ' "$CONFIG" 2>/dev/null)" || return 1
+  [[ -n "$route_json" ]] ||
+    route_json="$(lookup_model_pattern_value "model_routes" "$model" 1)"
+  [[ -n "$route_json" ]] || return 0
 
-  return 0
-}
+  [[ -x "$resolver" ]] || {
+    echo "c-thru: model-route resolver missing or not executable at $resolver" >&2; return 1;
+  }
 
-resolve_model_route_json_value() {
-  local model="$1" route_json="$2" llm_mode="$3"
-  [[ -f "$CONFIG" && -n "$model" && -n "$route_json" ]] || return 1
-
-  jq -r --arg model "$model" --argjson route "$route_json" --arg mode "$llm_mode" '
-    (.endpoints // .backends // {}) as $backends |
-    (.model_routes // {}) as $routes |
-
-    def route_entry($name):
-      if $routes | has($name) then $routes[$name]
-      else
-        (
-          $routes | to_entries |
-          map(
-            select(.key | startswith("re:")) |
-            .key[3:] as $pattern |
-            select(try ($name | test($pattern)) catch false) |
-            .value
-          ) |
-          .[0] // empty
-        )
-      end;
-
-    def sigil($value):
-      try ($value | capture("^(?<base>.+)@(?<backend>[A-Za-z0-9_-]+)$")) catch null;
-
-    def pick_mode_target($target):
-      $target[$mode] // $target.connected // $target.default // ($target | to_entries | map(.value) | .[0]);
-
-    def resolve_target($effective_model; $target; $depth):
-      if $depth > 8 then
-        empty
-      elif ($target | type) == "object" and (($target.endpoint // null) | type) == "string" then
-        [$target.endpoint, (($target.name // $effective_model) | tostring)] | @tsv
-      else
-        (if ($target | type) == "object" then pick_mode_target($target) else $target end) as $picked |
-        if (($picked | type) != "string") or ($picked == "") then
-          empty
-        elif $backends[$picked] != null then
-          [$picked, $effective_model] | @tsv
-        else
-          (sigil($picked)) as $sig |
-          if $sig != null and $sig.base != "" and $backends[$sig.backend] != null then
-            [$sig.backend, $sig.base] | @tsv
-          else
-            (route_entry($picked)) as $nested |
-            if $nested != null then
-              resolve_target($picked; $nested; ($depth + 1))
-            else
-              empty
-            end
-          end
-        end
-      end;
-
-    resolve_target($model; $route; 0)
-  ' "$CONFIG" 2>/dev/null
+  if resolved="$(CLAUDE_MODEL_MAP_PATH="$CONFIG" \
+      "$resolver" --model-route-target "$model" "$llm_mode" "$route_json")"; then
+    printf '%s' "$resolved"
+    return 0
+  else
+    status=$?
+    # Preserve legacy empty success so later Claude/Ollama autodetection runs.
+    [[ "$status" -eq 2 ]] && return 0
+    return "$status"
+  fi
 }
 
 resolve_target_backend_for_model() {
@@ -2695,6 +2751,27 @@ pid_looks_like_proxy() {
   esac
 }
 
+# Terminate only a launcher-owned child, then escalate promptly if it ignores
+# TERM. Keeping the grace bounded prevents a test supervisor from killing this
+# launcher while its Claude child is still alive and turning that child into an
+# orphan. A child cannot have its PID reused before this shell reaps it.
+terminate_and_reap_owned_pid() {
+  local pid="${1:-}"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+    local attempt
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" >/dev/null 2>&1 || true
+    fi
+  fi
+  wait "$pid" >/dev/null 2>&1 || true
+}
+
 # True if some other process still has ANTHROPIC_BASE_URL aimed at loopback:$1.
 # Used so EXIT cleanup does not kill a proxy that agent-view daemons still need.
 # Args: port, then optional PIDs to exclude (this shell, claude child, proxy).
@@ -2738,23 +2815,18 @@ reap_proxy_port_listener() {
   epid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true)"
   [[ -n "$epid" ]] || return 0
   if pid_looks_like_proxy "$epid"; then
-    kill "$epid" >/dev/null 2>&1 || true
-    wait "$epid" >/dev/null 2>&1 || true
+    terminate_and_reap_owned_pid "$epid"
   fi
 }
 
 cleanup_proxy_children() {
   local ec="${1:-$?}"
   if [[ -n "${_PROXY_SPIN_PID:-}" ]]; then
-    kill "$_PROXY_SPIN_PID" 2>/dev/null || true
-    wait "$_PROXY_SPIN_PID" 2>/dev/null || true
+    terminate_and_reap_owned_pid "$_PROXY_SPIN_PID"
     _PROXY_SPIN_PID=""
   fi
   if [[ -n "${CLAUDE_CHILD_PID:-}" ]]; then
-    if kill -0 "$CLAUDE_CHILD_PID" 2>/dev/null; then
-      kill "$CLAUDE_CHILD_PID" >/dev/null 2>&1 || true
-      wait "$CLAUDE_CHILD_PID" >/dev/null 2>&1 || true
-    fi
+    terminate_and_reap_owned_pid "$CLAUDE_CHILD_PID"
     CLAUDE_CHILD_PID=""
   fi
   local keep=0
@@ -2771,8 +2843,7 @@ cleanup_proxy_children() {
   fi
   if [[ "$keep" -eq 0 ]]; then
     if [[ -n "${PROXY_STARTED_PID:-}" ]] && pid_looks_like_proxy "$PROXY_STARTED_PID"; then
-      kill "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
-      wait "$PROXY_STARTED_PID" >/dev/null 2>&1 || true
+      terminate_and_reap_owned_pid "$PROXY_STARTED_PID"
     fi
     # Ensure/UPS/StopFailure may have spawned a new listener under a different
     # PID than PROXY_STARTED_PID — reap by port when we own cleanup.
@@ -2910,11 +2981,10 @@ describe_proxy_log_target() {
   printf ' — see %s' "$path"
 }
 
-# ARCH: ensure_per_user_secrets — generate the per-user control token ONCE.
-#   The proxy is a shared daemon reused across parallel sessions; the control
-#   token must be STABLE PER-USER (0600 under ~/.claude), NOT per-session.
-#   Agent-sentinel trust is loopback-client-only (no shared HMAC key).
-#     - proxy.control-token  (C23) — bearer token for mutating control routes.
+# ARCH: secret scopes are deliberately separate.
+#   - proxy.agent-token signs agent markers across all sessions that reuse one
+#     fixed proxy (stable per-user, 0600, distinct from control authority).
+#   - proxy.control-token authenticates mutating control routes.
 gen_secret_hex() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 32 2>/dev/null && return 0
@@ -2924,20 +2994,109 @@ gen_secret_hex() {
     od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
   fi
 }
+ensure_agent_sentinel_secret() {
+  # Direct-value override is supported for hermetic tests/manual proxy setups.
+  if [[ -n "${C_THRU_AGENT_SENTINEL_SECRET:-}" ]]; then
+    if [[ ${#C_THRU_AGENT_SENTINEL_SECRET} -lt 32 ]]; then
+      echo "c-thru: C_THRU_AGENT_SENTINEL_SECRET must be at least 32 characters" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  ensure_per_user_secrets
+  local token_file="${C_THRU_AGENT_SENTINEL_SECRET_FILE:-$CLAUDE_PROFILE_DIR/proxy.agent-token}"
+  local token=""
+  [[ -s "$token_file" ]] && token="$(cat "$token_file" 2>/dev/null || true)"
+  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "c-thru: missing or invalid agent sentinel token at $token_file" >&2
+    return 1
+  fi
+  # Export only the path. The proxy reads once at startup; the hook reads only
+  # while signing, so the token itself is not present in Claude's environment.
+  export C_THRU_AGENT_SENTINEL_SECRET_FILE="$token_file"
+}
+
 ensure_per_user_secrets() {
   local dir="$CLAUDE_PROFILE_DIR" f
   mkdir -p "$dir" 2>/dev/null || true
-  for f in proxy.control-token; do
+  for f in proxy.agent-token proxy.control-token; do
     local path="$dir/$f"
     if [[ ! -s "$path" ]]; then
       local secret; secret="$(gen_secret_hex)"
       if [[ -n "$secret" ]]; then
-        # umask so the create itself is 0600; chmod belt-and-suspenders.
-        ( umask 077; printf '%s' "$secret" > "$path" ) 2>/dev/null \
-          && chmod 0600 "$path" 2>/dev/null || true
+        # noclobber makes concurrent first launches converge on one winner
+        # instead of overwriting a token another live proxy already loaded.
+        ( umask 077; set -o noclobber; printf '%s' "$secret" > "$path" ) 2>/dev/null || true
       fi
     fi
+    [[ -e "$path" ]] && chmod 0600 "$path" 2>/dev/null || true
   done
+}
+
+agent_sentinel_token_identity_version() {
+  printf '%s' '1'
+}
+
+agent_sentinel_token_fingerprint() {
+  local token="${C_THRU_AGENT_SENTINEL_SECRET:-}"
+  local token_file="${C_THRU_AGENT_SENTINEL_SECRET_FILE:-$CLAUDE_PROFILE_DIR/proxy.agent-token}"
+  if [[ -z "$token" && -s "$token_file" ]]; then
+    token="$(cat "$token_file" 2>/dev/null || true)"
+  fi
+  [[ ${#token} -ge 32 ]] || return 1
+  command -v node >/dev/null 2>&1 || return 1
+  printf '%s' "$token" | node -e '
+const crypto = require("crypto");
+let token = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => { token += chunk; });
+process.stdin.on("end", () => {
+  if (Buffer.byteLength(token, "utf8") < 32) process.exit(1);
+  process.stdout.write(
+    crypto.createHash("sha256")
+      .update("c-thru-agent-token-identity-v1\0", "utf8")
+      .update(token, "utf8")
+      .digest("hex")
+  );
+});
+'
+}
+
+# A shared/fixed proxy is compatible only when it loaded the same agent-routing
+# token as this launcher. The fingerprint is nonsecret and versioned; a missing
+# identity identifies a pre-upgrade (or foreign) listener. This function never
+# signals the listener.
+require_proxy_agent_token_identity() {
+  local port="$1"
+  local ping_json="${2:-}"
+  local expected_version expected_fingerprint actual_version actual_fingerprint
+
+  if [[ -z "$ping_json" ]]; then
+    ping_json="$(proxy_ping_json "$port" 2>/dev/null || true)"
+  fi
+  expected_version="$(agent_sentinel_token_identity_version)"
+  expected_fingerprint="$(agent_sentinel_token_fingerprint 2>/dev/null || true)"
+  if [[ -z "$expected_fingerprint" ]]; then
+    echo "c-thru: cannot verify claude-proxy on :$port — launcher agent token is missing or invalid" >&2
+    return 1
+  fi
+
+  actual_version="$(printf '%s' "$ping_json" | jq -r '.agent_token_identity.version // empty' 2>/dev/null || true)"
+  actual_fingerprint="$(printf '%s' "$ping_json" | jq -r '.agent_token_identity.fingerprint // empty' 2>/dev/null || true)"
+  if [[ -z "$actual_version" || -z "$actual_fingerprint" ]]; then
+    echo "c-thru: refusing to reuse claude-proxy on :$port — /ping lacks agent-token identity (stale or foreign proxy)" >&2
+    return 1
+  fi
+  if [[ "$actual_version" != "$expected_version" ]]; then
+    echo "c-thru: refusing to reuse claude-proxy on :$port — agent-token identity version mismatch (proxy=$actual_version launcher=$expected_version)" >&2
+    return 1
+  fi
+  if [[ "$actual_fingerprint" != "$expected_fingerprint" ]]; then
+    echo "c-thru: refusing to reuse claude-proxy on :$port — agent-token fingerprint mismatch (different CLAUDE_PROFILE_DIR or token)" >&2
+    return 1
+  fi
+  return 0
 }
 
 # C23 — emit the control-token curl header args for a mutating route, or nothing
@@ -2949,6 +3108,28 @@ control_token_curl_args() {
   [[ -n "${CLAUDE_PROXY_CONTROL_TOKEN:-}" ]] && tok="$CLAUDE_PROXY_CONTROL_TOKEN"
   [[ -z "$tok" && -s "$tf" ]] && tok="$(cat "$tf" 2>/dev/null)"
   [[ -n "$tok" ]] && printf -- '-H\nX-C-Thru-Control: %s\n' "$tok"
+  return 0
+}
+
+# Opt-in: C_THRU_STATS_RESET=launch clears the lifetime usage ledger once after
+# the proxy is known ready for this process tree. Default is never (forensics).
+# Uses POST /c-thru/stats/clear so multi-proxy clear-wins applies. Once per shell.
+maybe_reset_usage_stats_on_launch() {
+  [[ "${C_THRU_STATS_RESET:-never}" == "launch" ]] || return 0
+  [[ "${_C_THRU_STATS_RESET_DONE:-0}" == "1" ]] && return 0
+  local port=""
+  port="${PROXY_PORT:-${CLAUDE_PROXY_PORT:-}}"
+  [[ -z "$port" ]] && port="$(claude_proxy_listen_port 2>/dev/null || true)"
+  [[ -n "$port" ]] || return 0
+  local _ct_args=()
+  while IFS= read -r _ct_line; do _ct_args+=("$_ct_line"); done < <(control_token_curl_args)
+  if curl -sf --max-time 2.0 -X POST "${_ct_args[@]}" \
+      "http://127.0.0.1:${port}/c-thru/stats/clear" >/dev/null 2>&1; then
+    _C_THRU_STATS_RESET_DONE=1
+    if [[ "${C_THRU_DEBUG:-0}" != "0" && -n "${C_THRU_DEBUG:-}" ]]; then
+      echo "c-thru: C_THRU_STATS_RESET=launch cleared usage stats on :$port" >&2
+    fi
+  fi
   return 0
 }
 
@@ -3111,6 +3292,10 @@ ensure_proxy_running() {
   ping_json="$(proxy_ping_json "$port" || true)"
   if [[ -n "$ping_json" ]]; then
     local ping_ok existing_config existing_pid kill_pid
+    # Token identity is checked before config-based reuse/restart. A proxy from
+    # another profile (or a pre-upgrade proxy with no identity) is never killed
+    # or silently reused.
+    require_proxy_agent_token_identity "$port" "$ping_json" || return 1
     ping_ok="$(printf '%s' "$ping_json" | jq -r '.ok // false' 2>/dev/null || echo false)"
     existing_config="$(printf '%s' "$ping_json" | jq -r '.config_path // empty' 2>/dev/null || true)"
     existing_pid="$(printf '%s' "$ping_json" | jq -r '.pid // empty' 2>/dev/null || true)"
@@ -3145,10 +3330,11 @@ ensure_proxy_running() {
   existing_listener_pid="$(proxy_listener_pid "$port")" || true
   if [[ -n "$existing_listener_pid" ]]; then
     if wait_proxy_ping_ready "$port" 20; then
+      require_proxy_agent_token_identity "$port" || return 1
       return 0
     fi
     echo "c-thru: port :$port already has a listener (pid=$existing_listener_pid) but claude-proxy /ping did not answer — not launching another proxy" >&2
-    return 0
+    return 1
   fi
 
   local proxy_js="$CLAUDE_PROFILE_DIR/tools/claude-proxy"
@@ -3158,6 +3344,7 @@ ensure_proxy_running() {
   if [[ ! -f "$proxy_js" ]]; then
     # No local script — maybe you started claude-proxy manually from elsewhere.
     if wait_proxy_ping_ready "$port" 50; then
+      require_proxy_agent_token_identity "$port" || return 1
       return 0
     fi
     echo "c-thru: claude-proxy not reachable on :$port and missing at both $CLAUDE_PROFILE_DIR/tools/claude-proxy and $CTHRU_REPO_ROOT/tools/claude-proxy — run install.sh or start the proxy" >&2
@@ -3180,6 +3367,10 @@ ensure_proxy_running() {
     exec {lock_fd}>"$CLAUDE_PROFILE_DIR/proxy.$port.lock"
     if ! flock -n "$lock_fd"; then
       if wait_proxy_ping_ready "$port" 50; then
+        if ! require_proxy_agent_token_identity "$port"; then
+          eval "exec ${lock_fd}>&-"
+          return 1
+        fi
         eval "exec ${lock_fd}>&-"
         return 0
       fi
@@ -3188,6 +3379,10 @@ ensure_proxy_running() {
       # Double-check: the previous holder may have finally succeeded while
       # we were blocked. If /ping answers now, we're done.
       if curl -sf --max-time 2.0 "http://127.0.0.1:$port/ping" >/dev/null 2>&1; then
+        if ! require_proxy_agent_token_identity "$port"; then
+          eval "exec ${lock_fd}>&-"
+          return 1
+        fi
         eval "exec ${lock_fd}>&-"
         return 0
       fi
@@ -3209,6 +3404,7 @@ ensure_proxy_running() {
       rm -f "$mkdir_err_file" 2>/dev/null || true
       if [[ -d "$lock_dir" ]]; then
         if wait_proxy_ping_ready "$port" 50; then
+          require_proxy_agent_token_identity "$port" || return 1
           return 0
         fi
         echo "c-thru: prior claude-proxy launch on :$port appears to have failed — retrying" >&2
@@ -3218,6 +3414,7 @@ ensure_proxy_running() {
           # Lost the takeover race to another router. It may already have brought
           # the proxy up — re-poll /ping before failing the launch.
           if wait_proxy_ping_ready "$port" 50; then
+            require_proxy_agent_token_identity "$port" || return 1
             return 0
           fi
           echo "c-thru: unable to acquire proxy lockdir on :$port after takeover attempt" >&2
@@ -3235,6 +3432,14 @@ ensure_proxy_running() {
   fi
 
   if curl -sf --max-time 2.0 "http://127.0.0.1:$port/ping" >/dev/null 2>&1; then
+    if ! require_proxy_agent_token_identity "$port"; then
+      if [[ -n "$lock_dir" ]]; then
+        rmdir "$lock_dir" 2>/dev/null || true
+      elif [[ -n "$lock_fd" ]]; then
+        eval "exec ${lock_fd}>&-"
+      fi
+      return 1
+    fi
     start_ec=0
   else
     local explicit_log=""
@@ -3292,6 +3497,11 @@ ensure_proxy_running() {
       start_ec=1
       diagnose_proxy_startup_failure "$PROXY_STARTED_PID" "$port" "${explicit_log:-$temp_log}" \
         "claude-proxy did not answer /ping on :$port"
+    elif ! require_proxy_agent_token_identity "$port"; then
+      # This process was spawned by us, so normal failed-start cleanup below may
+      # stop it. Reused/foreign listeners return before the spawn path and are
+      # never signaled on identity mismatch.
+      start_ec=1
     fi
     rm -f "$ready_pipe"
     if [[ "$start_ec" -eq 1 ]]; then
@@ -3337,6 +3547,7 @@ ensure_proxy_http_base() {
     ENSURED_PROXY_HTTP_BASE="$(apply_session_scope_suffix "$explicit_base")"
     # Normalize so both paths populate PROXY_PORT (used for system-prompt injection).
     PROXY_PORT="${PROXY_PORT:-$CLAUDE_PROXY_PORT}"
+    maybe_reset_usage_stats_on_launch
     return 0
   fi
 
@@ -3344,6 +3555,7 @@ ensure_proxy_http_base() {
   local dynamic_base=""
   dynamic_base="$(claude_proxy_http_base)" || return 1
   ENSURED_PROXY_HTTP_BASE="$(apply_session_scope_suffix "$dynamic_base")"
+  maybe_reset_usage_stats_on_launch
 }
 
 # Round-5 B2: appends a /s/<session-id> path prefix to the proxy base URL so
@@ -4285,6 +4497,19 @@ wait_for_concurrent_pull() {
   return 0
 }
 
+# Active warm-up uses a wall-clock deadline. Preserve the normal 120s cap, but
+# let live model tests widen it up to the shared one-hour hard ceiling.
+ollama_model_load_wait_seconds() {
+  local timeout_ms="${C_THRU_MODEL_TEST_TIMEOUT_MS:-120000}"
+  if [[ ! "$timeout_ms" =~ ^[1-9][0-9]*$ ]] \
+    || (( ${#timeout_ms} > 10 )) \
+    || (( timeout_ms > 3600000 )); then
+    echo "c-thru: C_THRU_MODEL_TEST_TIMEOUT_MS must be an integer from 1 to 3600000" >&2
+    return 2
+  fi
+  printf '%s' "$(( (timeout_ms + 999) / 1000 ))"
+}
+
 # ARCH: ensure_ollama_running — health-checks and, if needed, starts or repairs a local Ollama server,
 #   then ensures the requested model is pulled and warm. Non-fatal: any failure returns 0 to
 #   avoid blocking routing.
@@ -4560,11 +4785,18 @@ ensure_ollama_running() {
     _list_for_size=$("${ollama_cli_env[@]}" "${timeout_cmd[@]}" ollama list 2>/dev/null || true)
     model_size_str=$(printf '%s' "$_list_for_size" | awk -v m="$model" 'NR>1 && $1==m {print $3" "$4; exit}' 2>/dev/null || true)
 
-    local max_wait_iters=200  # 0.6s × 200 = 120s
+    local max_wait_seconds
+    max_wait_seconds="$(ollama_model_load_wait_seconds)" || exit 2
     local i=0
     local start_loop_time=$SECONDS
-    while (( i < max_wait_iters )); do
+    while true; do
       local elapsed=$(( SECONDS - start_loop_time ))
+      # SECONDS is integer-granularity. Reserve one second before both sleep
+      # and curl so rounding cannot carry this loop beyond its deadline.
+      local remaining=$(( max_wait_seconds - elapsed ))
+      if (( remaining <= 1 )); then
+        break
+      fi
       local time_str
       if (( elapsed >= 60 )); then
         time_str="$(( elapsed / 60 ))m $(( elapsed % 60 ))s"
@@ -4576,7 +4808,16 @@ ensure_ollama_running() {
       sleep 0.6
       i=$(( i + 1 ))
       if (( i % 5 == 0 )); then
-        api_ps_json=$(curl -sf --max-time 3 "${cli_host}/api/ps" 2>/dev/null || true)
+        elapsed=$(( SECONDS - start_loop_time ))
+        remaining=$(( max_wait_seconds - elapsed ))
+        if (( remaining <= 1 )); then
+          break
+        fi
+        local probe_timeout=3
+        if (( probe_timeout >= remaining )); then
+          probe_timeout=$(( remaining - 1 ))
+        fi
+        api_ps_json=$(curl -sf --max-time "$probe_timeout" "${cli_host}/api/ps" 2>/dev/null || true)
         if echo "$api_ps_json" | grep -qF "\"${model}\""; then
           _ollama_done "${GREEN}✓${NC}" "$model" "ready  ${GRAY}${model_size_str:+($model_size_str, }${time_str}${model_size_str:+)}${NC}"
           PROXY_ACTIVE_MODEL_WARMED=1
@@ -4622,15 +4863,13 @@ get_system_info_summary() {
     "IDENTITY QUESTIONS: c-thru may route many different backends. When asked \"what model are you\", \"what model version\", or \"who made you\", answer only from your direct knowledge of yourself as the model actually generating this response — do not invent a default from training data or from transport aliases. If you are unsure, say so. Never assume what model a subagent is. If identity of an agent or backend matters, ask that model/agent directly and report its answer; do not postulate from agent names, fleet tables, or tool aliases." \
     "c-thru routing active. Profile: ${profile:-unknown}. Mode: ${llm_mode:-unknown}." \
     "Available models by capability: ${caps_str}." \
-    "Use specialized agents aggressively.
+    "Use specialized agents as the default execution path.
 
-For any non-trivial task, assume suitable agents exist. Identify them by their descriptions and delegate matching work before proceeding directly.
+Before doing non-trivial work, inspect the available Agent definitions. If one description matches, your first substantive action MUST be an Agent delegation to the best matching named specialist. Do not complete matching work inline merely because you can. For multi-phase work, delegate focused phases to their matching specialists.
 
-Prefer delegation over doing specialized work in the main thread. Do not skip delegation when an agent could apply. Prefer multiple focused delegations over one large direct solution.
+Choose by description, not by model alias. Never substitute generic built-in agent types such as sonnet, opus, haiku, or general-purpose when a named c-thru specialist matches. Answer inline only for trivial conversation or when no specialist description fits.
 
 Named brand agents (grok, deepseek, kimi, qwen, gemini): when the user asks to \"ask <name> …\" for an opinion or second take, spawn that agent once with the user question and report its answer. Do not answer as that brand yourself, and do not chain further agents for the same question. For Grok multi-file implement/fix/review work, prefer the external Grok CLI (grok-cc) or coder — not the grok brand leaf.
-
-When useful, use agents across phases such as planning, execution, and verification.
 
 Keep each delegated task explicit and self-contained. Do not rely on shared context.
 
@@ -4764,28 +5003,52 @@ run_real_claude() {
   fi
 
   # Proxy was started by this shell: cannot exec (bash skips EXIT traps on
-  # exec, which would leak the proxy). Same constraint as c-thru-control:
-  # run as a true *foreground* child, then let EXIT reap the proxy.
+  # exec, which would leak the proxy).
   #
-  # Do NOT use `cmd &; wait`. Backgrounding under a non-interactive script
-  # makes Claude an async job (SIGINT/SIGQUIT ignored at spawn). Users then
-  # see TUI garbling when typing, pressing left-arrow, and moving the mouse
-  # over the window — only under c-thru; plain `claude` is clean. A set -m +
-  # fg approach was tried but is fragile: if fg fails, Claude stays a
-  # background job under job control and can get SIGTTIN on terminal reads.
-  # Pure foreground matches c-thru-control and keeps Claude in the terminal's
-  # foreground process group with the waiting shell.
+  # Interactive TTY sessions must keep Claude as a true foreground child.
+  # Backgrounding the TUI caused input/redraw corruption in prior attempts.
+  #
+  # Headless sessions use a tracked async child plus the `wait` builtin.
+  # Bash defers TERM traps while synchronously waiting for a foreground
+  # command, which used to leave Claude, the proxy, and the ephemeral session
+  # alive when a service/test sent TERM to the launcher PID only. `wait` on an
+  # async child is interruptible: proxy_signal_handler runs immediately and
+  # cleanup_proxy_children can forward TERM through CLAUDE_CHILD_PID.
   arm_proxy_cleanup
-  if [[ -n "$url" && -n "$tok" ]]; then
-    env ANTHROPIC_BASE_URL="$url" \
-        ANTHROPIC_AUTH_TOKEN="$tok" \
-        CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
-        CLAUDE_CODE_COLOR="$quiet_env_color" \
-        "${cmd[@]}"
+  # Stdin is the decisive interactive signal. Stdout may legitimately be
+  # piped through tee/logging while Claude still owns the user's terminal.
+  if [[ -t 0 ]]; then
+    if [[ -n "$url" && -n "$tok" ]]; then
+      env ANTHROPIC_BASE_URL="$url" \
+          ANTHROPIC_AUTH_TOKEN="$tok" \
+          CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
+          CLAUDE_CODE_COLOR="$quiet_env_color" \
+          "${cmd[@]}"
+    else
+      env CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
+          CLAUDE_CODE_COLOR="$quiet_env_color" \
+          "${cmd[@]}"
+    fi
   else
-    env CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
-        CLAUDE_CODE_COLOR="$quiet_env_color" \
-        "${cmd[@]}"
+    if [[ -n "$url" && -n "$tok" ]]; then
+      env ANTHROPIC_BASE_URL="$url" \
+          ANTHROPIC_AUTH_TOKEN="$tok" \
+          CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
+          CLAUDE_CODE_COLOR="$quiet_env_color" \
+          "${cmd[@]}" &
+    else
+      env CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
+          CLAUDE_CODE_COLOR="$quiet_env_color" \
+          "${cmd[@]}" &
+    fi
+    CLAUDE_CHILD_PID="$!"
+    if wait "$CLAUDE_CHILD_PID"; then
+      ec=0
+    else
+      ec=$?
+    fi
+    CLAUDE_CHILD_PID=""
+    return "$ec"
   fi
   ec=$?
   return "$ec"
@@ -4938,18 +5201,21 @@ _print_usage_tables() {
   local status_json="$1"
   [[ -z "$status_json" ]] && return
 
-  # Session totals
-  local total_in total_out total_calls first_rec last_rec
+  # Usage totals — cumulative lifetime ledger since last clear (not per Claude session)
+  local total_in total_out total_calls first_rec last_rec cleared_at since_rec
   total_in="$(printf '%s' "$status_json" | jq -r '.usage.total_input // 0' 2>/dev/null || echo 0)"
   total_out="$(printf '%s' "$status_json" | jq -r '.usage.total_output // 0' 2>/dev/null || echo 0)"
   total_calls="$(printf '%s' "$status_json" | jq -r '[.usage.by_model // {} | to_entries[].value.calls] | add // 0' 2>/dev/null || echo 0)"
   first_rec="$(printf '%s' "$status_json" | jq -r '.usage.first_recorded // ""' 2>/dev/null || true)"
   last_rec="$(printf '%s' "$status_json" | jq -r '.usage.last_recorded // ""' 2>/dev/null || true)"
+  cleared_at="$(printf '%s' "$status_json" | jq -r '.usage.cleared_at // ""' 2>/dev/null || true)"
+  since_rec="$first_rec"
+  [[ -n "$cleared_at" && "$cleared_at" != "null" ]] && since_rec="$cleared_at"
 
   if [[ "$total_calls" -gt 0 ]] 2>/dev/null; then
-    printf '\n%sSession totals:%s  %s calls  %s in  %s out' \
+    printf '\n%sUsage totals (since clear):%s  %s calls  %s in  %s out' \
       "$BOLD" "$NC" "$total_calls" "$total_in" "$total_out"
-    [[ -n "$first_rec" ]] && printf '  %s%s → %s%s' "$GRAY" "${first_rec:0:19}" "${last_rec:0:19}" "$NC"
+    [[ -n "$since_rec" ]] && printf '  %s%s → %s%s' "$GRAY" "${since_rec:0:19}" "${last_rec:0:19}" "$NC"
     printf '\n'
   fi
 
@@ -5448,6 +5714,59 @@ while [[ $i -lt $n ]]; do
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;
     --no-update)        export C_THRU_NO_UPDATE=1; i=$((i + 1)) ;;
     --no-agents)        export NO_AGENTS=1; i=$((i + 1)) ;;
+    --coordinator)
+      C_THRU_COORDINATOR_REQUESTED=1
+      export C_THRU_COORDINATOR=1
+      i=$((i + 1)) ;;
+    --no-coordinator)
+      C_THRU_COORDINATOR_FORCED_OFF=1
+      export C_THRU_COORDINATOR=0
+      i=$((i + 1)) ;;
+    --bare | --safe-mode | -c | --continue | -r | --resume | --resume=* | \
+    --from-pr | --from-pr=* | --teleport | --teleport=*)
+      C_THRU_COORDINATOR_INCOMPATIBLE=1
+      i=$((i + 1)) ;;
+    --system-prompt | --system-prompt=* | --system-prompt-file | --system-prompt-file=*)
+      C_THRU_COORDINATOR_INCOMPATIBLE=1
+      i=$((i + 1)) ;;
+    --tools=*)
+      _coordinator_tools_value="${a#--tools=}"
+      if ! coordinator_tools_allow_agent "$_coordinator_tools_value"; then
+        C_THRU_COORDINATOR_INCOMPATIBLE=1
+        C_THRU_COORDINATOR_TOOL_BLOCK="caller --tools excludes Agent"
+      fi
+      i=$((i + 1)) ;;
+    --tools)
+      _coordinator_tools_values=()
+      _coordinator_tools_i=$((i + 1))
+      while [[ $_coordinator_tools_i -lt $n && "${ORIG_ARGS[_coordinator_tools_i]}" != "--" && "${ORIG_ARGS[_coordinator_tools_i]}" != -* ]]; do
+        _coordinator_tools_values+=("${ORIG_ARGS[_coordinator_tools_i]}")
+        _coordinator_tools_i=$((_coordinator_tools_i + 1))
+      done
+      if ! coordinator_tools_allow_agent "${_coordinator_tools_values[@]}"; then
+        C_THRU_COORDINATOR_INCOMPATIBLE=1
+        C_THRU_COORDINATOR_TOOL_BLOCK="caller --tools excludes Agent"
+      fi
+      i=$((i + 1)) ;;
+    --disallowedTools=* | --disallowed-tools=*)
+      _coordinator_disallowed_value="${a#*=}"
+      if coordinator_tools_deny_agent "$_coordinator_disallowed_value"; then
+        C_THRU_COORDINATOR_INCOMPATIBLE=1
+        C_THRU_COORDINATOR_TOOL_BLOCK="caller disallowed-tools blocks Agent"
+      fi
+      i=$((i + 1)) ;;
+    --disallowedTools | --disallowed-tools)
+      _coordinator_disallowed_values=()
+      _coordinator_disallowed_i=$((i + 1))
+      while [[ $_coordinator_disallowed_i -lt $n && "${ORIG_ARGS[_coordinator_disallowed_i]}" != "--" && "${ORIG_ARGS[_coordinator_disallowed_i]}" != -* ]]; do
+        _coordinator_disallowed_values+=("${ORIG_ARGS[_coordinator_disallowed_i]}")
+        _coordinator_disallowed_i=$((_coordinator_disallowed_i + 1))
+      done
+      if coordinator_tools_deny_agent "${_coordinator_disallowed_values[@]}"; then
+        C_THRU_COORDINATOR_INCOMPATIBLE=1
+        C_THRU_COORDINATOR_TOOL_BLOCK="caller disallowed-tools blocks Agent"
+      fi
+      i=$((i + 1)) ;;
     --debug)            export C_THRU_DEBUG=1; export CLAUDE_PROXY_DEBUG=1; i=$((i + 1)) ;;
     --proxy-debug=*)    export CLAUDE_PROXY_DEBUG="${a#--proxy-debug=}"; i=$((i + 1)) ;;
     --proxy-debug)
@@ -5479,9 +5798,28 @@ while [[ $i -lt $n ]]; do
   esac
 done
 
+# Native subcommands never receive the main-session fleet or coordinator.
+case "${ORIG_ARGS[0]:-}" in
+  agents|auth|auto-mode|doctor|gateway|install|mcp|plugin|plugins|project|setup-token|ultrareview|update|upgrade)
+    C_THRU_COORDINATOR_INCOMPATIBLE=1
+    ;;
+esac
+
+if [[ "${C_THRU_COORDINATOR_REQUESTED:-0}" == "1" && "${C_THRU_COORDINATOR_FORCED_OFF:-0}" != "1" && -n "${C_THRU_COORDINATOR_TOOL_BLOCK:-}" ]]; then
+  echo "c-thru: coordinator disabled because ${C_THRU_COORDINATOR_TOOL_BLOCK}" >&2
+fi
+
+# Pilot boundary: Claude remains authoritative for permission rules loaded from
+# project/local/managed settings. The launcher does not pre-read those scopes to
+# guess whether they deny Agent or "*"; such a denial can prevent delegation at
+# runtime without mutating the caller's settings precedence.
+
 # ── Per-Process Ephemeral Session Control ──────────────────────────────────
 # This ensures that hooks and agents only apply when c-thru is in place,
 # and avoids modifying ~/.claude folders permanently.
+if [[ "${CLAUDE_PROXY_BYPASS:-0}" != "1" ]]; then
+  ensure_agent_sentinel_secret || exit 1
+fi
 setup_ephemeral_session
 trap cleanup_ephemeral_session EXIT
 
@@ -5539,7 +5877,11 @@ if [[ -z "$MODEL" ]]; then
   if [[ "${CLAUDE_PROXY_BYPASS:-}" == "1" ]]; then
     claude_router_debug_dump transparent
     apply_background_model_overrides "${MODEL:-}"
-    run_real_claude "$REAL_CLAUDE" "${ORIG_ARGS[@]}"
+    # Preserve Claude-owned flags verbatim while removing c-thru's private
+    # `--bypass-proxy` switch (and its peers). Passing ORIG_ARGS here leaked an
+    # unknown c-thru flag into the real Claude CLI.
+    strip_cthru_cli_args native_subcmd ""
+    run_real_claude "$REAL_CLAUDE" "${FORWARDED_ARGS[@]}"
     exit $?
   fi
   # --print-routing dry-run on the transparent path: exit before spawning the
@@ -5667,6 +6009,32 @@ apply_resolved_backend() {
   KIND=$(jq -r '.format // .kind // "anthropic"' <<< "$backend_json")
   BASE_URL=$(jq -r '.url // empty' <<< "$backend_json")
   AUTH_ENV=$(jq -r '.auth_env // empty' <<< "$backend_json")
+  if [[ "${CLAUDE_PROXY_BYPASS:-0}" == "1" ]]; then
+    # Claude Code speaks the Anthropic Messages protocol. A format=gemini,
+    # format=openai, or legacy format=ollama endpoint needs claude-proxy's
+    # request/response translation, so "bypass" cannot truthfully serve it.
+    # Fail before auth bootstrap or proxy startup instead of silently ignoring
+    # the flag (Gemini/Ollama) or sending Anthropic JSON to an incompatible API
+    # (OpenAI).
+    if [[ "$KIND" != "anthropic" ]]; then
+      echo "c-thru: --bypass-proxy cannot use backend '$backend_id' (format=$KIND); this route requires c-thru protocol translation" >&2
+      echo "c-thru: remove --bypass-proxy or select the native Anthropic backend" >&2
+      exit 2
+    fi
+    # `format=anthropic` only describes the body shape. It does not prove that
+    # Claude Code can directly satisfy the endpoint's auth/header/base-path
+    # contract: xAI, OpenRouter, and custom gateways may still need proxy-side
+    # adaptation. The documented escape hatch is deliberately near-plain
+    # Claude Code against the native Anthropic API.
+    if [[ "${BASE_URL%/}" != "https://api.anthropic.com" ]]; then
+      echo "c-thru: --bypass-proxy supports only the native Anthropic API; backend '$backend_id' uses '$BASE_URL'" >&2
+      echo "c-thru: remove --bypass-proxy so c-thru can apply this endpoint's auth and path contract" >&2
+      exit 2
+    fi
+    API_KEY="${AUTH_ENV:+${!AUTH_ENV}}"
+    apply_provider_block "$BASE_URL" "" "$API_KEY" "" "{}"
+    return 0
+  fi
   # Bootstrap missing auth env for interactive providers (Gemini AI Studio
   # today). For non-Gemini formats this is a no-op. The proxy reads the env
   # directly for Gemini routes, so this must run before the proxy spawns.
@@ -5717,7 +6085,7 @@ apply_resolved_backend() {
 }
 
 # --- Backend lookup chain ---
-# Priority: 1) .model_routes+.backends (exact) → 2) .model_routes+.backends (pattern)
+# Priority: 1) targets{} → 2) model_routes (exact, then first matching pattern)
 #           → 3) claude-* auto-anthropic → 4) Ollama tag auto-detect → 5) assume Ollama
 OLLAMA_HTTP_BASE="${OLLAMA_URL%/api}"
 TARGET_BACKEND_DATA=""
@@ -5725,7 +6093,6 @@ TARGET_BACKEND_ID=""
 TARGET_PROVIDER_MODEL=""
 TARGET_FORCE_PROXY=0
 ROUTE_BACKEND_DATA=""
-ROUTE_JSON_VALUE=""
 
 if [[ -n "$MODEL" && -f "$CONFIG" ]]; then
   TARGET_BACKEND_DATA="$(resolve_target_backend_for_model "$EFFECTIVE_MODEL" || true)"
@@ -5734,6 +6101,10 @@ if [[ -n "$MODEL" && -f "$CONFIG" ]]; then
     TARGET_PROVIDER_MODEL="${TARGET_BACKEND_DATA#*$'\t'}"
     TARGET_PROVIDER_MODEL="${TARGET_PROVIDER_MODEL%%$'\t'*}"
     TARGET_FORCE_PROXY=1
+  else
+    ROUTE_BACKEND_DATA="$(
+      resolve_model_route_value "$EFFECTIVE_MODEL" "$(resolve_llm_mode)"
+    )" || exit 1
   fi
 fi
 
@@ -5744,8 +6115,16 @@ if [[ -n "$TARGET_BACKEND_ID" ]]; then
     echo "c-thru: backend '$BACKEND_ID' not defined for target '$EFFECTIVE_MODEL' in $CONFIG" >&2
     exit 1
   fi
-  if [[ "$TARGET_FORCE_PROXY" == "1" ]]; then
-    local _bk_fmt _bk_url
+  if [[ "${CLAUDE_PROXY_BYPASS:-0}" == "1" ]]; then
+    # Bypass policy is authoritative even for capability/agent target
+    # resolution. Do not let the force-proxy optimization skip the native-only
+    # compatibility check in apply_resolved_backend.
+    apply_resolved_backend "$BACKEND" "$TARGET_PROVIDER_MODEL" "$BACKEND_ID"
+  elif [[ "$TARGET_FORCE_PROXY" == "1" ]]; then
+    # Top-level launch path, not a function: `local` here is a runtime error
+    # (`local: can only be used in a function`) on every force-proxy target.
+    _bk_fmt=""
+    _bk_url=""
     _bk_fmt=$(jq -r '.format // .kind // "anthropic"' <<< "$BACKEND" 2>/dev/null)
     _bk_url=$(jq -r '.url // empty' <<< "$BACKEND" 2>/dev/null)
     # Gemini routes need apply_resolved_backend so bootstrap_endpoint_auth_env
@@ -5762,27 +6141,9 @@ if [[ -n "$TARGET_BACKEND_ID" ]]; then
     apply_resolved_backend "$BACKEND" "$TARGET_PROVIDER_MODEL" "$BACKEND_ID"
   fi
 
-elif [[ -n "$MODEL" && -f "$CONFIG" ]] && \
-     ROUTE_JSON_VALUE="$(jq -c --arg m "$EFFECTIVE_MODEL" '
-       if (.model_routes // {}) | has($m) then .model_routes[$m] else empty end
-     ' "$CONFIG" 2>/dev/null)" && \
-     ROUTE_BACKEND_DATA="$(resolve_model_route_json_value "$EFFECTIVE_MODEL" "$ROUTE_JSON_VALUE" "$(resolve_llm_mode)" || true)" && \
-     [[ -n "$ROUTE_BACKEND_DATA" ]]; then
-  # 1b) model_routes exact match → endpoints/backends lookup
-  BACKEND_ID="${ROUTE_BACKEND_DATA%%$'\t'*}"
-  EFFECTIVE_MODEL="${ROUTE_BACKEND_DATA#*$'\t'}"
-  EFFECTIVE_MODEL="${EFFECTIVE_MODEL%%$'\t'*}"
-  BACKEND=$(jq -c --arg id "$BACKEND_ID" '(.endpoints // .backends)[$id] // empty' "$CONFIG" 2>/dev/null)
-  if [[ -z "$BACKEND" || "$BACKEND" == "null" ]]; then
-    echo "c-thru: backend '$BACKEND_ID' not defined for model '$EFFECTIVE_MODEL' in $CONFIG" >&2
-    exit 1
-  fi
-  apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
-
-elif [[ -n "$MODEL" && -f "$CONFIG" ]] && \
-     ROUTE_JSON_VALUE="$(lookup_model_pattern_json_value "model_routes" "$EFFECTIVE_MODEL")" && \
-     ROUTE_BACKEND_DATA="$(resolve_model_route_json_value "$EFFECTIVE_MODEL" "$ROUTE_JSON_VALUE" "$(resolve_llm_mode)" || true)" && \
-     [[ -n "$ROUTE_BACKEND_DATA" ]]; then
+elif [[ -n "$ROUTE_BACKEND_DATA" ]]; then
+  # Exact model_routes keys win over the first matching re: key. The shared
+  # domain resolver owns graph/mode/sigil decisions; Bash still owns effects.
   BACKEND_ID="${ROUTE_BACKEND_DATA%%$'\t'*}"
   EFFECTIVE_MODEL="${ROUTE_BACKEND_DATA#*$'\t'}"
   EFFECTIVE_MODEL="${EFFECTIVE_MODEL%%$'\t'*}"
@@ -5800,6 +6161,13 @@ elif [[ "$EFFECTIVE_MODEL" == claude-* ]] && [[ -f "$CONFIG" ]] && BACKEND_ID="$
     exit 1
   fi
   apply_resolved_backend "$BACKEND" "$EFFECTIVE_MODEL" "$BACKEND_ID"
+
+elif [[ "${CLAUDE_PROXY_BYPASS:-0}" == "1" ]]; then
+  # Reaching this point means no configured native-Anthropic backend resolved.
+  # A local tag or the historical assume-Ollama fallback necessarily requires
+  # the proxy's protocol translation and cannot honor bypass.
+  echo "c-thru: --bypass-proxy cannot use unresolved model '$EFFECTIVE_MODEL'; select a model mapped to the native Anthropic API" >&2
+  exit 2
 
 elif curl -sf --max-time 3 "$OLLAMA_HTTP_BASE/api/tags" 2>/dev/null | jq -e --arg m "$EFFECTIVE_MODEL" '.models[] | select(.name == $m)' >/dev/null 2>&1; then
   # 2) Listed in local Ollama /api/tags — client speaks to claude-proxy; proxy forwards to Ollama

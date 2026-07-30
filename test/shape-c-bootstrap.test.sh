@@ -92,17 +92,43 @@ check "scrub keeps non-loopback URL" grep -q 'api.anthropic.com' "$CLAUDE_DIR/se
 # R0b: plugin hook gate
 # shellcheck source=../tools/c-thru-plugin-hook-gate.sh
 . "$REPO_ROOT/tools/c-thru-plugin-hook-gate.sh"
-unset C_THRU_PLUGIN_HOOK C_THRU_SESSION_ID C_THRU_PLUGIN_LITE || true
+unset C_THRU_PLUGIN_HOOK C_THRU_SESSION_ID C_THRU_PLUGIN_LITE C_THRU_FROM_CLI || true
 check "gate inactive without PLUGIN_HOOK" bash -c 'source "'"$REPO_ROOT"'/tools/c-thru-plugin-hook-gate.sh"; ! cthru_plugin_hook_should_skip'
 export C_THRU_PLUGIN_HOOK=1
-export C_THRU_SESSION_ID=test-session
-check "gate skips under cthru session" cthru_plugin_hook_should_skip
+# Claude payload session ids must NOT skip (was a real bug: install-cli never prompted)
+export C_THRU_SESSION_ID=sess_claude_payload
+# stamp still present from earlier install → skip via stamp, so remove stamp for this check
+_stamp_bak="$(cthru_stamp_path).bak-test"
+mv "$(cthru_stamp_path)" "$_stamp_bak"
+check "gate allows Claude session_id without stamp" bash -c 'source "'"$REPO_ROOT"'/tools/c-thru-plugin-hook-gate.sh"; export C_THRU_PLUGIN_HOOK=1 C_THRU_SESSION_ID=sess_claude_payload; CLAUDE_DIR="'"$CLAUDE_DIR"'"; CLAUDE_PROFILE_DIR="'"$CLAUDE_DIR"'"; ! cthru_plugin_hook_should_skip'
+export C_THRU_FROM_CLI=1
+check "gate skips under C_THRU_FROM_CLI" cthru_plugin_hook_should_skip
+unset C_THRU_FROM_CLI
+export C_THRU_SESSION_ID=12345
+check "gate skips under legacy pid SESSION_ID" cthru_plugin_hook_should_skip
 unset C_THRU_SESSION_ID
+mv "$_stamp_bak" "$(cthru_stamp_path)"
 # stamp present + no lite → skip
 check "gate skips when stamp installed" cthru_plugin_hook_should_skip
 export C_THRU_PLUGIN_LITE=1
 check "gate allows lite mode" bash -c 'source "'"$REPO_ROOT"'/tools/c-thru-plugin-hook-gate.sh"; export C_THRU_PLUGIN_HOOK=1 C_THRU_PLUGIN_LITE=1; CLAUDE_DIR="'"$CLAUDE_DIR"'"; CLAUDE_PROFILE_DIR="'"$CLAUDE_DIR"'"; ! cthru_plugin_hook_should_skip'
-unset C_THRU_PLUGIN_HOOK C_THRU_PLUGIN_LITE
+unset C_THRU_PLUGIN_HOOK C_THRU_PLUGIN_LITE C_THRU_FROM_CLI
+
+# Live SessionStart: Claude stdin session_id + no stamp → install-cli prompt (R0c)
+_ss_base="$(mktemp -d "${TMPDIR:-/tmp}/c-thru-ss.XXXXXX")"
+export CLAUDE_DIR="$_ss_base/claude"
+export CLAUDE_PROFILE_DIR="$CLAUDE_DIR"
+mkdir -p "$CLAUDE_DIR"
+export C_THRU_PLUGIN_HOOK=1
+unset C_THRU_FROM_CLI C_THRU_SESSION_ID || true
+_ss_out_file="$_ss_base/out.txt"
+printf '%s' '{"session_id":"sess_live_abc"}' | bash "$REPO_ROOT/tools/c-thru-session-start.sh" >"$_ss_out_file" 2>&1 || true
+check "session-start prompts install-cli with Claude session_id" grep -q install-cli "$_ss_out_file"
+# restore shape-c CLAUDE_DIR for remaining checks
+export CLAUDE_DIR="$BASE/claude"
+export CLAUDE_PROFILE_DIR="$CLAUDE_DIR"
+rm -rf "$_ss_base"
+unset C_THRU_PLUGIN_HOOK
 
 # Completeness without +x still true (file present)
 chmod -x "$REPO_DIR/tools/c-thru" 2>/dev/null || true
@@ -112,6 +138,7 @@ chmod +x "$REPO_DIR/tools/c-thru" 2>/dev/null || true
 # install-cli command exists
 check "install-cli command present" test -f "$REPO_ROOT/commands/c-thru-install-cli.md"
 check "hooks.json sets PLUGIN_HOOK" grep -q 'C_THRU_PLUGIN_HOOK=1' "$REPO_ROOT/plugins/c-thru/hooks/hooks.json"
+check "cthru exports C_THRU_FROM_CLI" grep -q 'C_THRU_FROM_CLI=1' "$REPO_ROOT/tools/c-thru"
 
 rm -rf "$BASE"
 echo "shape-c-bootstrap: $pass ok, $fail failed"
