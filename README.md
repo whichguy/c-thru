@@ -192,7 +192,20 @@ flowchart LR
     M2 -.->|"the answer, in Anthropic format"| AGENTS
 
     linkStyle 0,1,2 stroke-width:2.5px
+
+    classDef harness  fill:#E8F0FE,stroke:#4285F4,stroke-width:1.5px,color:#111
+    classDef hook     fill:#FEF7E0,stroke:#F9AB00,stroke-width:1.5px,color:#111
+    classDef proxy    fill:#F3E8FD,stroke:#8430CE,stroke-width:1.5px,color:#111
+    classDef provider fill:#E6F4EA,stroke:#137333,stroke-width:1.5px,color:#111
+    class AGENTS harness
+    class HOOK hook
+    class PROXY proxy
+    class M1,M2,M3,M4 provider
 ```
+
+The colours are consistent across every diagram below: **blue** is the harness and the agents in it,
+**amber** is the hook, **purple** is the proxy, **green** is a provider that actually answers, and
+**grey** is config or on-disk state.
 
 The bold path is one real request under the shipped config: you ask for `coder`, and Gemini answers.
 
@@ -278,6 +291,15 @@ flowchart TB
     P4 --> XAI["xai / openai<br/>forwardOpenAI, Responses API"]
     P4 --> ORT["openrouter<br/>forwardAnthropic"]
     P4 --> OLL["ollama_local / ollama_cloud<br/>forwardAnthropic, or forwardOllamaLegacy"]
+
+    classDef harness  fill:#E8F0FE,stroke:#4285F4,stroke-width:1.5px,color:#111
+    classDef hook     fill:#FEF7E0,stroke:#F9AB00,stroke-width:1.5px,color:#111
+    classDef proxy    fill:#F3E8FD,stroke:#8430CE,stroke-width:1.5px,color:#111
+    classDef provider fill:#E6F4EA,stroke:#137333,stroke-width:1.5px,color:#111
+    class CTX,LOGICAL,UTILITY,NAMED harness
+    class HOOK hook
+    class P1,P2,P3,P4 proxy
+    class ANT,GEM,XAI,ORT,OLL provider
 ```
 
 **The one idea worth internalizing:** most agents name a *job*, not a model. `coder` is a role. Which
@@ -891,6 +913,19 @@ flowchart TB
     L2 -.->|"merge and write"| CFG
     P -.-> ART
     CTL -->|"signal and query"| SVC
+
+    classDef harness  fill:#E8F0FE,stroke:#4285F4,stroke-width:1.5px,color:#111
+    classDef hook     fill:#FEF7E0,stroke:#F9AB00,stroke-width:1.5px,color:#111
+    classDef proxy    fill:#F3E8FD,stroke:#8430CE,stroke-width:1.5px,color:#111
+    classDef provider fill:#E6F4EA,stroke:#137333,stroke-width:1.5px,color:#111
+    classDef launch   fill:#E0F2F1,stroke:#00796B,stroke-width:1.5px,color:#111
+    classDef state    fill:#F1F3F4,stroke:#9AA0A6,stroke-width:1.5px,color:#111
+    class DEV,L1,L2,L3,L4,L5,L6,L7,BG launch
+    class CTX,AG,MCP harness
+    class H1,H4,H5,H6,H8 hook
+    class PR1,PR2,PR3,PR4,PR5,SVC proxy
+    class E1,E2,E3,OLLAMA provider
+    class C1,C2,C3,C4,C5,C6,C7,A1,A2,A3,A4,T1,T2,T3,T4 state
 ```
 
 A few relationships in there are worth stating outright, because they are the ones people get wrong:
