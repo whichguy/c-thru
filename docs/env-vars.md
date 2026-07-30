@@ -96,9 +96,14 @@ rg 'anthropic\.upstream\.(error|midstream_error)|xai\.sanitize' ~/.claude/proxy.
 |---|---|
 | `C_THRU_NO_UPDATE=1` | Skip the best-effort git self-update at startup (CI/scripting). |
 | `C_THRU_NO_MARKETPLACE_UPDATE=1` | Skip the best-effort third-party CLI marketplace/plugin refresh (CI/scripting). |
-| `C_THRU_NO_STATUSLINE=1` | Do not inject the default `statusLine` when the user has none (ephemeral launch only). Custom user statusLines are never overridden. |
-| `C_THRU_STATUSLINE_OVERLAY=0` | Default bar only (`model \| cwd`); skip `/c-thru/recent` stats, fallback badge, and dash hint. |
+| `C_THRU_NO_STATUSLINE=1` | Do not inject the default `statusLine` when the user has none (ephemeral launch only). Custom user statusLines are never overridden. Durable bars set via `/c-thru-config statusline on` still run. |
+| `C_THRU_STATUSLINE_OVERLAY=0` | Default bar only (`model \| cwd`); skip `/c-thru/recent` stats, fallback badge, and dash hint. Forces minimal regardless of style. |
 | `C_THRU_STATUSLINE_DASH=0` | Hide the plain-text `dash :PORT/c-thru/dashboard` hint on the default statusline. |
+| `C_THRU_STATUSLINE_STYLE` | `minimal` \| `default` \| `stats` — statusline content. Overrides `~/.claude/c-thru-statusline.json`. `stats` uses `GET /c-thru/statusline` (mode, tier, last hop, Σ window). |
+| `C_THRU_ORIGINAL_PROFILE_DIR` | Durable `~/.claude` path exported by the launcher before the ephemeral session shadow. Skills that write settings/statusline prefs must use this (not `CLAUDE_PROFILE_DIR`). |
+| `C_THRU_STATS_RESET` | `never` (default) \| `launch` — when `launch`, clear the lifetime usage ledger once after proxy ready for this process tree. |
+| `CLAUDE_PROXY_USAGE_STATS_FILE` | Override path for the cumulative usage ledger (default `~/.claude/usage-stats.json`). Shared across proxy instances; clear with `c-thru stats clear` / `POST /c-thru/stats/clear`. |
+| `CLAUDE_PROXY_CONTROL_TOKEN` / `CLAUDE_PROXY_CONTROL_TOKEN_FILE` | Control-plane secret for mutating routes (`/c-thru/stats/clear`, `/mode`, `/reload`) from non-loopback clients. Loopback remains open. |
 | `C_THRU_UPDATE_INTERVAL` | Seconds between self-update fetches (default `3600`). Debounced via `.git/FETCH_HEAD` mtime. |
 | `C_THRU_MARKETPLACE_UPDATE_INTERVAL` | Seconds between third-party CLI marketplace/plugin refreshes (default `21600`). Debounced via the durable `.c-thru-marketplace-update-stamp` mtime. |
 | `C_THRU_UPDATE_GRACE` | Seconds the self-update fetch may run before being killed (default `1`). Tests raise it so a loaded machine can't kill the fetch before its diverged advisory is written. |
@@ -116,3 +121,16 @@ rg 'anthropic\.upstream\.(error|midstream_error)|xai\.sanitize' ~/.claude/proxy.
 | `C_THRU_OFFLOAD_EVIDENCE_PATH` | Absolute destination for the sanitized `c-thru.agent-offload` schema v2 scorecard. It contains a run UUID, fixture IDs, expected/selected agents, classifications, route-proof booleans, requested/effective mode and profile, stable parent route/model/backend identity, sanitized per-fixture dispatch observations, and hashes—not prompts, raw model output, transcripts, credentials, or tokens. An enabled campaign allocates and prints a private `0700` temporary destination when omitted. |
 | `C_THRU_OFFLOAD_GATE=1` | Explicit compatibility opt-in that makes one offload campaign's quality threshold process-blocking. Integrity and route-proof failures always block. Scheduled CI intentionally leaves single-run quality advisory; use pooled evidence for promotion decisions. |
 | `C_THRU_STRICT_LIVE_PROVIDERS=1` | Require every explicitly requested live-provider or live-agent suite to report a machine-readable terminal outcome. Missing credentials, quota/billing blocks, mandatory skips, missing outcome markers, and integrity failures make the aggregate fail instead of appearing green. Both `make test-live-shard` and `make test-live-all` enable this. |
+
+## Shape C bootstrap / plugin gates
+
+| Variable | Effect |
+|---|---|
+| `C_THRU_FROM_CLI=1` | Set by `tools/c-thru` launch; plugin hooks (`C_THRU_PLUGIN_HOOK=1`) no-op to avoid double-fire with CLI inject. |
+| `C_THRU_PLUGIN_HOOK=1` | Set by marketplace `hooks.json` only; not set for CLI-injected hooks. |
+| `C_THRU_PLUGIN_LITE=1` | Opt-in: allow plugin durable fixed-port proxy + `settings.env.ANTHROPIC_BASE_URL`. Default Shape C never writes durable loopback. |
+| `C_THRU_SOURCE_REF` | Override S1 pin ref (default `v` + plugin version). |
+| `C_THRU_ALLOW_UNPINNED=1` | Allow bootstrap when pin tag/ref is missing (stamps **actual** SHA; never pretends the pin landed). |
+| `C_THRU_GIT_REMOTE` | Override clone URL for `~/.claude/c-thru-src`. |
+| `C_THRU_FORCE_BOOTSTRAP=1` | Force re-link even if stamp healthy. |
+

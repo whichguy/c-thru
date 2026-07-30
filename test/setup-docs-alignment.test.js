@@ -86,4 +86,14 @@ if (fails) {
   console.error(`setup-docs-alignment: ${fails} failure(s)`);
   process.exit(1);
 }
+
+ok(fs.existsSync(path.join(root, 'test/shape-c-spec-contract.test.js')) || fs.existsSync(path.join(root, 'test/shape-c-spec-contract.test.sh')),
+  'shape-c-spec-contract test exists');
+const envDocs = read('docs/env-vars.md');
+ok(envDocs.includes('C_THRU_FROM_CLI') || envDocs.includes('C_THRU_PLUGIN_LITE'),
+  'env-vars documents Shape C gate vars');
+ok(envDocs.includes('C_THRU_ALLOW_UNPINNED') || read('docs/marketplace-release.md').includes('ALLOW_UNPINNED') || read('uninstall.sh').includes('purge-src'),
+  'uninstall purge-src or allow-unpinned documented');
+ok(read('uninstall.sh').includes('--purge-src'), 'uninstall supports --purge-src');
+
 console.log('setup-docs-alignment: ok');

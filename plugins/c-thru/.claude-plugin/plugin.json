@@ -1,6 +1,6 @@
 {
   "name": "c-thru",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Shape C: marketplace plugin bootstraps the c-thru CLI (symlinks). Runtime is `cthru` for multi-backend routing and agent fleet inject. Optional planning-suite for plan-scheduler.",
   "author": {
     "name": "whichguy",
@@ -9,5 +9,14 @@
   "homepage": "https://github.com/whichguy/c-thru",
   "repository": "https://github.com/whichguy/c-thru",
   "license": "MIT",
-  "keywords": ["claude-code", "c-thru", "proxy", "router", "ollama", "gemini", "openrouter", "model-routing"]
+  "keywords": [
+    "claude-code",
+    "c-thru",
+    "proxy",
+    "router",
+    "ollama",
+    "gemini",
+    "openrouter",
+    "model-routing"
+  ]
 }

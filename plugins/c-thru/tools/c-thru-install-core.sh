@@ -146,18 +146,49 @@ cthru_scrub_loopback_base_url() {
   rm -f "${CLAUDE_DIR}/.c-thru-plugin-setup-pending" 2>/dev/null || true
 }
 
+# Actual checkout identity for a git root (never invents a missed pin tag).
+cthru_git_actual_sha() {
+  local root="${1:-}"
+  [[ -n "$root" && -d "$root/.git" ]] || return 1
+  command -v git >/dev/null 2>&1 || return 1
+  git -C "$root" rev-parse HEAD 2>/dev/null
+}
+
+cthru_git_actual_ref() {
+  local root="${1:-}" abr
+  [[ -n "$root" && -d "$root/.git" ]] || return 1
+  command -v git >/dev/null 2>&1 || return 1
+  abr="$(git -C "$root" describe --tags --exact-match 2>/dev/null || true)"
+  if [[ -n "$abr" ]]; then
+    printf '%s' "$abr"
+    return 0
+  fi
+  abr="$(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [[ -n "$abr" && "$abr" != "HEAD" ]]; then
+    printf '%s' "$abr"
+    return 0
+  fi
+  # Detached without tag: short SHA as ref label
+  git -C "$root" rev-parse --short HEAD 2>/dev/null
+}
+
 cthru_write_stamp() {
   local root="${1:-$REPO_DIR}"
   local ver ref sha
   ver="$(cthru_plugin_version "$root")"
   [[ -n "$ver" ]] || ver="unknown"
-  ref="${C_THRU_SOURCE_REF:-}"
+  # Prefer actual git identity; never stamp a desired pin that is not checked out.
   sha=""
-  if [[ -d "$root/.git" ]] && command -v git >/dev/null 2>&1; then
-    sha="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
-    [[ -n "$ref" ]] || ref="$(git -C "$root" describe --tags --exact-match 2>/dev/null || git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  ref=""
+  if sha="$(cthru_git_actual_sha "$root" 2>/dev/null)"; then
+    ref="$(cthru_git_actual_ref "$root" 2>/dev/null || true)"
+    if [[ -n "${C_THRU_SOURCE_REF:-}" ]] && cthru_git_at_ref "$root" "${C_THRU_SOURCE_REF}"; then
+      ref="${C_THRU_SOURCE_REF}"
+    fi
+  else
+    ref="${C_THRU_SOURCE_REF:-}"
   fi
-  [[ -n "$ref" ]] || ref="v${ver}"
+  [[ -n "$ref" ]] || ref="unknown"
   mkdir -p "$CLAUDE_DIR"
   local tmp
   tmp="$(cthru_stamp_path).tmp.$$"
@@ -284,6 +315,7 @@ cthru_seed_model_map() {
 }
 
 # Desired git ref for S1 pin (tag vX.Y.Z matching plugin version when possible).
+# Override with C_THRU_SOURCE_REF. Fail-closed pin is the default (see ensure).
 cthru_desired_source_ref() {
   local ver root="${1:-}"
   if [[ -n "${C_THRU_SOURCE_REF:-}" ]]; then
@@ -298,27 +330,67 @@ cthru_desired_source_ref() {
   printf 'main'
 }
 
+# True if root HEAD equals the commit named by want (tag/branch/sha).
+cthru_git_at_ref() {
+  local root="$1" want="$2" head tip
+  [[ -n "$root" && -n "$want" ]] || return 1
+  head="$(git -C "$root" rev-parse HEAD 2>/dev/null)" || return 1
+  tip="$(git -C "$root" rev-parse --verify --quiet "${want}^{commit}" 2>/dev/null)" || return 1
+  [[ -n "$head" && -n "$tip" && "$head" == "$tip" ]]
+}
+
+cthru_try_pin_checkout() {
+  local root="$1" want="$2"
+  git -C "$root" fetch --depth 1 origin "refs/tags/${want}:refs/tags/${want}" >/dev/null 2>&1 \
+    || git -C "$root" fetch --depth 1 origin "$want" >/dev/null 2>&1 || true
+  git -C "$root" checkout --detach "tags/${want}" >/dev/null 2>&1 \
+    || git -C "$root" checkout --detach "$want" >/dev/null 2>&1 \
+    || return 1
+  cthru_git_at_ref "$root" "$want"
+}
+
+# After pin attempt: export C_THRU_SOURCE_REF from **actual** checkout only.
+cthru_export_actual_source_ref() {
+  local root="$1"
+  local actual
+  actual="$(cthru_git_actual_ref "$root" 2>/dev/null || true)"
+  if [[ -n "$actual" ]]; then
+    export C_THRU_SOURCE_REF="$actual"
+  else
+    unset C_THRU_SOURCE_REF || true
+  fi
+}
+
 # S1: durable full tree at $CLAUDE_DIR/c-thru-src → sets REPO_DIR
-# Prefers detached pin at tag v<plugin-version> when available.
+# Fail-closed: pin to v<plugin-version> (or C_THRU_SOURCE_REF). If pin cannot
+# be checked out, return non-zero unless C_THRU_ALLOW_UNPINNED=1 (then clone
+# default branch and stamp **actual** identity only).
 cthru_ensure_source_root_s1() {
   cthru_core_colors
-  local src remote ref
+  local src remote desired pin_ok=0
   src="$(cthru_src_path)"
   remote="${C_THRU_GIT_REMOTE:-$CTHRU_DEFAULT_REMOTE}"
-  # Version for pin may come from monorepo checkout if present
-  ref="$(cthru_desired_source_ref "${REPO_DIR:-}")"
+  # Version for pin may come from monorepo checkout / plugin package root
+  desired="$(cthru_desired_source_ref "${REPO_DIR:-}")"
 
   if cthru_repo_is_complete "$src"; then
     cthru_chmod_tree_bins "$src"
     if [[ -d "$src/.git" ]] && command -v git >/dev/null 2>&1; then
-      # Refresh pin when possible (fail soft)
-      git -C "$src" fetch --depth 1 origin "refs/tags/${ref}:refs/tags/${ref}" >/dev/null 2>&1 \
-        || git -C "$src" fetch --depth 1 origin "$ref" >/dev/null 2>&1 || true
-      git -C "$src" checkout --detach "tags/${ref}" >/dev/null 2>&1 \
-        || git -C "$src" checkout --detach "$ref" >/dev/null 2>&1 \
-        || { [[ "${C_THRU_BOOTSTRAP_PULL:-1}" == "1" ]] && git -C "$src" pull --ff-only >/dev/null 2>&1 || true; }
+      if cthru_try_pin_checkout "$src" "$desired"; then
+        pin_ok=1
+      elif [[ "${C_THRU_ALLOW_UNPINNED:-0}" == "1" ]]; then
+        echo -e "${YELLOW}c-thru bootstrap: pin ${desired} unavailable; C_THRU_ALLOW_UNPINNED=1 — using current tree${NC}" >&2
+        [[ "${C_THRU_BOOTSTRAP_PULL:-1}" == "1" ]] && git -C "$src" pull --ff-only >/dev/null 2>&1 || true
+        pin_ok=1
+      else
+        echo -e "${RED}c-thru bootstrap: cannot pin ${desired} at ${src} (set C_THRU_ALLOW_UNPINNED=1 to override)${NC}" >&2
+        return 1
+      fi
+    else
+      # Complete tree without .git (copied product tree) — accept as-is
+      pin_ok=1
     fi
-    export C_THRU_SOURCE_REF="$ref"
+    cthru_export_actual_source_ref "$src"
     REPO_DIR="$src"
     export REPO_DIR
     return 0
@@ -336,14 +408,24 @@ cthru_ensure_source_root_s1() {
     echo -e "${RED}c-thru bootstrap: ${src} exists but is not a complete c-thru tree${NC}" >&2
     return 1
   else
-    echo -e "${YELLOW}c-thru bootstrap: cloning ${remote} (${ref}) → ${src}${NC}" >&2
-    if ! git clone --depth 1 --branch "$ref" "$remote" "$src" >&2 \
-      && ! git clone --depth 1 "$remote" "$src" >&2; then
-      echo -e "${RED}c-thru bootstrap: git clone failed${NC}" >&2
+    echo -e "${YELLOW}c-thru bootstrap: cloning ${remote} (${desired}) → ${src}${NC}" >&2
+    if git clone --depth 1 --branch "$desired" "$remote" "$src" >&2; then
+      pin_ok=1
+    elif [[ "${C_THRU_ALLOW_UNPINNED:-0}" == "1" ]]; then
+      echo -e "${YELLOW}c-thru bootstrap: pin ${desired} missing on remote; C_THRU_ALLOW_UNPINNED=1 — cloning default branch${NC}" >&2
+      rm -rf "$src"
+      if ! git clone --depth 1 "$remote" "$src" >&2; then
+        echo -e "${RED}c-thru bootstrap: git clone failed${NC}" >&2
+        return 1
+      fi
+      pin_ok=1
+    else
+      echo -e "${RED}c-thru bootstrap: pin ${desired} not on remote (set C_THRU_ALLOW_UNPINNED=1 to clone default branch)${NC}" >&2
       return 1
     fi
-    git -C "$src" checkout --detach "tags/${ref}" >/dev/null 2>&1 \
-      || git -C "$src" checkout --detach "$ref" >/dev/null 2>&1 || true
+    # Prefer detached tag when clone used branch name that is a tag
+    git -C "$src" checkout --detach "tags/${desired}" >/dev/null 2>&1 \
+      || git -C "$src" checkout --detach "$desired" >/dev/null 2>&1 || true
   fi
 
   cthru_chmod_tree_bins "$src"
@@ -351,7 +433,18 @@ cthru_ensure_source_root_s1() {
     echo -e "${RED}c-thru bootstrap: clone incomplete (need tools/c-thru, agents/, config/model-map.json)${NC}" >&2
     return 1
   fi
-  export C_THRU_SOURCE_REF="$ref"
+
+  # Fail-closed: if we claimed a pin, HEAD must resolve to desired when not unpinned.
+  if [[ "${C_THRU_ALLOW_UNPINNED:-0}" != "1" ]]; then
+    if [[ -d "$src/.git" ]] && ! cthru_git_at_ref "$src" "$desired"; then
+      if ! cthru_try_pin_checkout "$src" "$desired"; then
+        echo -e "${RED}c-thru bootstrap: HEAD is not pin ${desired} (set C_THRU_ALLOW_UNPINNED=1 to accept)${NC}" >&2
+        return 1
+      fi
+    fi
+  fi
+
+  cthru_export_actual_source_ref "$src"
   REPO_DIR="$src"
   export REPO_DIR
   return 0

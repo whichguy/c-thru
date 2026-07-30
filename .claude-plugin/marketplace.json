@@ -9,7 +9,7 @@
     {
       "name": "c-thru",
       "source": "./plugins/c-thru",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "description": "Shape C: install this plugin to bootstrap the c-thru CLI, then run `cthru` for multi-backend routing and agent fleet. Private marketplace only."
     }
   ]

@@ -76,7 +76,14 @@ _cthru_inherited_proxy_selected() {
 }
 
 _cthru_plugin_setup() {
-    # Shape C default: skip durable routing registration when CLI tools exist.
+    # Shape C: durable fixed-port proxy + settings.env registration is **opt-in
+    # lite only**. Default product path is install-cli + `cthru` (no durable
+    # loopback ANTHROPIC_BASE_URL). Without LITE: never spawn, never write env.
+    if [ "${C_THRU_PLUGIN_LITE:-0}" != "1" ]; then
+        return 0
+    fi
+    # When CLI tools exist, Shape C still skips durable register unless LITE
+    # explicitly wants plugin-owned routing (rare dual-path).
     if [ "$_cthru_cli_ready" = "1" ] && [ "${C_THRU_PLUGIN_LITE:-0}" != "1" ]; then
         return 0
     fi
@@ -123,19 +130,20 @@ fi
 if [ "$_cthru_cli_ready" = "1" ] && [ "${C_THRU_PLUGIN_LITE:-0}" != "1" ]; then
     # CLI owns proxy; skip plugin fixed-port registration (avoids double-fire).
     rm -f "$_plugin_setup_pending" 2>/dev/null || true
-elif [ "$_seeded_model_maps" = "1" ]; then
-    # A launcher-provided selector already owns proxy lifecycle and routing.
-    # Defer fixed plugin setup, but remember to finish it on the first later
-    # standalone launch; map seeding must not permanently suppress registration.
+elif [ "${C_THRU_PLUGIN_LITE:-0}" = "1" ] && [ "$_seeded_model_maps" = "1" ]; then
+    # Lite only: may register durable loopback. Map seed alone never writes env.
     if _cthru_inherited_proxy_selected || ! _cthru_plugin_setup; then
         touch "$_plugin_setup_pending" 2>/dev/null || true
     else
         rm -f "$_plugin_setup_pending"
     fi
-elif [ -f "$_plugin_setup_pending" ] && ! _cthru_inherited_proxy_selected; then
+elif [ "${C_THRU_PLUGIN_LITE:-0}" = "1" ] && [ -f "$_plugin_setup_pending" ] && ! _cthru_inherited_proxy_selected; then
     if _cthru_plugin_setup; then
         rm -f "$_plugin_setup_pending"
     fi
+elif [ "$_seeded_model_maps" = "1" ] || [ -f "$_plugin_setup_pending" ]; then
+    # Non-lite: never durable-register; drop pending so legacy half-installs heal.
+    rm -f "$_plugin_setup_pending" 2>/dev/null || true
 fi
 
 # Canonical hook port ladder via the shared lib (CLAUDE_PROXY_PORT → PROXY_PORT
