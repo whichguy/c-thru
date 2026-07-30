@@ -157,8 +157,10 @@ first three deliberately leave out.
 Views 1–3 follow the same real request — the `coder` agent under the default shipped config — so
 the names line up across diagrams.
 
-> Prefer clicking through it? [`docs/request-flow.html`](docs/request-flow.html) is a self-contained
-> interactive step-through of View 2 and View 3. Open it in any browser.
+> **The same material exists in both formats.** Everything is on this page, including a
+> click-to-expand step-through under View 2. [`docs/request-flow.html`](docs/request-flow.html) is a
+> self-contained interactive version of the same content — arrow-key stepping, a play button, and
+> the component map — with no external dependencies. Open it in any browser.
 
 ### View 1 — the whole picture
 
@@ -270,6 +272,371 @@ thinking-token counts arrive as a custom `c-thru-thinking-tokens` SSE event rath
 
 That header is the honest answer to "which model actually ran?" — see
 [Verifying which agent ran](#verifying-which-agent-ran).
+
+#### Step-through, without leaving the README
+
+The interactive page is nicer to click through, but nothing in it is exclusive to it. Every step
+below expands in place, and the payload is shown exactly as it looks at that moment. Lines marked
+`+` are what changed since the previous step.
+
+<details>
+<summary><b>Happy path — coder, best-cloud, 64gb</b> &mdash; 10 steps</summary>
+
+<details>
+<summary>1 &middot; A prompt arrives &mdash; <i>You</i></summary>
+
+Nothing about routing has happened yet. This is an ordinary turn in an ordinary context window.
+
+```text
+# What you typed
+implement the JWT middleware
+```
+
+</details>
+
+<details>
+<summary>2 &middot; The main loop picks an agent &mdash; <i>Claude Code harness</i></summary>
+
+The fleet was injected at launch as ephemeral --agents JSON. The main loop selects coder — a role, not a model. Nothing here knows which vendor will serve it.
+
+```diff
+  # Agent tool call
+  {
++   "subagent_type": "coder",
+    "prompt": "implement the JWT middleware"
+  }
+```
+
+</details>
+
+<details>
+<summary>3 &middot; The hook tags the prompt &mdash; <i>PreToolUse hook</i></summary>
+
+This is the whole trick. Claude Code validates the Agent tool's model field against a fixed enum, and c-thru forbids hooks from rewriting body.model — a second rewriting path would drift from model-map.json. So the hook prepends a signed marker to the prompt text instead.
+
+```diff
+  # Prompt after the hook rewrites it
++ [[c-thru-agent:coder:9f3c1ab8...]]
+  
+  implement the JWT middleware
+```
+
+> model is set to "sonnet" purely to satisfy the harness enum. It is a placeholder, not a routing decision.
+
+</details>
+
+<details>
+<summary>4 &middot; The proxy reads the prefix &mdash; <i>claude-proxy</i></summary>
+
+ANTHROPIC_BASE_URL points at the local proxy, so the subagent's request lands here. The proxy parses the sentinel, verifies the HMAC against a 0600 secret at ~/.claude/proxy.agent-token, and strips it back out of the body.
+
+```text
+# Recovered identity
+agent      coder
+signature  verified
+body       sentinel removed — the model never sees it
+```
+
+</details>
+
+<details>
+<summary>5 &middot; Agent → capability &mdash; <i>claude-proxy</i></summary>
+
+Most agents map to a capability of the same name. Two alias deliberately: reviewer-plan → code-reviewer, plan-scheduler → fast-generalist.
+
+```diff
+  # config/model-map.json
+  "agent_to_capability": {
++   "coder": "coder",
+    "reviewer-plan": "code-reviewer",
+    "plan-scheduler": "fast-generalist"
+  }
+```
+
+</details>
+
+<details>
+<summary>6 &middot; Capability → concrete model &mdash; <i>claude-proxy</i></summary>
+
+Three inputs decide it: the capability, the routing mode, and the detected hardware tier. This is the only place in the system where a model gets chosen.
+
+```diff
+  # llm_profiles.coder
+  "coder": {
+    "best-cloud": {
++     "64gb": "gemini-pro"
+    },
+    "best-cloud-oss": {
+      "64gb": "kimi-k2.7-code:cloud"
+    }
+  }
+```
+
+</details>
+
+<details>
+<summary>7 &middot; Model → endpoint &mdash; <i>claude-proxy</i></summary>
+
+The concrete model resolves to an endpoint entry carrying the URL, the auth scheme, and the wire format. Format picks the translator.
+
+```diff
+  # endpoints.gemini_ai
+  {
+    "call_style": "gemini",
++   "fallback_to": "claude-sonnet-5",
+    "auth_env": "GOOGLE_API_KEY"
+  }
+```
+
+> Note that fallback_to line — it does nothing today, and everything in the failover scenario.
+
+</details>
+
+<details>
+<summary>8 &middot; Translate and send &mdash; <i>Upstream API</i></summary>
+
+The request arrived in Anthropic wire format. forwardGemini rewrites it into a Gemini generateContent call: system prompt, tool schemas, and content blocks all get remapped.
+
+```diff
+  # Outbound
+  POST  generativelanguage.googleapis.com
+        /v1beta/models/gemini-pro:streamGenerateContent
++ via   forwardGemini()
+```
+
+</details>
+
+<details>
+<summary>9 &middot; Normalize the response &mdash; <i>claude-proxy</i></summary>
+
+Coming back, the proxy does the inverse: Gemini SSE is translated into Anthropic SSE, so the harness never learns it was talking to anything else. Because headers cannot be set once streaming has begun, Gemini thinking-token counts ride along as a custom SSE event instead.
+
+```diff
+  # Response headers
++ x-c-thru-resolved-via: {"capability":"coder",
++   "served_by":"gemini-pro","tier":"64gb",
++   "mode":"best-cloud"}
+  event: c-thru-thinking-tokens
+```
+
+</details>
+
+<details>
+<summary>10 &middot; The answer lands &mdash; <i>You</i></summary>
+
+The subagent got a normal Anthropic-shaped response. It never knew it was served by Gemini — and it did not have to.
+
+```text
+# How to check after the fact
+x-c-thru-resolved-via  →  served_by: gemini-pro
+```
+
+</details>
+
+</details>
+
+<details>
+<summary><b>Backend failure — the cascade in payloads</b> &mdash; 8 steps</summary>
+
+<details>
+<summary>1 &middot; Same request, up to the send &mdash; <i>claude-proxy</i></summary>
+
+Steps 1 through 7 are identical to the happy path: coder → capability coder → gemini-pro → the gemini_ai endpoint. We rejoin the story at the moment of the outbound call.
+
+```diff
+  # endpoints.gemini_ai
+  {
+    "call_style": "gemini",
++   "fallback_to": "claude-sonnet-5"
+  }
+```
+
+</details>
+
+<details>
+<summary>2 &middot; The backend fails &mdash; <i>Upstream API</i></summary>
+
+Gemini returns a 503. In a system without indirection this is where the subagent gets an error and the turn dies.
+
+```diff
+  # Upstream response
++ HTTP/1.1 503 Service Unavailable
+```
+
+</details>
+
+<details>
+<summary>3 &middot; Guard one — has anything streamed yet? &mdash; <i>Upstream API</i></summary>
+
+The proxy checks whether bytes have already gone back to the client. A half-sent stream cannot be rewound, so mid-stream failures surface rather than reroute. Here nothing has been sent, so failover is still on the table.
+
+```text
+# Guard
+res.headersSent  →  false   (safe to reroute)
+```
+
+</details>
+
+<details>
+<summary>4 &middot; Guard two — is this capability allowed to degrade? &mdash; <i>Upstream API</i></summary>
+
+reviewer-security and debugger-hard ship with on_failure: hard_fail. For a security review, a quietly-substituted weaker model is a worse outcome than a visible failure, so those skip the cascade entirely. coder is cascade, the default.
+
+```diff
+  # llm_profiles.coder
++ "on_failure": "cascade"
+  "fallback_to": "coder-fallback"
+```
+
+> A 400 would not reach this point at all — a malformed request fails the same way on every backend, so retrying would only multiply the error.
+
+</details>
+
+<details>
+<summary>5 &middot; Stage 1 — endpoint fallback_to &mdash; <i>claude-proxy</i></summary>
+
+The first cascade stage reads fallback_to off the failed endpoint and re-resolves from scratch. This hop crosses vendors, not just models — which is only possible because the proxy owns translation in both directions.
+
+```diff
+  # Re-resolution
+  gemini_ai.fallback_to  →  claude-sonnet-5
++ endpoint               →  anthropic
++ wire format            →  forwardAnthropic
+```
+
+</details>
+
+<details>
+<summary>6 &middot; Retry against Anthropic &mdash; <i>Upstream API</i></summary>
+
+The same original request — sentinel already stripped, content untouched — is sent to a completely different provider in a completely different wire format.
+
+```diff
+  # Outbound, second attempt
++ POST api.anthropic.com/v1/messages
+       model: claude-sonnet-5
++ HTTP/1.1 200 OK
+```
+
+</details>
+
+<details>
+<summary>7 &middot; Later stages, if that had failed too &mdash; <i>claude-proxy</i></summary>
+
+Stage 1 answered, so the cascade stops. Had it not, the proxy would keep walking: capability fallback_to, then the tier's fallback chain ordered by quality tolerance, then local modes stepping out to cloud, then the global default route.
+
+```text
+# The full cascade order
+1  endpoint fallback_to        ← answered here
+2  capability fallback_to      coder → coder-fallback
+3  capability fallback chain   by quality_tolerance_pct
+4  local terminal fallback     best-local → best-cloud
+5  global default route
+```
+
+</details>
+
+<details>
+<summary>8 &middot; The subagent never saw the failure &mdash; <i>You</i></summary>
+
+It asked for coder. It never asked for Gemini. The only trace that anything went sideways is the resolved-via header naming a different model than the happy path.
+
+```diff
+  # Response header
+  x-c-thru-resolved-via: {"capability":"coder",
++   "served_by":"claude-sonnet-5",
+    "mode":"best-cloud"}
+```
+
+</details>
+
+</details>
+
+<details>
+<summary><b>Named agent — ask agent grok</b> &mdash; 6 steps</summary>
+
+<details>
+<summary>1 &middot; You name a model, not a job &mdash; <i>Claude Code harness</i></summary>
+
+Five agents are the deliberate exception to the whole capability scheme: grok, deepseek, qwen, kimi and gemini. Asking for grok means you want Grok specifically — a second opinion from a different vendor is the entire point.
+
+```text
+# What you typed
+ask agent grok to critique this plan
+```
+
+</details>
+
+<details>
+<summary>2 &middot; The hook tags it exactly the same way &mdash; <i>PreToolUse hook</i></summary>
+
+No special case here. The hook does not know or care whether the agent is logical or pinned; it prepends the same signed marker.
+
+```diff
+  # Prompt after the hook
++ [[c-thru-agent:grok:41d7e0c2...]]
+  
+  critique this plan
+```
+
+</details>
+
+<details>
+<summary>3 &middot; The lookup returns a pin, not a capability &mdash; <i>claude-proxy</i></summary>
+
+This is where the two kinds of agent diverge. A model: prefix in agent_to_capability tells the proxy to skip capability resolution entirely and resolve the pinned model directly.
+
+```diff
+  # config/model-map.json
+  "agent_to_capability": {
+    "coder": "coder",
++   "grok": "model:grok-4.5",
++   "gemini": "model:gemini-pro",
++   "kimi": "model:kimi-k2.7-code:cloud"
+  }
+```
+
+</details>
+
+<details>
+<summary>4 &middot; Straight to the endpoint &mdash; <i>claude-proxy</i></summary>
+
+No llm_profiles lookup, no mode, no hardware tier. Those three inputs are exactly what a pin opts out of — which is why grok reaches Grok no matter how the rest of the fleet is configured.
+
+```diff
+  # Resolution, short-circuited
+  grok-4.5  →  endpoints.xai
++ mode and tier are not consulted
+```
+
+</details>
+
+<details>
+<summary>5 &middot; Translate to the Responses API &mdash; <i>Upstream API</i></summary>
+
+xAI speaks the OpenAI-compatible Responses format, so forwardOpenAI handles the translation. Different vendor, different wire format, same Anthropic-shaped request on the way in.
+
+```diff
+  # Outbound
+  POST api.x.ai/v1/responses
++ via  forwardOpenAI()
+```
+
+</details>
+
+<details>
+<summary>6 &middot; Same normalized response &mdash; <i>You</i></summary>
+
+The answer comes back through the same translation layer as every other route. The pin changed which model answered — not how anything downstream works.
+
+```text
+# Response header
+x-c-thru-resolved-via: {"served_by":"grok-4.5"}
+```
+
+</details>
+
+</details>
 
 ### View 3 — when a backend fails
 
