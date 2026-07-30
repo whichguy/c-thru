@@ -424,15 +424,15 @@ Three inputs decide it: the capability, the routing mode, and the detected hardw
 The concrete model resolves to an endpoint entry carrying the URL, the auth scheme, and the wire format. Format picks the translator.
 
 ```diff
-  # endpoints.gemini_ai
+  # endpoints.gemini_ai — verbatim from the shipped config
   {
-    "call_style": "gemini",
-+   "fallback_to": "claude-sonnet-5",
-    "auth_env": "GOOGLE_API_KEY"
+    "url": "https://generativelanguage.googleapis.com",
+    "format": "gemini",
++   "fallback_to": "claude-sonnet-5"
   }
 ```
 
-> Note that fallback_to line — it does nothing today, and everything in the failover scenario.
+> Auth is not in this entry — it is derived from the hostname. Note the fallback_to line: it does nothing today, and everything in the failover scenario.
 
 </details>
 
@@ -488,9 +488,10 @@ x-c-thru-resolved-via  →  served_by: gemini-pro
 Steps 1 through 7 are identical to the happy path: coder → capability coder → gemini-pro → the gemini_ai endpoint. We rejoin the story at the moment of the outbound call.
 
 ```diff
-  # endpoints.gemini_ai
+  # endpoints.gemini_ai — verbatim from the shipped config
   {
-    "call_style": "gemini",
+    "url": "https://generativelanguage.googleapis.com",
+    "format": "gemini",
 +   "fallback_to": "claude-sonnet-5"
   }
 ```
@@ -689,7 +690,7 @@ for Gemini, so the proxy is free to serve `coder` from somewhere else.
 
 ```mermaid
 flowchart TD
-    START["Upstream call fails<br/>connection error, 401, 403, 404, 429, or any 5xx"] --> WINDOW
+    START["Upstream call fails<br/>a connection error, or any status from 401 to 599"] --> WINDOW
 
     WINDOW{"Have bytes already<br/>streamed to the client?"}
     WINDOW -->|"yes — too late to reroute"| SURFACE["Surface the error<br/>a half-sent stream cannot be rewound"]
@@ -724,8 +725,9 @@ clever:
 
 - **Failover crosses vendors, not just models.** Stage 1 hops to a different provider, wire format
   and all. That is only possible because the proxy owns translation.
-- **A 400 is not retried.** Malformed requests fail the same way on every backend; retrying would
-  just multiply the error. Only connection errors, 401/403/404, 429, and 5xx cascade.
+- **A 400 is not retried.** Malformed requests fail the same way on every backend, so retrying would
+  just multiply the error. The rule is a single exclusion rather than a list: `400` never cascades,
+  and every other status from `401` to `599` does — as do connection errors and timeouts.
 - **Some capabilities refuse to degrade.** `reviewer-security` and `debugger-hard` ship with
   `on_failure: "hard_fail"`. For a security review, a quietly-substituted weaker model is a worse
   outcome than a visible failure, so the cascade is skipped entirely.
@@ -925,7 +927,7 @@ Schema reference, route/endpoint/profile structure, and the full `model_override
 
 ## Agents
 
-27 agents declare `model: <agent-name>` in frontmatter (brand agents pin via `model:` to a concrete model). The proxy resolves
+27 agents declare `model: <agent-name>` in frontmatter — including the five brand agents, whose frontmatter names themselves like every other agent. Their pin to a concrete model lives one layer down, in `agent_to_capability` (`"grok": "model:grok-4.5"`), not in the agent file. The proxy resolves
 `agent-name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model`
 at request time. Agent files are never edited when you remap models.
 
@@ -984,7 +986,7 @@ The full mapping, all the way through the implementation: **agent → capability
 
 **Utility passthroughs.** `WebSearch`, `WebFetch`, and `Monitor` are not agent files — they're tool calls mapped to `fast-scout` in `agent_to_capability` for observability only; the [router hook](#verifying-which-agent-ran) logs their capability but does **not** override their model (doing so would corrupt the tool's input).
 
-**Gov modes.** `best-cloud-gov` / `best-local-gov` apply the same mapping but block Chinese-origin models (`qwen*`, `deepseek*`, `glm*`, …), substituting the next non-blocked model in the chain.
+**Gov modes.** `best-cloud-gov` / `best-local-gov` resolve through the same generic lookup as every other mode. There is **no runtime origin filter** — their `llm_profiles` cells are hand-curated to avoid Chinese-origin models (`qwen*`, `deepseek*`, `glm*`, …), so the guarantee is a config-authoring convention rather than an enforced mechanism; editing a gov cell to point at a blocked model would simply work. The one gov-aware runtime behavior is a safety net: if a config reload removes an active gov mode, the proxy degrades routing to `best-cloud` and logs `mode.orphaned_gov_degrade`, warning that gov egress restrictions are no longer enforced.
 
 ### Verifying which agent ran
 
@@ -996,7 +998,7 @@ The full mapping, all the way through the implementation: **agent → capability
 | **Journal** | `~/.claude/journal/<date>/<capability>.jsonl` (opt-in: `CLAUDE_PROXY_JOURNAL=1`) | per-request `capability` + `served_by`, auth-scrubbed |
 | **Usage stats** | `~/.claude/usage-stats.json` → `by_agent[name].served_by` | cumulative per-agent model + call counts |
 
-The prompt→agent seam itself lives in `tools/c-thru-agent-router-hook.sh` (a `PreToolUse` hook): because Claude Code's Agent tool ignores the frontmatter `model:` field ([bug #44385](https://github.com/anthropics/claude-code/issues/44385)), the hook rewrites an Agent call's `subagent_type` → `agent_to_capability[…]` → the request `model`. That's the deterministic point where "a prompt picked agent X" becomes a concrete model on the wire.
+The prompt→agent seam itself lives in `tools/c-thru-agent-router-hook.sh` (a `PreToolUse` hook): because Claude Code's Agent tool ignores the frontmatter `model:` field ([bug #44385](https://github.com/anthropics/claude-code/issues/44385)), the hook records the agent identity for the proxy. It sets `model` only to a fixed, enum-safe alias (`sonnet` by default) to satisfy Claude Code’s own validation, and carries the real agent name in an HMAC-signed sentinel prepended to the prompt text. The concrete model is chosen later, by the proxy, and only there.
 
 Tests: `test/agent-mapping-complete.test.js`, `test/agent-invocation-headers.test.js`, `test/agent-router-hook.test.js`, optional `test/agent-scenarios-e2e.sh`. See [Appendix D](#appendix-d-tests-and-contributor-checks).
 
