@@ -1,0 +1,16 @@
+{
+  "name": "c-thru",
+  "owner": {
+    "name": "whichguy",
+    "url": "https://github.com/whichguy"
+  },
+  "description": "c-thru: transparent LLM router/proxy for Claude Code.",
+  "plugins": [
+    {
+      "name": "c-thru",
+      "source": "./plugins/c-thru",
+      "version": "0.2.0",
+      "description": "Router/proxy for alternative model providers behind Claude Code. Proxy, hooks, /c-thru-status, /cplan skills. Optional planning-suite for wave scheduling."
+    }
+  ]
+}

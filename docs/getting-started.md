@@ -248,9 +248,11 @@ The repo has a deliberately small surface area. Here is each directory and
   (`*.test.sh`), plus `run-all.sh` (the orchestrator) and shared harnesses
   (`helpers.js`, `helpers.sh`). New files are **not** auto-discovered; see
   section 8.
-- **`plugins/c-thru/`** — the `claude-craft` marketplace bundle. It must
-  mirror source files from `tools/` and `skills/`. After editing a mirrored
-  source file, run `tools/sync-plugin-bundle.sh` to sync the bundle, and
+- **`plugins/c-thru/`** — the Claude Code plugin package. Listed by this
+  repo's root marketplace (`.claude-plugin/marketplace.json`) and also by
+  `claude-craft` as a git-subdir. It must mirror source files from `tools/`
+  and `skills/`. After editing a mirrored source file, run
+  `tools/sync-plugin-bundle.sh` to sync the bundle, and
   `tools/sync-plugin-bundle.sh --check` to verify. Bundle drift is also
   covered by the hermetic suite Validators (`make test` / `test/run-all.sh`).
 

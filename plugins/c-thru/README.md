@@ -1,9 +1,55 @@
 # c-thru — Claude Code plugin
 
-Surfaces c-thru as a Claude Code plugin via the
-[claude-craft marketplace](https://github.com/whichguy/claude-craft).
-c-thru lets Claude Code talk to alternative model providers (Ollama,
-OpenRouter, Bedrock, Vertex, Gemini, LiteLLM) without changing the vendor CLI.
+Surfaces c-thru as a Claude Code plugin. c-thru lets Claude Code talk to
+alternative model providers (Ollama, OpenRouter, Bedrock, Vertex, Gemini,
+LiteLLM) without changing the vendor CLI.
+
+This package lives in the **c-thru** git repository and is also listed from
+the [claude-craft](https://github.com/whichguy/claude-craft) family marketplace
+as a git-subdir. Install from **exactly one** marketplace source — installing
+both activates the plugin twice and double-fires its hooks.
+
+## Install (pick one source)
+
+### From this repository (standalone)
+
+```
+/plugin marketplace add whichguy/c-thru
+/plugin install c-thru@c-thru
+```
+
+### From the family marketplace
+
+```
+/plugin marketplace add whichguy/claude-craft
+/plugin install c-thru@claude-craft
+```
+
+If you previously installed the other identity, uninstall it first:
+
+```
+/plugin uninstall c-thru@claude-craft
+# or: /plugin uninstall c-thru@c-thru
+```
+
+### Optional: wave scheduler
+
+`planning-suite` is **optional**. Install it only if you want
+`/schedule-plan-tasks` / plan-scheduler:
+
+```
+/plugin marketplace add whichguy/claude-craft
+/plugin install planning-suite@claude-craft
+```
+
+On your first Claude Code session after install, the SessionStart hook may:
+- Seed `~/.claude/model-map.json` with default routing config
+- Start the proxy on port 10017 (override: `C_THRU_PLUGIN_PORT`)
+- Register `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`
+
+That settings change applies on the **next** launch, so you may need a
+**second** restart before the client honors the base URL. Then verify with
+`/c-thru-status`.
 
 ## What this plugin gives you
 
@@ -14,38 +60,23 @@ OpenRouter, Bedrock, Vertex, Gemini, LiteLLM) without changing the vendor CLI.
 | Skills | `c-thru-plan` (planner/coder/tester/reviewer pipeline), `c-thru-config`, `c-thru-control` |
 | Hooks | SessionStart proxy+Ollama health check, UserPromptSubmit proxy-health gate + static control-plane context injection, PostToolUse model-map.json validation, PreCompact context re-injection |
 
-## Install
+## Plugin-only limitations
 
-```
-/plugin marketplace add whichguy/claude-craft
-/plugin install c-thru@claude-craft
-```
+Plugin install provides: proxy runtime, routing config, hooks, and the public skills above.
 
-On your first Claude Code session after install, the SessionStart hook automatically:
-- Seeds `~/.claude/model-map.json` with default routing config
-- Starts the proxy on port 10017 (override: `C_THRU_PLUGIN_PORT`)
-- Registers `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`
-
-**Restart Claude Code once** after install to activate model routing.
-
-### Plugin-only limitations
-
-Plugin install provides: proxy runtime, routing config, hooks, and the three public skills above.
-
-**Not included in the plugin bundle** (requires source install):
+**Not included in the plugin bundle** (requires CLI install from this repo):
 - `c-thru` CLI — terminal drop-in for `claude` with `--mode`, `--profile`, `--route` flags
 - `c-thru list`, `c-thru explain`, `c-thru reload` control commands
 - `c-thru-hygiene-check`, `c-thru-statusline` monitoring scripts
 - `llm-capabilities-mcp.js` MCP server (model capability queries)
-- `c-thru-ollama-gc.sh`, `c-thru-journal` and other utility tools
+- Full 27-agent fleet injection via `--agents`
 
 ### Full install (CLI + all tools)
 
-To install the full CLI as a drop-in replacement for `claude`:
-
 ```sh
-git clone https://github.com/whichguy/c-thru.git ~/src/c-thru
-cd ~/src/c-thru && ./install.sh
+git clone https://github.com/whichguy/c-thru.git
+cd c-thru
+bash install.sh
 ```
 
 ## Plugin bundle maintenance
@@ -57,9 +88,10 @@ canonical files in `tools/` and `skills/`. Keep them in sync by running:
 tools/sync-plugin-bundle.sh
 ```
 
-This is also gated in pre-commit via `tools/sync-plugin-bundle.sh --check`.
+This is also gated in the hermetic suite via `tools/sync-plugin-bundle.sh --check`.
 
 ## Reporting issues
 
-Plugin issues → [claude-craft repo](https://github.com/whichguy/claude-craft).
-Proxy / model routing / agent definitions → this repo.
+Proxy / model routing / agent definitions / this plugin package →
+[c-thru](https://github.com/whichguy/c-thru).
+Family marketplace packaging → [claude-craft](https://github.com/whichguy/claude-craft).

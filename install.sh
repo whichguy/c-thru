@@ -13,16 +13,22 @@ set -euo pipefail
 
 # --- Arg parsing (minimal) ---
 SKIP_E2E=0
+REGISTER_LOCAL_MARKETPLACE=0
 for arg in "$@"; do
     case "$arg" in
         --skip-e2e)
             SKIP_E2E=1
             ;;
+        --register-local-marketplace)
+            REGISTER_LOCAL_MARKETPLACE=1
+            ;;
         -h|--help)
             cat <<USAGE
-Usage: install.sh [--skip-e2e]
+Usage: install.sh [--skip-e2e] [--register-local-marketplace]
 
-  --skip-e2e   Skip post-install end-to-end validation (CI / sandboxed envs).
+  --skip-e2e                      Skip post-install end-to-end validation (CI / sandboxed envs).
+  --register-local-marketplace    Register this clone as a Claude Code marketplace
+                                  (claude plugin marketplace add <repo-root>). Opt-in only.
 USAGE
             exit 0
             ;;
@@ -362,13 +368,53 @@ install_skill
 install_cplan_command
 extend_model_map
 
-# --- Migration warning: planning-suite dependency ---
-# plan-scheduler requires the /schedule-plan-tasks skill from planning-suite.
-# Existing users who git pull get no other signal until the agent fails.
+# --- Post-CLI guidance (do not combine with marketplace plugin inject) ---
+# plan-scheduler needs /schedule-plan-tasks from planning-suite (optional).
+# Plugin package no longer hard-depends on planning-suite.
+echo ""
+echo "CLI path active: tools under \$HOME/.claude/tools (c-thru / cthru on PATH)."
+echo -e "  ${YELLOW}Do not also install the marketplace plugin while using CLI inject${NC}"
+echo -e "  ${YELLOW}(hooks would double-fire). Marketplace-only alternative (instead of CLI):${NC}"
+echo -e "  ${GRAY}/plugin marketplace add whichguy/c-thru${NC}"
+echo -e "  ${GRAY}/plugin install c-thru@c-thru${NC}"
+echo -e "  ${GRAY}# family discovery (pick one identity, never both):${NC}"
+echo -e "  ${GRAY}/plugin marketplace add whichguy/claude-craft && /plugin install c-thru@claude-craft${NC}"
+PLUGIN_JSON="$REPO_DIR/plugins/c-thru/.claude-plugin/plugin.json"
+if [ -f "$PLUGIN_JSON" ] && command -v node >/dev/null 2>&1; then
+    _pv="$(node -e "try{console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).version||'')}catch(e){}" "$PLUGIN_JSON" 2>/dev/null || true)"
+    if [ -n "${_pv:-}" ]; then
+        echo -e "  ${GRAY}plugin package version: ${_pv}${NC}"
+    fi
+fi
+if [ -x "$REPO_DIR/tools/sync-plugin-bundle.sh" ]; then
+    if ! "$REPO_DIR/tools/sync-plugin-bundle.sh" --check >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}⚠️  plugin bundle drift (tools/sync-plugin-bundle.sh --check failed) — run tools/sync-plugin-bundle.sh if you edit mirrored sources${NC}"
+    fi
+fi
 if ! find "$CLAUDE_DIR/skills" -type d -name "schedule-plan-tasks" 2>/dev/null | grep -q .; then
     echo ""
-    echo -e "${YELLOW}⚠️  planning-suite not installed — plan-scheduler agent requires it.${NC}"
-    echo -e "${YELLOW}   Install: claude /plugin install planning-suite@claude-craft${NC}"
+    echo -e "${YELLOW}⚠️  planning-suite not installed — optional; only needed for plan-scheduler / schedule-plan-tasks.${NC}"
+    echo -e "${YELLOW}   Install: /plugin marketplace add whichguy/claude-craft${NC}"
+    echo -e "${YELLOW}            /plugin install planning-suite@claude-craft${NC}"
+fi
+
+# Opt-in: register this clone as a local marketplace (never auto without flag).
+if [ "$REGISTER_LOCAL_MARKETPLACE" = "1" ]; then
+    echo ""
+    if ! command -v claude >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}⚠️  --register-local-marketplace: claude not on PATH; run manually:${NC}"
+        echo -e "  ${YELLOW}   claude plugin marketplace add \"${REPO_DIR}\"${NC}"
+    elif [ ! -f "$REPO_DIR/.claude-plugin/marketplace.json" ]; then
+        echo -e "  ${YELLOW}⚠️  --register-local-marketplace: missing .claude-plugin/marketplace.json in repo root${NC}"
+    else
+        if claude plugin marketplace add "$REPO_DIR" </dev/null 2>/dev/null; then
+            echo -e "  ${GREEN}✅ registered local marketplace: ${REPO_DIR}${NC}"
+            echo -e "  ${GRAY}   then: /plugin install c-thru@c-thru${NC}"
+        else
+            echo -e "  ${YELLOW}⚠️  marketplace add failed; try manually:${NC}"
+            echo -e "  ${YELLOW}   claude plugin marketplace add \"${REPO_DIR}\"${NC}"
+        fi
+    fi
 fi
 
 # --- Add ~/.claude/tools to PATH via shell rc file (idempotent) ---

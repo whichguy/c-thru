@@ -1,98 +1,106 @@
 # c-thru
 
-**A router and proxy that lets Claude Code talk to alternative model providers — Ollama, OpenRouter, Bedrock, Vertex, Gemini, LiteLLM — without modifying the vendor CLI.**
+**A transparent router between Claude Code and the models you actually want —
+without patching the vendor CLI.**
 
-`c-thru` slots between an unmodified Claude Code binary and your chosen backend(s). It selects models per hardware tier, translates Anthropic's Messages API to other wire protocols where needed, and forwards everything else verbatim. A single session can run a planner against cloud Sonnet and a coder against a local Qwen3.6.
+```text
+Claude Code  ──▶  c-thru  ──▶  Anthropic · Ollama · Gemini · xAI · OpenRouter · …
+                    │
+          capability × hardware tier × mode
+```
 
-> **Intent.** c-thru is a transparent LLM router for Claude Code: it proxies the Anthropic Messages API and re-routes each request — by **capability**, **hardware tier**, and **connectivity mode** — to local Ollama, OSS cloud (OpenRouter), Gemini, xAI Responses, Bedrock, or Anthropic, translating wire formats and orchestrating a **27-agent fleet** (22 pipeline/utility + 5 brand-name model pins), with no change to the Claude Code binary. See [Use cases](#use-cases) for what that buys you and [Agent routing reference](#agent-routing-reference) for the full agent→model→endpoint mapping.
+| See | Choose | Route |
+|---|---|---|
+| Unmodified Claude Code | Connectivity mode + RAM tier | Concrete model, translated only when needed |
+
+Requests resolve by **capability**, **hardware tier**, and **connectivity mode**. Wire formats are translated only when the backend requires it.
+
+### Capabilities
+
+- Route Anthropic-shaped traffic to local and cloud backends
+- Resolve models per role, tier, and mode
+- Mix providers in a single session
+- Fall back and reload without restarting Claude
+- Observe every decision (`x-c-thru-*`, optional journal)
+- Optional 27-agent fleet and `/cplan` waves (CLI install)
+
+### In practice
+
+```bash
+cthru --mode best-local-oss     # air-gapped / local Ollama
+cthru --mode best-cloud-oss     # cost-aware default
+# CLI fleet: /cplan "add JWT auth"
+# Or: "ask agent grok to critique this plan"
+```
 
 ---
 
 ## Quick start
 
-Install the plugin from the `claude-craft` marketplace:
+**Pick exactly one** marketplace source. Installing both `c-thru@c-thru` and
+`c-thru@claude-craft` activates the plugin twice and double-fires its hooks.
+
+### Option A — this repository (standalone)
+
+```
+/plugin marketplace add whichguy/c-thru
+/plugin install c-thru@c-thru
+```
+
+### Option B — family marketplace
 
 ```
 /plugin marketplace add whichguy/claude-craft
 /plugin install c-thru@claude-craft
+```
+
+If you already have the other identity installed, remove it first:
+
+```
+/plugin uninstall c-thru@claude-craft
+# or: /plugin uninstall c-thru@c-thru
+```
+
+**`planning-suite` is optional** — only needed for plan-scheduler /
+`/schedule-plan-tasks`. Install separately from claude-craft if you want it:
+
+```
+/plugin marketplace add whichguy/claude-craft
 /plugin install planning-suite@claude-craft
 ```
 
-> **`planning-suite` is required** for `/cplan` and the wave-based plan scheduler. Skip it only if you don't intend to use the agentic planning skill.
-
-Restart Claude Code so the plugin loads. On the first SessionStart after install, the hook may spawn the proxy and write `ANTHROPIC_BASE_URL` into your settings — that settings change applies on the **next** launch, so you may need a **second** restart (or a new session) before the client honors the base URL. Then verify with:
+Restart Claude Code so the plugin loads. On the first SessionStart after install,
+the hook may spawn the proxy and write `ANTHROPIC_BASE_URL` into your settings —
+that settings change applies on the **next** launch, so you may need a **second**
+restart (or a new session) before the client honors the base URL. Then verify:
 
 ```
 /c-thru-status
 ```
 
-You should see the active routing profile, proxy URL, configured routes, and (if reachable) local Ollama models. If the proxy isn't reachable or the model-map is missing, run `/c-thru-status fix` to apply recommended mappings and reload.
+You should see the active routing profile, proxy URL, configured routes, and
+(if reachable) local Ollama models. If the proxy isn't reachable or the model-map
+is missing, run `/c-thru-status fix`.
 
-> **The marketplace plugin gives you proxy + routing, not the full agentic workflow.** `/cplan` and the 27-agent fleet depend on the agent files being injected via `--agents`, which only happens on the CLI install path. If you want the planner/coder/reviewer pipeline, see [Appendix A](#appendix-a-cli-install-for-contributors-and-advanced-users).
+> **The marketplace plugin gives you proxy + routing, not the full agentic
+> workflow.** `/cplan` and the 27-agent fleet depend on agent files injected via
+> `--agents` on the CLI path. See [Appendix A](#appendix-a-cli-install-for-contributors-and-advanced-users).
+> Prefer **one** of plugin vs CLI inject — both together can double-fire hooks.
+> Details: [Appendix C](#appendix-c-plugin-vs-cli--entry-points).
 
-### Cloud backends
+### Cloud backends (optional)
 
-Using a Claude.ai subscription instead of API billing? See [`docs/subscription-auth.md`](docs/subscription-auth.md) — no API key needed.
+Local-only routing needs no cloud keys. Subscription-backed Claude: see
+[`docs/subscription-auth.md`](docs/subscription-auth.md).
 
-Otherwise, export keys for whichever cloud providers you want to route to. None of these are required — local-only routing works without any keys.
+Optional environment variables (set values in your shell profile — do not commit keys):
 
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENROUTER_API_KEY="sk-or-..."
-export GOOGLE_API_KEY="..."               # Gemini AI Studio
-export XAI_API_KEY="xai-..."              # Grok brand leaf + gov generalist/writer cells
-```
+- `ANTHROPIC_API_KEY`
+- `OPENROUTER_API_KEY`
+- `GOOGLE_API_KEY` — Gemini AI Studio
+- `XAI_API_KEY` — Grok routes
 
-**Brand-name agents** (CLI install / `c-thru` only): say *“ask agent grok …”*, *“ask deepseek …”*, *“use qwen …”*, *“ask kimi …”*, *“use gemini …”*. Definitions live in repo `agents/*.md` and are **runtime-injected** each launch via ephemeral `--agents` JSON — they are **not** installed into Claude’s durable agent store (`~/.claude/agents/`). Plain `claude` without `c-thru` does not load them. Each is a leaf agent whose `model:` pin resolves to that vendor’s concrete model (Grok needs `XAI_API_KEY`). Chinese-origin brands (deepseek/qwen/kimi) are filtered under `best-cloud-gov` / `best-local-gov`.
-
-**Grok has three surfaces** (see [docs/agent-architecture.md § Grok surfaces](docs/agent-architecture.md#grok-surfaces-brand-vs-gov-vs-cli)): (A) the brand leaf above for short opinions via c-thru's Anthropic↔xAI Responses translator, (B) silent `best-cloud-gov` routing of `generalist`/`writer` to the same `grok-4.5` API path (also `XAI_API_KEY`), and (C) the separate **Grok Build CLI** via the marketplace `grok-cc` plugin for subscription/login-backed implement/review loops. Prefer `grok-cc` for multi-file Grok-owned work; the brand leaf is for short opinions, not a full coding session. Anthropic does not officially support routing Claude Code to non-Claude models — any full-session non-Claude path is an opt-in compatibility surface, not an Anthropic-supported configuration.
-
----
-
-## Plugin vs CLI: which install do I want?
-
-The marketplace plugin is the right starting point for most users. The CLI install path (`bash install.sh`, see [Appendix A](#appendix-a-cli-install-for-contributors-and-advanced-users)) adds a `c-thru` terminal binary and the surfaces that need it: the agent fleet, the `llm-capabilities` MCP server, runtime control subcommands, and flag-driven mode/profile selection.
-
-| Surface | Plugin (marketplace) | CLI (`bash install.sh`) |
-|---|:---:|:---:|
-| `claude-proxy` runtime + auto-spawn on session start | ✓ | ✓ |
-| Model-map seeding (`model-map.system.json`, overrides preserved) | ✓ | ✓ |
-| `ANTHROPIC_BASE_URL` auto-registration in settings | ✓ | (set per launch) |
-| Slash command `/c-thru-status` | ✓ | ✓ |
-| Slash command `/cplan` (needs `planning-suite`; full 27-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
-| Skills `c-thru-plan`, `c-thru-config`, `c-thru-control` | ✓ | ✓ |
-| User-wide hooks — fire in every Claude Code session (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) | ✓ | — |
-| Ephemeral hooks — injected per `c-thru` launch only (no static project `.claude` hooks) | — | ✓ |
-| `c-thru` binary on PATH | — | ✓ |
-| Control subcommands (`list`, `reload`, `restart`, `explain`, `stats`, `check-deps`) | — | ✓ |
-| Flags (`--mode`, `--profile`, `--bypass-proxy`, `--journal`, `--router-debug`) | (use env vars) | ✓ |
-| Agent fleet (27 agents) injected via `--agents` | — | ✓ |
-| `llm-capabilities` MCP server injected via `--settings` | — | ✓ |
-| Contributor checks (`c-thru-contract-check`, `c-thru-hygiene-check`) | — | ✓ |
-
-Plugin hooks fire globally in every Claude Code session; the CLI injects the same shared fleet ephemerally on each `c-thru` launch (`install.sh` strips durable c-thru fleet hooks from `~/.claude/settings.json`; project `.claude/settings.json` does not register c-thru hooks). Prefer **one** of plugin vs CLI inject — both together can double-fire the same hooks.
-
-TUI garble / input junk under c-thru: see [`docs/tui-troubleshooting.md`](docs/tui-troubleshooting.md).
-
-Plugin users can still drive routing via environment variables — `CLAUDE_LLM_MODE`, `CLAUDE_LLM_PROFILE`, `CLAUDE_LLM_MEMORY_GB`, `CLAUDE_PROXY_BYPASS`, `CLAUDE_PROXY_JOURNAL` all work the same way the CLI flags do. The flags are a CLI convenience, not a capability difference at the proxy layer.
-
-### Entry points: what each path actually guarantees
-
-Hooks and agent scripts live **in the git repo** (`tools/c-thru-*.sh`, mirrored under `plugins/c-thru/hooks/`). They are **enabled** either by the marketplace plugin (user-wide, always-on) or by **`c-thru` ephemeral inject** (CLI path only — not durable project settings).
-
-| Entry point | Proxy | Fleet `--agents` / system-prompt inject | Brand `--model` (e.g. `grok`) | Hooks |
-|---|:---:|:---:|:---:|---|
-| `cthru` (main chat) | ✓ | ✓ | ✓ (resolved on wire) | CLI ephemeral inject per launch |
-| `cthru agents --model grok` | ✓ (brand models) | — (commander rejects) | Re-inserted; proxy resolves | No CLI ephemeral inject (plugin hooks only if installed) |
-| `cthru agents --model sonnet` | optional / not forced | — | Claude-native alias kept | No CLI ephemeral inject (plugin hooks only if installed) |
-| Brand Agent tool inside main `cthru` (“ask grok”) | ✓ (sentinel + map) | Parent has fleet; leaf is one-shot | Via `agent_to_capability` | Parent session hooks |
-| `grok-cc` / Grok Build CLI | external | n/a | CLI login (preferred) or API-key fallback | n/a |
-| Plain `claude` (no plugin, no `cthru`) | — | — | Anthropic only | none from c-thru |
-| Plain `claude` + marketplace plugin | ✓ (plugin SessionStart) | — (no CLI fleet inject) | map if proxy routes | Plugin always-on |
-
-**Pick the right entry point:** full planner/coder fleet → main `cthru` chat (CLI install). Brand opinion leaf → “ask agent grok” inside that chat. Subscription-backed Grok-owned implement/review loop → `grok-cc`.
-
-**Routing forensics without fleet inject:** use `c-thru list` or `/c-thru-status` (needs a live proxy — started by main `cthru` or a native brand `agents` launch). Port discovery uses `proxy.pid` / `CLAUDE_PROXY_PORT` / `ANTHROPIC_BASE_URL`; agent-view does not inject SessionStart control-plane hooks.
+Full list: [`docs/env-vars.md`](docs/env-vars.md).
 
 ---
 
@@ -123,7 +131,7 @@ FIFO handshake failure modes): [docs/architecture-diagrams.md § 1](docs/archite
 claude-proxy (Node.js, stdlib only):
   - resolves capability alias → llm_profiles[capability][mode][tier] → concrete model
   - rewrites: model field, URL/Host, auth headers, model_overrides, @sigil
-  - translates Anthropic ↔ Gemini and OpenAI-compatible Responses (OpenAI/xAI)
+  - translates Anthropic ↔ Gemini and OpenAI-compatible Responses (OpenAI/xAI Responses translator)
   - forwards Ollama via /v1/messages (Ollama 0.4+) — preserves tool_use, thinking
   - catch-all passthrough for anything not explicitly handled
   - stamps x-c-thru-* response headers (resolved-via, translation-gap, …)
@@ -135,7 +143,182 @@ Two components, both in `tools/`:
 - **`tools/c-thru`** (bash) — entrypoint. Config selection, Ollama lifecycle, agent injection, exec into claude.
 - **`tools/claude-proxy`** (Node.js) — long-running HTTP server. Capability resolution, auth, fallback chains, SIGHUP reload, translation. **No external Node deps** — stdlib only.
 
-> **Gate philosophy.** The proxy answers as many incoming Claude Code calls as possible — gating only when truly unreachable. A passthrough catch-all forwards anything not explicitly translated; OAuth and bootstrap paths (`/v1/oauth/token`, file content download) are never gated; a structured 501 is reserved for paths that are genuinely unsupported on the configured backend. Translation gaps surface on the response via the `x-c-thru-translation-gap` header rather than failing silently. Full endpoint × backend matrix: [`docs/anthropic-api-coverage.md`](docs/anthropic-api-coverage.md).
+> Translation gaps surface via `x-c-thru-translation-gap`. Full matrix: [`docs/anthropic-api-coverage.md`](docs/anthropic-api-coverage.md).
+
+---
+
+## Architecture: how a prompt becomes a model call
+
+Three views of the same path. **View 1** is the map. **View 2** walks a single request end to end.
+**View 3** shows what happens when the chosen backend fails.
+
+All three follow the same real request — the `coder` agent under the default shipped config — so
+the names line up across diagrams.
+
+> Prefer clicking through it? [`docs/request-flow.html`](docs/request-flow.html) is a self-contained
+> interactive step-through of View 2 and View 3. Open it in any browser.
+
+### View 1 — the whole picture
+
+```mermaid
+flowchart TB
+    subgraph HARNESS["Claude Code harness — hosts the context window"]
+        CTX["Context window<br/>your conversation, tools, and the injected fleet"]
+
+        subgraph FLEET["Agent fleet, injected at launch as ephemeral --agents JSON"]
+            LOGICAL["LOGICAL agents — a role, not a model<br/>planner · planner-hard · explore<br/>coder · coder-fallback · tester · docs<br/>code-reviewer · reviewer-plan · reviewer-security<br/>debugger-hypothesis · -investigate · -hard"]
+            UTILITY["UTILITY agents — also logical<br/>vision · pdf · writer · edge · generalist<br/>fast-generalist · fast-scout · long-context<br/>plan-scheduler"]
+            NAMED["NAMED agents — the agent IS the model<br/>grok · deepseek · qwen · kimi · gemini"]
+        end
+
+        CTX -->|"you or the main loop pick an agent"| FLEET
+    end
+
+    FLEET --> HOOK
+
+    subgraph HOOKBOX["PreToolUse hook — tools/c-thru-agent-router-hook.sh"]
+        HOOK["Prepend a signed sentinel to the PROMPT<br/>c-thru-agent : coder : HMAC-SHA256<br/><br/>Hooks must never rewrite body.model —<br/>the agent name rides in the prompt text instead"]
+    end
+
+    HOOK -->|"POST /v1/messages to ANTHROPIC_BASE_URL<br/>127.0.0.1 : proxy port"| PROXYBOX
+
+    subgraph PROXYBOX["claude-proxy — Node, stdlib only"]
+        P1["1 · Read the prefix<br/>parse sentinel, verify HMAC, strip it from the body"]
+        P2["2 · Agent to capability<br/>coder to coder · reviewer-plan to code-reviewer<br/>grok to model:grok-4.5 — pins skip the profile"]
+        P3["3 · Capability to concrete model<br/>llm_profiles, then mode, then hardware tier<br/>coder + best-cloud + 64gb to gemini-pro"]
+        P4["4 · Model to endpoint<br/>url, auth, wire format"]
+        P1 --> P2 --> P3 --> P4
+    end
+
+    P4 --> ANT["anthropic<br/>forwardAnthropic"]
+    P4 --> GEM["gemini_ai / gemini_vertex<br/>forwardGemini"]
+    P4 --> XAI["xai / openai<br/>forwardOpenAI, Responses API"]
+    P4 --> ORT["openrouter<br/>forwardAnthropic"]
+    P4 --> OLL["ollama_local / ollama_cloud<br/>forwardAnthropic, or forwardOllamaLegacy"]
+```
+
+**The one idea worth internalizing:** most agents name a *job*, not a model. `coder` is a role. Which
+model actually serves it is a runtime decision made by the proxy from three inputs — the capability,
+the [routing mode](#routing-modes), and the detected hardware tier. Swapping a model is a one-value
+edit in `config/model-map.json`; **agent files are never touched.**
+
+The five named agents (`grok`, `deepseek`, `qwen`, `kimi`, `gemini`) are the deliberate exception:
+they map to a `model:` pin and bypass capability resolution entirely, so "ask agent grok" always
+reaches Grok.
+
+**How the agent name survives the trip.** Claude Code validates the Agent tool's `model` field
+against a fixed enum (`sonnet` / `opus` / `haiku` / `fable`), and c-thru's own rule forbids hooks from
+rewriting `body.model` — a second rewriting path would silently drift from `config/model-map.json`.
+So the hook does something narrower: it prepends a signed marker to the *prompt text*. The proxy
+reads that prefix off the first message, verifies the HMAC against a `0600` secret at
+`~/.claude/proxy.agent-token`, strips it, and only then decides which API to call. The model field
+stays untouched end to end; **the proxy is the only component that picks a model.**
+
+### View 2 — step-through of one request
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant CC as Claude Code harness
+    participant Hook as PreToolUse hook
+    participant Proxy as claude-proxy
+    participant Map as model-map.json
+    participant Up as Upstream API
+
+    You->>CC: "implement the JWT middleware"
+    CC->>CC: main loop picks the coder agent
+    CC->>Hook: Agent tool call, subagent_type coder
+
+    rect rgb(238, 244, 255)
+    Note over Hook: TAG — the prefix is added here
+    Hook->>Hook: HMAC-SHA256 over the agent name
+    Hook-->>CC: prompt = sentinel + original prompt<br/>model = sonnet, a placeholder for the harness enum
+    end
+
+    CC->>Proxy: POST /v1/messages
+
+    rect rgb(240, 248, 240)
+    Note over Proxy,Map: RESOLVE — the only place a model is chosen
+    Proxy->>Proxy: parse prefix, verify HMAC, strip from body
+    Proxy->>Map: agent_to_capability, key coder
+    Map-->>Proxy: capability coder
+    Proxy->>Map: llm_profiles coder, mode best-cloud, tier 64gb
+    Map-->>Proxy: gemini-pro
+    Proxy->>Map: which endpoint serves gemini-pro
+    Map-->>Proxy: gemini_ai — url, auth, format gemini
+    end
+
+    rect rgb(255, 248, 236)
+    Note over Proxy,Up: TRANSLATE — Anthropic wire format in, Gemini out
+    Proxy->>Up: forwardGemini, generateContent
+    Up-->>Proxy: 200, streamed response
+    end
+
+    Proxy->>Proxy: translate Gemini SSE back to Anthropic SSE
+    Proxy-->>CC: stream + header x-c-thru-resolved-via<br/>capability coder, served_by gemini-pro, tier 64gb, mode best-cloud
+    CC-->>You: the coder agent's answer
+```
+
+The response leg is not a mirror image. Going out, c-thru **resolves**; coming back, it **normalizes**
+— Gemini or OpenAI-shaped responses are translated into Anthropic SSE so the harness never learns it
+was talking to anything else. Two observability details ride along: `x-c-thru-resolved-via` names who
+actually served the request, and because headers cannot be set once streaming has begun, Gemini
+thinking-token counts arrive as a custom `c-thru-thinking-tokens` SSE event rather than a header.
+
+That header is the honest answer to "which model actually ran?" — see
+[Verifying which agent ran](#verifying-which-agent-ran).
+
+### View 3 — when a backend fails
+
+Failover is the reason the indirection earns its keep. The client asked for `coder`; it never asked
+for Gemini, so the proxy is free to serve `coder` from somewhere else.
+
+```mermaid
+flowchart TD
+    START["Upstream call fails<br/>connection error, 401, 403, 404, 429, or any 5xx"] --> WINDOW
+
+    WINDOW{"Have bytes already<br/>streamed to the client?"}
+    WINDOW -->|"yes — too late to reroute"| SURFACE["Surface the error<br/>a half-sent stream cannot be rewound"]
+    WINDOW -->|"no"| GATE
+
+    GATE{"on_failure for<br/>this capability"}
+    GATE -->|"hard_fail<br/>reviewer-security, debugger-hard"| STOP["Clean error, no substitute<br/>a weaker model here would be worse than failing"]
+    GATE -->|"cascade — the default"| S1
+
+    S1["1 · Endpoint fallback_to<br/>gemini_ai to claude-sonnet-5"] --> S2
+    S2["2 · Capability fallback_to<br/>coder to coder-fallback · planner to planner-hard"] --> S3
+    S3["3 · Capability fallback chain for this tier<br/>ordered by quality_tolerance_pct"] --> S4
+    S4["4 · Local terminal fallback<br/>best-local modes step out to best-cloud"] --> S5
+    S5["5 · Global default route"] --> EXHAUST["Every hop exhausted — return the error"]
+
+    S1 -.->|"a hop answers"| OK
+    S2 -.-> OK
+    S3 -.-> OK
+    S4 -.-> OK
+    S5 -.-> OK
+
+    OK["Serve the response normally<br/>x-c-thru-resolved-via names who really answered"]
+```
+
+Walking the shipped config for our example: `coder` resolves to `gemini-pro` on the `gemini_ai`
+endpoint. If Gemini 500s, stage 1 fires — `endpoints.gemini_ai.fallback_to` is `claude-sonnet-5` — and
+the same request is transparently re-sent to Anthropic. The subagent never sees an error; only
+`x-c-thru-resolved-via` records that `served_by` changed.
+
+Three properties are worth calling out, because they are what make this safe rather than merely
+clever:
+
+- **Failover crosses vendors, not just models.** Stage 1 hops to a different provider, wire format
+  and all. That is only possible because the proxy owns translation.
+- **A 400 is not retried.** Malformed requests fail the same way on every backend; retrying would
+  just multiply the error. Only connection errors, 401/403/404, 429, and 5xx cascade.
+- **Some capabilities refuse to degrade.** `reviewer-security` and `debugger-hard` ship with
+  `on_failure: "hard_fail"`. For a security review, a quietly-substituted weaker model is a worse
+  outcome than a visible failure, so the cascade is skipped entirely.
+
+Every branch and guard, with source anchors:
+[docs/architecture-diagrams.md § 2](docs/architecture-diagrams.md#2-model-resolution--fallback-cascade).
 
 ---
 
@@ -152,6 +335,8 @@ Set with `CLAUDE_LLM_MODE` (or `--mode <name>` on the CLI):
 | `best-local-gov` | US-Gov compliant local |
 
 Hardware tier is auto-detected from `os.totalmem()`; override with `CLAUDE_LLM_PROFILE` (or `--profile <tier>`): `16gb` / `32gb` / `48gb` / `64gb` / `128gb`.
+
+---
 
 ---
 
@@ -174,6 +359,8 @@ What c-thru is *for* — the scenarios the router/proxy/fleet exist to serve. Ea
 
 ---
 
+---
+
 ## Configuration
 
 Three-tier merge for the profile graph at `~/.claude/`:
@@ -185,6 +372,8 @@ Three-tier merge for the profile graph at `~/.claude/`:
 A project can opt out of the global graph by placing its own `model-map.json` at `$PWD/.claude/model-map.json` — that file is selected as its own DAG rather than merged on top of the profile graph. `CLAUDE_MODEL_MAP_PATH` overrides everything.
 
 Schema reference, route/endpoint/profile structure, and the full `model_overrides` semantics: [`CLAUDE.md`](CLAUDE.md).
+
+---
 
 ---
 
@@ -263,11 +452,10 @@ The full mapping, all the way through the implementation: **agent → capability
 
 The prompt→agent seam itself lives in `tools/c-thru-agent-router-hook.sh` (a `PreToolUse` hook): because Claude Code's Agent tool ignores the frontmatter `model:` field ([bug #44385](https://github.com/anthropics/claude-code/issues/44385)), the hook rewrites an Agent call's `subagent_type` → `agent_to_capability[…]` → the request `model`. That's the deterministic point where "a prompt picked agent X" becomes a concrete model on the wire.
 
-Tests covering these surfaces:
-- `test/agent-mapping-complete.test.js` — every agent resolves end-to-end (config guard).
-- `test/agent-invocation-headers.test.js` — per-agent `resolved-via` / `served-by` / journal asserts through a live proxy (hermetic).
-- `test/agent-router-hook.test.js` — the `subagent_type` → `model` rewrite, including the two remaps and non-LLM passthroughs.
-- `test/agent-scenarios-e2e.sh` — opt-in (`C_THRU_E2E=1`), Ollama-backed: a prompt elicits a subagent, then greps the journal for its capability (advisory; non-deterministic).
+Tests: `test/agent-mapping-complete.test.js`, `test/agent-invocation-headers.test.js`, `test/agent-router-hook.test.js`, optional `test/agent-scenarios-e2e.sh`. See [Appendix D](#appendix-d-tests-and-contributor-checks).
+
+
+---
 
 ---
 
@@ -278,6 +466,8 @@ Tests covering these surfaces:
 - **`fallback_to` retry chains** — endpoint-level fallback on 5xx / 429 / network errors. Cycle detection per-request; resets on SIGHUP config reload (`CONFIG_VERSION` bump). `on_failure: "hard_fail"` opts out for security-sensitive capabilities.
 - **Per-request journaling** — opt-in via `CLAUDE_PROXY_JOURNAL=1`. Writes JSONL to `~/.claude/journal/YYYY-MM-DD/<capability>.jsonl` with auth headers scrubbed. See [`docs/journaling.md`](docs/journaling.md).
 - **SIGHUP-safe reload** — `c-thru reload` triggers a config re-read; read errors keep the previous live config rather than crashing.
+
+---
 
 ---
 
@@ -292,6 +482,8 @@ Tests covering these surfaces:
 - [`docs/subscription-auth.md`](docs/subscription-auth.md) — using Claude.ai subscription instead of API billing
 - [`docs/agent-architecture.md`](docs/agent-architecture.md) — wave lifecycle, STATUS contracts, escalation chain
 - [`docs/journaling.md`](docs/journaling.md) — per-request JSONL schema and storage layout
+
+---
 
 ---
 
@@ -325,6 +517,8 @@ c-thru --mode best-local-oss                     # force fully-local Ollama rout
 c-thru --mode best-cloud-oss                     # OSS cloud via OpenRouter
 c-thru --route background --model gemma4:26b     # named route + explicit model
 ```
+
+---
 
 ---
 
@@ -364,7 +558,77 @@ Full env-var reference: [`docs/env-vars.md`](docs/env-vars.md). Runtime control 
 
 ---
 
-## Appendix C: tests and contributor checks
+---
+
+## Appendix C: Plugin vs CLI + entry points
+
+The marketplace plugin is the right starting point for most users. The CLI install path (`bash install.sh`, see [Appendix A](#appendix-a-cli-install-for-contributors-and-advanced-users)) adds a `c-thru` terminal binary and the surfaces that need it: the agent fleet, the `llm-capabilities` MCP server, runtime control subcommands, and flag-driven mode/profile selection.
+
+| Surface | Plugin (marketplace) | CLI (`bash install.sh`) |
+|---|:---:|:---:|
+| `claude-proxy` runtime + auto-spawn on session start | ✓ | ✓ |
+| Model-map seeding (`model-map.system.json`, overrides preserved) | ✓ | ✓ |
+| `ANTHROPIC_BASE_URL` auto-registration in settings | ✓ | (set per launch) |
+| Slash command `/c-thru-status` | ✓ | ✓ |
+| Slash command `/cplan` (needs `planning-suite`; full 27-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
+| Skills `c-thru-plan`, `c-thru-config`, `c-thru-control` | ✓ | ✓ |
+| User-wide hooks — fire in every Claude Code session (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) | ✓ | — |
+| Ephemeral hooks — injected per `c-thru` launch only (no static project `.claude` hooks) | — | ✓ |
+| `c-thru` binary on PATH | — | ✓ |
+| Control subcommands (`list`, `reload`, `restart`, `explain`, `stats`, `check-deps`) | — | ✓ |
+| Flags (`--mode`, `--profile`, `--bypass-proxy`, `--journal`, `--router-debug`) | (use env vars) | ✓ |
+| Agent fleet (27 agents) injected via `--agents` | — | ✓ |
+| `llm-capabilities` MCP server injected via `--settings` | — | ✓ |
+| Contributor checks (`c-thru-contract-check`, `c-thru-hygiene-check`) | — | ✓ |
+
+Plugin hooks fire globally in every Claude Code session; the CLI injects the same shared fleet ephemerally on each `c-thru` launch (`install.sh` strips durable c-thru fleet hooks from `~/.claude/settings.json`; project `.claude/settings.json` does not register c-thru hooks). Prefer **one** of plugin vs CLI inject — both together can double-fire the same hooks.
+
+TUI garble / input junk under c-thru: see [`docs/tui-troubleshooting.md`](docs/tui-troubleshooting.md).
+
+Plugin users can still drive routing via environment variables — `CLAUDE_LLM_MODE`, `CLAUDE_LLM_PROFILE`, `CLAUDE_LLM_MEMORY_GB`, `CLAUDE_PROXY_BYPASS`, `CLAUDE_PROXY_JOURNAL` all work the same way the CLI flags do. The flags are a CLI convenience, not a capability difference at the proxy layer.
+
+### Entry points: what each path actually guarantees
+
+Hooks and agent scripts live **in the git repo** (`tools/c-thru-*.sh`, mirrored under `plugins/c-thru/hooks/`). They are **enabled** either by the marketplace plugin (user-wide, always-on) or by **`c-thru` ephemeral inject** (CLI path only — not durable project settings).
+
+| Entry point | Proxy | Fleet `--agents` / system-prompt inject | Brand `--model` (e.g. `grok`) | Hooks |
+|---|:---:|:---:|:---:|---|
+| `cthru` (main chat) | ✓ | ✓ | ✓ (resolved on wire) | CLI ephemeral inject per launch |
+| `cthru agents --model grok` | ✓ (brand models) | — (commander rejects) | Re-inserted; proxy resolves | No CLI ephemeral inject (plugin hooks only if installed) |
+| `cthru agents --model sonnet` | optional / not forced | — | Claude-native alias kept | No CLI ephemeral inject (plugin hooks only if installed) |
+| Brand Agent tool inside main `cthru` (“ask grok”) | ✓ (sentinel + map) | Parent has fleet; leaf is one-shot | Via `agent_to_capability` | Parent session hooks |
+| `grok-cc` / Grok Build CLI | external | n/a | CLI login (preferred) or API-key fallback | n/a |
+| Plain `claude` (no plugin, no `cthru`) | — | — | Anthropic only | none from c-thru |
+| Plain `claude` + marketplace plugin | ✓ (plugin SessionStart) | — (no CLI fleet inject) | map if proxy routes | Plugin always-on |
+
+**Pick the right entry point:** full planner/coder fleet → main `cthru` chat (CLI install). Brand opinion leaf → “ask agent grok” inside that chat. Subscription-backed Grok-owned implement/review loop → `grok-cc`.
+
+**Routing forensics without fleet inject:** use `c-thru list` or `/c-thru-status` (needs a live proxy — started by main `cthru` or a native brand `agents` launch). Port discovery uses `proxy.pid` / `CLAUDE_PROXY_PORT` / `ANTHROPIC_BASE_URL`; agent-view does not inject SessionStart control-plane hooks.
+
+---
+
+### Brand agents and Grok surfaces
+
+Brand-name agents (`grok`, `deepseek`, `qwen`, `kimi`, `gemini`) ship with the
+**CLI install** only: say "ask agent grok …" inside a `cthru` session. Definitions
+are runtime-injected via ephemeral `--agents` JSON — not installed into
+`~/.claude/agents/`. Chinese-origin brands are filtered under `best-cloud-gov` /
+`best-local-gov`.
+
+Grok has three surfaces (see
+[docs/agent-architecture.md § Grok surfaces](docs/agent-architecture.md#grok-surfaces-brand-vs-gov-vs-cli)):
+(A) brand leaf for short opinions via the Anthropic↔xAI Responses translator,
+(B) silent `best-cloud-gov` routing of `generalist`/`writer`, and (C) the separate
+**Grok Build CLI** (`grok-cc`) for subscription/login-backed implement/review.
+Prefer `grok-cc` for multi-file Grok-owned work.
+
+Anthropic does not officially support routing Claude Code to non-Claude models —
+any full-session non-Claude path is an opt-in compatibility surface, not an
+Anthropic-supported configuration.
+
+---
+
+## Appendix D: tests and contributor checks
 
 ```bash
 make check              # syntax checks (bash -n, node --check) + schema validation
@@ -398,6 +662,8 @@ bash tools/c-thru-hygiene-check.sh    # working-tree hygiene check (not gated)
 bash test/run-all.sh --skip-smoke     # default hermetic suite (or: make test)
 bash test/run-all.sh                  # full suite including smoke (or: make test-all)
 ```
+
+---
 
 ---
 
