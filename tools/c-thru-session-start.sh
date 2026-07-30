@@ -31,32 +31,57 @@ done
 _script_dir=$(cd -P "$(dirname "$_src")" && pwd)
 ROUTER_REPO_ROOT=$(cd -P "$_script_dir/.." && pwd)
 
-# --- First-run: seed model-map config + register proxy URL in settings.json ---
+# --- Shape C: bootstrap CLI tools (symlinks) then prefer cthru runtime ---
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
+_cli_stamp="$CLAUDE_DIR/.c-thru-cli-installed"
+_bootstrap="$ROUTER_REPO_ROOT/tools/c-thru-plugin-bootstrap.sh"
+if [ -x "$_bootstrap" ] || [ -f "$_bootstrap" ]; then
+    # Fail-open: never block SessionStart if bootstrap fails.
+    bash "$_bootstrap" 2>/dev/null || true
+fi
+
+# After successful CLI bootstrap, default is no plugin proxy registration
+# (CLI `cthru` owns lifecycle). Opt-in lite: C_THRU_PLUGIN_LITE=1.
+_cthru_cli_ready=0
+if [ -f "$_cli_stamp" ] && { [ -x "$CLAUDE_DIR/tools/c-thru" ] || [ -L "$CLAUDE_DIR/tools/c-thru" ]; }; then
+    _cthru_cli_ready=1
+fi
+
+# --- First-run: seed model-map config + register proxy URL in settings.json ---
 _bundled_config="$ROUTER_REPO_ROOT/config/model-map.json"
 _sys_map="$CLAUDE_DIR/model-map.system.json"
 _ovr_map="$CLAUDE_DIR/model-map.overrides.json"
 _eff_map="$CLAUDE_DIR/model-map.json"
 _settings="$CLAUDE_DIR/settings.json"
+_plugin_setup_pending="$CLAUDE_DIR/.c-thru-plugin-setup-pending"
 
-if [ -f "$_bundled_config" ] && [ ! -f "$_sys_map" ]; then
-    # Seed model-map files
-    cp "$_bundled_config" "$_sys_map"
-    [ -f "$_ovr_map" ] || printf '{}' > "$_ovr_map"
-    [ -f "$_eff_map" ] || cp "$_bundled_config" "$_eff_map"
+_cthru_inherited_proxy_selected() {
+    [ -n "${ANTHROPIC_BASE_URL:-}" ] || \
+    [ -n "${CLAUDE_PROXY_PORT:-}" ] || \
+    [ -n "${PROXY_PORT:-}" ]
+}
 
-    # Spawn proxy on fixed port (plugin mode — port is static so ANTHROPIC_BASE_URL can be pre-written)
+_cthru_plugin_setup() {
+    # Shape C default: skip durable routing registration when CLI tools exist.
+    if [ "$_cthru_cli_ready" = "1" ] && [ "${C_THRU_PLUGIN_LITE:-0}" != "1" ]; then
+        return 0
+    fi
     _proxy_bin="$ROUTER_REPO_ROOT/tools/claude-proxy"
     _plugin_port="${C_THRU_PLUGIN_PORT:-10017}"
-    if [ -f "$_proxy_bin" ] && command -v node >/dev/null 2>&1; then
-        nohup node "$_proxy_bin" --port "$_plugin_port" \
-            --config "$_eff_map" \
-            >> "$CLAUDE_DIR/proxy.plugin.log" 2>&1 &
-        disown $!
-    fi
+    [ -f "$_proxy_bin" ] && [ -f "$_eff_map" ] && \
+        command -v node >/dev/null 2>&1 || return 1
 
-    # Register ANTHROPIC_BASE_URL in settings.json (takes effect on next Claude Code launch)
-    if command -v node >/dev/null 2>&1 && [ -f "$_settings" ]; then
+    # Spawn proxy on fixed port (plugin lite mode — port is static so
+    # ANTHROPIC_BASE_URL can be pre-written).
+    nohup node "$_proxy_bin" --port "$_plugin_port" \
+        --config "$_eff_map" \
+        >> "$CLAUDE_DIR/proxy.plugin.log" 2>&1 &
+    disown $!
+
+    # Register ANTHROPIC_BASE_URL in settings.json (takes effect on next Claude
+    # Code launch). A missing settings file is valid: the proxy can still serve
+    # the current plugin lifecycle, and later resurrection owns availability.
+    if [ -f "$_settings" ]; then
         node -e "
           const fs=require('fs'), f=process.argv[1], p=parseInt(process.argv[2]);
           let s={};
@@ -67,7 +92,35 @@ if [ -f "$_bundled_config" ] && [ ! -f "$_sys_map" ]; then
             fs.writeFileSync(f,JSON.stringify(s,null,2)+'\n');
             process.stderr.write('c-thru plugin: routing registered on port '+p+'. Restart Claude Code to activate.\n');
           }
-        " "$_settings" "$_plugin_port" >&2
+        " "$_settings" "$_plugin_port" >&2 || return 1
+    fi
+    return 0
+}
+
+_seeded_model_maps=0
+if [ -f "$_bundled_config" ] && [ ! -f "$_sys_map" ]; then
+    # Seed model-map files independently of proxy ownership.
+    cp "$_bundled_config" "$_sys_map"
+    [ -f "$_ovr_map" ] || printf '{}' > "$_ovr_map"
+    [ -f "$_eff_map" ] || cp "$_bundled_config" "$_eff_map"
+    _seeded_model_maps=1
+fi
+
+if [ "$_cthru_cli_ready" = "1" ] && [ "${C_THRU_PLUGIN_LITE:-0}" != "1" ]; then
+    # CLI owns proxy; skip plugin fixed-port registration (avoids double-fire).
+    rm -f "$_plugin_setup_pending" 2>/dev/null || true
+elif [ "$_seeded_model_maps" = "1" ]; then
+    # A launcher-provided selector already owns proxy lifecycle and routing.
+    # Defer fixed plugin setup, but remember to finish it on the first later
+    # standalone launch; map seeding must not permanently suppress registration.
+    if _cthru_inherited_proxy_selected || ! _cthru_plugin_setup; then
+        touch "$_plugin_setup_pending" 2>/dev/null || true
+    else
+        rm -f "$_plugin_setup_pending"
+    fi
+elif [ -f "$_plugin_setup_pending" ] && ! _cthru_inherited_proxy_selected; then
+    if _cthru_plugin_setup; then
+        rm -f "$_plugin_setup_pending"
     fi
 fi
 

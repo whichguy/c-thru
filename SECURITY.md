@@ -18,22 +18,21 @@ c-thru-operated cloud services. Review this before marketplace install.
 - Cloud keys (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, …) are read from **your** environment if set — c-thru does not embed or phone-home credentials.
 - Do not commit keys; document env **names** only.
 
-## Dual install
+## Dual install / Shape C
 
-Prefer **one** of:
-
-- Marketplace plugin inject (user-wide hooks), **or**
-- CLI `bash install.sh` / `cthru` ephemeral inject
-
-Installing both can double-fire hooks. See README.
+**Supported runtime is `cthru`** after install or plugin bootstrap. The marketplace
+plugin bootstraps CLI tools; it should not run alongside CLI inject as a second
+routing path (hooks double-fire). After bootstrap, plugin SessionStart skips
+durable proxy registration unless `C_THRU_PLUGIN_LITE=1`.
 
 ## Removing c-thru safely
 
-Marketplace uninstall alone does **not** always clear a durable base URL:
+Order matters. Plugin uninstall alone does **not** clear global settings or kill
+an orphan proxy:
 
-1. `/plugin uninstall c-thru@…` (or CLI `bash uninstall.sh`)
-2. If `~/.claude/settings.json` still has `env.ANTHROPIC_BASE_URL` pointing at `127.0.0.1` / `localhost`, remove that key (CLI uninstall does this for loopback URLs).
-3. Optional: `pkill -f claude-proxy`
+1. **`pkill -f claude-proxy`** (required — orphan on :10017 can mask the brick until reboot)
+2. **`bash uninstall.sh`** — removes tools symlinks and loopback `ANTHROPIC_BASE_URL`
+3. **`/plugin uninstall c-thru@…`** last
 
 Leaving a loopback `ANTHROPIC_BASE_URL` after uninstall makes plain `claude` talk to a dead port.
 

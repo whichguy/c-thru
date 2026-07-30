@@ -49,6 +49,12 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
 TOOLS_SRC="$REPO_DIR/tools"
 TOOLS_DEST="$CLAUDE_DIR/tools"
+export REPO_DIR CLAUDE_DIR
+
+# shellcheck source=tools/c-thru-install-core.sh
+. "$TOOLS_SRC/c-thru-install-core.sh"
+# shellcheck source=tools/c-thru-setup-messages.sh
+. "$TOOLS_SRC/c-thru-setup-messages.sh"
 
 JQ_AVAILABLE=0
 if command -v jq >/dev/null 2>&1; then
@@ -74,80 +80,21 @@ chmod +x "$TOOLS_SRC/c-thru-contract-check.sh" "$TOOLS_SRC/c-thru-self-update.sh
 chmod +x "$TOOLS_SRC/verify-lmstudio-ollama-compat.sh" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/model-map-resolve.js" "$TOOLS_SRC/c-thru-resolve" 2>/dev/null || true
 chmod +x "$TOOLS_SRC/c-thru-enter-plan-hook.sh" "$TOOLS_SRC/c-thru-agent-router-hook.sh" 2>/dev/null || true
+chmod +x "$TOOLS_SRC/c-thru-install-core.sh" "$TOOLS_SRC/c-thru-plugin-bootstrap.sh" "$TOOLS_SRC/c-thru-setup-messages.sh" 2>/dev/null || true
 
 mkdir -p "$TOOLS_DEST"
 
-# --- Idempotent symlink helper ---
-link_tool() {
-    local src="$1" dest_name="$2"
-    local dest="$TOOLS_DEST/$dest_name"
-    local want="$TOOLS_SRC/$src"
-    if [ ! -e "$want" ]; then return 0; fi
-    if [ ! -x "$want" ]; then
-        echo -e "  ${YELLOW}⚠️  ${dest_name} — source ${src} exists but is not executable; skipping (run: chmod +x ${want})${NC}"
-        return 0
-    fi
-
-    if [ -L "$dest" ]; then
-        local current
-        current="$(readlink "$dest")"
-        if [ "$current" = "$want" ]; then
-            echo -e "  ${GRAY}✓  ${dest_name}${NC}"
-            return 0
-        fi
-        ln -sfn "$want" "$dest"
-        echo -e "  ${GREEN}✅ ${dest_name} — updated (was: ${current})${NC}"
-    elif [ -e "$dest" ]; then
-        echo -e "  ${YELLOW}⚠️  ${dest_name} — exists as a real file, not a symlink; skipping${NC}"
-    else
-        ln -sfn "$want" "$dest"
-        echo -e "  ${GREEN}✅ ${dest_name} — installed${NC}"
-    fi
-}
-
-echo ""
-echo "Tools:"
-link_tool c-thru c-thru
-link_tool c-thru cthru          # convenience alias — `cthru` ≡ `c-thru`
-link_tool c-thru claude-router
-link_tool claude-proxy claude-proxy
 if [ "$JQ_AVAILABLE" -eq 0 ]; then
     DEPS_WARN=1
     echo -e "  ${YELLOW}⚠️  jq not found — some install steps will be skipped${NC}"
 fi
-if command -v node >/dev/null 2>&1; then
-    link_tool llm-capabilities-mcp.js llm-capabilities-mcp
-    link_tool model-map-validate.js model-map-validate
-    link_tool model-map-sync.js model-map-sync
-    link_tool model-map-edit.js model-map-edit
-    link_tool model-map-resolve.js model-map-resolve.js
-    link_tool c-thru-resolve c-thru-resolve
-else
+if ! command -v node >/dev/null 2>&1; then
     DEPS_WARN=1
     echo -e "  ${YELLOW}⚠️  node not found — claude-proxy requires Node.js ≥ 15${NC}"
 fi
-link_tool verify-llm-capabilities-mcp.sh verify-llm-capabilities-mcp
-link_tool c-thru-proxy-health.sh c-thru-proxy-health
-link_tool c-thru-session-start.sh c-thru-session-start
-link_tool c-thru-map-changed.sh c-thru-map-changed
-link_tool c-thru-classify.sh c-thru-classify
-link_tool c-thru-stop-hook.sh c-thru-stop-hook
-link_tool c-thru-stop-failure-hook.sh c-thru-stop-failure-hook
-link_tool c-thru-ensure-proxy-on-port.sh c-thru-ensure-proxy-on-port
-link_tool c-thru-revive-agent-sessions.sh c-thru-revive-agent-sessions
-link_tool c-thru-gateway-auth-helper.sh c-thru-gateway-auth-helper
-link_tool c-thru-statusline.sh c-thru-statusline
-link_tool c-thru-statusline-overlay.sh c-thru-statusline-overlay
-link_tool c-thru-ollama-gc.sh c-thru-ollama-gc
-link_tool c-thru-contract-check.sh c-thru-contract-check
-link_tool c-thru-hygiene-check.sh c-thru-hygiene-check
-link_tool c-thru-self-update.sh c-thru-self-update
-link_tool c-thru-marketplace-update.sh c-thru-marketplace-update
-link_tool verify-lmstudio-ollama-compat.sh verify-lmstudio-ollama-compat
-link_tool c-thru-ollama-probe.sh c-thru-ollama-probe
-link_tool c-thru-enter-plan-hook.sh c-thru-enter-plan-hook
-link_tool c-thru-agent-router-hook.sh c-thru-agent-router-hook
-link_tool c-thru-postcompact-context.sh c-thru-postcompact-context
+
+# Shape C shared tool linking
+cthru_link_all_tools
 
 # --- Migrate legacy providers schema ---
 migrate_providers_schema() {
@@ -356,17 +303,10 @@ install_skill
 install_cplan_command
 extend_model_map
 
-# --- Post-CLI guidance (do not combine with marketplace plugin inject) ---
-# plan-scheduler needs /schedule-plan-tasks from planning-suite (optional).
-# Plugin package no longer hard-depends on planning-suite.
+# Shape C stamp + shared post-install messaging
+cthru_write_stamp "$REPO_DIR"
 echo ""
-echo "CLI path active: tools under \$HOME/.claude/tools (c-thru / cthru on PATH)."
-echo -e "  ${YELLOW}Do not also install the marketplace plugin while using CLI inject${NC}"
-echo -e "  ${YELLOW}(hooks would double-fire). Marketplace-only alternative (instead of CLI):${NC}"
-echo -e "  ${GRAY}/plugin marketplace add whichguy/c-thru${NC}"
-echo -e "  ${GRAY}/plugin install c-thru@c-thru${NC}"
-echo -e "  ${GRAY}# family discovery (pick one identity, never both):${NC}"
-echo -e "  ${GRAY}/plugin marketplace add whichguy/claude-craft && /plugin install c-thru@claude-craft${NC}"
+cthru_msg_after_cli_install
 PLUGIN_JSON="$REPO_DIR/plugins/c-thru/.claude-plugin/plugin.json"
 if [ -f "$PLUGIN_JSON" ] && command -v node >/dev/null 2>&1; then
     _pv="$(node -e "try{console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).version||'')}catch(e){}" "$PLUGIN_JSON" 2>/dev/null || true)"

@@ -1,7 +1,18 @@
 # Marketplace release checklist (private catalog)
 
 c-thru is distributed from **your** marketplace(s), not Anthropic’s public
-`claude-plugins-community` / `claude-plugins-official` catalogs.
+plugin directories.
+
+## Canonical Shape C story
+
+1. **Install:** private marketplace → `c-thru@c-thru` (or one family identity).  
+2. **Bootstrap:** plugin SessionStart runs `c-thru-plugin-bootstrap.sh` → durable
+   clone `~/.claude/c-thru-src` + symlinks into `~/.claude/tools` + stamp
+   `.c-thru-cli-installed`.  
+3. **Runtime:** always **`cthru`** / `c-thru` (launch-time inject + fleet).  
+4. **Dev path:** clone + `bash install.sh` = same core as bootstrap.  
+5. **Remove:** `pkill` proxy → `uninstall.sh` scrub → then `/plugin uninstall`.  
+6. **One identity:** never both `@c-thru` and `@claude-craft`.
 
 | Catalog | Install id | Role |
 |---|---|---|

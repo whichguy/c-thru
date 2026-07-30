@@ -35,74 +35,63 @@ cthru --mode best-cloud-oss     # cost-aware default
 
 ---
 
-## Quick start
+## Quick start (Shape C)
 
-c-thru is offered from **private/product marketplaces you control** (this repo
-and optionally the claude-craft family catalog) — not Anthropic’s public plugin
-directories. Product code lives only in this repository; catalogs point at
-`plugins/c-thru`.
+c-thru is a **CLI launcher** (`cthru`) that wraps the real `claude` binary with
+routing and agent fleet inject. The **private marketplace plugin** discovers and
+**bootstraps** that CLI (symlinks under `~/.claude/tools`). Product code lives
+only in this repository; catalogs point at `plugins/c-thru`.
 
 **Pick exactly one** marketplace identity. Installing both `c-thru@c-thru` and
 `c-thru@claude-craft` activates the plugin twice and double-fires its hooks.
 
-### Option A — this repository (primary)
+### 1. Install from private marketplace
 
 ```
 /plugin marketplace add whichguy/c-thru
 /plugin install c-thru@c-thru
 ```
 
-### Option B — family marketplace (same plugin package, git-subdir)
+(Family catalog, same package: `whichguy/claude-craft` → `c-thru@claude-craft`.)
 
-```
-/plugin marketplace add whichguy/claude-craft
-/plugin install c-thru@claude-craft
-```
+### 2. First Claude session bootstraps CLI tools
 
-If you already have the other identity installed, remove it first:
+SessionStart clones/updates `~/.claude/c-thru-src` if needed, symlinks
+`c-thru` / `cthru` into `~/.claude/tools`, and seeds the model-map. Open a new
+shell (or source your rc) so PATH picks up `~/.claude/tools`.
 
-```
-/plugin uninstall c-thru@claude-craft
-# or: /plugin uninstall c-thru@c-thru
-```
+### 3. Runtime — always use `cthru`
 
-Team repos can prompt collaborators to add the catalog via
-`extraKnownMarketplaces` — see [`docs/marketplace-release.md`](docs/marketplace-release.md).
-
-**`planning-suite` is optional** — only needed for plan-scheduler /
-`/schedule-plan-tasks`. Install separately from claude-craft if you want it:
-
-```
-/plugin marketplace add whichguy/claude-craft
-/plugin install planning-suite@claude-craft
+```bash
+cthru
+cthru --mode best-cloud-oss
 ```
 
-Restart Claude Code so the plugin loads. On the first SessionStart after install,
-the hook may spawn the proxy and write `ANTHROPIC_BASE_URL` into your settings —
-that settings change applies on the **next** launch, so you may need a **second**
-restart (or a new session) before the client honors the base URL. Then verify:
+Plain `claude` is not the full product (no launch-time `--agents` / fleet inject).
 
+### Developer path (clone)
+
+```bash
+git clone https://github.com/whichguy/c-thru.git
+cd c-thru
+bash install.sh
+cthru
 ```
-/c-thru:c-thru-status
-```
 
-(Plugin installs namespace the command. It uses the live proxy HTTP API — no CLI
-required. CLI installs may also expose `/c-thru-status`.)
+`install.sh` and plugin bootstrap share the same symlink core.
 
-> **The marketplace plugin gives you proxy + routing, not the full agentic
-> workflow.** `/cplan` and the 27-agent fleet depend on agent files injected via
-> `--agents` on the CLI path. See [Appendix A](#appendix-a-cli-install-for-contributors-and-advanced-users).
-> Prefer **one** of plugin vs CLI inject — both together can double-fire hooks.
-> Details: [Appendix C](#appendix-c-plugin-vs-cli--entry-points).
-> Safety / remove: [SECURITY.md](SECURITY.md).
+Team repos can prompt the catalog via `extraKnownMarketplaces` — see
+[`docs/marketplace-release.md`](docs/marketplace-release.md). Safety / remove:
+[SECURITY.md](SECURITY.md). Plugin vs CLI details:
+[Appendix C](#appendix-c-plugin-vs-cli--entry-points).
 
 ### Removing c-thru
 
-1. Uninstall the plugin: `/plugin uninstall c-thru@c-thru` (or the family identity).
-2. Clear loopback `env.ANTHROPIC_BASE_URL` from `~/.claude/settings.json` if still
-   set — otherwise plain `claude` talks to a dead port. CLI `bash uninstall.sh`
-   scrubs loopback URLs automatically.
-3. Optional: `pkill -f claude-proxy`
+Order matters (plugin uninstall alone does not scrub global settings):
+
+1. `pkill -f claude-proxy` — required; an orphan proxy can mask a dead base URL
+2. `bash uninstall.sh` (CLI) — removes tools symlinks and loopback `ANTHROPIC_BASE_URL`
+3. `/plugin uninstall c-thru@c-thru` (or the family identity)
 
 ### Cloud backends (optional)
 

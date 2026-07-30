@@ -9,8 +9,8 @@
     {
       "name": "c-thru",
       "source": "./plugins/c-thru",
-      "version": "0.2.1",
-      "description": "Router/proxy for alternative model providers behind Claude Code. Plugin: proxy, hooks, /c-thru:c-thru-status. Full /cplan agent fleet needs CLI install from this repo. Optional planning-suite for plan-scheduler."
+      "version": "0.2.2",
+      "description": "Shape C: install this plugin to bootstrap the c-thru CLI, then run `cthru` for multi-backend routing and agent fleet. Private marketplace only."
     }
   ]
 }

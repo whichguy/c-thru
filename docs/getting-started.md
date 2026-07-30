@@ -84,17 +84,23 @@ bash tools/c-thru check-deps --fix
 
 ## 3. First run
 
-Clone, audit deps, then run the installer from the repo root:
+**End users (Shape C):** install the private marketplace plugin, let SessionStart
+bootstrap CLI tools, then always launch with **`cthru`**. See the root
+[`README.md`](../README.md) Quick start.
+
+**Contributors** clone the repo and run the same installer core from a checkout:
 
 ```bash
 git clone https://github.com/whichguy/c-thru.git
 cd c-thru
 bash tools/c-thru check-deps
 bash install.sh
+cthru
 ```
 
 (`install.sh` is invoked with `bash` so a fresh checkout works without a git
-executable bit.)
+executable bit.) Plugin bootstrap and `install.sh` share
+`tools/c-thru-install-core.sh` (symlinks + stamp under `~/.claude/`).
 
 `install.sh` is idempotent and safe to re-run. It does three things you
 should understand, because they explain where c-thru's state lives

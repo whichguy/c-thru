@@ -1,119 +1,71 @@
-# c-thru — Claude Code plugin
+# c-thru — Claude Code plugin (Shape C)
 
-Surfaces c-thru as a Claude Code plugin. c-thru lets Claude Code talk to
-alternative model providers (Ollama, OpenRouter, Bedrock, Vertex, Gemini,
-LiteLLM) without changing the vendor CLI.
+**Private marketplace package.** Discovers c-thru and **bootstraps the CLI**
+(`cthru` / `c-thru`). Full routing + agent fleet require launching with **`cthru`**,
+not plain `claude`.
 
-This package lives in the **c-thru** git repository (private/product marketplace
-root). It is also listed from the
-[claude-craft](https://github.com/whichguy/claude-craft) family catalog as a
-**git-subdir** of this repo — not vendored. Not submitted to Anthropic’s public
-plugin directories.
+Product source: [whichguy/c-thru](https://github.com/whichguy/c-thru). Family
+catalog [claude-craft](https://github.com/whichguy/claude-craft) points here via
+git-subdir — do not install both identities.
 
-Install from **exactly one** marketplace identity — installing both activates
-the plugin twice and double-fires its hooks.
-
-## Install (pick one source)
-
-### From this repository (primary)
+## Install (pick one identity)
 
 ```
 /plugin marketplace add whichguy/c-thru
 /plugin install c-thru@c-thru
 ```
 
-### From the family marketplace (same package)
+Or: `whichguy/claude-craft` → `c-thru@claude-craft`.
 
-```
-/plugin marketplace add whichguy/claude-craft
-/plugin install c-thru@claude-craft
-```
+### What happens next
 
-If you previously installed the other identity, uninstall it first:
+1. First SessionStart runs `tools/c-thru-plugin-bootstrap.sh`.
+2. Clones/updates `~/.claude/c-thru-src` (full tree) and symlinks tools into
+   `~/.claude/tools` (same core as `bash install.sh`).
+3. Writes stamp `~/.claude/.c-thru-cli-installed`.
+4. **You run `cthru`** for day-to-day work.
 
-```
-/plugin uninstall c-thru@claude-craft
-# or: /plugin uninstall c-thru@c-thru
-```
-
-### Optional: wave scheduler
-
-`planning-suite` is **optional**. Install it only if you want
-`/schedule-plan-tasks` / plan-scheduler:
-
-```
-/plugin marketplace add whichguy/claude-craft
-/plugin install planning-suite@claude-craft
+```bash
+cthru
+cthru --mode best-cloud-oss
 ```
 
-On your first Claude Code session after install, the SessionStart hook may:
-- Seed `~/.claude/model-map.json` with default routing config
-- Start the proxy on port 10017 (override: `C_THRU_PLUGIN_PORT`)
-- Register `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`
-
-That settings change applies on the **next** launch, so you may need a
-**second** restart before the client honors the base URL. Then verify with
-the **namespaced** command:
+Verify (namespaced plugin command uses proxy HTTP; optional after CLI works):
 
 ```
 /c-thru:c-thru-status
 ```
 
-(Plugin skills are namespaced. The command uses the live proxy HTTP API and
-bundled tools under `${CLAUDE_PLUGIN_ROOT}` — it does not require the CLI.)
+## What this plugin is for
 
-## What this plugin gives you
-
-| Surface | What it adds |
+| Surface | Role |
 |---|---|
-| `/c-thru:c-thru-status` | Proxy status, recent requests, dashboard URL (plugin-root tools) |
-| `/cplan` skill files | Present; full multi-agent waves need CLI fleet inject |
-| Skills | `c-thru-plan`, `c-thru-config`, `c-thru-control` (config/control prefer CLI tools when present) |
-| Hooks | SessionStart proxy+Ollama health check, UserPromptSubmit proxy-health gate + static control-plane context injection, PostToolUse model-map.json validation, PreCompact context re-injection |
+| Bootstrap | Install CLI tools via symlinks |
+| `/c-thru:c-thru-status` | Proxy status via HTTP + plugin-root tools |
+| Hooks | Bootstrap + optional lite mode only (`C_THRU_PLUGIN_LITE=1`) |
 
-## Plugin-only limitations
+Full multi-agent `/cplan` waves need the CLI fleet (`cthru` injects `--agents`).
 
-Plugin install provides: proxy runtime, routing config, hooks, and the public skills above.
-
-**Not included in the plugin bundle** (requires CLI install from this repo):
-- `c-thru` CLI — terminal drop-in for `claude` with `--mode`, `--profile`, `--route` flags
-- `c-thru list`, `c-thru explain`, `c-thru reload` control commands
-- `c-thru-hygiene-check`, `c-thru-statusline` monitoring scripts
-- `llm-capabilities-mcp.js` MCP server (model capability queries)
-- Full 27-agent fleet injection via `--agents`
-
-### Full install (CLI + all tools)
+## Developer path
 
 ```sh
 git clone https://github.com/whichguy/c-thru.git
 cd c-thru
 bash install.sh
+cthru
 ```
 
 ## Removing c-thru
 
-1. `/plugin uninstall c-thru@c-thru` (or `c-thru@claude-craft` if that identity).
-2. Clear durable loopback base URL if still set — otherwise plain `claude` targets a dead port:
-   - Remove `env.ANTHROPIC_BASE_URL` from `~/.claude/settings.json` when it is
-     `http://127.0.0.1:…` or `http://localhost:…`.
-   - CLI users: `bash uninstall.sh` does this automatically for loopback URLs.
-3. Optional: `pkill -f claude-proxy`
+1. `pkill -f claude-proxy`
+2. `bash uninstall.sh` (from a checkout) or manual loopback `ANTHROPIC_BASE_URL` scrub
+3. `/plugin uninstall c-thru@c-thru`
 
-See also [SECURITY.md](../../SECURITY.md) in the repo root.
+See [SECURITY.md](../../SECURITY.md).
 
-## Plugin bundle maintenance
-
-`plugins/c-thru/{hooks,skills,tools,config,commands}/` are synced from
-`tools/`, `skills/`, `config/`, and `commands/`. Keep them in sync:
+## Bundle maintenance
 
 ```sh
 tools/sync-plugin-bundle.sh
+tools/sync-plugin-bundle.sh --check
 ```
-
-This is also gated in the hermetic suite via `tools/sync-plugin-bundle.sh --check`.
-
-## Reporting issues
-
-Proxy / model routing / agent definitions / this plugin package →
-[c-thru](https://github.com/whichguy/c-thru).
-Family marketplace packaging → [claude-craft](https://github.com/whichguy/claude-craft).
