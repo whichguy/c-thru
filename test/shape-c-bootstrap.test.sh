@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hermetic Shape C bootstrap + stamp tests (uses local REPO_DIR; no network).
+# Hermetic Shape C bootstrap + stamp tests (local REPO_DIR; no network).
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASE="$(mktemp -d "${TMPDIR:-/tmp}/c-thru-shape-c.XXXXXX")"
@@ -25,20 +25,40 @@ check() {
 
 export REPO_DIR="$REPO_ROOT"
 
-check "empty dir incomplete" bash -c '! cthru_repo_is_complete "'"$BASE"'/empty"'
+check "empty dir incomplete" bash -c 'source "'"$REPO_ROOT"'/tools/c-thru-install-core.sh"; ! cthru_repo_is_complete "'"$BASE"'/nope"'
 check "monorepo complete" cthru_repo_is_complete "$REPO_DIR"
 check "install from repo" cthru_install_from_repo
-check "c-thru linked" test -e "$CLAUDE_DIR/tools/c-thru"
-check "cthru linked" test -e "$CLAUDE_DIR/tools/cthru"
+check "c-thru linked and exists" test -e "$CLAUDE_DIR/tools/c-thru"
+check "cthru linked and exists" test -e "$CLAUDE_DIR/tools/cthru"
 check "stamp exists" test -f "$(cthru_stamp_path)"
 check "stamp healthy" cthru_stamp_is_healthy
 check "source_root field" test "$(cthru_read_stamp_field source_root)" = "$REPO_DIR"
 
+# Dangling symlink must fail health
+rm -f "$CLAUDE_DIR/tools/c-thru"
+ln -sfn "$BASE/missing-c-thru" "$CLAUDE_DIR/tools/c-thru"
+check "dangling symlink unhealthy" bash -c 'source "'"$REPO_ROOT"'/tools/c-thru-install-core.sh"; CLAUDE_DIR="'"$CLAUDE_DIR"'"; ! cthru_stamp_is_healthy'
+# Repair
+cthru_install_from_repo
+check "repaired healthy" cthru_stamp_is_healthy
+
+# Version stale detection (when package root has different version — use empty = not stale)
+check "not stale vs self" bash -c 'source "'"$REPO_ROOT"'/tools/c-thru-install-core.sh"; CLAUDE_DIR="'"$CLAUDE_DIR"'"; ! cthru_stamp_version_stale_vs "'"$REPO_DIR"'"'
+
 bash "$REPO_ROOT/tools/c-thru-plugin-bootstrap.sh" 2>/dev/null || true
 check "stamp still healthy after bootstrap noop" cthru_stamp_is_healthy
 
+C_THRU_FORCE_BOOTSTRAP=1 bash "$REPO_ROOT/tools/c-thru-plugin-bootstrap.sh" 2>/dev/null || true
+check "bootstrap log after force" test -f "$CLAUDE_DIR/c-thru-bootstrap.log"
+
 check "session-start has Shape C" grep -q '_cthru_cli_ready' "$REPO_ROOT/tools/c-thru-session-start.sh"
 check "session-start lite opt-in" grep -q 'C_THRU_PLUGIN_LITE' "$REPO_ROOT/tools/c-thru-session-start.sh"
+check "session-start requires resolvable tools link" grep -q 'tools/c-thru' "$REPO_ROOT/tools/c-thru-session-start.sh"
+
+# Completeness without +x still true (file present)
+chmod -x "$REPO_DIR/tools/c-thru" 2>/dev/null || true
+check "complete without +x" cthru_repo_is_complete "$REPO_DIR"
+chmod +x "$REPO_DIR/tools/c-thru" 2>/dev/null || true
 
 rm -rf "$BASE"
 echo "shape-c-bootstrap: $pass ok, $fail failed"

@@ -35,15 +35,17 @@ ROUTER_REPO_ROOT=$(cd -P "$_script_dir/.." && pwd)
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 _cli_stamp="$CLAUDE_DIR/.c-thru-cli-installed"
 _bootstrap="$ROUTER_REPO_ROOT/tools/c-thru-plugin-bootstrap.sh"
-if [ -x "$_bootstrap" ] || [ -f "$_bootstrap" ]; then
-    # Fail-open: never block SessionStart if bootstrap fails.
-    bash "$_bootstrap" 2>/dev/null || true
+if [ -f "$_bootstrap" ]; then
+    # Fail-open for the host session. Bootstrap logs to
+    # $CLAUDE_DIR/c-thru-bootstrap.log (not fully silenced).
+    bash "$_bootstrap" || true
 fi
 
 # After successful CLI bootstrap, default is no plugin proxy registration
 # (CLI `cthru` owns lifecycle). Opt-in lite: C_THRU_PLUGIN_LITE=1.
+# Require a resolvable tools/c-thru (not a dangling symlink).
 _cthru_cli_ready=0
-if [ -f "$_cli_stamp" ] && { [ -x "$CLAUDE_DIR/tools/c-thru" ] || [ -L "$CLAUDE_DIR/tools/c-thru" ]; }; then
+if [ -f "$_cli_stamp" ] && [ -e "$CLAUDE_DIR/tools/c-thru" ]; then
     _cthru_cli_ready=1
 fi
 

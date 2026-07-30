@@ -1,6 +1,6 @@
 {
   "name": "c-thru",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Shape C: marketplace plugin bootstraps the c-thru CLI (symlinks). Runtime is `cthru` for multi-backend routing and agent fleet inject. Optional planning-suite for plan-scheduler.",
   "author": {
     "name": "whichguy",
