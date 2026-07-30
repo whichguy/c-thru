@@ -712,6 +712,10 @@ run_suite "c-thru-bootstrap-auth-env (bootstrap auth env helper)" \
   bash "$REPO_DIR/test/c-thru-bootstrap-auth-env.test.sh"
 run_suite "shape-c-bootstrap (stamp, scrub, gate, install-cli path)" \
   bash "$REPO_DIR/test/shape-c-bootstrap.test.sh"
+run_suite "shape-c-spec-contract (R0/W0 named anchors)" \
+  bash "$REPO_DIR/test/shape-c-spec-contract.test.sh"
+run_suite "uninstall-shape-c (stamp, c-thru-src links, --purge-src)" \
+  bash "$REPO_DIR/test/uninstall-shape-c.test.sh"
 run_suite "setup-docs-alignment (Shape C marketplace docs + lean bundle)" \
   node "$REPO_DIR/test/setup-docs-alignment.test.js"
 run_suite "c-thru-lib (env/discovery resolvers: port ladder, profile-dir shadow split, ollama url)" \
@@ -1246,6 +1250,8 @@ run_suite "gen-routing-doc --check (README routing table drift)" \
   node "$REPO_DIR/tools/gen-routing-doc.js" --check
 run_suite "gen-request-flow-doc --check (README step-through vs docs/request-flow.html)" \
   node "$REPO_DIR/tools/gen-request-flow-doc.js" --check
+run_suite "docs-html-integrity (dangling refs / duplicate ids / external subresources)" \
+  node "$REPO_DIR/test/docs-html-integrity.test.js"
 run_suite "check-diagram-sync (shared launch-flow diagram: README ↔ CLAUDE.md)" \
   node "$REPO_DIR/tools/check-diagram-sync.js"
 run_suite "hooks-armed (core.hooksPath → .githooks, fail-closed)" \

@@ -14,6 +14,7 @@ fresh generation. There is no required repo-local `.githooks/pre-commit` for thi
 |---|---|---|
 | README "Agent routing reference" table | `tools/gen-routing-doc.js` (wraps `c-thru-explain.js --all`) | `node tools/gen-routing-doc.js --check` in suite Validators; `make docs` regenerates |
 | README request-flow step-through (`<!-- BEGIN request-flow-steps -->` region) | `tools/gen-request-flow-doc.js` (reads the `SCENARIOS` object in `docs/request-flow.html`) | `node tools/gen-request-flow-doc.js --check` in suite Validators; `make docs` regenerates |
+| Inlined architecture SVGs in `docs/request-flow.html` | `tools/gen-request-flow-svgs.js` (mermaid-cli, selected via `<!-- diagram-source: … -->` markers in README.md) | **Not** a suite gate — it shells out to mermaid-cli (external dep, headless Chromium) while `test/run-all.sh` is hermetic. The output is guarded instead by `test/docs-html-integrity.test.js` (no dangling refs, no duplicate ids, smap node-name contract). Regenerate with `make diagrams` |
 | Lineage snapshot (`test/model-map-lineage.test.js#SNAPSHOT`) | `node test/model-map-lineage.test.js --update` (anchors on the `const SNAPSHOT = {` … `};` block; exits 1 loudly if the block is not found — it must never silently no-op) | the test itself fails on any cell drift |
 
 `gen-routing-doc.js` pins `c-thru-explain.js` to the repo `config/model-map.json` via

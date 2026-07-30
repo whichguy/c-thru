@@ -106,6 +106,14 @@ docs:
 	node tools/gen-routing-doc.js
 	node tools/gen-request-flow-doc.js
 
+# Re-render the two architecture diagrams from README.md into docs/request-flow.html.
+# NOT part of `make test`: this shells out to mermaid-cli (external dep, headless
+# Chromium) while test/run-all.sh is hermetic. The OUTPUT is guarded hermetically by
+# test/docs-html-integrity.test.js. Run after editing either diagram in README.md.
+# Needs network on a cold npx cache; the pinned CLI version lives in the tool.
+diagrams:
+	node tools/gen-request-flow-svgs.js
+
 # Tier-2 regen (docs/derived-artifacts.md): rebuild ALL derived artifacts after a config bump,
 # then show the diff — the human intent-gate stays: review the diff, confirm it is the
 # *intended* change (e.g. only a model-id bump, no null/route-drop transitions), then commit.

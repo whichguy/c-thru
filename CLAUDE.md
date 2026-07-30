@@ -266,7 +266,7 @@ See `docs/env-vars.md` for the full reference. Core vars: `CLAUDE_PROXY_BYPASS=1
 
 ## No External Node Dependencies
 
-`claude-proxy`, `llm-capabilities-mcp.js`, and all `model-map-*.js` helpers use Node.js stdlib only (`http`, `https`, `fs`, `path`, `crypto`, `child_process`). There is no `package.json` and no `node_modules/`. Do not add third-party deps.
+`claude-proxy`, `llm-capabilities-mcp.js`, and all `model-map-*.js` helpers use Node.js stdlib only (`http`, `https`, `fs`, `path`, `crypto`, `child_process`). There is no runtime dependency on `node_modules/`. `package.json` exists but carries dev-only tooling (eslint); do not add third-party **runtime** deps. Diagram regeneration (`make diagrams`) shells out to a pinned mermaid-cli via `npx` and is deliberately excluded from the hermetic test suite.
 
 ## Proxy Observability
 
@@ -337,9 +337,9 @@ trackers; the two new docs are process/mechanics references.
 Invoke with `/c-thru-plan <intent>`. State in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/`. Completed plans archived to `~/.claude/c-thru-archive/`.
 Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`. When adding or editing an agent's `description` (its only discovery surface), follow `docs/agent-authoring.md` — enforced by `test/agent-description-quality.test.js`; dispatch edges enforced by `test/agent-dispatch-graph.test.js`.
 
-### Pipeline agents (13 + 9 utility + 5 named model pins)
+### Pipeline agents (13 + 10 utility + 5 named model pins)
 
-The agent fleet uses an identity mapping for most agents: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. Two exceptions alias to a different capability: `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`. Five named agents pin directly to vendor models via `model:` pins: `grok`, `deepseek`, `qwen`, `kimi`, `gemini` (see `docs/agent-architecture.md`).
+The agent fleet uses an identity mapping for most agents: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. Three exceptions alias to a different capability: `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`, `advisors` → `planner-hard`. Five named agents pin directly to vendor models via `model:` pins: `grok`, `deepseek`, `qwen`, `kimi`, `gemini` (see `docs/agent-architecture.md`).
 
 **Delivery:** fleet definitions are repo `agents/*.md`, runtime-injected each `c-thru` launch as ephemeral `--agents` JSON — never installed into Claude's durable agent store (`~/.claude/agents/`).
 
@@ -365,7 +365,7 @@ tier_budget values are hand-copied from each `agents/*.md` frontmatter — updat
 | `debugger-investigate` | 50000 |
 | `debugger-hard` | 999999 |
 
-**9 retained utility agents:**
+**10 retained utility agents:**
 
 | Agent | Purpose |
 |---|---|
@@ -378,6 +378,7 @@ tier_budget values are hand-copied from each `agents/*.md` frontmatter — updat
 | `fast-scout` | Latency-optimized search |
 | `long-context` | Large context window tasks |
 | `plan-scheduler` | Dispatches wave READY_ITEMS to worker agents via /schedule-plan-tasks |
+| `advisors` | Multi-seat panel host (`/advisors`; seats from `advisor_panels`; host → planner-hard) |
 
 **5 named model-pin agents** (leaf; invoke by name — “ask agent grok …”; require vendor keys where applicable):
 

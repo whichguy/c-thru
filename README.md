@@ -22,7 +22,7 @@ Requests resolve by **capability**, **hardware tier**, and **connectivity mode**
 - Mix providers in a single session
 - Fall back and reload without restarting Claude
 - Observe every decision (`x-c-thru-*`, optional journal)
-- Optional 27-agent fleet and `/cplan` waves (CLI install)
+- Optional 28-agent fleet and `/cplan` waves (CLI install)
 
 ### In practice
 
@@ -166,6 +166,7 @@ Two components, both in `tools/`:
 looks the name up, decides which model should serve it, and translates the call. The answer comes
 back in Anthropic format, so nothing downstream needs to know where it came from.
 
+<!-- diagram-source: smap-svg (rendered into docs/request-flow.html by tools/gen-request-flow-svgs.js) -->
 ```mermaid
 flowchart LR
     subgraph CC["Claude Code — one context window"]
@@ -811,6 +812,7 @@ Read the arrows by weight:
 The spine runs **launch → config → proxy → endpoints**, with the harness and its hook fleet on the
 right and the artifacts, control surface and Ollama daemon hanging off the sides.
 
+<!-- diagram-source: cmap-svg (rendered into docs/request-flow.html by tools/gen-request-flow-svgs.js) -->
 ```mermaid
 flowchart TB
     DEV(["Developer runs c-thru"])
@@ -832,7 +834,7 @@ flowchart TB
     subgraph H["Claude Code harness"]
         direction LR
         CTX["Context window"]
-        AG["Agent fleet<br/>13 pipeline · 9 utility<br/>5 named pins"]
+        AG["Agent fleet<br/>13 pipeline · 10 utility<br/>5 named pins"]
         MCP["llm-capabilities MCP<br/>CLI only"]
         CTX --> AG
     end
@@ -1103,7 +1105,7 @@ Tests: `test/agent-mapping-complete.test.js`, `test/agent-invocation-headers.tes
 - [`docs/request-flow.html`](docs/request-flow.html) — interactive step-through of a request: agent name → hook → proxy → model → response, plus the failover and named-pin paths and the full component map. Self-contained; open in any browser
 - [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) — the six per-subsystem flow diagrams, each with file:line source anchors
 - [`docs/agent-architecture.md`](docs/agent-architecture.md) — wave lifecycle, STATUS contracts, escalation chain, advisors panel
-- [`skills/c-thru-advisors/SKILL.md`](skills/c-thru-advisors/SKILL.md) — multi-model panel (CLI/`cthru` only; seats from `advisor_panels`)
+- [`skills/advisors/SKILL.md`](skills/advisors/SKILL.md) — multi-model panel `/advisors` (CLI/`cthru` only; seats from `advisor_panels`)
 - [`docs/journaling.md`](docs/journaling.md) — per-request JSONL schema and storage layout
 
 ---
@@ -1195,8 +1197,8 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | Model-map seeding (`model-map.system.json`, overrides preserved) | ✓ | ✓ |
 | `ANTHROPIC_BASE_URL` auto-registration in settings | ✓ | (set per launch) |
 | Slash command `/c-thru-status` | ✓ | ✓ |
-| Slash command `/cplan` (needs `planning-suite`; full 27-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
-| Skills `c-thru-plan`, `c-thru-config`, `c-thru-control`, `c-thru-advisors` | — | ✓ |
+| Slash command `/cplan` (needs `planning-suite`; full 28-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
+| Skills `c-thru-plan`, `c-thru-config`, `c-thru-control`, `advisors` | — | ✓ |
 | User-wide hooks — fire in every Claude Code session (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) | ✓ | — |
 | Ephemeral hooks — injected per `c-thru` launch only (no static project `.claude` hooks) | — | ✓ |
 | `c-thru` binary on PATH | — | ✓ |
