@@ -16,6 +16,7 @@ const os   = require('os');
 const {
   resolveProfileModel,
   resolveCapabilityAlias,
+  resolveAdvisorPanel,
   resolveModelRoute,
   baseModeFor,
   validModes,
@@ -50,6 +51,7 @@ function parseArgs(argv) {
 const args = parseArgs(process.argv.slice(2));
 if (args.help || args.h) {
   console.log(`Usage: c-thru explain [--capability <cap>] [--agent <name>] [--model <name>] [--mode <m>] [--tier <t>]
+         c-thru explain --panel <role> [--mode <m>] [--tier <t>] [--format json|text]
          c-thru explain --all [--mode <m>] [--tier <t>] [--format json|text]
 
 Prints the model resolution chain for a hypothetical request, without sending one.
@@ -57,15 +59,17 @@ Prints the model resolution chain for a hypothetical request, without sending on
   --capability <cap>   capability alias (e.g. workhorse, judge, deep-coder)
   --agent <name>       agent name (resolved through agent_to_capability)
   --model <name>       raw model name (resolved through model_routes)
+  --panel <role>       advisor panel role (advisor_panels; falls back to "default" for same mode)
   --all                resolve every capability in llm_profiles
   --mode <m>           connectivity / routing mode (default: \$CLAUDE_LLM_MODE or 'best-cloud')
   --tier <t>           hardware tier (default: detected from RAM)
-  --format <f>         output format: text (default) or json (machine-readable, only with --all)
+  --format <f>         output format: text (default) or json (with --all or --panel)
 
 Examples:
   c-thru explain --capability coder --mode best-cloud-oss
   c-thru explain --agent tester --mode best-local-oss --tier 64gb
   c-thru explain --model gemini-latest
+  c-thru explain --panel default --mode best-cloud-oss --tier 64gb --format json
   c-thru explain --all --format json --mode best-local-oss --tier 64gb
 `);
   process.exit(0);
@@ -101,6 +105,61 @@ try {
 let capability = args.capability;
 let agent = args.agent;
 const modelName = args.model;
+
+// --panel branch: resolve advisor_panels seats → concrete models (no dispatch)
+if (args.panel) {
+  const panelRole = args.panel === true ? 'default' : String(args.panel);
+  const theMode = args.mode || process.env.CLAUDE_LLM_MODE || 'best-cloud';
+  const theValidModes = validModes(config);
+  if (!theValidModes.has(theMode)) {
+    console.error(`explain: unknown mode '${theMode}' (valid: ${[...theValidModes].join(', ')})`);
+    process.exit(1);
+  }
+  let theTier = args.tier || process.env.CLAUDE_LLM_PROFILE;
+  if (!theTier) {
+    try {
+      const { tierForGb } = require('./hw-profile.js');
+      const gb = process.env.CLAUDE_LLM_MEMORY_GB
+        ? Number(process.env.CLAUDE_LLM_MEMORY_GB)
+        : Math.ceil(os.totalmem() / (1024 ** 3));
+      theTier = tierForGb(gb);
+    } catch {
+      theTier = '64gb';
+    }
+  }
+  const resolved = resolveAdvisorPanel(config, { role: panelRole, mode: theMode, tier: theTier });
+  if (!resolved) {
+    console.error(`explain: panel '${panelRole}' not defined in advisor_panels (and no default)`);
+    const roles = Object.keys(config.advisor_panels || {});
+    if (roles.length) console.error(`         panels: ${roles.join(', ')}`);
+    process.exit(1);
+  }
+  if (args.format === 'json') {
+    console.log(JSON.stringify(resolved, null, 2));
+  } else {
+    const cyan  = process.stdout.isTTY ? '\x1b[36m' : '';
+    const bold  = process.stdout.isTTY ? '\x1b[1m'  : '';
+    const reset = process.stdout.isTTY ? '\x1b[0m'  : '';
+    console.log(`${bold}Advisor panel — role=${resolved.role} mode=${resolved.mode} tier=${resolved.tier}${reset}`);
+    if (resolved.requestedRole && resolved.requestedRole !== resolved.role) {
+      console.log(`  requested_role  ${resolved.requestedRole} → fell back to ${resolved.role}`);
+    }
+    if (resolved.description) console.log(`  description     ${resolved.description}`);
+    console.log('');
+    for (const s of resolved.seats) {
+      const model = s.model || '(unresolved)';
+      const cap = s.capability || '—';
+      const pin = s.pin ? ' [pin]' : '';
+      console.log(`  seat ${cyan}${s.name}${reset}  →  ${model}${pin}  (via ${cap})`);
+    }
+    if (resolved.errors && resolved.errors.length) {
+      console.log('');
+      for (const e of resolved.errors) console.error(`  error: ${e}`);
+    }
+  }
+  if (resolved.errors && resolved.errors.length) process.exit(1);
+  process.exit(0);
+}
 
 // --all branch: resolve every capability for the given tier × mode
 if (args.all) {
@@ -194,7 +253,7 @@ if (args.all) {
 }
 
 if (!capability && !agent && !modelName) {
-  console.error('explain: --capability, --agent, or --model required (try --help)');
+  console.error('explain: --capability, --agent, --model, or --panel required (try --help)');
   process.exit(1);
 }
 

@@ -921,6 +921,8 @@ run_suite "c-thru-explain (explain command resolution)" \
   node "$REPO_DIR/test/c-thru-explain.test.js"
 run_suite "advisor-panels-resolve (advisor_panels seats per mode)" \
   node "$REPO_DIR/test/advisor-panels-resolve.test.js"
+run_suite "advisor-panels-validate (advisor_panels schema)" \
+  node "$REPO_DIR/test/advisor-panels-validate.test.js"
 run_suite "c-thru-plan-harness (plan harness utilities)" \
   node "$REPO_DIR/test/c-thru-plan-harness.test.js"
 run_suite "plan-state-lib (native plans + wave/session aggregation)" \

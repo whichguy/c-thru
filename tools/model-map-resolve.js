@@ -545,6 +545,121 @@ function compareKey(a, b) {
   return 0;
 }
 
+/**
+ * Resolve an advisor panel role for a connectivity mode × hardware tier.
+ *
+ * Config shape (config.advisor_panels):
+ *   { [role]: { [mode]: { seats: string[], description?: string } } }
+ * Missing non-default roles fall back to "default".
+ *
+ * Each seat string is resolved via agent_to_capability → capability or model: pin,
+ * then capabilities via resolveProfileModel(mode, tier).
+ *
+ * Returns:
+ *   { role, mode, tier, description, seats: [{ name, capability, model, pin }], errors: string[] }
+ * or null if no panel config / role missing entirely.
+ */
+function resolveAdvisorPanel(config, { role = 'default', mode, tier } = {}) {
+  const panels = (config && config.advisor_panels) || null;
+  if (!panels || typeof panels !== 'object') return null;
+
+  const theRole = (typeof role === 'string' && role.trim()) ? role.trim() : 'default';
+  let roleEntry = panels[theRole];
+  let resolvedRole = theRole;
+  if (!roleEntry || typeof roleEntry !== 'object') {
+    if (theRole !== 'default' && panels.default && typeof panels.default === 'object') {
+      roleEntry = panels.default;
+      resolvedRole = 'default';
+    } else {
+      return null;
+    }
+  }
+
+  const theMode = mode || resolveLlmMode(config);
+  const theTier = tier || resolveActiveTier(config);
+  // Strict mode order only — never fall back to another connectivity mode's seats
+  // (e.g. do not serve best-cloud-oss seats when the request asked for best-cloud-gov).
+  // Order: role[mode] → default[mode] → error.
+  let modeEntry = roleEntry[theMode];
+  if ((!modeEntry || typeof modeEntry !== 'object') && resolvedRole !== 'default'
+      && panels.default && typeof panels.default === 'object') {
+    modeEntry = panels.default[theMode] || null;
+    if (modeEntry && typeof modeEntry === 'object') {
+      resolvedRole = 'default';
+      roleEntry = panels.default;
+    }
+  }
+  if (!modeEntry || typeof modeEntry !== 'object') {
+    return {
+      role: resolvedRole,
+      requestedRole: theRole,
+      mode: theMode,
+      tier: theTier,
+      description: null,
+      seats: [],
+      errors: [`advisor_panels.${theRole} has no entry for mode '${theMode}' (and default.${theMode} is missing)`],
+    };
+  }
+
+  const seatNames = Array.isArray(modeEntry.seats) ? modeEntry.seats : [];
+  const errors = [];
+  if (seatNames.length < 2 || seatNames.length > 5) {
+    errors.push(`advisor_panels.${resolvedRole}.${theMode}.seats must have 2–5 entries (got ${seatNames.length})`);
+  }
+
+  const seats = [];
+  for (const raw of seatNames) {
+    if (typeof raw !== 'string' || !raw.trim()) {
+      errors.push(`empty seat name in advisor_panels.${resolvedRole}.${theMode}`);
+      continue;
+    }
+    const name = raw.trim();
+    const alias = resolveCapabilityAlias(name, config);
+    let capability = null;
+    let model = null;
+    let pin = false;
+
+    if (alias && typeof alias === 'string' && alias.startsWith(MODEL_PIN_PREFIX)) {
+      model = alias.slice(MODEL_PIN_PREFIX.length);
+      pin = true;
+      capability = alias; // model:<id>
+    } else if (alias) {
+      capability = alias;
+      const entry = config.llm_profiles && config.llm_profiles[alias];
+      if (entry) {
+        model = resolveProfileModel(entry, theTier, theMode);
+      }
+      if (!model) {
+        errors.push(`seat '${name}' capability '${alias}' did not resolve a model for mode=${theMode} tier=${theTier}`);
+      }
+    } else {
+      // direct capability or unknown
+      const entry = config.llm_profiles && config.llm_profiles[name];
+      if (entry) {
+        capability = name;
+        model = resolveProfileModel(entry, theTier, theMode);
+        if (!model) {
+          errors.push(`seat '${name}' capability did not resolve for mode=${theMode} tier=${theTier}`);
+        }
+      } else {
+        errors.push(`seat '${name}' is not an agent, model: pin, or llm_profiles capability`);
+      }
+    }
+
+    seats.push({ name, capability, model, pin });
+  }
+
+  return {
+    role: resolvedRole,
+    requestedRole: theRole,
+    mode: theMode,
+    tier: theTier,
+    description: typeof modeEntry.description === 'string' ? modeEntry.description : null,
+    seats,
+    errors,
+  };
+}
+
 module.exports = {
   MODEL_PIN_PREFIX,
   resolveProfileModel,
@@ -555,6 +670,7 @@ module.exports = {
   baseModeFor,
   resolveActiveTier,
   resolveCapabilityAlias,
+  resolveAdvisorPanel,
   resolveTerminalTarget,
   matchModelRoute,
   pickModeTarget,

@@ -167,6 +167,26 @@ install_cplan_command() {
     echo -e "  ${GREEN}✅ installed command: /cplan${NC}"
 }
 
+# --- /c-thru-advisors multi-model panel command (CLI fleet; not marketplace lean) ---
+install_advisors_command() {
+    local commands_dir="$CLAUDE_DIR/commands"
+    local src="$REPO_DIR/commands/c-thru-advisors.md"
+    local cmd_file="$commands_dir/c-thru-advisors.md"
+    mkdir -p "$commands_dir"
+    if [ ! -f "$src" ]; then
+        echo -e "  ${YELLOW}⚠️  missing $src — skip /c-thru-advisors install${NC}"
+        return 0
+    fi
+    if [ -f "$cmd_file" ] && cmp -s "$src" "$cmd_file" 2>/dev/null; then
+        echo -e "  ${GRAY}✓  /c-thru-advisors${NC}"
+        return 0
+    fi
+    cp "$src" "$cmd_file"
+    # Remove legacy short name if present (avoid clash with global Grok /advisors)
+    rm -f "$commands_dir/advisors.md" 2>/dev/null || true
+    echo -e "  ${GREEN}✅ installed command: /c-thru-advisors${NC}"
+}
+
 # --- Agentic plan/wave: skill symlinks ---
 install_skills_cthru() {
     local skills_src="$REPO_DIR/skills"
@@ -301,6 +321,7 @@ fi
 cleanup_old_persistent_config
 install_skill
 install_cplan_command
+install_advisors_command
 extend_model_map
 
 # Shape C stamp + shared post-install messaging

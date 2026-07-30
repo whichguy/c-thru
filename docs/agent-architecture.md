@@ -384,6 +384,26 @@ Agents that don't use the standard worker STATUS block:
 `current.md` only. Agents never read each other's outputs directly.
 The deterministic pre-processor applies dep_discoveries from findings to pending items in current.md between waves — this is the structured channel for cross-wave knowledge.
 
+## Advisors panel (not a wave agent)
+
+The **c-thru-advisors** skill (`skills/c-thru-advisors/SKILL.md`, slash
+`/c-thru-advisors`) is a **leaf multi-seat consult**, not part of the `/cplan`
+wave graph. It requires a **`cthru` CLI launch** (fleet `--agents` inject);
+the lean marketplace plugin does not ship this skill or the seat fleet.
+
+Seats are declared in `config/model-map.json` → `advisor_panels` per
+connectivity mode and resolved with:
+
+```bash
+c-thru explain --panel default --mode best-cloud-oss --tier 64gb
+```
+
+The host session fans out to `Agent(subagent_type: <seat>)` for each seat
+(pass 1 independent, pass 2 peer-aware), then synthesizes a final answer.
+Brand leaves (`grok`, `deepseek`, …) require the matching provider keys on the
+proxy path. Gov modes must not seat Chinese-origin brand agents (enforced by
+map validation + hermetic tests). Not the global Grok skill named `advisors`.
+
 ## Skill source
 
 Skills live in `skills/`, agents live in `agents/`. Neither is installed as a persistent

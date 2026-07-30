@@ -1040,5 +1040,49 @@
     "qwen3.6": {
       "preserve_thinking": true
     }
+  },
+  "advisor_panels": {
+    "default": {
+      "best-cloud": {
+        "seats": [
+          "planner-hard",
+          "gemini",
+          "grok"
+        ],
+        "description": "Max-quality cloud mix: hard planner + Gemini + Grok leaf"
+      },
+      "best-cloud-oss": {
+        "seats": [
+          "deepseek",
+          "kimi",
+          "qwen"
+        ],
+        "description": "OSS cloud brand leaves"
+      },
+      "best-local-oss": {
+        "seats": [
+          "planner",
+          "coder",
+          "code-reviewer"
+        ],
+        "description": "Local capability seats (resolve via llm_profiles)"
+      },
+      "best-cloud-gov": {
+        "seats": [
+          "planner-hard",
+          "gemini",
+          "grok"
+        ],
+        "description": "Gov-safe cloud (no Chinese-origin brand leaves)"
+      },
+      "best-local-gov": {
+        "seats": [
+          "planner",
+          "code-reviewer",
+          "generalist"
+        ],
+        "description": "Gov-safe local capabilities"
+      }
+    }
   }
 }

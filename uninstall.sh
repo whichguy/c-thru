@@ -200,6 +200,8 @@ SKILL_FILES=(
     "$CLAUDE_DIR/commands/c-thru-status.md"
     "$CLAUDE_DIR/commands/c-thru-install-cli.md"
     "$CLAUDE_DIR/commands/cplan.md"
+    "$CLAUDE_DIR/commands/c-thru-advisors.md"
+    "$CLAUDE_DIR/commands/advisors.md"
 )
 
 SKILLS_CTHRU_DIR="$CLAUDE_DIR/skills/c-thru"

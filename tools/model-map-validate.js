@@ -1068,6 +1068,74 @@ function validateConfig(config, _errors, options) {
     }
   }
 
+  // advisor_panels: role → mode → { seats: string[2..5], description? }
+  // Seats are agent names (preferred), llm_profiles capabilities, or model: pins via agent_to_capability.
+  if (config.advisor_panels != null) {
+    const validModes = LLM_MODES || CONNECTIVITY_MODES || [];
+    const modeSet = new Set(Array.isArray(validModes) ? validModes : [...validModes]);
+    const a2c = isObject(config.agent_to_capability) ? config.agent_to_capability : {};
+    const validCaps = deriveCapabilityAliases(config);
+    if (!isObject(config.advisor_panels)) {
+      report("'advisor_panels' must be an object when present");
+    } else {
+      if (!isObject(config.advisor_panels.default)) {
+        report("'advisor_panels.default' is required when advisor_panels is present");
+      }
+      for (const [role, roleEntry] of Object.entries(config.advisor_panels)) {
+        if (!isObject(roleEntry)) {
+          report(`'advisor_panels.${role}' must be an object`);
+          continue;
+        }
+        for (const [mode, modeEntry] of Object.entries(roleEntry)) {
+          if (modeSet.size && !modeSet.has(mode)) {
+            report(`'advisor_panels.${role}.${mode}' is not a valid connectivity mode`);
+            continue;
+          }
+          if (!isObject(modeEntry)) {
+            report(`'advisor_panels.${role}.${mode}' must be an object`);
+            continue;
+          }
+          if (modeEntry.description != null && typeof modeEntry.description !== 'string') {
+            report(`'advisor_panels.${role}.${mode}.description' must be a string when present`);
+          }
+          if (!Array.isArray(modeEntry.seats)) {
+            report(`'advisor_panels.${role}.${mode}.seats' must be an array`);
+            continue;
+          }
+          if (modeEntry.seats.length < 2 || modeEntry.seats.length > 5) {
+            report(`'advisor_panels.${role}.${mode}.seats' must have 2–5 entries (got ${modeEntry.seats.length})`);
+          }
+          for (let i = 0; i < modeEntry.seats.length; i++) {
+            const seat = modeEntry.seats[i];
+            if (typeof seat !== 'string' || !seat.trim()) {
+              report(`'advisor_panels.${role}.${mode}.seats[${i}]' must be a non-empty string`);
+              continue;
+            }
+            const name = seat.trim();
+            const mapped = Object.prototype.hasOwnProperty.call(a2c, name) ? a2c[name] : null;
+            if (mapped) {
+              if (typeof mapped === 'string' && mapped.startsWith('model:')) {
+                if (!mapped.slice('model:'.length).trim()) {
+                  report(`'advisor_panels.${role}.${mode}.seats[${i}]' agent '${name}' has empty model: pin`);
+                }
+              } else if (typeof mapped === 'string' && !validCaps.has(mapped)) {
+                report(`'advisor_panels.${role}.${mode}.seats[${i}]' agent '${name}' maps to unknown capability '${mapped}'`);
+              }
+            } else if (!validCaps.has(name)) {
+              report(`'advisor_panels.${role}.${mode}.seats[${i}]' '${name}' is not an agent_to_capability key or llm_profiles capability`);
+            }
+            // Gov modes: brand agent names that are Chinese-origin families must not be seated
+            if (/gov$/.test(mode) || mode.includes('gov')) {
+              if (/^(deepseek|qwen|kimi|glm)(-|$)/i.test(name) || /^(deepseek|qwen|kimi|glm)$/i.test(name)) {
+                report(`'advisor_panels.${role}.${mode}.seats[${i}]' seats Chinese-origin brand agent '${name}' in a gov mode`);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // v1.2 schema keys — optional, accepted when present
   if (config.tool_capability_to_profile != null) {
     if (!isObject(config.tool_capability_to_profile)) {

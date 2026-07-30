@@ -1103,7 +1103,7 @@ Tests: `test/agent-mapping-complete.test.js`, `test/agent-invocation-headers.tes
 - [`docs/request-flow.html`](docs/request-flow.html) — interactive step-through of a request: agent name → hook → proxy → model → response, plus the failover and named-pin paths and the full component map. Self-contained; open in any browser
 - [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) — the six per-subsystem flow diagrams, each with file:line source anchors
 - [`docs/agent-architecture.md`](docs/agent-architecture.md) — wave lifecycle, STATUS contracts, escalation chain, advisors panel
-- [`skills/advisors/SKILL.md`](skills/advisors/SKILL.md) — multi-model advisors skill (seats from `advisor_panels` per connectivity mode)
+- [`skills/c-thru-advisors/SKILL.md`](skills/c-thru-advisors/SKILL.md) — multi-model panel (CLI/`cthru` only; seats from `advisor_panels`)
 - [`docs/journaling.md`](docs/journaling.md) — per-request JSONL schema and storage layout
 
 ---
@@ -1196,7 +1196,7 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | `ANTHROPIC_BASE_URL` auto-registration in settings | ✓ | (set per launch) |
 | Slash command `/c-thru-status` | ✓ | ✓ |
 | Slash command `/cplan` (needs `planning-suite`; full 27-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
-| Skills `c-thru-plan`, `c-thru-config`, `c-thru-control`, `advisors` | ✓ | ✓ |
+| Skills `c-thru-plan`, `c-thru-config`, `c-thru-control`, `c-thru-advisors` | — | ✓ |
 | User-wide hooks — fire in every Claude Code session (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) | ✓ | — |
 | Ephemeral hooks — injected per `c-thru` launch only (no static project `.claude` hooks) | — | ✓ |
 | `c-thru` binary on PATH | — | ✓ |
