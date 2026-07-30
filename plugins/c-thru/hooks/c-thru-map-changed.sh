@@ -34,6 +34,15 @@ while [ -L "$_src" ]; do
 done
 _hook_dir=$(cd -P "$(dirname "$_src")" && pwd)
 repo_root="$(cd "$_hook_dir/.." && pwd)"
+# Plugin-manifest gate (C_THRU_PLUGIN_HOOK=1)
+if [ -r "$repo_root/tools/c-thru-plugin-hook-gate.sh" ]; then
+    # shellcheck source=c-thru-plugin-hook-gate.sh
+    ROUTER_REPO_ROOT="$repo_root"
+    . "$repo_root/tools/c-thru-plugin-hook-gate.sh"
+    if cthru_plugin_hook_should_skip; then
+        exit 0
+    fi
+fi
 validator="$repo_root/tools/model-map-validate.js"
 
 if ! command -v node >/dev/null 2>&1 || [ ! -f "$validator" ]; then

@@ -6,12 +6,17 @@ plugin directories.
 ## Canonical Shape C story
 
 1. **Install:** private marketplace → `c-thru@c-thru` (or one family identity).  
-2. **Bootstrap:** plugin SessionStart runs `c-thru-plugin-bootstrap.sh` → durable
-   clone `~/.claude/c-thru-src` + symlinks into `~/.claude/tools` + stamp
-   `.c-thru-cli-installed`.  
-3. **Runtime:** always **`cthru`** / `c-thru` (launch-time inject + fleet).  
-4. **Dev path:** clone + `bash install.sh` = same core as bootstrap.  
-5. **Remove:** `pkill` proxy → `uninstall.sh` scrub → then `/plugin uninstall`.  
+2. **Bootstrap:** run **`/c-thru:install-cli`** (blocking; not SessionStart — hook
+   timeout is too short for `git clone`). That runs `c-thru-plugin-bootstrap.sh` →
+   durable pin clone `~/.claude/c-thru-src` + symlinks into `~/.claude/tools` +
+   stamp `.c-thru-cli-installed` (fields: `version`, `source_root`, `source_ref`,
+   `source_sha`). Loopback `ANTHROPIC_BASE_URL` residue is scrubbed on stamp.  
+3. **Runtime:** always **`cthru`** / `c-thru` (launch-time inject + fleet). Plugin
+   lifecycle hooks set `C_THRU_PLUGIN_HOOK=1` and **no-op** under `cthru` / after
+   stamp (avoid double-fire).  
+4. **Dev path:** clone + `bash install.sh` = same core as install-cli.  
+5. **Remove:** `pkill` proxy → `uninstall.sh` (stamp + tools; optional
+   `--purge-src` for `c-thru-src`) → then `/plugin uninstall`.  
 6. **One identity:** never both `@c-thru` and `@claude-craft`.
 
 | Catalog | Install id | Role |

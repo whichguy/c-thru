@@ -19,10 +19,12 @@ Or: `whichguy/claude-craft` → `c-thru@claude-craft`.
 
 ### What happens next
 
-1. First SessionStart runs `tools/c-thru-plugin-bootstrap.sh`.
-2. Clones/updates `~/.claude/c-thru-src` (full tree) and symlinks tools into
+1. Run **`/c-thru:install-cli`** (blocking bootstrap — do **not** rely on
+   SessionStart to `git clone`; the hook timeout is too short).
+2. Bootstrap clones/pins `~/.claude/c-thru-src` and symlinks tools into
    `~/.claude/tools` (same core as `bash install.sh`).
-3. Writes stamp `~/.claude/.c-thru-cli-installed`.
+3. Writes stamp `~/.claude/.c-thru-cli-installed` and scrubs residual loopback
+   `ANTHROPIC_BASE_URL` from settings.
 4. **You run `cthru`** for day-to-day work.
 
 ```bash
@@ -40,11 +42,12 @@ Verify (namespaced plugin command uses proxy HTTP; optional after CLI works):
 
 | Surface | Role |
 |---|---|
-| Bootstrap | Install CLI tools via symlinks |
+| `/c-thru:install-cli` | Supported bootstrap / re-link path |
 | `/c-thru:c-thru-status` | Proxy status via HTTP + plugin-root tools |
-| Hooks | Bootstrap + optional lite mode only (`C_THRU_PLUGIN_LITE=1`) |
+| Hooks | Prompt install-cli if needed; no-op under `cthru` (no double-fire) |
 
 Full multi-agent `/cplan` waves need the CLI fleet (`cthru` injects `--agents`).
+This package is intentionally **lean** (no fat skill tree).
 
 ## Developer path
 
@@ -58,7 +61,7 @@ cthru
 ## Removing c-thru
 
 1. `pkill -f claude-proxy`
-2. `bash uninstall.sh` (from a checkout) or manual loopback `ANTHROPIC_BASE_URL` scrub
+2. `bash uninstall.sh` (from a checkout; optional `--purge-src` for `c-thru-src`)
 3. `/plugin uninstall c-thru@c-thru`
 
 See [SECURITY.md](../../SECURITY.md).

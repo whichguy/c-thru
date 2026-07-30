@@ -112,21 +112,65 @@ cthru_plugin_version() {
   return 0
 }
 
+# Remove durable loopback ANTHROPIC_BASE_URL (plugin fixed-port residue).
+# Never touches non-loopback URLs. Uses node (always available if proxy is).
+cthru_scrub_loopback_base_url() {
+  local settings="${CLAUDE_DIR}/settings.json"
+  [[ -f "$settings" ]] || return 0
+  if command -v node >/dev/null 2>&1; then
+    node -e '
+      const fs=require("fs");
+      const f=process.argv[1];
+      let s;
+      try { s=JSON.parse(fs.readFileSync(f,"utf8")); } catch(e) { process.exit(0); }
+      const u=s&&s.env&&s.env.ANTHROPIC_BASE_URL;
+      if(!u||typeof u!=="string") process.exit(0);
+      if(!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(u)) process.exit(0);
+      delete s.env.ANTHROPIC_BASE_URL;
+      if(s.env&&Object.keys(s.env).length===0) delete s.env;
+      fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n");
+    ' "$settings" 2>/dev/null || true
+  elif command -v jq >/dev/null 2>&1; then
+    local base_url tmp
+    base_url=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$settings" 2>/dev/null || true)
+    case "$base_url" in
+      http://127.0.0.1:*|http://localhost:*|https://127.0.0.1:*|https://localhost:*)
+        tmp="${settings}.tmp.$$"
+        jq 'if .env and .env.ANTHROPIC_BASE_URL then
+              del(.env.ANTHROPIC_BASE_URL)
+              | (if (.env|length)==0 then del(.env) else . end)
+            else . end' "$settings" >"$tmp" && mv "$tmp" "$settings"
+        ;;
+    esac
+  fi
+  rm -f "${CLAUDE_DIR}/.c-thru-plugin-setup-pending" 2>/dev/null || true
+}
+
 cthru_write_stamp() {
   local root="${1:-$REPO_DIR}"
-  local ver
+  local ver ref sha
   ver="$(cthru_plugin_version "$root")"
   [[ -n "$ver" ]] || ver="unknown"
+  ref="${C_THRU_SOURCE_REF:-}"
+  sha=""
+  if [[ -d "$root/.git" ]] && command -v git >/dev/null 2>&1; then
+    sha="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
+    [[ -n "$ref" ]] || ref="$(git -C "$root" describe --tags --exact-match 2>/dev/null || git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  fi
+  [[ -n "$ref" ]] || ref="v${ver}"
   mkdir -p "$CLAUDE_DIR"
-  # Atomic-ish write
   local tmp
   tmp="$(cthru_stamp_path).tmp.$$"
   cat >"$tmp" <<EOF
 version=${ver}
 source_root=${root}
+source_ref=${ref}
+source_sha=${sha}
 installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
   mv -f "$tmp" "$(cthru_stamp_path)"
+  # Shape C: do not leave plugin fixed-port routing fighting cthru process env
+  cthru_scrub_loopback_base_url
 }
 
 cthru_read_stamp_field() {
@@ -239,18 +283,42 @@ cthru_seed_model_map() {
   fi
 }
 
+# Desired git ref for S1 pin (tag vX.Y.Z matching plugin version when possible).
+cthru_desired_source_ref() {
+  local ver root="${1:-}"
+  if [[ -n "${C_THRU_SOURCE_REF:-}" ]]; then
+    printf '%s' "$C_THRU_SOURCE_REF"
+    return 0
+  fi
+  ver="$(cthru_plugin_version "$root")"
+  if [[ -n "$ver" && "$ver" != "unknown" ]]; then
+    printf 'v%s' "$ver"
+    return 0
+  fi
+  printf 'main'
+}
+
 # S1: durable full tree at $CLAUDE_DIR/c-thru-src → sets REPO_DIR
+# Prefers detached pin at tag v<plugin-version> when available.
 cthru_ensure_source_root_s1() {
   cthru_core_colors
-  local src remote
+  local src remote ref
   src="$(cthru_src_path)"
   remote="${C_THRU_GIT_REMOTE:-$CTHRU_DEFAULT_REMOTE}"
+  # Version for pin may come from monorepo checkout if present
+  ref="$(cthru_desired_source_ref "${REPO_DIR:-}")"
 
   if cthru_repo_is_complete "$src"; then
     cthru_chmod_tree_bins "$src"
-    if [[ "${C_THRU_BOOTSTRAP_PULL:-1}" == "1" ]] && [[ -d "$src/.git" ]]; then
-      git -C "$src" pull --ff-only >/dev/null 2>&1 || true
+    if [[ -d "$src/.git" ]] && command -v git >/dev/null 2>&1; then
+      # Refresh pin when possible (fail soft)
+      git -C "$src" fetch --depth 1 origin "refs/tags/${ref}:refs/tags/${ref}" >/dev/null 2>&1 \
+        || git -C "$src" fetch --depth 1 origin "$ref" >/dev/null 2>&1 || true
+      git -C "$src" checkout --detach "tags/${ref}" >/dev/null 2>&1 \
+        || git -C "$src" checkout --detach "$ref" >/dev/null 2>&1 \
+        || { [[ "${C_THRU_BOOTSTRAP_PULL:-1}" == "1" ]] && git -C "$src" pull --ff-only >/dev/null 2>&1 || true; }
     fi
+    export C_THRU_SOURCE_REF="$ref"
     REPO_DIR="$src"
     export REPO_DIR
     return 0
@@ -263,16 +331,19 @@ cthru_ensure_source_root_s1() {
 
   mkdir -p "$(dirname "$src")"
   if [[ -d "$src/.git" ]]; then
-    git -C "$src" pull --ff-only >/dev/null 2>&1 || true
+    :
   elif [[ -e "$src" ]]; then
     echo -e "${RED}c-thru bootstrap: ${src} exists but is not a complete c-thru tree${NC}" >&2
     return 1
   else
-    echo -e "${YELLOW}c-thru bootstrap: cloning ${remote} → ${src}${NC}" >&2
-    if ! git clone --depth 1 "$remote" "$src" >&2; then
+    echo -e "${YELLOW}c-thru bootstrap: cloning ${remote} (${ref}) → ${src}${NC}" >&2
+    if ! git clone --depth 1 --branch "$ref" "$remote" "$src" >&2 \
+      && ! git clone --depth 1 "$remote" "$src" >&2; then
       echo -e "${RED}c-thru bootstrap: git clone failed${NC}" >&2
       return 1
     fi
+    git -C "$src" checkout --detach "tags/${ref}" >/dev/null 2>&1 \
+      || git -C "$src" checkout --detach "$ref" >/dev/null 2>&1 || true
   fi
 
   cthru_chmod_tree_bins "$src"
@@ -280,6 +351,7 @@ cthru_ensure_source_root_s1() {
     echo -e "${RED}c-thru bootstrap: clone incomplete (need tools/c-thru, agents/, config/model-map.json)${NC}" >&2
     return 1
   fi
+  export C_THRU_SOURCE_REF="$ref"
   REPO_DIR="$src"
   export REPO_DIR
   return 0

@@ -48,12 +48,10 @@ for h in "${HOOKS[@]}"; do
   check_or_copy "$ROOT/tools/$h" "$BUNDLE/hooks/$h"
 done
 
-# Skill SKILL.md files — only public-facing skills synced to the marketplace bundle.
-# The following skills are intentionally excluded:
-#   logical-gearbox                             — internal routing research
-#   review-fix, review-plan                     — review-suite; shipped via separate plugin
-#   update-model-research                       — internal capability research tool
-SKILLS=(c-thru-plan c-thru-config c-thru-control plan-page)
+# Skill SKILL.md files — Shape C lean marketplace: none.
+# Fleet skills (c-thru-plan, config, control, …) arrive via `cthru` launch inject,
+# not the plugin package. Repo skills/ still holds sources for CLI inject.
+SKILLS=()
 for s in "${SKILLS[@]}"; do
   check_or_copy "$ROOT/skills/$s/SKILL.md" "$BUNDLE/skills/$s/SKILL.md"
 done
@@ -61,9 +59,11 @@ done
 # Proxy binary + JS runtime deps (needed for plugin-only installs without install.sh).
 # c-thru-lib.sh: the bundled hooks source it from $ROUTER_REPO_ROOT/tools/ (which
 # resolves to $BUNDLE/tools/ in plugin mode), so it must ship here too.
+# c-thru-plugin-hook-gate.sh: sourced by every hook when C_THRU_PLUGIN_HOOK=1.
 for f in c-thru-lib.sh c-thru-ensure-proxy-on-port.sh c-thru-revive-agent-sessions.sh c-thru-gateway-auth-helper.sh claude-proxy proxy-dashboard.html plan-dashboard.html plan-state-lib.js c-thru-plan-harness.js model-map-config.js model-map-resolve.js model-map-layered.js \
           model-map-validate.js hw-profile.js agent-sentinel.js upstream-error-body.js proxy-log-maintain.js \
-          c-thru-install-core.sh c-thru-plugin-bootstrap.sh c-thru-setup-messages.sh; do
+          c-thru-install-core.sh c-thru-plugin-bootstrap.sh c-thru-setup-messages.sh c-thru-plugin-hook-gate.sh \
+          c-thru-statusline.sh c-thru-statusline-overlay.sh c-thru-config-helpers.js c-thru-control.js; do
   check_or_copy "$ROOT/tools/$f" "$BUNDLE/tools/$f"
 done
 
@@ -77,35 +77,42 @@ done
 # Shipped config (model routing defaults)
 check_or_copy "$ROOT/config/model-map.json"            "$BUNDLE/config/model-map.json"
 
-# Slash commands (canonical under repo commands/; install.sh + plugin bundle both consume these)
-COMMANDS=(c-thru-status.md cplan.md)
+# Slash commands — Shape C lean: status + install-cli only.
+# Full /cplan and advisors ship via CLI inject / other plugins, not marketplace fat.
+COMMANDS=(c-thru-status.md c-thru-install-cli.md)
 for c in "${COMMANDS[@]}"; do
   if [ -f "$ROOT/commands/$c" ]; then
     check_or_copy "$ROOT/commands/$c" "$BUNDLE/commands/$c"
   fi
 done
 
-# Reverse-drift pass (--check only): a forward sync proves every source has a
-# matching destination, but never catches a STALE bundle file that lingers after
-# its source was dropped from a list. Walk the bundle's synced subtrees and flag
-# any file that isn't an expected destination.
-#   hooks.json is hand-maintained in the bundle (not copied from a source list),
-#   so it is allowlisted rather than flagged.
-if [ "$mode" = "--check" ]; then
-  BUNDLE_ALLOWLIST=("$BUNDLE/hooks/hooks.json")
-  is_expected() {
-    local f="$1" e
-    for e in "${EXPECTED_DESTS[@]}" "${BUNDLE_ALLOWLIST[@]}"; do
-      [ "$f" = "$e" ] && return 0
-    done
-    return 1
-  }
-  while IFS= read -r -d '' f; do
-    if ! is_expected "$f"; then
+# hooks.json is hand-maintained in the bundle (not copied from a source list).
+BUNDLE_ALLOWLIST=("$BUNDLE/hooks/hooks.json")
+
+is_expected() {
+  local f="$1" e
+  for e in "${EXPECTED_DESTS[@]}" "${BUNDLE_ALLOWLIST[@]}"; do
+    [ "$f" = "$e" ] && return 0
+  done
+  return 1
+}
+
+# Reverse-drift: --check flags STALE; sync mode prunes orphaned lean leftovers.
+while IFS= read -r -d '' f; do
+  if ! is_expected "$f"; then
+    if [ "$mode" = "--check" ]; then
       echo "STALE: $f (no corresponding source entry in sync lists)"
       drift=1
+    else
+      echo "PRUNE: $f"
+      rm -f "$f" || { echo "FAIL: could not prune $f"; drift=1; }
     fi
-  done < <(find "$BUNDLE"/tools "$BUNDLE"/hooks "$BUNDLE"/skills "$BUNDLE"/config "$BUNDLE"/commands -type f -print0 2>/dev/null)
+  fi
+done < <(find "$BUNDLE"/tools "$BUNDLE"/hooks "$BUNDLE"/skills "$BUNDLE"/config "$BUNDLE"/commands -type f -print0 2>/dev/null)
+
+# Drop empty skill dirs left after lean prune
+if [ "$mode" != "--check" ]; then
+  find "$BUNDLE/skills" -mindepth 1 -type d -empty -delete 2>/dev/null || true
 fi
 
 [ "$drift" -eq 0 ] || { echo "Run tools/sync-plugin-bundle.sh to fix drift."; exit 1; }

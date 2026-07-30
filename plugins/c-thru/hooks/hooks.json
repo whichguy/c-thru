@@ -1,46 +1,81 @@
 {
-  "description": "c-thru proxy lifecycle hooks. SessionStart probes proxy + Ollama health (silent on happy path). UserPromptSubmit health-checks the proxy and injects a static control-plane context block (no prompt inspection). PostToolUse re-validates model-map.json on edit. PreCompact re-injects context before Claude Code compresses history.",
+  "description": "c-thru Shape C: plugin discovers/bootstraps CLI. Lifecycle hooks set C_THRU_PLUGIN_HOOK=1 so they no-op under cthru (avoid double-fire). Run /c-thru:install-cli then launch with cthru.",
   "hooks": {
     "SessionStart": [{
       "matcher": "*",
       "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-session-start.sh", "timeout": 10 }
+        {
+          "type": "command",
+          "command": "env C_THRU_PLUGIN_HOOK=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-session-start.sh\"",
+          "timeout": 10
+        }
       ]
     }],
     "Stop": [{
       "matcher": "*",
       "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-stop-hook.sh", "timeout": 5 }
+        {
+          "type": "command",
+          "command": "env C_THRU_PLUGIN_HOOK=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-stop-hook.sh\"",
+          "timeout": 5
+        }
       ]
     }],
     "StopFailure": [{
       "matcher": "server_error|unknown",
       "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-stop-failure-hook.sh", "timeout": 10 }
+        {
+          "type": "command",
+          "command": "env C_THRU_PLUGIN_HOOK=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-stop-failure-hook.sh\"",
+          "timeout": 10
+        }
       ]
     }],
     "UserPromptSubmit": [{
       "matcher": "*",
       "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-proxy-health.sh", "timeout": 5, "async": true, "asyncRewake": true },
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-classify.sh", "timeout": 8, "async": true }
+        {
+          "type": "command",
+          "command": "env C_THRU_PLUGIN_HOOK=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-proxy-health.sh\"",
+          "timeout": 5,
+          "async": true,
+          "asyncRewake": true
+        },
+        {
+          "type": "command",
+          "command": "env C_THRU_PLUGIN_HOOK=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-classify.sh\"",
+          "timeout": 8,
+          "async": true
+        }
       ]
     }],
     "PostToolUse": [{
       "matcher": "Write|Edit",
       "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-map-changed.sh", "timeout": 5 }
+        {
+          "type": "command",
+          "command": "env C_THRU_PLUGIN_HOOK=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-map-changed.sh\"",
+          "timeout": 5
+        }
       ]
     }, {
       "matcher": "ExitPlanMode",
       "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-plan-visibility-hook.sh", "timeout": 5 }
+        {
+          "type": "command",
+          "command": "env C_THRU_PLUGIN_HOOK=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-plan-visibility-hook.sh\"",
+          "timeout": 5
+        }
       ]
     }],
     "PreCompact": [{
       "matcher": "*",
       "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-postcompact-context.sh", "timeout": 10 }
+        {
+          "type": "command",
+          "command": "env C_THRU_PLUGIN_HOOK=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/c-thru-postcompact-context.sh\"",
+          "timeout": 10
+        }
       ]
     }]
   }

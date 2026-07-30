@@ -84,8 +84,9 @@ bash tools/c-thru check-deps --fix
 
 ## 3. First run
 
-**End users (Shape C):** install the private marketplace plugin, let SessionStart
-bootstrap CLI tools, then always launch with **`cthru`**. See the root
+**End users (Shape C):** install the private marketplace plugin, run
+`/c-thru:install-cli` to bootstrap CLI tools (not SessionStart clone), then
+always launch with **`cthru`**. See the root
 [`README.md`](../README.md) Quick start.
 
 **Contributors** clone the repo and run the same installer core from a checkout:

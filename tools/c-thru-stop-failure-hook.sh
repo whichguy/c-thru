@@ -19,6 +19,15 @@ while [ -L "$_src" ]; do
   case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
 done
 ROUTER_REPO_ROOT=$(cd -P "$(dirname "$_src")/.." && pwd)
+# Plugin-manifest gate (C_THRU_PLUGIN_HOOK=1): skip under cthru / Shape C stamp
+if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-plugin-hook-gate.sh" ]; then
+    # shellcheck source=c-thru-plugin-hook-gate.sh
+    . "$ROUTER_REPO_ROOT/tools/c-thru-plugin-hook-gate.sh"
+    if cthru_plugin_hook_should_skip; then
+        exit 0
+    fi
+fi
+
 
 stdin_data=$(cat || true)
 error=""

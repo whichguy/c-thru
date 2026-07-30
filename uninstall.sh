@@ -9,16 +9,20 @@
 #   - llm-capabilities entry from ~/.claude.json mcpServers (if present)
 #   - Skill/command files install.sh creates (c-thru-status.md, cplan.md)
 #   - Cache/state files (proxy.pid, proxy.log, usage-stats.json, prepull stamps, etc.)
+#   - Shape C stamp ~/.claude/.c-thru-cli-installed (+ bootstrap log / setup-pending)
+#   - Symlinks under ~/.claude/tools that point into this repo OR ~/.claude/c-thru-src
 #   - Stops any running claude-proxy first (TERM, then KILL after 2s)
 #
 # What this PRESERVES:
 #   - ~/.claude/model-map.overrides.json (user data)
+#   - ~/.claude/c-thru-src (durable clone) unless --purge-src
 #   - Any unrelated symlinks or files in ~/.claude/
 #
 # Flags:
 #   --dry-run | -n     : print what would be removed; do nothing
 #   --yes     | -y     : skip the confirmation prompt
 #   --purge-models     : ALSO delete Ollama models that c-thru pulled (opt-in)
+#   --purge-src        : ALSO delete ~/.claude/c-thru-src (Shape C durable clone)
 #   --help    | -h     : show this help
 
 set -euo pipefail
@@ -40,13 +44,14 @@ TMPDIR_EFF="${TMPDIR:-/tmp}"
 DRY_RUN=0
 ASSUME_YES=0
 PURGE_MODELS=0
+PURGE_SRC=0
 
 COUNT_REMOVED=0
 COUNT_SKIPPED=0
 COUNT_PRESERVED=0
 
 usage() {
-    sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -54,6 +59,7 @@ while [ $# -gt 0 ]; do
         --dry-run|-n)   DRY_RUN=1; shift ;;
         --yes|-y)       ASSUME_YES=1; shift ;;
         --purge-models) PURGE_MODELS=1; shift ;;
+        --purge-src)    PURGE_SRC=1; shift ;;
         --help|-h)      usage; exit 0 ;;
         *) echo -e "${RED}Unknown flag: $1${NC}" >&2; usage >&2; exit 2 ;;
     esac
@@ -85,8 +91,8 @@ run_rm() {
     rm -f "$1" 2>/dev/null || true
 }
 
-# Detect whether a symlink under TOOLS_DEST resolves into our repo.
-link_targets_repo() {
+# Resolve a tools/ symlink to a canonical absolute path (or empty).
+_link_canon_target() {
     local link="$1"
     local target
     target="$(readlink "$link" 2>/dev/null || true)"
@@ -99,11 +105,46 @@ link_targets_repo() {
     dir="$(dirname "$target")"
     base="$(basename "$target")"
     canon="$(cd "$dir" 2>/dev/null && pwd -P)" || return 1
-    canon="$canon/$base"
+    printf '%s' "$canon/$base"
+}
+
+# Detect whether a symlink under TOOLS_DEST resolves into our monorepo checkout.
+link_targets_repo() {
+    local link="$1" canon
+    canon="$(_link_canon_target "$link")" || return 1
     case "$canon/" in
         "$REPO_DIR/"*) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+# Shape C: symlink into durable clone ~/.claude/c-thru-src (or stamp source_root).
+link_targets_shape_c_src() {
+    local link="$1" canon src_root stamp_root
+    canon="$(_link_canon_target "$link")" || return 1
+    src_root="$(cd "$CLAUDE_DIR/c-thru-src" 2>/dev/null && pwd -P)" || src_root=""
+    if [ -n "$src_root" ]; then
+        case "$canon/" in
+            "$src_root/"*) return 0 ;;
+        esac
+    fi
+    # stamp may record source_root even if path renamed
+    if [ -f "$CLAUDE_DIR/.c-thru-cli-installed" ]; then
+        stamp_root="$(grep -E '^source_root=' "$CLAUDE_DIR/.c-thru-cli-installed" 2>/dev/null | head -1 | sed 's/^source_root=//')"
+        if [ -n "$stamp_root" ]; then
+            stamp_root="$(cd "$stamp_root" 2>/dev/null && pwd -P)" || stamp_root=""
+            if [ -n "$stamp_root" ]; then
+                case "$canon/" in
+                    "$stamp_root/"*) return 0 ;;
+                esac
+            fi
+        fi
+    fi
+    return 1
+}
+
+link_is_c_thru_managed() {
+    link_targets_repo "$1" || link_targets_shape_c_src "$1"
 }
 
 # ---- Plan: enumerate everything ---------------------------------------------
@@ -134,7 +175,7 @@ LINKS_TO_KEEP=()
 if [ -d "$TOOLS_DEST" ]; then
     while IFS= read -r -d '' link; do
         if [ -L "$link" ]; then
-            if link_targets_repo "$link"; then
+            if link_is_c_thru_managed "$link"; then
                 LINKS_TO_REMOVE+=("$link")
             else
                 LINKS_TO_KEEP+=("$link")
@@ -150,10 +191,14 @@ FILES_TO_REMOVE=(
     "$CLAUDE_DIR/proxy-usage-stats.json"
     "$CLAUDE_DIR/ollama-prep-state.json"
     "$CLAUDE_DIR/c-thru-ollama-models.json"
+    "$CLAUDE_DIR/.c-thru-cli-installed"
+    "$CLAUDE_DIR/.c-thru-plugin-setup-pending"
+    "$CLAUDE_DIR/c-thru-bootstrap.log"
 )
 
 SKILL_FILES=(
     "$CLAUDE_DIR/commands/c-thru-status.md"
+    "$CLAUDE_DIR/commands/c-thru-install-cli.md"
     "$CLAUDE_DIR/commands/cplan.md"
 )
 
@@ -180,8 +225,13 @@ echo "  - remove ${#LINKS_TO_REMOVE[@]} repo-pointing symlink(s) under $TOOLS_DE
 echo "  - remove derived files (model-map.json, model-map.system.json)"
 echo "  - PRESERVE model-map.overrides.json (user data)"
 echo "  - clean c-thru hook entries from settings.json (preserve user hooks)"
-echo "  - remove cache/state files (proxy.pid, proxy.log, stamps, etc.)"
+echo "  - remove cache/state files (proxy.pid, proxy.log, stamps, Shape C stamp, etc.)"
 [ "$PURGE_MODELS" -eq 1 ] && echo "  - PURGE Ollama models pulled by c-thru (--purge-models)"
+if [ "$PURGE_SRC" -eq 1 ]; then
+    echo "  - PURGE Shape C durable clone $CLAUDE_DIR/c-thru-src (--purge-src)"
+else
+    echo "  - PRESERVE $CLAUDE_DIR/c-thru-src (pass --purge-src to delete)"
+fi
 echo
 
 if [ "$DRY_RUN" -eq 0 ] && [ "$ASSUME_YES" -eq 0 ]; then
@@ -456,6 +506,25 @@ if [ "$PURGE_MODELS" -eq 1 ]; then
             echo -e "  ${GREEN}[ok]${NC} ran $gc_cmd purge"
             COUNT_REMOVED=$((COUNT_REMOVED + 1))
         fi
+    fi
+fi
+
+# ---- Step 8: optional Shape C source clone purge --------------------------
+
+if [ "$PURGE_SRC" -eq 1 ]; then
+    echo
+    echo "Shape C durable clone (--purge-src):"
+    src_dir="$CLAUDE_DIR/c-thru-src"
+    if [ -e "$src_dir" ]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo -e "  ${YELLOW}[dry-run] would remove${NC} $src_dir"
+            COUNT_REMOVED=$((COUNT_REMOVED + 1))
+        else
+            rm -rf "$src_dir"
+            say_remove "$src_dir"
+        fi
+    else
+        say_skip "$src_dir (not present)"
     fi
 fi
 

@@ -54,11 +54,18 @@ only in this repository; catalogs point at `plugins/c-thru`.
 
 (Family catalog, same package: `whichguy/claude-craft` → `c-thru@claude-craft`.)
 
-### 2. First Claude session bootstraps CLI tools
+### 2. Bootstrap the CLI (`/c-thru:install-cli`)
 
-SessionStart clones/updates `~/.claude/c-thru-src` if needed, symlinks
-`c-thru` / `cthru` into `~/.claude/tools`, and seeds the model-map. Open a new
-shell (or source your rc) so PATH picks up `~/.claude/tools`.
+Do **not** rely on SessionStart to clone (hook timeout is too short). Run:
+
+```
+/c-thru:install-cli
+```
+
+That pins `~/.claude/c-thru-src`, symlinks `c-thru` / `cthru` into
+`~/.claude/tools`, writes `.c-thru-cli-installed`, and scrubs residual loopback
+`ANTHROPIC_BASE_URL`. Open a new shell (or source your rc) so PATH picks up
+`~/.claude/tools`.
 
 ### 3. Runtime — always use `cthru`
 
@@ -90,7 +97,8 @@ Team repos can prompt the catalog via `extraKnownMarketplaces` — see
 Order matters (plugin uninstall alone does not scrub global settings):
 
 1. `pkill -f claude-proxy` — required; an orphan proxy can mask a dead base URL
-2. `bash uninstall.sh` (CLI) — removes tools symlinks and loopback `ANTHROPIC_BASE_URL`
+2. `bash uninstall.sh` (CLI) — tools, stamp, loopback `ANTHROPIC_BASE_URL`; optional
+   `--purge-src` removes `~/.claude/c-thru-src`
 3. `/plugin uninstall c-thru@c-thru` (or the family identity)
 
 ### Cloud backends (optional)
@@ -1059,7 +1067,8 @@ Tests: `test/agent-mapping-complete.test.js`, `test/agent-invocation-headers.tes
 - [`docs/subscription-auth.md`](docs/subscription-auth.md) — using Claude.ai subscription instead of API billing
 - [`docs/request-flow.html`](docs/request-flow.html) — interactive step-through of a request: agent name → hook → proxy → model → response, plus the failover and named-pin paths and the full component map. Self-contained; open in any browser
 - [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) — the six per-subsystem flow diagrams, each with file:line source anchors
-- [`docs/agent-architecture.md`](docs/agent-architecture.md) — wave lifecycle, STATUS contracts, escalation chain
+- [`docs/agent-architecture.md`](docs/agent-architecture.md) — wave lifecycle, STATUS contracts, escalation chain, advisors panel
+- [`skills/advisors/SKILL.md`](skills/advisors/SKILL.md) — multi-model advisors skill (seats from `advisor_panels` per connectivity mode)
 - [`docs/journaling.md`](docs/journaling.md) — per-request JSONL schema and storage layout
 
 ---
@@ -1111,7 +1120,9 @@ c-thru --route background --model gemma4:26b     # named route + explicit model
 | `c-thru reload` | SIGHUP proxy, wait for `/ping`, print new tier |
 | `c-thru restart [--force]` | Stop + re-spawn proxy |
 | `c-thru explain --capability X --mode M [--tier T]` | Print resolution chain, no real request |
-| `c-thru stats` / `c-thru stats clear` | Per-agent/model usage stats |
+| `c-thru stats` / `c-thru stats clear` | Lifetime usage ledger (calls/tokens by model); clear zeros machine-wide totals |
+| `/c-thru-status clear` / `/c-thru-control clear stats` | Same clear via session skills |
+| `/c-thru-config statusline on\|off\|style …` | Durable statusline enable/style (restart Claude to apply) |
 | `c-thru check-deps [--fix]` | Audit system dependencies |
 | Native Claude Code subcommands (`agents`, `auth`, `auto-mode`, `doctor`, `gateway`, `install`, `mcp`/`plugin`/`plugins`, `project`, `setup-token`, `ultrareview`, `update`/`upgrade`) | Pass through untouched to the real `claude` binary |
 
@@ -1150,7 +1161,7 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | `ANTHROPIC_BASE_URL` auto-registration in settings | ✓ | (set per launch) |
 | Slash command `/c-thru-status` | ✓ | ✓ |
 | Slash command `/cplan` (needs `planning-suite`; full 27-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
-| Skills `c-thru-plan`, `c-thru-config`, `c-thru-control` | ✓ | ✓ |
+| Skills `c-thru-plan`, `c-thru-config`, `c-thru-control`, `advisors` | ✓ | ✓ |
 | User-wide hooks — fire in every Claude Code session (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) | ✓ | — |
 | Ephemeral hooks — injected per `c-thru` launch only (no static project `.claude` hooks) | — | ✓ |
 | `c-thru` binary on PATH | — | ✓ |

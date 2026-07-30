@@ -38,6 +38,41 @@ ok(getting.includes('cthru') || getting.includes('c-thru'), 'getting-started men
 ok(messages.includes('Shape C') || messages.includes('cthru'), 'setup-messages Shape C');
 ok(fs.existsSync(path.join(root, 'tools/c-thru-install-core.sh')), 'install-core exists');
 ok(fs.existsSync(path.join(root, 'tools/c-thru-plugin-bootstrap.sh')), 'bootstrap exists');
+ok(fs.existsSync(path.join(root, 'tools/c-thru-plugin-hook-gate.sh')), 'plugin-hook-gate exists');
+ok(fs.existsSync(path.join(root, 'commands/c-thru-install-cli.md')), 'install-cli command exists');
+
+const sessionStart = read('tools/c-thru-session-start.sh');
+ok(!/git\s+clone/.test(sessionStart), 'session-start must not git clone');
+ok(sessionStart.includes('install-cli'), 'session-start points to install-cli');
+ok(sessionStart.includes('c-thru-plugin-hook-gate'), 'session-start sources gate');
+
+const hooksJson = read('plugins/c-thru/hooks/hooks.json');
+ok(hooksJson.includes('C_THRU_PLUGIN_HOOK=1'), 'hooks.json sets plugin hook env');
+
+ok(mkt.includes('install-cli') || mkt.includes('c-thru-install-cli'),
+  'marketplace-release mentions install-cli');
+ok(!/SessionStart runs.*bootstrap|SessionStart.*git clone/i.test(mkt) ||
+   mkt.includes('install-cli'),
+  'marketplace-release does not claim SessionStart is primary bootstrap without install-cli');
+
+const pluginReadmeBody = pluginReadme;
+ok(pluginReadmeBody.includes('install-cli') || pluginReadmeBody.includes('cthru'),
+  'plugin README Shape C path');
+ok(pluginReadmeBody.includes('/c-thru:install-cli') ||
+   pluginReadmeBody.includes('install-cli') ||
+   pluginReadmeBody.includes('bootstrap'),
+  'plugin README bootstrap path documented');
+
+// Lean marketplace: no fat skill tree in plugin package
+const leanSkills = ['c-thru-plan', 'c-thru-config', 'c-thru-control', 'plan-page', 'advisors'];
+for (const s of leanSkills) {
+  ok(!fs.existsSync(path.join(root, 'plugins/c-thru/skills', s, 'SKILL.md')),
+    `lean: plugins/c-thru/skills/${s} must not ship`);
+}
+ok(fs.existsSync(path.join(root, 'plugins/c-thru/commands/c-thru-install-cli.md')),
+  'bundle has install-cli command');
+ok(fs.existsSync(path.join(root, 'plugins/c-thru/tools/c-thru-plugin-hook-gate.sh')),
+  'bundle has plugin-hook-gate');
 
 const market = JSON.parse(read('.claude-plugin/marketplace.json'));
 const plugin = JSON.parse(read('plugins/c-thru/.claude-plugin/plugin.json'));

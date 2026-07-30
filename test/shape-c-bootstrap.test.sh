@@ -54,11 +54,64 @@ check "bootstrap log after force" test -f "$CLAUDE_DIR/c-thru-bootstrap.log"
 check "session-start has Shape C" grep -q '_cthru_cli_ready' "$REPO_ROOT/tools/c-thru-session-start.sh"
 check "session-start lite opt-in" grep -q 'C_THRU_PLUGIN_LITE' "$REPO_ROOT/tools/c-thru-session-start.sh"
 check "session-start requires resolvable tools link" grep -q 'tools/c-thru' "$REPO_ROOT/tools/c-thru-session-start.sh"
+# No executable git-clone (comments like "do NOT git-clone" are fine)
+check "session-start no git clone cmd" bash -c '! grep -E "^[^#]*git[[:space:]]+clone" "'"$REPO_ROOT"'/tools/c-thru-session-start.sh"'
+check "session-start prompts install-cli" grep -q 'install-cli' "$REPO_ROOT/tools/c-thru-session-start.sh"
+check "session-start sources plugin gate" grep -q 'c-thru-plugin-hook-gate' "$REPO_ROOT/tools/c-thru-session-start.sh"
+
+# Stamp pin fields after install
+check "stamp has source_ref" test -n "$(cthru_read_stamp_field source_ref)"
+check "stamp has source_sha or empty-ok" bash -c 'source "'"$REPO_ROOT"'/tools/c-thru-install-core.sh"; CLAUDE_DIR="'"$CLAUDE_DIR"'"; v=$(cthru_read_stamp_field source_sha); true'
+check "stamp has version" test -n "$(cthru_read_stamp_field version)"
+
+# R0a: scrub loopback ANTHROPIC_BASE_URL on stamp write
+mkdir -p "$CLAUDE_DIR"
+cat >"$CLAUDE_DIR/settings.json" <<'EOF'
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:3456",
+    "OTHER": "keep"
+  }
+}
+EOF
+cthru_write_stamp "$REPO_DIR"
+check "scrub removed loopback base URL" bash -c '! grep -q "ANTHROPIC_BASE_URL" "'"$CLAUDE_DIR"'/settings.json"'
+check "scrub kept other env" grep -q '"OTHER"' "$CLAUDE_DIR/settings.json"
+
+# Non-loopback must stay
+cat >"$CLAUDE_DIR/settings.json" <<'EOF'
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+  }
+}
+EOF
+cthru_write_stamp "$REPO_DIR"
+check "scrub keeps non-loopback URL" grep -q 'api.anthropic.com' "$CLAUDE_DIR/settings.json"
+
+# R0b: plugin hook gate
+# shellcheck source=../tools/c-thru-plugin-hook-gate.sh
+. "$REPO_ROOT/tools/c-thru-plugin-hook-gate.sh"
+unset C_THRU_PLUGIN_HOOK C_THRU_SESSION_ID C_THRU_PLUGIN_LITE || true
+check "gate inactive without PLUGIN_HOOK" bash -c 'source "'"$REPO_ROOT"'/tools/c-thru-plugin-hook-gate.sh"; ! cthru_plugin_hook_should_skip'
+export C_THRU_PLUGIN_HOOK=1
+export C_THRU_SESSION_ID=test-session
+check "gate skips under cthru session" cthru_plugin_hook_should_skip
+unset C_THRU_SESSION_ID
+# stamp present + no lite → skip
+check "gate skips when stamp installed" cthru_plugin_hook_should_skip
+export C_THRU_PLUGIN_LITE=1
+check "gate allows lite mode" bash -c 'source "'"$REPO_ROOT"'/tools/c-thru-plugin-hook-gate.sh"; export C_THRU_PLUGIN_HOOK=1 C_THRU_PLUGIN_LITE=1; CLAUDE_DIR="'"$CLAUDE_DIR"'"; CLAUDE_PROFILE_DIR="'"$CLAUDE_DIR"'"; ! cthru_plugin_hook_should_skip'
+unset C_THRU_PLUGIN_HOOK C_THRU_PLUGIN_LITE
 
 # Completeness without +x still true (file present)
 chmod -x "$REPO_DIR/tools/c-thru" 2>/dev/null || true
 check "complete without +x" cthru_repo_is_complete "$REPO_DIR"
 chmod +x "$REPO_DIR/tools/c-thru" 2>/dev/null || true
+
+# install-cli command exists
+check "install-cli command present" test -f "$REPO_ROOT/commands/c-thru-install-cli.md"
+check "hooks.json sets PLUGIN_HOOK" grep -q 'C_THRU_PLUGIN_HOOK=1' "$REPO_ROOT/plugins/c-thru/hooks/hooks.json"
 
 rm -rf "$BASE"
 echo "shape-c-bootstrap: $pass ok, $fail failed"

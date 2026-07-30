@@ -31,19 +31,29 @@ done
 _script_dir=$(cd -P "$(dirname "$_src")" && pwd)
 ROUTER_REPO_ROOT=$(cd -P "$_script_dir/.." && pwd)
 
-# --- Shape C: bootstrap CLI tools (symlinks) then prefer cthru runtime ---
+# Plugin-manifest invocations set C_THRU_PLUGIN_HOOK=1 (see hooks.json).
+if [ -r "$ROUTER_REPO_ROOT/tools/c-thru-plugin-hook-gate.sh" ]; then
+    # shellcheck source=c-thru-plugin-hook-gate.sh
+    . "$ROUTER_REPO_ROOT/tools/c-thru-plugin-hook-gate.sh"
+    if cthru_plugin_hook_should_skip; then
+        exit 0
+    fi
+fi
+
+# --- Shape C (plugin path): do NOT git-clone in SessionStart (10s timeout). ---
 CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 _cli_stamp="$CLAUDE_DIR/.c-thru-cli-installed"
-_bootstrap="$ROUTER_REPO_ROOT/tools/c-thru-plugin-bootstrap.sh"
-if [ -f "$_bootstrap" ]; then
-    # Fail-open for the host session. Bootstrap logs to
-    # $CLAUDE_DIR/c-thru-bootstrap.log (not fully silenced).
-    bash "$_bootstrap" || true
+if [ "${C_THRU_PLUGIN_HOOK:-0}" = "1" ]; then
+    if [ ! -f "$_cli_stamp" ] || [ ! -e "$CLAUDE_DIR/tools/c-thru" ]; then
+        # Tell the user to run the blocking install command (not a network hook).
+        printf '%s\n' \
+          "c-thru: CLI not installed yet. Run /c-thru:install-cli (or from a checkout: bash install.sh), then launch with: cthru" >&2
+        exit 0
+    fi
 fi
 
 # After successful CLI bootstrap, default is no plugin proxy registration
 # (CLI `cthru` owns lifecycle). Opt-in lite: C_THRU_PLUGIN_LITE=1.
-# Require a resolvable tools/c-thru (not a dangling symlink).
 _cthru_cli_ready=0
 if [ -f "$_cli_stamp" ] && [ -e "$CLAUDE_DIR/tools/c-thru" ]; then
     _cthru_cli_ready=1

@@ -710,6 +710,10 @@ run_suite "model-route shared adapter (shell + CLI + JS golden contract)" \
   bash "$REPO_DIR/test/model-route-parity.test.sh"
 run_suite "c-thru-bootstrap-auth-env (bootstrap auth env helper)" \
   bash "$REPO_DIR/test/c-thru-bootstrap-auth-env.test.sh"
+run_suite "shape-c-bootstrap (stamp, scrub, gate, install-cli path)" \
+  bash "$REPO_DIR/test/shape-c-bootstrap.test.sh"
+run_suite "setup-docs-alignment (Shape C marketplace docs + lean bundle)" \
+  node "$REPO_DIR/test/setup-docs-alignment.test.js"
 run_suite "c-thru-lib (env/discovery resolvers: port ladder, profile-dir shadow split, ollama url)" \
   bash "$REPO_DIR/test/c-thru-lib.test.sh"
 run_suite "c-thru-listen-port (ANTHROPIC_BASE_URL port discovery)" \
@@ -730,6 +734,10 @@ run_suite "c-thru-statusline (default bar + recent stats + dash hint)" \
   node "$REPO_DIR/test/c-thru-statusline.test.js"
 run_suite "statusline absent-only injection (c-thru never overwrites a user statusLine)" \
   node "$REPO_DIR/test/c-thru-statusline-injection.test.js"
+run_suite "c-thru-durable-profile (statusline writes survive session shadow)" \
+  node "$REPO_DIR/test/c-thru-durable-profile.test.js"
+run_suite "proxy-statusline-endpoint (GET /c-thru/statusline slim feed)" \
+  node "$REPO_DIR/test/proxy-statusline-endpoint.test.js"
 run_suite "agent-router-hook (subagent_type → capability model rewrite)" \
   bash "$REPO_DIR/test/agent-router-hook.test.js"
 run_suite "strict-models (C_THRU_STRICT_MODELS=1 enforcement)" \
@@ -911,6 +919,8 @@ run_suite "c-thru-config-helpers (config helper functions)" \
   node "$REPO_DIR/test/c-thru-config-helpers.test.js"
 run_suite "c-thru-explain (explain command resolution)" \
   node "$REPO_DIR/test/c-thru-explain.test.js"
+run_suite "advisor-panels-resolve (advisor_panels seats per mode)" \
+  node "$REPO_DIR/test/advisor-panels-resolve.test.js"
 run_suite "c-thru-plan-harness (plan harness utilities)" \
   node "$REPO_DIR/test/c-thru-plan-harness.test.js"
 run_suite "plan-state-lib (native plans + wave/session aggregation)" \
