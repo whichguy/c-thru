@@ -149,10 +149,12 @@ Two components, both in `tools/`:
 
 ## Architecture: how a prompt becomes a model call
 
-Three views of the same path. **View 1** is the map. **View 2** walks a single request end to end.
-**View 3** shows what happens when the chosen backend fails.
+Four views. **View 1** is the map of the hot path. **View 2** walks a single request end to end.
+**View 3** shows what happens when the chosen backend fails. **View 4** is the complete component
+map — every box and every arrow, including the launch, config, hook and control planes that the
+first three deliberately leave out.
 
-All three follow the same real request — the `coder` agent under the default shipped config — so
+Views 1–3 follow the same real request — the `coder` agent under the default shipped config — so
 the names line up across diagrams.
 
 > Prefer clicking through it? [`docs/request-flow.html`](docs/request-flow.html) is a self-contained
@@ -319,6 +321,139 @@ clever:
 
 Every branch and guard, with source anchors:
 [docs/architecture-diagrams.md § 2](docs/architecture-diagrams.md#2-model-resolution--fallback-cascade).
+
+### View 4 — every box and every arrow
+
+The first three views follow one request. This one is the whole system: what runs at launch, where
+config comes from, every hook, what the proxy serves besides `/v1/messages`, and what writes which
+file.
+
+Read the arrows by weight:
+
+| Arrow | Means |
+|---|---|
+| **Thick** | the launch sequence — what `c-thru` does before your first prompt |
+| **Solid** | the live request and response path |
+| **Dotted** | a read, an observation, or a file write |
+
+The spine runs **launch → config → proxy → endpoints**, with the harness and its hook fleet on the
+right and the artifacts, control surface and Ollama daemon hanging off the sides.
+
+```mermaid
+flowchart TB
+    DEV(["Developer runs c-thru"])
+
+    subgraph L["Launch — tools/c-thru, bash"]
+        direction TB
+        L1["Parse and strip c-thru flags"]
+        L2["Resolve, merge, validate config"]
+        L3["Detect hardware tier"]
+        L4["Ensure Ollama, pre-pull tier"]
+        L5["Spawn claude-proxy<br/>FIFO READY handshake"]
+        L6["Inject --settings, --agents,<br/>--append-system-prompt"]
+        L7["Run the real claude binary"]
+        BG["Background, never blocks<br/>self-update · benchmarks · marketplace"]
+        L1 --> L2 --> L3 --> L4 --> L5 --> L6 --> L7
+        L1 -.-> BG
+    end
+
+    subgraph H["Claude Code harness"]
+        direction LR
+        CTX["Context window"]
+        AG["Agent fleet<br/>13 pipeline · 9 utility<br/>5 named pins"]
+        MCP["llm-capabilities MCP<br/>CLI only"]
+        CTX --> AG
+    end
+
+    subgraph HK["Hook fleet — injected via --settings"]
+        direction LR
+        H4["PreToolUse Agent<br/>agent-router — CLI only<br/>prepends the sentinel"]
+        H1["SessionStart · PreCompact<br/>UserPromptSubmit<br/>session-start · postcompact<br/>proxy-health · classify"]
+        H6["PostToolUse<br/>map-changed<br/>plan-visibility"]
+        H8["Stop · StopFailure<br/>autonomous-gate CLI only<br/>statusLine CLI only"]
+        H5["PreToolUse<br/>EnterPlanMode<br/>CLI only"]
+    end
+
+    subgraph P["claude-proxy — Node, stdlib only"]
+        direction TB
+        PR1["Parse sentinel, verify HMAC, strip"]
+        PR2["Resolve capability, mode, tier, endpoint"]
+        PR3["Fallback cascade + backend cooldown"]
+        PR4["Translate out<br/>forwardAnthropic · forwardGemini<br/>forwardOpenAI · forwardOllamaLegacy"]
+        PR5["Normalize back to Anthropic SSE<br/>stamp x-c-thru-* headers"]
+        SVC["Control and context surface<br/>/ping · /c-thru/status · /c-thru/recent<br/>/hooks/context · /v1/models<br/>/c-thru/plan/dashboard · SIGHUP"]
+        PR1 --> PR2 --> PR3 --> PR4
+    end
+
+    subgraph B["Endpoints — 9 shipped"]
+        direction LR
+        E1["anthropic · subscription<br/>openrouter<br/>ollama_local · ollama_cloud"]
+        E2["gemini_ai · gemini_vertex<br/>fallback_to claude-sonnet-5"]
+        E3["xai · openai<br/>Responses API"]
+    end
+
+    OLLAMA(["Ollama daemon — detached, outlives c-thru"])
+
+    subgraph CFG["Config stack"]
+        direction TB
+        C7["CLAUDE_MODEL_MAP_PATH<br/>env override, wins over all"]
+        C1["config/model-map.json<br/>shipped"]
+        C2["model-map.system.json<br/>install.sh, self-heals"]
+        C3["model-map.overrides.json<br/>yours, never overwritten"]
+        C4["model-map.json<br/>merged profile"]
+        C5[".claude/model-map.json<br/>project"]
+        C6["session overlay in TMPDIR"]
+        C1 -.-> C2 -.-> C4
+        C3 -.-> C4
+        C4 -.-> C6
+        C5 -.-> C6
+    end
+
+    subgraph ART["Written by the proxy"]
+        direction LR
+        A1["proxy.log<br/>+ rotation"]
+        A2["usage-stats.json"]
+        A3["proxy.pid"]
+        A4["journal<br/>opt in"]
+    end
+
+    subgraph CTL["Runtime control"]
+        direction LR
+        T1["reload<br/>SIGHUP"]
+        T2["restart<br/>SIGTERM"]
+        T3["list · explain · check-deps<br/>offline, never contacts the proxy"]
+        T4["/c-thru-status<br/>/c-thru-config"]
+    end
+
+    DEV ==> L1
+    L7 ==> H
+    L6 ==> HK
+    L5 ==>|"spawn + handshake"| SVC
+    AG ==> H4
+    H4 -->|"signed sentinel in the prompt"| PR1
+    HK -->|"context, health, recent"| SVC
+    PR4 --> B
+    B --> PR5
+    PR5 -->|"response"| CTX
+    L4 ==> OLLAMA
+    E1 -->|"connects only, never spawns"| OLLAMA
+    CFG -.->|"read by launch, proxy, MCP,<br/>explain and map-changed"| P
+    L2 -.->|"merge and write"| CFG
+    P -.-> ART
+    CTL -->|"signal and query"| SVC
+```
+
+A few relationships in there are worth stating outright, because they are the ones people get wrong:
+
+- **`c-thru` starts Ollama; the proxy never does.** The bash entrypoint owns daemon lifecycle and
+  `nohup`s it detached, so Ollama outlives the session. `claude-proxy` only ever connects to it.
+- **Config is read at startup, not per request.** The proxy re-reads only on `SIGHUP` — which is
+  exactly what `c-thru reload` sends, and why editing the map does not require a restart.
+- **`c-thru list`, `explain` and `check-deps` never touch the proxy.** They resolve straight from
+  config, so you can ask "why would it pick that?" with nothing running.
+- **Not every hook ships on both install paths.** The agent-router hook, the plan-mode hint, the
+  autonomous gate, the statusline and the MCP server are CLI-only; the other eight also ship in the
+  plugin bundle. Routing by agent name is therefore a CLI-install feature.
 
 ---
 
