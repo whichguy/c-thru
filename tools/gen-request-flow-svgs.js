@@ -43,6 +43,7 @@ const MERMAID_PKG = '@mermaid-js/mermaid-cli@11.16.0';
 // position — README has six mermaid blocks and reordering them must not silently
 // regenerate the page from the wrong diagram.
 const DIAGRAMS = [
+  { svgId: 'ctxmap-svg', marker: '<!-- diagram-source: ctxmap-svg' },
   { svgId: 'smap-svg', marker: '<!-- diagram-source: smap-svg' },
   { svgId: 'cmap-svg', marker: '<!-- diagram-source: cmap-svg' },
 ];

@@ -162,6 +162,41 @@ Two components, both in `tools/`:
 
 ## Architecture: how a prompt becomes a model call
 
+**Why bother at all.** Not to pick a better model — to stop switching tools to reach one. Normally
+each model lives behind its own CLI or chat window, so consulting a second one means copying context
+across and losing the thread. c-thru makes them callable **from inside a single conversation**: the
+reasoning stays in one context window, and every answer lands back in it.
+
+<!-- diagram-source: ctxmap-svg (rendered into docs/request-flow.html by tools/gen-request-flow-svgs.js) -->
+```mermaid
+flowchart LR
+    subgraph ONE["ONE context window — everything below stays in this conversation"]
+        R["Your reasoning thread<br/><br/>plan it · build it · critique it · decide<br/>every answer lands back here"]
+    end
+
+    subgraph MODELS["Models you consult from inside it"]
+        A["Claude"]
+        B["Qwen<br/>on your machine"]
+        C["Grok"]
+        D["Gemini"]
+    end
+
+    R <-->|"plan"| A
+    R <-->|"implement"| B
+    R <-->|"critique"| C
+    R <-->|"debug"| D
+
+    classDef harness  fill:#E8F0FE,stroke:#4285F4,stroke-width:1.5px,color:#111
+    classDef provider fill:#E6F4EA,stroke:#137333,stroke-width:1.5px,color:#111
+    class R harness
+    class A,B,C,D provider
+```
+
+That is the part worth internalising: Claude can plan a change, a local model can write it, and Grok
+can attack it — **without you leaving the session or re-explaining the problem three times.** Each
+model sees the accumulated context, and its answer becomes part of the same thread the next one
+reads. Everything below is the machinery that makes that possible.
+
 **The short version.** You call an agent by name. A hook tags the request with that name. The proxy
 looks the name up, decides which model should serve it, and translates the call. The answer comes
 back in Anthropic format, so nothing downstream needs to know where it came from.
@@ -264,7 +299,7 @@ flowchart TB
 
         subgraph FLEET["Agent fleet, injected at launch as ephemeral --agents JSON"]
             LOGICAL["LOGICAL agents — a role, not a model<br/>planner · planner-hard · explore<br/>coder · coder-fallback · tester · docs<br/>code-reviewer · reviewer-plan · reviewer-security<br/>debugger-hypothesis · -investigate · -hard"]
-            UTILITY["UTILITY agents — also logical<br/>vision · pdf · writer · edge · generalist<br/>fast-generalist · fast-scout · long-context<br/>plan-scheduler"]
+            UTILITY["UTILITY agents — also logical<br/>vision · pdf · writer · edge · generalist<br/>fast-generalist · fast-scout · long-context<br/>plan-scheduler · advisors"]
             NAMED["NAMED agents — the agent IS the model<br/>grok · deepseek · qwen · kimi · gemini"]
         end
 
@@ -445,14 +480,15 @@ body       sentinel removed — the model never sees it
 <details>
 <summary>5 &middot; Agent → capability &mdash; <i>claude-proxy</i></summary>
 
-Most agents map to a capability of the same name. Two alias deliberately: reviewer-plan → code-reviewer, plan-scheduler → fast-generalist.
+Most agents map to a capability of the same name. Three alias deliberately: reviewer-plan → code-reviewer, plan-scheduler → fast-generalist, advisors → planner-hard.
 
 ```diff
   # config/model-map.json
   "agent_to_capability": {
 +   "coder": "coder",
     "reviewer-plan": "code-reviewer",
-    "plan-scheduler": "fast-generalist"
+    "plan-scheduler": "fast-generalist",
+    "advisors": "planner-hard"
   }
 ```
 
@@ -1001,14 +1037,14 @@ Schema reference, route/endpoint/profile structure, and the full `model_override
 
 ## Agents
 
-27 agents declare `model: <agent-name>` in frontmatter — including the five brand agents, whose frontmatter names themselves like every other agent. Their pin to a concrete model lives one layer down, in `agent_to_capability` (`"grok": "model:grok-4.5"`), not in the agent file. The proxy resolves
+28 agents declare `model: <agent-name>` in frontmatter — including the five brand agents, whose frontmatter names themselves like every other agent. Their pin to a concrete model lives one layer down, in `agent_to_capability` (`"grok": "model:grok-4.5"`), not in the agent file. The proxy resolves
 `agent-name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model`
 at request time. Agent files are never edited when you remap models.
 
 The fleet ships with the **CLI install** (it depends on `--agents` injection by `tools/c-thru`):
 
 - **Pipeline (13):** `planner`, `planner-hard`, `explore`, `coder`, `coder-fallback`, `tester`, `docs`, `code-reviewer`, `reviewer-plan`, `reviewer-security`, `debugger-hypothesis`, `debugger-investigate`, `debugger-hard`.
-- **Utility (9):** `vision`, `pdf`, `writer`, `edge`, `generalist`, `fast-generalist`, `fast-scout`, `long-context`, `plan-scheduler`.
+- **Utility (10):** `vision`, `pdf`, `writer`, `edge`, `generalist`, `fast-generalist`, `fast-scout`, `long-context`, `plan-scheduler`, `advisors`.
 
 Pipeline agents end each response with an `UNBLOCKED_TASKS` block of `Task()` calls naming the next agent(s) — the inter-agent dispatch graph is verified by `test/agent-dispatch-graph.test.js`. Full wave lifecycle and STATUS contracts: [`docs/agent-architecture.md`](docs/agent-architecture.md).
 
@@ -1026,6 +1062,7 @@ The full mapping, all the way through the implementation: **agent → capability
 <!-- BEGIN routing-table (generated by tools/gen-routing-doc.js — run it, don't hand-edit) -->
 | Agent | Capability | `best-cloud` | `best-cloud-oss` | `best-local-oss` | Endpoint (`best-cloud`) |
 |---|---|---|---|---|---|
+| `advisors` &nbsp;⚠ | `planner-hard` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `code-reviewer` | `code-reviewer` | `claude-sonnet-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
 | `coder` | `coder` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
 | `coder-fallback` | `coder-fallback` | `gemini-pro-latest` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
@@ -1056,7 +1093,7 @@ The full mapping, all the way through the implementation: **agent → capability
 <!-- END routing-table -->
 
 **⚠ Non-1:1 rows.** Two agents intentionally route to a *different* capability than their own name:
-`reviewer-plan` → `code-reviewer` and `plan-scheduler` → `fast-generalist`. Every other agent maps 1:1.
+`reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`, and `advisors` → `planner-hard`. Every other agent maps 1:1.
 
 **Utility passthroughs.** `WebSearch`, `WebFetch`, and `Monitor` are not agent files — they're tool calls mapped to `fast-scout` in `agent_to_capability` for observability only; the [router hook](#verifying-which-agent-ran) logs their capability but does **not** override their model (doing so would corrupt the tool's input).
 
@@ -1204,7 +1241,7 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | `c-thru` binary on PATH | — | ✓ |
 | Control subcommands (`list`, `reload`, `restart`, `explain`, `stats`, `check-deps`) | — | ✓ |
 | Flags (`--mode`, `--profile`, `--bypass-proxy`, `--journal`, `--router-debug`) | (use env vars) | ✓ |
-| Agent fleet (27 agents) injected via `--agents` | — | ✓ |
+| Agent fleet (28 agents) injected via `--agents` | — | ✓ |
 | `llm-capabilities` MCP server injected via `--settings` | — | ✓ |
 | Contributor checks (`c-thru-contract-check`, `c-thru-hygiene-check`) | — | ✓ |
 
