@@ -208,4 +208,43 @@ test ! -f "${shadow}/settings.json"
   fs.rmSync(durable, { recursive: true, force: true });
 }
 
+// ── Gap 13: fat settings / pref — only owned fields change ─────────────────
+{
+  console.log('\nGap 13: statusline-on preserves unrelated settings keys');
+  const durable = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-fat-'));
+  const toolsDir = path.join(durable, 'tools');
+  fs.mkdirSync(toolsDir, { recursive: true });
+  fs.copyFileSync(STATUSLINE_SRC, path.join(toolsDir, 'c-thru-statusline'));
+  fs.chmodSync(path.join(toolsDir, 'c-thru-statusline'), 0o755);
+  const fat = {
+    permissions: { allow: ['Bash(*)', 'Read'] },
+    hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo user' }] }] },
+    env: { MY_CUSTOM: 'keep-me' },
+    customTopLevel: { nested: true, n: 42 },
+  };
+  fs.writeFileSync(path.join(durable, 'settings.json'), JSON.stringify(fat, null, 2) + '\n');
+  // Pref with extra keys must survive style write
+  fs.writeFileSync(path.join(durable, 'c-thru-statusline.json'),
+    JSON.stringify({ style: 'default', experimental_chip: 'keep' }) + '\n');
+  const env = { C_THRU_ORIGINAL_PROFILE_DIR: durable, HOME: durable };
+  let r = runHelper(env, ['statusline-on']);
+  assertEq(r.status, 0, 'fat settings statusline-on exits 0');
+  const after = JSON.parse(fs.readFileSync(path.join(durable, 'settings.json'), 'utf8'));
+  assert(after.statusLine && /c-thru-statusline/.test(after.statusLine.command),
+    'statusLine added');
+  assertEq(JSON.stringify(after.permissions), JSON.stringify(fat.permissions),
+    'permissions key unchanged');
+  assertEq(JSON.stringify(after.hooks), JSON.stringify(fat.hooks),
+    'hooks key unchanged');
+  assertEq(after.env.MY_CUSTOM, 'keep-me', 'env.MY_CUSTOM preserved');
+  assertEq(after.customTopLevel.n, 42, 'customTopLevel preserved');
+
+  r = runHelper(env, ['statusline-style', 'stats']);
+  assertEq(r.status, 0, 'statusline-style on fat pref exits 0');
+  const pref = JSON.parse(fs.readFileSync(path.join(durable, 'c-thru-statusline.json'), 'utf8'));
+  assertEq(pref.style, 'stats', 'style updated to stats');
+  assertEq(pref.experimental_chip, 'keep', 'unrelated pref key preserved');
+  fs.rmSync(durable, { recursive: true, force: true });
+}
+
 process.exit(summary() ? 1 : 0);

@@ -194,6 +194,30 @@ async function main() {
       assert(out6c.stdout.includes('sonnet'), 'dead-proxy still shows model');
       assert(out6c.stdout.includes('/tmp/dead') || out6c.stdout.includes('dead'),
         `dead-proxy still shows cwd (got ${JSON.stringify(out6c.stdout)})`);
+
+      // Gap 9: shadow pref ignored — durable wins when ORIGINAL_PROFILE_DIR set
+      console.log('\n6d. Shadow pref ignored (durable stats wins over shadow minimal)');
+      const dualBase = fs.mkdtempSync(path.join(base, 'dual-pref-'));
+      const durablePref = path.join(dualBase, 'durable');
+      const shadowPref = path.join(dualBase, 'shadow');
+      fs.mkdirSync(durablePref, { recursive: true });
+      fs.mkdirSync(shadowPref, { recursive: true });
+      fs.writeFileSync(path.join(durablePref, 'c-thru-statusline.json'),
+        JSON.stringify({ style: 'stats' }) + '\n');
+      fs.writeFileSync(path.join(shadowPref, 'c-thru-statusline.json'),
+        JSON.stringify({ style: 'minimal' }) + '\n');
+      const out6d = runStatusline(scratchHook, shadowPref, port, 'session-a', {
+        model: { id: 'sonnet' },
+        workspace: { current_dir: '/tmp/dual' },
+      }, {
+        C_THRU_ORIGINAL_PROFILE_DIR: durablePref,
+        // HOME/CLAUDE_DIR point at shadow — product must not use them for pref
+        CLAUDE_DIR: shadowPref,
+        C_THRU_STATUSLINE_DASH: '0',
+      });
+      assertEq(out6d.status, 0, 'dual-pref exits 0');
+      assert(/\| (cloud|oss|local|gov|local-gov|\?)\|/.test(out6d.stdout) || /\| [a-z0-9-]+\|\d+/.test(out6d.stdout),
+        `durable stats pref wins over shadow minimal (got ${JSON.stringify(out6d.stdout)})`);
     });
   } finally {
     try { await primary.close(); } catch {}

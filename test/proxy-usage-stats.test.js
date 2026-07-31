@@ -88,7 +88,7 @@ async function spawnUsageProxy() {
     },
   });
 
-  await waitForPing(port, 5000);
+  await waitForPing(port);
 
   return { child, port, statsFile, tmpHome, configPath, stub };
 }
@@ -313,7 +313,7 @@ async function testByAgentServedBy() {
     const statsFile = path.join(tmpHome, 'usage-stats.json');
     const configPath = writeConfig(tmpHome, buildCapabilityConfig(stub.port));
     const { child, port } = await spawnProxy({ configPath, tmpHome, env: { CLAUDE_PROXY_USAGE_STATS_FILE: statsFile } });
-    await waitForPing(port, 5000);
+    await waitForPing(port);
     state = { child, port, statsFile, tmpHome, stub };
 
     // Send request using capability name 'workhorse' — it resolves to CONCRETE_MODEL via llm_profiles
@@ -414,7 +414,7 @@ async function testStatsClear() {
     await sleep(200);
 
     // Clear via HTTP
-    const clearResp = await httpJson(port, 'POST', '/c-thru/stats/clear', null, {}, 3000);
+    const clearResp = await httpJson(port, 'POST', '/c-thru/stats/clear', null, {});
     assertEq(clearResp.status, 200, 'Test F: /c-thru/stats/clear returned 200');
     assert(clearResp.body && clearResp.body.ok === true, 'Test F: clear response body has ok:true');
 
@@ -458,7 +458,7 @@ async function spawnUsageProxySharing(statsFile) {
     tmpHome,
     env: { CLAUDE_PROXY_USAGE_STATS_FILE: statsFile },
   });
-  await waitForPing(port, 5000);
+  await waitForPing(port);
   return { child, port, tmpHome, stub };
 }
 
@@ -558,7 +558,7 @@ async function testClearWins() {
     for (let i = 0; i < 2; i++) await sendPing(p1.port, `Test I: P1 request ${i + 1} returned 200`);
 
     // Clear through P2 — stamps cleared_at into the file.
-    const clearResp = await httpJson(p2.port, 'POST', '/c-thru/stats/clear', null, {}, 3000);
+    const clearResp = await httpJson(p2.port, 'POST', '/c-thru/stats/clear', null, {});
     assertEq(clearResp.status, 200, 'Test I: clear via P2 returned 200');
 
     // P1 exits — its flush must observe the unfamiliar cleared_at and drop the
@@ -671,7 +671,7 @@ async function testGeminiUsageRecorded() {
       configPath, tmpHome,
       env: { CLAUDE_PROXY_USAGE_STATS_FILE: statsFile, CLAUDE_LLM_MODE: 'connected' },
     });
-    await waitForPing(port, 5000);
+    await waitForPing(port);
     state = { child, tmpHome, stub };
 
     const nonStream = await httpJson(port, 'POST', '/v1/messages', {
@@ -708,6 +708,72 @@ async function testGeminiUsageRecorded() {
   }
 }
 
+// ── Test L: incomplete/legacy usage file — defensive fill + unknown keys ─
+
+async function testLegacyIncompleteUsageFile() {
+  console.log('\nTest L: incomplete legacy usage-stats.json (missing maps + unknown key)');
+  let state = null;
+  try {
+    const stub = await stubBackend();
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-usage-legacy-'));
+    const statsFile = path.join(tmpHome, 'usage-stats.json');
+    // Older file shape: totals only, no by_* maps; plus a custom top-level key.
+    fs.writeFileSync(statsFile, JSON.stringify({
+      total_input: 10,
+      total_output: 2,
+      total_duration_ms: 5,
+      first_recorded: '2026-01-01T00:00:00.000Z',
+      last_recorded: '2026-01-01T00:00:00.000Z',
+      custom_operator_note: 'preserve-me',
+    }, null, 2));
+    const configPath = writeConfig(tmpHome, {
+      backends: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stub.port}` } },
+      model_routes: { [CONCRETE_MODEL]: 'stub' },
+    });
+    const { child, port } = await spawnProxy({
+      configPath, tmpHome,
+      env: { CLAUDE_PROXY_USAGE_STATS_FILE: statsFile },
+    });
+    await waitForPing(port);
+    state = { child, tmpHome, stub };
+
+    // Status must not throw / 500 on incomplete file
+    const st = await httpJson(port, 'GET', '/c-thru/status', null, {});
+    assertEq(st.status, 200, 'Test L: /c-thru/status 200 with incomplete file');
+    const usage = (st.json || st.body || {}).usage || {};
+    assert(usage.by_model && typeof usage.by_model === 'object',
+      'Test L: status.usage.by_model filled defensively');
+    assertEq(usage.total_input, 10, 'Test L: pre-existing total_input preserved on read');
+
+    const msg = await httpJson(port, 'POST', '/v1/messages', {
+      model: CONCRETE_MODEL,
+      messages: [{ role: 'user', content: 'legacy' }],
+      max_tokens: 10,
+    }, { 'x-api-key': 'test', 'anthropic-version': '2023-06-01' });
+    assertEq(msg.status, 200, 'Test L: request 200');
+
+    await killAndWait(child, 'SIGTERM');
+    assert(fs.existsSync(statsFile), 'Test L: stats file written after traffic');
+    const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    assert(stats.by_model && stats.by_model[CONCRETE_MODEL],
+      'Test L: by_model filled after traffic');
+    assert(stats.by_model[CONCRETE_MODEL].calls >= 1, 'Test L: new calls recorded');
+    assertEq(stats.custom_operator_note, 'preserve-me',
+      'Test L: unknown top-level key survives flush');
+    assert(stats.total_input >= 10, 'Test L: totals accumulate on legacy base');
+
+    await stub.close();
+    cleanup(tmpHome);
+  } catch (e) {
+    if (state) {
+      try { state.child.kill('SIGKILL'); } catch {}
+      try { await state.stub.close(); } catch {}
+      cleanup(state.tmpHome);
+    }
+    throw e;
+  }
+}
+
 // ── main ───────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -722,6 +788,7 @@ async function main() {
   await testClearWins();
   await testStaleLockReclaim();
   await testGeminiUsageRecorded();
+  await testLegacyIncompleteUsageFile();
 
   const failed = summary();
   process.exit(failed ? 1 : 0);

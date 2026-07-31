@@ -237,6 +237,47 @@ else
     check "free-port capture is a bare integer under FORCE_COLOR=3" "yes" "no (got: $free_port_under_color)"
 fi
 
+# ---------------------------------------------------------------------------
+# T-D / A1b: /c-thru-status install — managed upgrade + user-authored preserve
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== /c-thru-status managed marker + preserve ==="
+CMD_STATUS="$FAKE_CLAUDE/commands/c-thru-status.md"
+CANON="$REPO_DIR/commands/c-thru-status.md"
+if [ -f "$CMD_STATUS" ] && [ -f "$CANON" ]; then
+  if grep -q 'c-thru-managed:' "$CMD_STATUS" 2>/dev/null; then
+    check "first install writes managed marker" "yes" "yes"
+  else
+    check "first install writes managed marker" "yes" "no"
+  fi
+  # User-authored (no marker, no legacy description sentence) must survive reinstall
+  printf '%s\n' '# my custom status command' 'echo only-mine' > "$CMD_STATUS"
+  (cd "$REPO_DIR" && bash install.sh 2>/dev/null) || true
+  if grep -q 'only-mine' "$CMD_STATUS" 2>/dev/null && ! grep -q 'c-thru-managed:' "$CMD_STATUS" 2>/dev/null; then
+    check "user-authored c-thru-status preserved on reinstall" "yes" "yes"
+  else
+    check "user-authored c-thru-status preserved on reinstall" "yes" "no"
+  fi
+  # Legacy managed (description sentence, no marker) → migrate to canonical
+  printf '%s\n' '---' 'description: "Show c-thru routes, proxy URL, per-model usage stats (calls, tokens, last call time)"' '---' '# old 12-line body' > "$CMD_STATUS"
+  (cd "$REPO_DIR" && bash install.sh 2>/dev/null) || true
+  if grep -q 'c-thru-managed:' "$CMD_STATUS" 2>/dev/null && cmp -s "$CANON" "$CMD_STATUS" 2>/dev/null; then
+    check "legacy description-only body migrated to managed canonical" "yes" "yes"
+  else
+    check "legacy description-only body migrated to managed canonical" "yes" "no"
+  fi
+  # Managed stale → upgrade
+  printf '%s\n' '<!-- c-thru-managed: c-thru-status v1 -->' '# stale managed body' > "$CMD_STATUS"
+  (cd "$REPO_DIR" && bash install.sh 2>/dev/null) || true
+  if cmp -s "$CANON" "$CMD_STATUS" 2>/dev/null; then
+    check "stale managed marker body upgraded to canonical" "yes" "yes"
+  else
+    check "stale managed marker body upgraded to canonical" "yes" "no"
+  fi
+else
+  check "c-thru-status install paths exist for preserve tests" "yes" "no"
+fi
+
 echo ""
 echo "$((PASS+FAIL)) tests: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

@@ -133,6 +133,9 @@ migrate_providers_schema() {
 
 # --- Commands: install from canonical repo commands/ (same source as plugin bundle) ---
 install_skill() {
+    # Canonical source: repo commands/c-thru-status.md (carries
+    # <!-- c-thru-managed: c-thru-status vN -->). Managed / recognized-legacy
+    # copies are upgraded; user-authored unmarked files are preserved.
     local commands_dir="$CLAUDE_DIR/commands"
     local src="$REPO_DIR/commands/c-thru-status.md"
     local skill_file="$commands_dir/c-thru-status.md"
@@ -141,12 +144,30 @@ install_skill() {
         echo -e "  ${YELLOW}⚠️  missing $src — skip /c-thru-status install${NC}"
         return 0
     fi
-    if [ -f "$skill_file" ] && cmp -s "$src" "$skill_file" 2>/dev/null; then
+    if [ ! -f "$skill_file" ]; then
+        cp "$src" "$skill_file"
+        echo -e "  ${GREEN}✅ installed skill: /c-thru-status${NC}"
+        return 0
+    fi
+    if cmp -s "$src" "$skill_file" 2>/dev/null; then
         echo -e "  ${GRAY}✓  /c-thru-status${NC}"
         return 0
     fi
-    cp "$src" "$skill_file"
-    echo -e "  ${GREEN}✅ installed skill: /c-thru-status${NC}"
+    # Managed: any c-thru-managed marker → upgrade (overwrite).
+    if grep -q 'c-thru-managed:' "$skill_file" 2>/dev/null; then
+        cp "$src" "$skill_file"
+        echo -e "  ${GREEN}✅ updated skill: /c-thru-status${NC}"
+        return 0
+    fi
+    # Recognized legacy managed copy (old install.sh description sentence, no marker).
+    if grep -q 'Show c-thru routes, proxy URL, per-model usage stats' "$skill_file" 2>/dev/null; then
+        cp "$src" "$skill_file"
+        echo -e "  ${GREEN}✅ migrated skill: /c-thru-status${NC}"
+        return 0
+    fi
+    # Unrecognized / user-authored → preserve.
+    echo -e "  ${YELLOW}⚠️  preserved user /c-thru-status at $skill_file (no c-thru-managed marker)${NC}"
+    return 0
 }
 
 # --- /cplan command shortcut ---
