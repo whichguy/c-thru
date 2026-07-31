@@ -159,8 +159,12 @@ install_skill() {
         echo -e "  ${GREEN}✅ updated skill: /c-thru-status${NC}"
         return 0
     fi
-    # Recognized legacy managed copy (old install.sh description sentence, no marker).
-    if grep -q 'Show c-thru routes, proxy URL, per-model usage stats' "$skill_file" 2>/dev/null; then
+    # Recognized legacy managed copy (A1b step 3): only a frontmatter
+    # `description:` line whose value is the known pre-marker install
+    # description. Never unanchored full-file grep — a user-authored file that
+    # merely quotes the marketing sentence mid-body must be preserved.
+    local legacy_desc='Show c-thru routes, proxy URL, per-model usage stats (calls, tokens, last call time)'
+    if grep -E '^description:[[:space:]]' "$skill_file" 2>/dev/null | grep -Fq "$legacy_desc"; then
         cp "$src" "$skill_file"
         echo -e "  ${GREEN}✅ migrated skill: /c-thru-status${NC}"
         return 0

@@ -39,7 +39,7 @@ For the AI agent's situational awareness, here is the mapping from logical inten
 | **Open Stats Dashboard** | `GET` | `/c-thru/dashboard` | N/A — live HTML dashboard (give the user the URL; also in `dashboard_url` of `/c-thru/status`) |
 | **Set Connectivity Mode** | `POST` | `/c-thru/mode` | `{"mode": "<mode_name>"}` |
 | **Reload Config** | `POST` | `/c-thru/reload` | N/A |
-| **Clear Usage Stats** | `POST` | `/c-thru/stats/clear` | N/A — zeros the lifetime ledger (`usage-stats.json`); not per Claude session |
+| **Clear Usage Stats** | `POST` | `/c-thru/stats/clear` | N/A — zeros the **machine-wide** lifetime ledger (`usage-stats.json`); not per Claude session. Same ledger the statusline `Σ` chip shows under `stats` style |
 
 ### Valid Modes:
 5 canonical modes: `best-cloud`, `best-cloud-oss`, `best-local-oss`, `best-cloud-gov`, `best-local-gov`.

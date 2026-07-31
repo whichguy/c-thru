@@ -1301,7 +1301,7 @@ c-thru --route background --model gemma4:26b     # named route + explicit model
 | `c-thru reload` | SIGHUP proxy, wait for `/ping`, print new tier |
 | `c-thru restart [--force]` | Stop + re-spawn proxy |
 | `c-thru explain --capability X --mode M [--tier T]` | Print resolution chain, no real request |
-| `c-thru stats` / `c-thru stats clear` | Lifetime usage ledger (calls/tokens by model); clear zeros machine-wide totals |
+| `c-thru stats` / `c-thru stats clear` | Lifetime usage ledger (calls/tokens by model); clear zeros **machine-wide** totals (all sessions). Opt-in `C_THRU_STATS_RESET=launch` does the same clear once at proxy ready — shared forensics, not per-chat |
 | `/c-thru-status clear` / `/c-thru-control clear stats` | Same clear via session skills |
 | `/c-thru-config statusline on\|off\|style …` | Durable statusline enable/style (restart Claude to apply) |
 | `c-thru check-deps [--fix]` | Audit system dependencies |

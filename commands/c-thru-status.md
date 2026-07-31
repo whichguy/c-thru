@@ -50,7 +50,7 @@ Parse `$ARGUMENTS` (first word):
 
 ### Clear stats
 
-Usage stats are a **machine-wide lifetime ledger** (`~/.claude/usage-stats.json`), not per Claude session. Reset:
+Usage stats are a **machine-wide lifetime ledger** (`~/.claude/usage-stats.json`), not per Claude session. The statusline `stats` style Σ chip reads the same ledger (global), while last-hop/fallback follow the session when `/s/<id>` is in the base URL. Reset:
 
 ```bash
 if command -v c-thru >/dev/null 2>&1 || [ -x "${HOME}/.claude/tools/c-thru" ]; then

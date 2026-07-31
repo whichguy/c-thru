@@ -6,6 +6,10 @@
 #   default — + last served/tokens + fallback + dash  (GET /c-thru/recent)
 #   stats   — + mode|tier + Σ window totals          (GET /c-thru/statusline)
 #
+# Dual scope (stats style): last hop / fallback follow the session-scoped base
+# URL (/s/<id>/…) when set; Σ / usage_window is always the machine-wide
+# lifetime ledger since last clear (same file as c-thru stats clear).
+#
 # Env:
 #   C_THRU_NO_STATUSLINE=1       — skip inject entirely (launcher)
 #   C_THRU_STATUSLINE_OVERLAY=0  — forces minimal content

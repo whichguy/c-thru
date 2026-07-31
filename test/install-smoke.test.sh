@@ -258,13 +258,30 @@ if [ -f "$CMD_STATUS" ] && [ -f "$CANON" ]; then
   else
     check "user-authored c-thru-status preserved on reinstall" "yes" "no"
   fi
-  # Legacy managed (description sentence, no marker) → migrate to canonical
+  # Legacy managed (frontmatter description, no marker) → migrate to canonical
   printf '%s\n' '---' 'description: "Show c-thru routes, proxy URL, per-model usage stats (calls, tokens, last call time)"' '---' '# old 12-line body' > "$CMD_STATUS"
   (cd "$REPO_DIR" && bash install.sh 2>/dev/null) || true
   if grep -q 'c-thru-managed:' "$CMD_STATUS" 2>/dev/null && cmp -s "$CANON" "$CMD_STATUS" 2>/dev/null; then
     check "legacy description-only body migrated to managed canonical" "yes" "yes"
   else
     check "legacy description-only body migrated to managed canonical" "yes" "no"
+  fi
+  # R-B false-positive: marketing sentence mid-body, different description → preserve
+  cat > "$CMD_STATUS" <<'EOF'
+---
+description: "My personal status dashboard"
+---
+# custom
+# Note: some docs say "Show c-thru routes, proxy URL, per-model usage stats (calls, tokens, last call time)"
+echo only-custom-status
+EOF
+  (cd "$REPO_DIR" && bash install.sh 2>/dev/null) || true
+  if grep -q 'only-custom-status' "$CMD_STATUS" 2>/dev/null \
+     && grep -q 'My personal status dashboard' "$CMD_STATUS" 2>/dev/null \
+     && ! grep -q 'c-thru-managed:' "$CMD_STATUS" 2>/dev/null; then
+    check "mid-body marketing sentence does not force migrate (preserve)" "yes" "yes"
+  else
+    check "mid-body marketing sentence does not force migrate (preserve)" "yes" "no"
   fi
   # Managed stale → upgrade
   printf '%s\n' '<!-- c-thru-managed: c-thru-status v1 -->' '# stale managed body' > "$CMD_STATUS"
