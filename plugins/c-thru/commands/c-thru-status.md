@@ -53,10 +53,32 @@ Parse `$ARGUMENTS` (first word):
 Usage stats are a **machine-wide lifetime ledger** (`~/.claude/usage-stats.json`), not per Claude session. The statusline `stats` style Σ chip reads the same ledger (global), while last-hop/fallback follow the session when `/s/<id>` is in the base URL. Reset:
 
 ```bash
+# Prefer c-thru stats clear (retries 503 lock-busy; machine-wide ledger).
 if command -v c-thru >/dev/null 2>&1 || [ -x "${HOME}/.claude/tools/c-thru" ]; then
   "${HOME}/.claude/tools/c-thru" stats clear 2>/dev/null || c-thru stats clear
 else
-  curl -sf -X POST --max-time 2 "$BASE/c-thru/stats/clear" || echo "proxy unreachable — cannot clear"
+  # Fallback: POST clear with brief 503 lock-busy retries (do not use curl -f —
+  # that mislabels lock-busy as "proxy unreachable").
+  _clear_ok=0
+  for _i in 1 2 3 4 5 6 7 8; do
+    _code="$(curl -sS --max-time 2 -o /tmp/c-thru-clear-body.$$ -w '%{http_code}' \
+      -X POST "$BASE/c-thru/stats/clear" 2>/dev/null || echo 000)"
+    if [ "$_code" = "200" ]; then _clear_ok=1; break; fi
+    if [ "$_code" = "503" ]; then sleep 0.15 2>/dev/null || sleep 1; continue; fi
+    break
+  done
+  if [ "$_clear_ok" != "1" ]; then
+    if [ "$_code" = "503" ]; then
+      echo "usage lock busy — try again in a moment (stats not cleared)"
+    elif [ "$_code" = "000" ] || [ -z "$_code" ]; then
+      echo "proxy unreachable — cannot clear"
+    else
+      echo "stats clear failed (HTTP ${_code})"
+    fi
+  else
+    cat /tmp/c-thru-clear-body.$$ 2>/dev/null || true
+  fi
+  rm -f /tmp/c-thru-clear-body.$$ 2>/dev/null || true
 fi
 # then re-run the status path below so the user sees empty totals
 ```

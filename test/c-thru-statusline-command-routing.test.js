@@ -26,6 +26,11 @@ assert(/statusline-off/.test(cmd), 'routes statusline off → statusline-off');
 assert(/statusline-style/.test(cmd), 'routes statusline style → statusline-style');
 assert(/\/c-thru\/stats\/clear/.test(cmd) || /stats clear/.test(cmd),
   'clear path mentions stats clear or POST /c-thru/stats/clear');
+// F4: slash-command clear must not use bare curl -f (mislabels 503 as unreachable)
+assert(!/curl -sf[^|]*stats\/clear/.test(cmd),
+  'clear fallback must not use curl -sf alone against stats/clear');
+assert(/lock busy|http_code|503/.test(cmd) || /c-thru" stats clear|stats clear/.test(cmd),
+  'clear path prefers c-thru stats clear and/or handles lock busy');
 assert(/restart/i.test(cmd), 'mentions restart required for statusline enable');
 
 // ── skills/c-thru-config/SKILL.md ──────────────────────────────────────────
