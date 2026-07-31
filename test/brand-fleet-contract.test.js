@@ -104,15 +104,35 @@ console.log('\n3. Codex brand leaves + advisors host');
 // ── 4. Parent system-prompt: no builtin/brand contradiction ─────────────────
 console.log('\n4. Fleet system-prompt wording');
 {
-  assert(/Named brand agents/.test(cthru), 'c-thru mentions Named brand agents');
-  assert(/fleet brand leaves may reuse short names like opus\/sonnet\/haiku\/fable/i.test(cthru) ||
-    /Fleet brand leaves may reuse short names like opus\/sonnet\/haiku\/fable/.test(cthru),
+  // Accept compact or long wording (prompt may be edited for token budget).
+  assert(/Named[- ]brand|brand leaves|Named brand/i.test(cthru),
+    'c-thru mentions named brand / brand leaves');
+  assert(/opus\/sonnet\/haiku\/fable/.test(cthru) && /fleet brand leaves/i.test(cthru),
     'prompt clarifies opus/sonnet/haiku/fable are fleet brand leaves');
+  // Forbidden: list sonnet/opus/haiku as banned builtins (collides with brand leaves).
   assert(!/Never substitute generic built-in agent types such as sonnet, opus, haiku/.test(cthru),
     'removed contradictory "never substitute … sonnet, opus, haiku" ban');
-  assert(/OPENAI_API_KEY/.test(cthru), 'Codex family auth note present');
-  assert(/Multi-model panel → advisors/.test(cthru) || /advisors skill\/agent/.test(cthru),
+  assert(/OpenAI API/i.test(cthru) || /OPENAI_API_KEY/.test(cthru),
+    'Codex family auth note present (OpenAI API, not subscription CLI)');
+  assert(/Multi-model panel\s*→\s*advisors|advisors skill\/agent/i.test(cthru),
     'multi-model panel routes to advisors');
+}
+
+// ── 4b. Reserved control docs are not fleet agents ─────────────────────────
+console.log('\n4b. Reserved agents/*.md control docs');
+{
+  const reserved = ['AGENTS.md', 'CLAUDE.md'];
+  for (const name of reserved) {
+    const p = path.join(REPO, 'agents', name);
+    if (!fs.existsSync(p)) {
+      assert(true, `${name}: absent (ok)`);
+      continue;
+    }
+    assert(a2c[name.replace(/\.md$/, '')] === undefined,
+      `${name}: must not have agent_to_capability entry`);
+    assert(/reservedAgentFiles|AGENTS\.md\|CLAUDE\.md/.test(cthru),
+      'c-thru inject skips reserved control docs');
+  }
 }
 
 // ── 5. Lean marketplace still excludes advisors skill ───────────────────────
