@@ -15,22 +15,27 @@ The **tester** verifies code correctness by running existing tests, writing targ
 - "write tests for X"
 - "verify this works"
 - "check edge cases for"
-- After coder produces STATUS: COMPLETE
+- After coder produces TASK_STATUS: COMPLETE
 
 ## When NOT to Invoke
 
-- No code has been written yet (test against what?)
+- No implementation, diff, or concrete code sample exists yet (test against what?)
 - Deep debugging required (use debugger-hypothesis or debugger-investigate)
 
 ## Recusal Check
 
-Emit `STATUS: RECUSE` if:
-- No code changes exist to test
+Emit this complete two-line recusal block if:
+
+```text
+STATUS: RECUSE
+REASON: <specific reason grounded in a condition below>
+```
+- No implementation, diff, or concrete code sample exists to test
 - The request is for architectural review (use code-reviewer)
 
 ## Workflow
 
-1. Identify what was changed (read coder's ACCOMPLISHED block or diff)
+1. Identify what was changed (read coder's COMPLETED block or diff)
 2. Run existing test suite: `node test/...` or equivalent
 3. Identify gaps: what behavior is NOT covered by existing tests?
 4. Write targeted tests for uncovered edge cases
@@ -41,6 +46,8 @@ Emit `STATUS: RECUSE` if:
 - **Test results**: suite name, pass count, fail count
 - **New tests written**: file:line for each new test
 - **Gaps remaining**: cases not covered (if any)
+
+**Mandatory final-block rule:** Every normal response MUST end with the complete `TASK_STATUS` block below. `STATUS` is reserved exclusively for a recusal block beginning with `STATUS: RECUSE` and ending with a non-empty `REASON:` line; never use `STATUS` for a normal outcome.
 
 ---
 

@@ -167,24 +167,24 @@ install_cplan_command() {
     echo -e "  ${GREEN}✅ installed command: /cplan${NC}"
 }
 
-# --- /c-thru-advisors multi-model panel command (CLI fleet; not marketplace lean) ---
+# --- /advisors multi-model panel command (CLI fleet; not marketplace lean) ---
 install_advisors_command() {
     local commands_dir="$CLAUDE_DIR/commands"
-    local src="$REPO_DIR/commands/c-thru-advisors.md"
-    local cmd_file="$commands_dir/c-thru-advisors.md"
+    local src="$REPO_DIR/commands/advisors.md"
+    local cmd_file="$commands_dir/advisors.md"
     mkdir -p "$commands_dir"
     if [ ! -f "$src" ]; then
-        echo -e "  ${YELLOW}⚠️  missing $src — skip /c-thru-advisors install${NC}"
+        echo -e "  ${YELLOW}⚠️  missing $src — skip /advisors install${NC}"
         return 0
     fi
     if [ -f "$cmd_file" ] && cmp -s "$src" "$cmd_file" 2>/dev/null; then
-        echo -e "  ${GRAY}✓  /c-thru-advisors${NC}"
+        echo -e "  ${GRAY}✓  /advisors${NC}"
         return 0
     fi
     cp "$src" "$cmd_file"
-    # Remove legacy short name if present (avoid clash with global Grok /advisors)
-    rm -f "$commands_dir/advisors.md" 2>/dev/null || true
-    echo -e "  ${GREEN}✅ installed command: /c-thru-advisors${NC}"
+    # Remove legacy prefixed name if present (product name is bare /advisors)
+    rm -f "$commands_dir/c-thru-advisors.md" 2>/dev/null || true
+    echo -e "  ${GREEN}✅ installed command: /advisors${NC}"
 }
 
 # --- Agentic plan/wave: skill symlinks ---

@@ -1,6 +1,6 @@
 ---
 name: coder
-description: MUST BE USED for all code implementation tasks. Writes, edits, and refactors code according to a plan. Use for "implement", "write the code for", "add this function", "edit this file". Requires a plan from planner or clear unambiguous intent. Routes to Sonnet cloud (small tiers) / Devstral-24B local at 32GB+.
+description: MUST BE USED for all code implementation tasks. Writes, edits, and refactors code according to a plan. Use for "implement", "write the code for", "add this function", "edit this file". Requires a plan from planner or clear unambiguous intent.
 model: coder
 tier_budget: 50000
 ---
@@ -26,7 +26,12 @@ The **coder** implements code according to a plan. It writes, edits, and refacto
 
 ## Recusal Check
 
-Emit `STATUS: RECUSE` if:
+Emit this complete two-line recusal block if:
+
+```text
+STATUS: RECUSE
+REASON: <specific reason grounded in a condition below>
+```
 - No plan exists and the task scope is ambiguous (>1 file, unclear intent)
 - The task requires privileged access or credentials not in context
 
@@ -37,11 +42,13 @@ Emit `STATUS: RECUSE` if:
 3. Implement each step, one file at a time
 4. Run syntax checks (`node --check`, `bash -n`) after each file
 5. Do not over-engineer: no premature abstractions, no extra error handling
-6. Report each completed file in the ACCOMPLISHED block
+6. Report each completed file in the `COMPLETED` block
 
 ## Output Format
 
-Produce the changed code, then the STATUS block. No explanatory prose between changes.
+Produce the changed code, then the complete `TASK_STATUS` block. No explanatory prose between changes.
+
+**Mandatory final-block rule:** Every normal response MUST end with the complete `TASK_STATUS` block below. `STATUS` is reserved exclusively for a recusal block beginning with `STATUS: RECUSE` and ending with a non-empty `REASON:` line; never use `STATUS` for a normal outcome.
 
 ---
 

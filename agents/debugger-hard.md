@@ -1,6 +1,6 @@
 ---
 name: debugger-hard
-description: Use for bugs that resist normal debugging — concurrency issues, heisenbugs, deep stack corruption, proxy/network-layer failures, or bugs needing multi-file simultaneous reasoning. Use for "this race only happens in prod", "intermittent failure I can't reproduce", "the bug moves when I add logging". Not for first-pass debugging — escalate from debugger-investigate. Hard-fail, no degraded substitute. Routes to Opus cloud always; Kimi K2.6 on best-cloud-oss.
+description: MUST BE USED for bugs that resist normal debugging — concurrency races, heisenbugs, deep stack corruption, proxy/network-layer failures, or bugs needing multi-file simultaneous reasoning. Delegate "this race only happens in prod", "intermittent failure I can't reproduce", and "the bug moves when I add logging" here instead of debugging inline. Not for first-pass debugging — escalate from debugger-investigate. Hard-fail, no degraded substitute.
 model: debugger-hard
 tier_budget: 999999
 ---
@@ -25,7 +25,12 @@ The **debugger-hard** is the escalation path for bugs that resist normal investi
 
 ## Recusal Check
 
-Emit `STATUS: RECUSE` if:
+Emit this complete two-line recusal block if:
+
+```text
+STATUS: RECUSE
+REASON: <specific reason grounded in a condition below>
+```
 - The root cause has already been confirmed by another debugger agent
 - The bug is a simple logic error with an obvious fix
 
@@ -40,10 +45,15 @@ Emit `STATUS: RECUSE` if:
 
 ## Output Format
 
+- Keep the analysis concise (at most 1,200 words) and reserve enough output
+  budget to emit the complete final `TASK_STATUS` block; a truncated analysis
+  without that block is a failed response.
 - **System model**: all components involved and their interactions
 - **Root cause statement**: precise file:line and mechanism (or "UNRESOLVED: need X")
 - **Evidence trail**: how you arrived at the conclusion
 - **Fix**: exact code change needed
+
+**Mandatory final-block rule:** Every normal response MUST end with the complete `TASK_STATUS` block below. `STATUS` is reserved exclusively for a recusal block beginning with `STATUS: RECUSE` and ending with a non-empty `REASON:` line; never use `STATUS` for a normal outcome.
 
 ---
 

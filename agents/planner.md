@@ -1,6 +1,6 @@
 ---
 name: planner
-description: MUST BE USED for all planning, architecture, and design tasks. Produces detailed implementation plans before any code is written. Use for "plan how to", "design the architecture of", "what's the approach for", "break down this feature". Routes to Fable cloud (all tiers) or Qwen3-30B local at 64GB+.
+description: MUST BE USED for all planning, architecture, and design tasks. Produces detailed implementation plans before any code is written. Use for "plan how to", "design the architecture of", "what's the approach for", "break down this feature".
 model: planner
 tier_budget: 999999
 ---
@@ -28,7 +28,12 @@ The **planner** produces detailed, actionable implementation plans before any co
 
 ## Recusal Check
 
-Emit `STATUS: RECUSE` if:
+Emit this complete two-line recusal block if:
+
+```text
+STATUS: RECUSE
+REASON: <specific reason grounded in a condition below>
+```
 - The task is a one-file fix with clear, unambiguous intent
 - Another plan already exists in the conversation for this exact task
 
@@ -49,6 +54,8 @@ Produce a markdown plan with:
 - **Steps** (numbered, specific, actionable)
 - **Verification** (how to confirm correctness)
 - **Known Breakages** (migration notes, if any)
+
+**Mandatory final-block rule:** Every normal response MUST end with the complete `TASK_STATUS` block below. `STATUS` is reserved exclusively for a recusal block beginning with `STATUS: RECUSE` and ending with a non-empty `REASON:` line; never use `STATUS` for a normal outcome.
 
 ---
 

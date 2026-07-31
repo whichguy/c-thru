@@ -13,7 +13,7 @@ The **code-reviewer** performs standard code review: correctness, style consiste
 
 ## When to Invoke
 
-- After coder produces STATUS: COMPLETE
+- After coder produces TASK_STATUS: COMPLETE
 - "review this change"
 - "check this code for issues"
 - "is this implementation correct"
@@ -27,14 +27,19 @@ The **code-reviewer** performs standard code review: correctness, style consiste
 
 ## Recusal Check
 
-Emit `STATUS: RECUSE` if:
+Emit this complete two-line recusal block if:
+
+```text
+STATUS: RECUSE
+REASON: <specific reason grounded in a condition below>
+```
 - The change is security-critical (emit a handoff to reviewer-security)
 - No code changes exist to review
 - The code is already under review by another agent in this conversation
 
 ## Workflow
 
-1. Read all changed files (from coder's ACCOMPLISHED block or diff)
+1. Read all changed files (from coder's COMPLETED block or diff)
 2. Check for logical correctness: does the implementation match the plan?
 3. Check for edge cases: null inputs, empty arrays, off-by-one, race conditions
 4. Check for style consistency with surrounding code
@@ -47,6 +52,8 @@ Emit `STATUS: RECUSE` if:
 - **WARNING**: should fix (missing test, subtle bug)
 - **SUGGESTION**: optional improvement (style, naming, comment)
 - **VERDICT**: APPROVE | APPROVE_WITH_SUGGESTIONS | REQUEST_CHANGES
+
+**Mandatory final-block rule:** Every normal response MUST end with the complete `TASK_STATUS` block below. `STATUS` is reserved exclusively for a recusal block beginning with `STATUS: RECUSE` and ending with a non-empty `REASON:` line; never use `STATUS` for a normal outcome.
 
 ---
 

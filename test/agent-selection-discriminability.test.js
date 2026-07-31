@@ -52,7 +52,19 @@ function summary() {
 const REPO        = path.resolve(__dirname, '..');
 const AGENTS_DIR  = path.join(REPO, 'agents');
 const CORPUS_PATH = path.join(REPO, 'test', 'fixtures', 'agent-selection-corpus.json');
+const OFFLOAD_HARNESS_PATH = path.join(REPO, 'test', 'agent-offload-coverage.js');
 const AGENT_FILES = fs.readdirSync(AGENTS_DIR).filter(f => f.endsWith('.md')).sort();
+
+// Brand catalog leaves share intentional leaf boilerplate; pairwise lexical
+// overlap among them is expected. Still check brand↔role and role↔role pairs.
+const BRAND_IDS = new Set();
+try {
+  const cat = JSON.parse(fs.readFileSync(path.join(REPO, 'config', 'brand-agents.json'), 'utf8'));
+  for (const a of cat.agents || []) {
+    BRAND_IDS.add(a.id);
+    for (const al of a.aliases || []) BRAND_IDS.add(typeof al === 'string' ? al : al.id);
+  }
+} catch (_) { /* catalog optional in ancient checkouts */ }
 
 // ── Lexical metric ───────────────────────────────────────────────────────────
 // Token Jaccard over lowercased content words, stopword-stripped. Stopwords
@@ -186,7 +198,8 @@ const TOP2_RANK = 1; // 0-indexed: rank 0 or 1 counts as "near-top"
 //   top-2 (intended agent edged to rank 1 by an acceptable neighbour):
 const CORPUS_TOP2_ALLOW = new Map([
   ['tester-edge',    'coder (expect[1]) edges tester on "behaves correctly / function / input" overlap'],
-  ['explore-usages', 'explore at rank 1 behind coder; "defined / calls / repo" pulls coder slightly higher'],
+  ['deepseek-named', 'advisors/generalist edge on architecture vocabulary; deepseek remains top-2'],
+  ['glm-named',      'generalist may edge on trade-off vocabulary; glm remains top-2'],
 ]);
 //   blind spots (lexical proxy cannot make the intended agent even top-2):
 const CORPUS_BLIND_SPOTS = new Map([
@@ -249,6 +262,8 @@ for (const p of pairs.slice(0, 12)) {
 console.log('');
 
 for (const p of pairs) {
+  // Brand catalog leaves intentionally share leaf boilerplate; skip brand↔brand pairs.
+  if (BRAND_IDS.has(p.a.name) && BRAND_IDS.has(p.b.name)) continue;
   if (p.score <= PAIR_OVERLAP_MAX) continue; // only over-threshold pairs need the exemption
   const clause = pairDisambiguated(p.a, p.b);
   assert(clause !== null,
@@ -260,7 +275,9 @@ for (const p of pairs) {
 // metric broke). Assert at least one over-threshold pair exists AND is exempted,
 // so the exemption path stays live.
 {
-  const above = pairs.filter(p => p.score > PAIR_OVERLAP_MAX);
+  const above = pairs.filter(p =>
+    p.score > PAIR_OVERLAP_MAX &&
+    !(BRAND_IDS.has(p.a.name) && BRAND_IDS.has(p.b.name)));
   assert(above.length >= 1,
     `at least one legitimate near-neighbour pair exceeds ${PAIR_OVERLAP_MAX} (keeps the disambiguation ` +
     `exemption exercised; got ${above.length})`);
@@ -398,6 +415,34 @@ for (const task of ambiguous) {
 }
 console.log(`\n    baseline: strongest ambiguous match is ${maxAmbId} → ${maxAmbAgent}:${maxAmb.toFixed(3)} ` +
   `(floor ${AMBIGUOUS_FLOOR})`);
+
+// ════════════════════════════════════════════════════════════════════════════
+// (E) EVIDENCE-BACKED FIXTURE HABITAT
+// ════════════════════════════════════════════════════════════════════════════
+console.log('\n── (E) Evidence-backed fixture habitat ──\n');
+
+const offloadHarnessSource = fs.readFileSync(OFFLOAD_HARNESS_PATH, 'utf8');
+const evidenceBacked = corpus.filter(task => task.evidence_files !== undefined);
+for (const task of evidenceBacked) {
+  const files = Array.isArray(task.evidence_files) ? task.evidence_files : [];
+  assert(files.length >= 3,
+    `${task.id}: declares at least three evidence files for a multi-file investigation`);
+  for (const file of files) {
+    const safeRelativeFile = typeof file === 'string' &&
+      !path.isAbsolute(file) &&
+      !file.split('/').includes('..');
+    assert(safeRelativeFile,
+      `${task.id}: evidence file ${JSON.stringify(file)} is a safe relative path`);
+    if (!safeRelativeFile) continue;
+    assert(task.prompt.includes(`{{DIR}}/${file}`),
+      `${task.id}: prompt directs the investigator to ${file}`);
+    const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert(new RegExp(`^[ \\t]*['"]${escaped}['"]\\s*:`, 'm').test(offloadHarnessSource),
+      `${task.id}: real-session habitat materializes ${file}`);
+  }
+}
+assert(evidenceBacked.some(task => task.expect?.[0] === 'debugger-investigate'),
+  'corpus contains an evidence-backed primary debugger-investigate fixture');
 
 // ── Exit gate (enforced by test/exit-code-gating.test.js) ────────────────────
 const _failed = summary();

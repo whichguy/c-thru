@@ -21,12 +21,13 @@ request time.
 
 ## Agent roster
 
-The fleet is **27 agents**: 22 pipeline/utility roles plus **5 brand-name agents**
-(`grok`, `deepseek`, `qwen`, `kimi`, `gemini`). Each declares `model: <its-own-name>` in
-frontmatter. The proxy resolves
+The fleet is **98 agents**: 23 pipeline/utility roles plus **brand-name leaves** from
+`config/brand-agents.json` (shorthands such as `opus` / `devstral` / `glm` plus Claude-safe
+full-name aliases). Each declares `model: <its-own-name>` in frontmatter. The proxy resolves
 `name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model` at
 request time (or a `model:` pin for brand agents). Pipeline agents map 1:1 (capability == name)
-**except** the two ⚠ rows. Brand agents pin to concrete models. The **Dispatches →**
+**except** the remapped ⚠ rows. Brand agents pin via `model:<…>` (Claude-family shorthands use
+mode-conditional `model_routes`). The **Dispatches →**
 column is the inter-agent dispatch/escalation graph, parsed from each agent's `UNBLOCKED_TASKS`
 block (self-loops are continuation, `↑` marks an escalation to a harder tier). Brand agents are
 always leaves.
@@ -67,8 +68,15 @@ this fleet.
 | `kimi` 📌 | `model:kimi-k2.7-code:cloud` | Brand: Kimi cloud OSS | (leaf) |
 | `gemini` 📌 | `model:gemini-pro` | Brand: Google Gemini | (leaf) |
 
-**⚠ Non-1:1 rows.** `reviewer-plan` → `code-reviewer` and `plan-scheduler` → `fast-generalist`.
-**📌 Brand pins** map via `model:<concrete>` (always that model, not hardware-tier profiles).
+**Brand catalog (expanded).** Codex family leaves: `sol`, `terra`, `luna`, `codex` (default terra) pin to `gpt-5.6-*` via OpenAI API (`OPENAI_API_KEY`), not the Codex CLI subscription path. Additional brand leaves (`opus`, `sonnet`, `haiku`, `fable`,
+`devstral`, `glm`, `gemma`, `phi`, `gpt-oss`, `nemotron`, `minimax`, `hermes`, `mistral`, …)
+and Claude-safe full-name aliases are generated from
+[`config/brand-agents.json`](../config/brand-agents.json) via
+`node tools/gen-brand-agents.js`. Each pins through `agent_to_capability` → `model:<…>`.
+
+**⚠ Non-1:1 rows.** `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`,
+`advisors` → `planner-hard`.
+**📌 Brand pins** map via `model:<shorthand-or-concrete>` (not hardware-tier profiles).
 **Utility passthroughs** `WebSearch` / `WebFetch` /
 `Monitor` are tool calls mapped to `fast-scout` in `agent_to_capability` for observability only —
 they are not agent files and the router does not override their model.
@@ -386,10 +394,12 @@ The deterministic pre-processor applies dep_discoveries from findings to pending
 
 ## Advisors panel (not a wave agent)
 
-The **c-thru-advisors** skill (`skills/c-thru-advisors/SKILL.md`, slash
-`/c-thru-advisors`) is a **leaf multi-seat consult**, not part of the `/cplan`
-wave graph. It requires a **`cthru` CLI launch** (fleet `--agents` inject);
-the lean marketplace plugin does not ship this skill or the seat fleet.
+The **advisors** fleet agent (`agents/advisors.md`) and skill
+(`skills/advisors/SKILL.md`, slash `/advisors`) are a **leaf multi-seat consult**,
+not part of the `/cplan` wave graph. Prefer dispatching
+`Agent(subagent_type: "advisors")` under a **`cthru` CLI launch** (fleet
+`--agents` inject). The lean marketplace plugin does not ship this skill or the
+seat fleet. Host capability: `agent_to_capability.advisors` → `planner-hard`.
 
 Seats are declared in `config/model-map.json` → `advisor_panels` per
 connectivity mode and resolved with:
@@ -398,11 +408,12 @@ connectivity mode and resolved with:
 c-thru explain --panel default --mode best-cloud-oss --tier 64gb
 ```
 
-The host session fans out to `Agent(subagent_type: <seat>)` for each seat
+The **advisors** host fans out to `Agent(subagent_type: <seat>)` for each seat
 (pass 1 independent, pass 2 peer-aware), then synthesizes a final answer.
 Brand leaves (`grok`, `deepseek`, …) require the matching provider keys on the
 proxy path. Gov modes must not seat Chinese-origin brand agents (enforced by
-map validation + hermetic tests). Not the global Grok skill named `advisors`.
+map validation + hermetic tests). Distinct from the global Grok skill also named
+`advisors` when not under `cthru`.
 
 ## Skill source
 

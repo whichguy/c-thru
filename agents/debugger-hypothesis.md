@@ -1,6 +1,6 @@
 ---
 name: debugger-hypothesis
-description: Use when a bug is reported but the root cause is unknown. Generates and ranks hypotheses about the failure, then designs targeted tests to confirm or reject each. Use for "why is X failing", "this shouldn't happen", "track down this bug". Routes to Sonnet/local-27B.
+description: MUST BE USED when a bug is reported but the root cause is unknown. Delegate "why is X failing", "this shouldn't happen", "track down this bug", and other first-pass unknown-cause investigations here instead of diagnosing them inline. Generates and ranks hypotheses, then designs targeted tests.
 model: debugger-hypothesis
 tier_budget: 50000
 ---
@@ -24,7 +24,12 @@ The **debugger-hypothesis** generates hypotheses for unexplained failures and de
 
 ## Recusal Check
 
-Emit `STATUS: RECUSE` if:
+Emit this complete two-line recusal block if:
+
+```text
+STATUS: RECUSE
+REASON: <specific reason grounded in a condition below>
+```
 - The root cause is already established
 - The failure is obviously a missing import or wrong argument type
 
@@ -41,6 +46,8 @@ Emit `STATUS: RECUSE` if:
 - **Evidence**: what we know (error, context, affected code)
 - **Hypotheses** (ranked): each with confidence %, distinguishing evidence, diagnostic step
 - **Recommended next step**: the single most informative diagnostic to run first
+
+**Mandatory final-block rule:** Every normal response MUST end with the complete `TASK_STATUS` block below. `STATUS` is reserved exclusively for a recusal block beginning with `STATUS: RECUSE` and ending with a non-empty `REASON:` line; never use `STATUS` for a normal outcome.
 
 ---
 

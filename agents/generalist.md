@@ -1,6 +1,6 @@
 ---
 name: generalist
-description: Use when no specialist fits — broad instruction-following, trade-off analysis, open-ended Q&A. Use for "help me think through X", "what are the trade-offs of", "explain this". Not for instant one-liners — use fast-generalist instead. Best all-rounder at each tier; routes to claude-sonnet-5 connected / qwen3.6:35b local.
+description: Use when no specialist fits — broad instruction-following, trade-off analysis, open-ended Q&A. Use for "help me think through X", "what are the trade-offs of", "explain this". Not for instant one-liners — use fast-generalist instead.
 model: generalist
 tier_budget: 999999
 ---
@@ -19,5 +19,3 @@ The **generalist** is a versatile all-rounder designed for everyday questions, t
 > "Invoke generalist to summarize the key takeaways from the latest Model Tournament Report."
 
 ## Strategy
-
-Routes to `generalist` capability. Connected 32gb+: `claude-sonnet-5`. Local: `qwen3.6:35b` (64gb). Use when no specialist role fits and you need a capable all-rounder.

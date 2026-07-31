@@ -28,6 +28,9 @@
 //      "prefer X") must be a real agents/*.md or an allowlisted built-in —
 //      a rename must not silently orphan the guidance (the
 //      <role>-<noun>→<noun>-<role> rename already orphaned one once).
+//   6. omit selector-visible routing tails. Model choice belongs in the generated
+//      routing reference and model map; prose such as "Routes to Opus ..." drifts
+//      independently and can bias selection toward a model name instead of a job.
 //
 // Fail-closed: a new agent that skips the convention fails this suite.
 //
@@ -139,6 +142,8 @@ for (const file of AGENT_FILES) {
   const sig = hasSpecificity(desc);
   assert(sig !== null,
     `${name}: has a specificity signal (quoted example / disambiguation / mandate+scope)${sig ? ` [${sig}]` : ''}`);
+  assert(!/\broutes? to\b/i.test(desc),
+    `${name}: description omits hand-maintained routing prose (model map is source of truth)`);
   for (const { token, sentence } of disambigTargets(desc)) {
     assert(AGENT_NAMES.has(token) || BUILTIN_AGENTS.has(token),
       `${name}: disambiguation target "${token}" resolves to a real agent — offending sentence: "${sentence}"`);
@@ -193,9 +198,27 @@ console.log('\nModel-id staleness (frontmatter+body tokens must be in the agent\
     if (typeof cap === 'string' && cap.startsWith(MODEL_PIN_PREFIX)) {
       const pinned = cap.slice(MODEL_PIN_PREFIX.length).replace(/@[a-zA-Z0-9_-]+$/, '');
       own = new Set([pinned]);
-      // Alias keys in model_routes (e.g. grok → grok-4.5) are also allowed in prose.
+      // Agent filename / frontmatter name is not a routing claim.
+      own.add(name);
+      // Claude-safe slug of the pin (gpt-oss:20b → gpt-oss-20b) used as alias agent ids.
+      own.add(pinned.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''));
+      // Alias keys in model_routes that resolve to the pinned concrete model
+      // (e.g. grok-build → grok-4.5) are also valid in that agent's prose.
+      for (const [alias, aliasRoute] of Object.entries(cfg.model_routes || {})) {
+        if (aliasRoute && typeof aliasRoute === 'object' && aliasRoute.name === pinned) {
+          own.add(alias);
+        }
+      }
+      // Preserve forward-alias support when the pin itself names an alias.
       const route = (cfg.model_routes || {})[pinned];
       if (route && typeof route === 'object' && route.name) own.add(route.name);
+      // Mode-conditional routes (opus/sonnet/haiku/fable): pin is a shorthand key whose
+      // values are concrete models per mode — allow every string target in the object.
+      if (route && typeof route === 'object' && !route.endpoint) {
+        for (const v of Object.values(route)) {
+          if (typeof v === 'string' && v && !['endpoint', 'name'].includes(v)) own.add(v);
+        }
+      }
     } else {
       own = capSets[cap] || new Set();
     }

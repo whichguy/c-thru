@@ -22,7 +22,7 @@ Requests resolve by **capability**, **hardware tier**, and **connectivity mode**
 - Mix providers in a single session
 - Fall back and reload without restarting Claude
 - Observe every decision (`x-c-thru-*`, optional journal)
-- Optional 28-agent fleet and `/cplan` waves (CLI install)
+- Optional 98-agent fleet and `/cplan` waves (CLI install)
 
 ### In practice
 
@@ -907,7 +907,7 @@ flowchart TB
     subgraph H["Claude Code harness"]
         direction LR
         CTX["Context window"]
-        AG["Agent fleet<br/>13 pipeline · 10 utility<br/>5 named pins"]
+        AG["Agent fleet<br/>13 pipeline · 10 utility<br/>brand leaves (catalog)"]
         MCP["llm-capabilities MCP<br/>CLI only"]
         CTX --> AG
     end
@@ -1074,7 +1074,7 @@ Schema reference, route/endpoint/profile structure, and the full `model_override
 
 ## Agents
 
-28 agents declare `model: <agent-name>` in frontmatter — including the five brand agents, whose frontmatter names themselves like every other agent. Their pin to a concrete model lives one layer down, in `agent_to_capability` (`"grok": "model:grok-4.5"`), not in the agent file. The proxy resolves
+98 agents declare `model: <agent-name>` in frontmatter — including brand leaves from `config/brand-agents.json`, whose frontmatter names themselves like every other agent. Their pin to a concrete model lives one layer down, in `agent_to_capability` (e.g. `"grok": "model:grok-4.5"`, `"opus": "model:opus"`), not in the agent file. The proxy resolves
 `agent-name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model`
 at request time. Agent files are never edited when you remap models.
 
@@ -1100,30 +1100,100 @@ The full mapping, all the way through the implementation: **agent → capability
 | Agent | Capability | `best-cloud` | `best-cloud-oss` | `best-local-oss` | Endpoint (`best-cloud`) |
 |---|---|---|---|---|---|
 | `advisors` &nbsp;⚠ | `planner-hard` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
+| `claude-haiku-4-5-20251001` &nbsp;⚠ | `model:claude-haiku-4-5-20251001` | `—` | `—` | `—` | `—` |
+| `claude-opus-5` &nbsp;⚠ | `model:claude-opus-5` | `—` | `—` | `—` | `—` |
+| `claude-sonnet-5` &nbsp;⚠ | `model:claude-sonnet-5` | `—` | `—` | `—` | `—` |
 | `code-reviewer` | `code-reviewer` | `claude-sonnet-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
 | `coder` | `coder` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
 | `coder-fallback` | `coder-fallback` | `gemini-pro-latest` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
+| `codex` &nbsp;⚠ | `model:gpt-5.6-terra` | `—` | `—` | `—` | `—` |
+| `codex-luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `—` | `—` | `—` | `—` |
+| `codex-sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `—` | `—` | `—` | `—` |
+| `codex-terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `—` | `—` | `—` | `—` |
 | `debugger-hard` | `debugger-hard` | `claude-opus-4-8` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
 | `debugger-hypothesis` | `debugger-hypothesis` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
 | `debugger-investigate` | `debugger-investigate` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
 | `deepseek` &nbsp;⚠ | `model:deepseek-v4-pro:cloud` | `—` | `—` | `—` | `—` |
+| `deepseek-flash` &nbsp;⚠ | `model:deepseek-v4-flash:cloud` | `—` | `—` | `—` | `—` |
+| `deepseek-v4-flash-cloud` &nbsp;⚠ | `model:deepseek-v4-flash:cloud` | `—` | `—` | `—` | `—` |
+| `deepseek-v4-pro-cloud` &nbsp;⚠ | `model:deepseek-v4-pro:cloud` | `—` | `—` | `—` | `—` |
+| `devstral` &nbsp;⚠ | `model:devstral-2:latest` | `—` | `—` | `—` | `—` |
+| `devstral-2` &nbsp;⚠ | `model:devstral-2` | `—` | `—` | `—` | `—` |
+| `devstral-2-latest` &nbsp;⚠ | `model:devstral-2:latest` | `—` | `—` | `—` | `—` |
+| `devstral-small-2-24b` &nbsp;⚠ | `model:devstral-small-2:24b` | `—` | `—` | `—` | `—` |
+| `devstral-small-2-24b-cloud` &nbsp;⚠ | `model:devstral-small-2:24b-cloud` | `—` | `—` | `—` | `—` |
 | `docs` | `docs` | `gemma4:26b` | `gemma4:26b` | `qwen3.6:35b` | `ollama_local` |
 | `edge` | `edge` | `gemma4:e4b` | `gemma4:e4b` | `gemma4:e4b` | `ollama_local` |
 | `explore` | `explore` | `gemini-pro-latest` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `gemini_ai` |
+| `fable` &nbsp;⚠ | `model:claude-fable-5` | `—` | `—` | `—` | `—` |
 | `fast-generalist` | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
 | `fast-scout` | `fast-scout` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `ollama_local` |
 | `gemini` &nbsp;⚠ | `model:gemini-pro` | `—` | `—` | `—` | `—` |
+| `gemini-3-flash-preview-cloud` &nbsp;⚠ | `model:gemini-3-flash-preview:cloud` | `—` | `—` | `—` | `—` |
+| `gemini-flash` &nbsp;⚠ | `model:gemini-3-flash-preview:cloud` | `—` | `—` | `—` | `—` |
+| `gemini-pro` &nbsp;⚠ | `model:gemini-pro` | `—` | `—` | `—` | `—` |
+| `gemini-pro-latest` &nbsp;⚠ | `model:gemini-pro-latest` | `—` | `—` | `—` | `—` |
+| `gemma` &nbsp;⚠ | `model:gemma4:26b` | `—` | `—` | `—` | `—` |
+| `gemma4-26b` &nbsp;⚠ | `model:gemma4:26b` | `—` | `—` | `—` | `—` |
+| `gemma4-26b-mxfp8` &nbsp;⚠ | `model:gemma4:26b-mxfp8` | `—` | `—` | `—` | `—` |
+| `gemma4-31b` &nbsp;⚠ | `model:gemma4:31b` | `—` | `—` | `—` | `—` |
+| `gemma4-31b-mxfp8` &nbsp;⚠ | `model:gemma4:31b-mxfp8` | `—` | `—` | `—` | `—` |
+| `gemma4-e4b` &nbsp;⚠ | `model:gemma4:e4b` | `—` | `—` | `—` | `—` |
 | `generalist` | `generalist` | `claude-sonnet-5` | `glm-5.2:cloud` | `qwen3.6:35b` | `anthropic` |
+| `glm` &nbsp;⚠ | `model:glm-5.2:cloud` | `—` | `—` | `—` | `—` |
+| `glm-5-2-cloud` &nbsp;⚠ | `model:glm-5.2:cloud` | `—` | `—` | `—` | `—` |
+| `gpt-5-6-luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `—` | `—` | `—` | `—` |
+| `gpt-5-6-sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `—` | `—` | `—` | `—` |
+| `gpt-5-6-terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `—` | `—` | `—` | `—` |
+| `gpt-oss` &nbsp;⚠ | `model:gpt-oss:20b` | `—` | `—` | `—` | `—` |
+| `gpt-oss-120b` &nbsp;⚠ | `model:gpt-oss:120b` | `—` | `—` | `—` | `—` |
+| `gpt-oss-120b-cloud` &nbsp;⚠ | `model:gpt-oss:120b-cloud` | `—` | `—` | `—` | `—` |
+| `gpt-oss-20b` &nbsp;⚠ | `model:gpt-oss:20b` | `—` | `—` | `—` | `—` |
 | `grok` &nbsp;⚠ | `model:grok-4.5` | `—` | `—` | `—` | `—` |
-| `kimi` &nbsp;⚠ | `model:kimi-k2.7-code:cloud` | `—` | `—` | `—` | `—` |
+| `grok-4-5` &nbsp;⚠ | `model:grok-4.5` | `—` | `—` | `—` | `—` |
+| `haiku` &nbsp;⚠ | `model:claude-haiku-4-5-20251001` | `—` | `—` | `—` | `—` |
+| `hermes` &nbsp;⚠ | `model:hermes3:70b` | `—` | `—` | `—` | `—` |
+| `hermes3-70b` &nbsp;⚠ | `model:hermes3:70b` | `—` | `—` | `—` | `—` |
+| `kimi` &nbsp;⚠ | `model:kimi-k3:cloud` | `—` | `—` | `—` | `—` |
+| `kimi-k2-7-code-cloud` &nbsp;⚠ | `model:kimi-k2.7-code:cloud` | `—` | `—` | `—` | `—` |
+| `kimi-k3-cloud` &nbsp;⚠ | `model:kimi-k3:cloud` | `—` | `—` | `—` | `—` |
 | `long-context` | `long-context` | `claude-sonnet-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
+| `luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `—` | `—` | `—` | `—` |
+| `minimax` &nbsp;⚠ | `model:minimax-m3:cloud` | `—` | `—` | `—` | `—` |
+| `minimax-m3-cloud` &nbsp;⚠ | `model:minimax-m3:cloud` | `—` | `—` | `—` | `—` |
+| `mistral` &nbsp;⚠ | `model:mistral-small3.2:24b` | `—` | `—` | `—` | `—` |
+| `mistral-small3-2-24b` &nbsp;⚠ | `model:mistral-small3.2:24b` | `—` | `—` | `—` | `—` |
+| `nemotron` &nbsp;⚠ | `model:nemotron-3-super:cloud` | `—` | `—` | `—` | `—` |
+| `nemotron-3-super-cloud` &nbsp;⚠ | `model:nemotron-3-super:cloud` | `—` | `—` | `—` | `—` |
+| `opus` &nbsp;⚠ | `model:claude-opus-5` | `—` | `—` | `—` | `—` |
 | `pdf` | `pdf` | `claude-sonnet-5` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |
+| `phi` &nbsp;⚠ | `model:phi4-reasoning:plus` | `—` | `—` | `—` | `—` |
+| `phi4-mini-3-8b` &nbsp;⚠ | `model:phi4-mini:3.8b` | `—` | `—` | `—` | `—` |
+| `phi4-reasoning-plus` &nbsp;⚠ | `model:phi4-reasoning:plus` | `—` | `—` | `—` | `—` |
 | `plan-scheduler` &nbsp;⚠ | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
 | `planner` | `planner` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `planner-hard` | `planner-hard` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `qwen` &nbsp;⚠ | `model:qwen3.6:35b` | `—` | `—` | `—` | `—` |
+| `qwen3-1-7b` &nbsp;⚠ | `model:qwen3:1.7b` | `—` | `—` | `—` | `—` |
+| `qwen3-4b` &nbsp;⚠ | `model:qwen3:4b` | `—` | `—` | `—` | `—` |
+| `qwen3-6-27b` &nbsp;⚠ | `model:qwen3.6:27b` | `—` | `—` | `—` | `—` |
+| `qwen3-6-27b-coding-mxfp8` &nbsp;⚠ | `model:qwen3.6:27b-coding-mxfp8` | `—` | `—` | `—` | `—` |
+| `qwen3-6-27b-coding-nvfp4` &nbsp;⚠ | `model:qwen3.6:27b-coding-nvfp4` | `—` | `—` | `—` | `—` |
+| `qwen3-6-27b-nvfp4` &nbsp;⚠ | `model:qwen3.6:27b-nvfp4` | `—` | `—` | `—` | `—` |
+| `qwen3-6-35b` &nbsp;⚠ | `model:qwen3.6:35b` | `—` | `—` | `—` | `—` |
+| `qwen3-6-35b-a3b-coding-mxfp8` &nbsp;⚠ | `model:qwen3.6:35b-a3b-coding-mxfp8` | `—` | `—` | `—` | `—` |
+| `qwen3-6-35b-a3b-coding-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b-a3b-coding-nvfp4` | `—` | `—` | `—` | `—` |
+| `qwen3-6-35b-a3b-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b-a3b-nvfp4` | `—` | `—` | `—` | `—` |
+| `qwen3-6-35b-a3b-q8-0` &nbsp;⚠ | `model:qwen3.6:35b-a3b-q8_0` | `—` | `—` | `—` | `—` |
+| `qwen3-coder-480b-cloud` &nbsp;⚠ | `model:qwen3-coder:480b-cloud` | `—` | `—` | `—` | `—` |
+| `qwen3-coder-next-q4-k-m` &nbsp;⚠ | `model:qwen3-coder-next:q4_K_M` | `—` | `—` | `—` | `—` |
+| `qwen3-coder-next-q8-0` &nbsp;⚠ | `model:qwen3-coder-next:q8_0` | `—` | `—` | `—` | `—` |
+| `qwen3-vl-8b` &nbsp;⚠ | `model:qwen3-vl:8b` | `—` | `—` | `—` | `—` |
 | `reviewer-plan` &nbsp;⚠ | `code-reviewer` | `claude-sonnet-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
 | `reviewer-security` | `reviewer-security` | `claude-opus-4-8` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
+| `sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `—` | `—` | `—` | `—` |
+| `sonnet` &nbsp;⚠ | `model:claude-sonnet-5` | `—` | `—` | `—` | `—` |
+| `terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `—` | `—` | `—` | `—` |
 | `tester` | `tester` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `ollama_local` |
 | `vision` | `vision` | `claude-sonnet-5` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |
 | `writer` | `writer` | `claude-sonnet-5` | `glm-5.2:cloud` | `qwen3.6:35b` | `anthropic` |
@@ -1271,14 +1341,14 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | Model-map seeding (`model-map.system.json`, overrides preserved) | ✓ | ✓ |
 | `ANTHROPIC_BASE_URL` auto-registration in settings | ✓ | (set per launch) |
 | Slash command `/c-thru-status` | ✓ | ✓ |
-| Slash command `/cplan` (needs `planning-suite`; full 28-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
+| Slash command `/cplan` (needs `planning-suite`; full 98-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
 | Skills `c-thru-plan`, `c-thru-config`, `c-thru-control`, `advisors` | — | ✓ |
 | User-wide hooks — fire in every Claude Code session (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) | ✓ | — |
 | Ephemeral hooks — injected per `c-thru` launch only (no static project `.claude` hooks) | — | ✓ |
 | `c-thru` binary on PATH | — | ✓ |
 | Control subcommands (`list`, `reload`, `restart`, `explain`, `stats`, `check-deps`) | — | ✓ |
 | Flags (`--mode`, `--profile`, `--bypass-proxy`, `--journal`, `--router-debug`) | (use env vars) | ✓ |
-| Agent fleet (28 agents) injected via `--agents` | — | ✓ |
+| Agent fleet (98 agents) injected via `--agents` | — | ✓ |
 | `llm-capabilities` MCP server injected via `--settings` | — | ✓ |
 | Contributor checks (`c-thru-contract-check`, `c-thru-hygiene-check`) | — | ✓ |
 

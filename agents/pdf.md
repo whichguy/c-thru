@@ -1,6 +1,6 @@
 ---
 name: pdf
-description: Use to parse PDF documents — tables, multi-column layouts, embedded figures. Use for "read this PDF", "extract data from this whitepaper", "find the pricing table in". Not for screenshots or standalone images — use vision instead. Complex layouts handled best connected; routes to claude-sonnet-5 connected / qwen3.6:35b local.
+description: Use to parse PDF documents — tables, multi-column layouts, embedded figures. Use for "read this PDF", "extract data from this whitepaper", "find the pricing table in". Not for screenshots or standalone images — use vision instead.
 model: pdf
 tier_budget: 999999
 ---
@@ -19,5 +19,3 @@ The **pdf** agent is a document-analysis specialist optimized for parsing and an
 > "Invoke pdf to find the definition of 'Graceful Drain' in the architectural design document."
 
 ## Strategy
-
-Routes to `pdf` capability. Claude-sonnet connected = best for complex PDF layouts. Local: `qwen3.6:35b` — handles text-heavy PDFs well; may miss visual PDF elements.

@@ -71,11 +71,25 @@ function routeEndpointId(model) {
 
 console.log(`agent-mapping-complete: ${AGENTS.length} agents × ${MODES.length} modes × ${TIERS.length} tiers\n`);
 
-// ── 0. Roster sanity — pipeline fleet + brand-name model-pin agents ──────────
-// 22 pipeline/utility + 5 brand agents (grok, deepseek, qwen, kimi, gemini).
-const EXPECTED_ROSTER = 27;
+// ── 0. Roster sanity — pipeline/utility + brand-name model-pin agents ────────
+// Brand leaves are generated from config/brand-agents.json; count = agents/*.md.
+const BRAND_CATALOG = JSON.parse(fs.readFileSync(path.join(REPO, 'config', 'brand-agents.json'), 'utf8'));
+function brandIdsFromCatalog(cat) {
+  const ids = [];
+  for (const a of cat.agents || []) {
+    ids.push(a.id);
+    for (const al of a.aliases || []) ids.push(typeof al === 'string' ? al : al.id);
+  }
+  return ids;
+}
+const BRAND_IDS = brandIdsFromCatalog(BRAND_CATALOG);
+const EXPECTED_ROSTER = AGENTS.length;
 assert(AGENTS.length === EXPECTED_ROSTER,
   `agents/*.md roster has ${EXPECTED_ROSTER} files (got ${AGENTS.length})`);
+assert(BRAND_IDS.every(id => AGENTS.includes(id)),
+  `every brand-agents.json id has agents/<id>.md (missing: ${JSON.stringify(BRAND_IDS.filter(id => !AGENTS.includes(id)))})`);
+assert(AGENTS.length >= 28 + BRAND_IDS.length - 5,
+  `roster grew with brand catalog (got ${AGENTS.length}, brand entries ${BRAND_IDS.length})`);
 
 // ── 1. Every agent has an agent_to_capability entry ──────────────────────────
 console.log('\n1. Every agent → agent_to_capability entry');
@@ -111,8 +125,18 @@ console.log('\n2. Full chain: agent → capability → model → route → endpo
     for (const mode of MODES) {
       for (const tier of TIERS) {
         combos++;
+        function resolvePinnedModel(rawPin, mode) {
+          let model = rawPin;
+          const route = ROUTES[model];
+          if (route && typeof route === 'object' && !route.endpoint) {
+            model = route[mode] || route.connected || route.offline || null;
+          } else if (route && typeof route === 'object' && route.name) {
+            model = route.name;
+          }
+          return model;
+        }
         const model = pinned
-          ? cap.slice(MODEL_PIN_PREFIX.length)
+          ? resolvePinnedModel(cap.slice(MODEL_PIN_PREFIX.length), mode)
           : resolveProfileModel(entry, tier, mode);
         if (!model || typeof model !== 'string') {
           assert(false, `${agent} → ${cap} @ ${mode}/${tier}: empty model (got ${JSON.stringify(model)})`);
@@ -146,20 +170,28 @@ console.log('\n3. Documented non-1:1 remaps hold (guards the README "⚠" rows +
     `reviewer-plan → code-reviewer (got ${JSON.stringify(a2c['reviewer-plan'])})`);
   assert(a2c['plan-scheduler'] === 'fast-generalist',
     `plan-scheduler → fast-generalist (got ${JSON.stringify(a2c['plan-scheduler'])})`);
-  // Brand agents pin directly to concrete models (not llm_profiles capabilities).
-  const brandPins = {
-    grok: 'model:grok-4.5',
-    deepseek: 'model:deepseek-v4-pro:cloud',
-    qwen: 'model:qwen3.6:35b',
-    kimi: 'model:kimi-k2.7-code:cloud',
-    gemini: 'model:gemini-pro',
-  };
+  assert(a2c['advisors'] === 'planner-hard',
+    `advisors → planner-hard (got ${JSON.stringify(a2c['advisors'])})`);
+  // Brand agents pin via model: (catalog is source of truth).
+  const brandPins = {};
+  for (const a of BRAND_CATALOG.agents || []) {
+    brandPins[a.id] = a.pin;
+    for (const al of a.aliases || []) {
+      const id = typeof al === 'string' ? al : al.id;
+      brandPins[id] = typeof al === 'string' ? a.pin : (al.pin || a.pin);
+    }
+  }
   for (const [agent, pin] of Object.entries(brandPins)) {
     assert(a2c[agent] === pin,
       `${agent} → brand pin ${pin} (got ${JSON.stringify(a2c[agent])})`);
   }
+  // Claude-family brand leaves pin to concrete Claude models (name-gated brands).
+  for (const name of ['opus', 'sonnet', 'haiku', 'fable']) {
+    assert(typeof a2c[name] === 'string' && a2c[name].startsWith('model:claude-'),
+      `${name} brand leaf pins a concrete Claude model (got ${JSON.stringify(a2c[name])})`);
+  }
   // Every OTHER agent maps 1:1 to its own name.
-  const remapped = new Set(['reviewer-plan', 'plan-scheduler', ...Object.keys(brandPins)]);
+  const remapped = new Set(['reviewer-plan', 'plan-scheduler', 'advisors', ...Object.keys(brandPins)]);
   for (const agent of AGENTS) {
     if (remapped.has(agent)) continue;
     assert(a2c[agent] === agent,

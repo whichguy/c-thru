@@ -1,0 +1,540 @@
+{
+  "_comment": "Fleet brand-leaf catalog. Primary ids + Claude-safe aliases. Pins are model:<id> resolved by the proxy. Explicit Claude brand leaves pin concrete current IDs; generic transport keys in model_routes remain mode-conditional. Ollama full-name aliases pin concrete tags. Generated agents: node tools/gen-brand-agents.js",
+  "agents": [
+    {
+      "id": "opus",
+      "pin": "model:claude-opus-5",
+      "family": "anthropic-claude",
+      "label": "Claude Opus",
+      "triggers": [
+        "ask opus",
+        "ask agent opus",
+        "use opus",
+        "claude opus"
+      ],
+      "aliases": [
+        {
+          "id": "claude-opus-5",
+          "pin": "model:claude-opus-5"
+        }
+      ]
+    },
+    {
+      "id": "sonnet",
+      "pin": "model:claude-sonnet-5",
+      "family": "anthropic-claude",
+      "label": "Claude Sonnet",
+      "triggers": [
+        "ask sonnet",
+        "ask agent sonnet",
+        "use sonnet",
+        "claude sonnet"
+      ],
+      "aliases": [
+        {
+          "id": "claude-sonnet-5",
+          "pin": "model:claude-sonnet-5"
+        }
+      ]
+    },
+    {
+      "id": "haiku",
+      "pin": "model:claude-haiku-4-5-20251001",
+      "family": "anthropic-claude",
+      "label": "Claude Haiku",
+      "triggers": [
+        "ask haiku",
+        "ask agent haiku",
+        "use haiku",
+        "claude haiku"
+      ],
+      "aliases": [
+        {
+          "id": "claude-haiku-4-5-20251001",
+          "pin": "model:claude-haiku-4-5-20251001"
+        }
+      ]
+    },
+    {
+      "id": "fable",
+      "pin": "model:claude-fable-5",
+      "family": "anthropic-claude",
+      "label": "Claude Fable",
+      "triggers": [
+        "ask fable",
+        "ask agent fable",
+        "use fable",
+        "claude fable"
+      ],
+      "aliases": []
+    },
+    {
+      "id": "grok",
+      "pin": "model:grok-4.5",
+      "family": "xai",
+      "label": "Grok (xAI)",
+      "triggers": [
+        "ask grok",
+        "ask agent grok",
+        "what does grok think",
+        "grok critique",
+        "xai second opinion"
+      ],
+      "aliases": [
+        {
+          "id": "grok-4-5",
+          "pin": "model:grok-4.5"
+        }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "pin": "model:deepseek-v4-pro:cloud",
+      "family": "deepseek",
+      "label": "DeepSeek Pro",
+      "triggers": [
+        "ask deepseek",
+        "ask agent deepseek",
+        "use deepseek"
+      ],
+      "aliases": [
+        {
+          "id": "deepseek-v4-pro-cloud",
+          "pin": "model:deepseek-v4-pro:cloud"
+        }
+      ]
+    },
+    {
+      "id": "deepseek-flash",
+      "pin": "model:deepseek-v4-flash:cloud",
+      "family": "deepseek",
+      "label": "DeepSeek Flash",
+      "triggers": [
+        "ask deepseek flash",
+        "deepseek-v4-flash",
+        "use deepseek flash"
+      ],
+      "aliases": [
+        {
+          "id": "deepseek-v4-flash-cloud",
+          "pin": "model:deepseek-v4-flash:cloud"
+        }
+      ]
+    },
+    {
+      "id": "qwen",
+      "pin": "model:qwen3.6:35b",
+      "family": "qwen",
+      "label": "Qwen",
+      "triggers": [
+        "ask qwen",
+        "ask agent qwen",
+        "use qwen",
+        "local qwen"
+      ],
+      "aliases": [
+        {
+          "id": "qwen3-6-35b",
+          "pin": "model:qwen3.6:35b"
+        },
+        {
+          "id": "qwen3-6-35b-a3b-coding-nvfp4",
+          "pin": "model:qwen3.6:35b-a3b-coding-nvfp4"
+        },
+        {
+          "id": "qwen3-6-35b-a3b-q8-0",
+          "pin": "model:qwen3.6:35b-a3b-q8_0"
+        },
+        {
+          "id": "qwen3-6-35b-a3b-coding-mxfp8",
+          "pin": "model:qwen3.6:35b-a3b-coding-mxfp8"
+        },
+        {
+          "id": "qwen3-6-35b-a3b-nvfp4",
+          "pin": "model:qwen3.6:35b-a3b-nvfp4"
+        },
+        {
+          "id": "qwen3-6-27b",
+          "pin": "model:qwen3.6:27b"
+        },
+        {
+          "id": "qwen3-6-27b-nvfp4",
+          "pin": "model:qwen3.6:27b-nvfp4"
+        },
+        {
+          "id": "qwen3-6-27b-coding-nvfp4",
+          "pin": "model:qwen3.6:27b-coding-nvfp4"
+        },
+        {
+          "id": "qwen3-6-27b-coding-mxfp8",
+          "pin": "model:qwen3.6:27b-coding-mxfp8"
+        },
+        {
+          "id": "qwen3-1-7b",
+          "pin": "model:qwen3:1.7b"
+        },
+        {
+          "id": "qwen3-4b",
+          "pin": "model:qwen3:4b"
+        },
+        {
+          "id": "qwen3-coder-next-q8-0",
+          "pin": "model:qwen3-coder-next:q8_0"
+        },
+        {
+          "id": "qwen3-coder-next-q4-k-m",
+          "pin": "model:qwen3-coder-next:q4_K_M"
+        },
+        {
+          "id": "qwen3-coder-480b-cloud",
+          "pin": "model:qwen3-coder:480b-cloud"
+        },
+        {
+          "id": "qwen3-vl-8b",
+          "pin": "model:qwen3-vl:8b"
+        }
+      ]
+    },
+    {
+      "id": "kimi",
+      "pin": "model:kimi-k3:cloud",
+      "family": "kimi",
+      "label": "Kimi",
+      "triggers": [
+        "ask kimi",
+        "ask agent kimi",
+        "use kimi",
+        "moonshot kimi"
+      ],
+      "aliases": [
+        {
+          "id": "kimi-k3-cloud",
+          "pin": "model:kimi-k3:cloud"
+        },
+        {
+          "id": "kimi-k2-7-code-cloud",
+          "pin": "model:kimi-k2.7-code:cloud"
+        }
+      ]
+    },
+    {
+      "id": "gemini",
+      "pin": "model:gemini-pro",
+      "family": "gemini",
+      "label": "Gemini Pro",
+      "triggers": [
+        "ask gemini",
+        "ask agent gemini",
+        "use gemini",
+        "google gemini",
+        "gemini-pro"
+      ],
+      "aliases": [
+        {
+          "id": "gemini-pro",
+          "pin": "model:gemini-pro"
+        },
+        {
+          "id": "gemini-pro-latest",
+          "pin": "model:gemini-pro-latest"
+        }
+      ]
+    },
+    {
+      "id": "gemini-flash",
+      "pin": "model:gemini-3-flash-preview:cloud",
+      "family": "gemini",
+      "label": "Gemini Flash",
+      "triggers": [
+        "ask gemini flash",
+        "gemini flash preview",
+        "ollama gemini flash"
+      ],
+      "aliases": [
+        {
+          "id": "gemini-3-flash-preview-cloud",
+          "pin": "model:gemini-3-flash-preview:cloud"
+        }
+      ]
+    },
+    {
+      "id": "devstral",
+      "pin": "model:devstral-2:latest",
+      "family": "devstral",
+      "label": "Devstral",
+      "triggers": [
+        "ask devstral",
+        "ask agent devstral",
+        "use devstral",
+        "mistral devstral"
+      ],
+      "aliases": [
+        {
+          "id": "devstral-2-latest",
+          "pin": "model:devstral-2:latest"
+        },
+        {
+          "id": "devstral-2",
+          "pin": "model:devstral-2"
+        },
+        {
+          "id": "devstral-small-2-24b",
+          "pin": "model:devstral-small-2:24b"
+        },
+        {
+          "id": "devstral-small-2-24b-cloud",
+          "pin": "model:devstral-small-2:24b-cloud"
+        }
+      ]
+    },
+    {
+      "id": "glm",
+      "pin": "model:glm-5.2:cloud",
+      "family": "glm",
+      "label": "GLM",
+      "triggers": [
+        "ask glm",
+        "ask agent glm",
+        "use glm",
+        "thudm glm"
+      ],
+      "aliases": [
+        {
+          "id": "glm-5-2-cloud",
+          "pin": "model:glm-5.2:cloud"
+        }
+      ]
+    },
+    {
+      "id": "gemma",
+      "pin": "model:gemma4:26b",
+      "family": "gemma",
+      "label": "Gemma",
+      "triggers": [
+        "ask gemma",
+        "ask agent gemma",
+        "use gemma",
+        "gemma4"
+      ],
+      "aliases": [
+        {
+          "id": "gemma4-26b",
+          "pin": "model:gemma4:26b"
+        },
+        {
+          "id": "gemma4-e4b",
+          "pin": "model:gemma4:e4b"
+        },
+        {
+          "id": "gemma4-26b-mxfp8",
+          "pin": "model:gemma4:26b-mxfp8"
+        },
+        {
+          "id": "gemma4-31b",
+          "pin": "model:gemma4:31b"
+        },
+        {
+          "id": "gemma4-31b-mxfp8",
+          "pin": "model:gemma4:31b-mxfp8"
+        }
+      ]
+    },
+    {
+      "id": "phi",
+      "pin": "model:phi4-reasoning:plus",
+      "family": "phi",
+      "label": "Phi",
+      "triggers": [
+        "ask phi",
+        "ask agent phi",
+        "use phi",
+        "phi4"
+      ],
+      "aliases": [
+        {
+          "id": "phi4-reasoning-plus",
+          "pin": "model:phi4-reasoning:plus"
+        },
+        {
+          "id": "phi4-mini-3-8b",
+          "pin": "model:phi4-mini:3.8b"
+        }
+      ]
+    },
+    {
+      "id": "gpt-oss",
+      "pin": "model:gpt-oss:20b",
+      "family": "gpt-oss",
+      "label": "GPT-OSS",
+      "triggers": [
+        "ask gpt-oss",
+        "ask agent gpt-oss",
+        "use gpt-oss",
+        "gpt oss"
+      ],
+      "aliases": [
+        {
+          "id": "gpt-oss-20b",
+          "pin": "model:gpt-oss:20b"
+        },
+        {
+          "id": "gpt-oss-120b",
+          "pin": "model:gpt-oss:120b"
+        },
+        {
+          "id": "gpt-oss-120b-cloud",
+          "pin": "model:gpt-oss:120b-cloud"
+        }
+      ]
+    },
+    {
+      "id": "nemotron",
+      "pin": "model:nemotron-3-super:cloud",
+      "family": "nemotron",
+      "label": "Nemotron",
+      "triggers": [
+        "ask nemotron",
+        "ask agent nemotron",
+        "use nemotron"
+      ],
+      "aliases": [
+        {
+          "id": "nemotron-3-super-cloud",
+          "pin": "model:nemotron-3-super:cloud"
+        }
+      ]
+    },
+    {
+      "id": "minimax",
+      "pin": "model:minimax-m3:cloud",
+      "family": "minimax",
+      "label": "MiniMax",
+      "triggers": [
+        "ask minimax",
+        "ask agent minimax",
+        "use minimax"
+      ],
+      "aliases": [
+        {
+          "id": "minimax-m3-cloud",
+          "pin": "model:minimax-m3:cloud"
+        }
+      ]
+    },
+    {
+      "id": "hermes",
+      "pin": "model:hermes3:70b",
+      "family": "hermes",
+      "label": "Hermes",
+      "triggers": [
+        "ask hermes",
+        "ask agent hermes",
+        "use hermes",
+        "hermes3"
+      ],
+      "aliases": [
+        {
+          "id": "hermes3-70b",
+          "pin": "model:hermes3:70b"
+        }
+      ]
+    },
+    {
+      "id": "mistral",
+      "pin": "model:mistral-small3.2:24b",
+      "family": "mistral",
+      "label": "Mistral Small",
+      "triggers": [
+        "ask mistral",
+        "ask agent mistral",
+        "use mistral",
+        "mistral small"
+      ],
+      "aliases": [
+        {
+          "id": "mistral-small3-2-24b",
+          "pin": "model:mistral-small3.2:24b"
+        }
+      ]
+    },
+    {
+      "id": "terra",
+      "pin": "model:gpt-5.6-terra",
+      "family": "codex-openai",
+      "label": "Codex Terra",
+      "triggers": [
+        "ask terra",
+        "ask agent terra",
+        "use terra",
+        "codex terra"
+      ],
+      "aliases": [
+        {
+          "id": "gpt-5-6-terra",
+          "pin": "model:gpt-5.6-terra"
+        },
+        {
+          "id": "codex-terra",
+          "pin": "model:gpt-5.6-terra"
+        }
+      ]
+    },
+    {
+      "id": "sol",
+      "pin": "model:gpt-5.6-sol",
+      "family": "codex-openai",
+      "label": "Codex SOL",
+      "triggers": [
+        "ask sol",
+        "ask agent sol",
+        "use sol",
+        "codex sol",
+        "ask soul"
+      ],
+      "aliases": [
+        {
+          "id": "gpt-5-6-sol",
+          "pin": "model:gpt-5.6-sol"
+        },
+        {
+          "id": "codex-sol",
+          "pin": "model:gpt-5.6-sol"
+        }
+      ]
+    },
+    {
+      "id": "luna",
+      "pin": "model:gpt-5.6-luna",
+      "family": "codex-openai",
+      "label": "Codex Luna",
+      "triggers": [
+        "ask luna",
+        "ask agent luna",
+        "use luna",
+        "codex luna"
+      ],
+      "aliases": [
+        {
+          "id": "gpt-5-6-luna",
+          "pin": "model:gpt-5.6-luna"
+        },
+        {
+          "id": "codex-luna",
+          "pin": "model:gpt-5.6-luna"
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "pin": "model:gpt-5.6-terra",
+      "family": "codex-openai",
+      "label": "Codex",
+      "triggers": [
+        "ask codex",
+        "ask agent codex",
+        "use codex"
+      ],
+      "aliases": []
+    }
+  ]
+}

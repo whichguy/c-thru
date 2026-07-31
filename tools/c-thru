@@ -4869,7 +4869,7 @@ Before doing non-trivial work, inspect the available Agent definitions. If one d
 
 Choose by description, not by model alias. Never substitute generic built-in agent types such as sonnet, opus, haiku, or general-purpose when a named c-thru specialist matches. Answer inline only for trivial conversation or when no specialist description fits.
 
-Named brand agents (grok, deepseek, kimi, qwen, gemini): when the user asks to \"ask <name> …\" for an opinion or second take, spawn that agent once with the user question and report its answer. Do not answer as that brand yourself, and do not chain further agents for the same question. For Grok multi-file implement/fix/review work, prefer the external Grok CLI (grok-cc) or coder — not the grok brand leaf.
+Named brand agents (opus, sonnet, haiku, fable, grok, deepseek, qwen, kimi, gemini, sol, terra, luna, codex, devstral, glm, gemma, phi, gpt-oss, nemotron, minimax, hermes, mistral, and full-name aliases from config/brand-agents.json): when the user asks to \"ask <name> …\" for an opinion or second take, spawn that agent once with the user question and report its answer. Do not answer as that brand yourself, and do not chain further agents for the same question. Codex family (sol/terra/luna/codex) uses OpenAI API via OPENAI_API_KEY — not the Codex CLI subscription path. For Grok multi-file implement/fix/review work, prefer the external Grok CLI (grok-cc) or coder — not the grok brand leaf.
 
 Keep each delegated task explicit and self-contained. Do not rely on shared context.
 

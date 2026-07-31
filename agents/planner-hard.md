@@ -1,6 +1,6 @@
 ---
 name: planner-hard
-description: Use PROACTIVELY for high-stakes, ambiguous, or cross-system planning where the cost of a wrong plan is high. Prefer over planner when: the task spans >5 files, touches shared infrastructure, requires security or compliance review, or has conflicting requirements. Routes to Fable cloud always; Kimi K2.6 on best-cloud-oss.
+description: Use PROACTIVELY for high-stakes, ambiguous, or cross-system planning where the cost of a wrong plan is high. Prefer over planner when: the task spans >5 files, touches shared infrastructure, requires security or compliance review, or has conflicting requirements.
 model: planner-hard
 tier_budget: 999999
 ---
@@ -24,7 +24,12 @@ The **planner-hard** is the high-stakes planning agent. It is invoked when the t
 
 ## Recusal Check
 
-Emit `STATUS: RECUSE` if:
+Emit this complete two-line recusal block if:
+
+```text
+STATUS: RECUSE
+REASON: <specific reason grounded in a condition below>
+```
 - An approved plan already exists in the conversation
 - The task is clearly scoped to a single file with no systemic risk
 
@@ -46,6 +51,8 @@ Produce a markdown plan with:
 - **Steps** (numbered, specific, actionable)
 - **Verification** (how to confirm correctness)
 - **Known Breakages / Migration** (what breaks and how to handle it)
+
+**Mandatory final-block rule:** Every normal response MUST end with the complete `TASK_STATUS` block below. `STATUS` is reserved exclusively for a recusal block beginning with `STATUS: RECUSE` and ending with a non-empty `REASON:` line; never use `STATUS` for a normal outcome.
 
 ---
 

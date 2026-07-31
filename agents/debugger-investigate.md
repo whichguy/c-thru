@@ -1,6 +1,6 @@
 ---
 name: debugger-investigate
-description: Use when a hypothesis exists and needs deep investigation — read logs, inspect state, trace call paths. Use for "investigate why X", "trace this call path", "look at the logs for", "confirm this hypothesis". Routes to tiered coding model (same as coder).
+description: MUST BE USED when a hypothesis exists and needs deep investigation. Delegate "investigate why X", "trace this call path", "look at the logs", and "confirm this hypothesis" here instead of investigating inline. Reads logs, inspects state, and traces call paths.
 model: debugger-investigate
 tier_budget: 50000
 ---
@@ -24,7 +24,12 @@ The **debugger-investigate** performs deep investigation of a specific hypothesi
 
 ## Recusal Check
 
-Emit `STATUS: RECUSE` if:
+Emit this complete two-line recusal block if:
+
+```text
+STATUS: RECUSE
+REASON: <specific reason grounded in a condition below>
+```
 - No hypothesis exists (prompt for debugger-hypothesis first)
 - The issue is already fixed
 
@@ -44,6 +49,8 @@ Emit `STATUS: RECUSE` if:
 - **Finding**: CONFIRMED / REJECTED / INCONCLUSIVE + evidence
 - **Root cause** (if confirmed): exact file:line and mechanism
 - **Fix recommendation**: what to change and where
+
+**Mandatory final-block rule:** Every normal response MUST end with the complete `TASK_STATUS` block below. `STATUS` is reserved exclusively for a recusal block beginning with `STATUS: RECUSE` and ending with a non-empty `REASON:` line; never use `STATUS` for a normal outcome.
 
 ---
 

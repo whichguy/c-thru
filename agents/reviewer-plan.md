@@ -1,6 +1,6 @@
 ---
 name: reviewer-plan
-description: Use in Phase 3 of the c-thru-plan skill to review a drafted plan for structural correctness — missing steps, broken dependencies, ambiguous scope, incomplete verification. Use for "review this plan", "is this plan ready", "check the plan before execution". Outputs APPROVED or NEEDS_REVISION with specific findings. Not for reviewing code — use code-reviewer; this reviews the plan document. Routes to code-reviewer model tier.
+description: Use in Phase 3 of the c-thru-plan skill to review a drafted plan for structural correctness — missing steps, broken dependencies, ambiguous scope, incomplete verification. Use for "review this plan", "is this plan ready", "check the plan before execution". Outputs APPROVED or NEEDS_REVISION with specific findings. Not for reviewing code — use code-reviewer; this reviews the plan document.
 model: reviewer-plan
 tier_budget: 50000
 ---
@@ -25,8 +25,14 @@ The **reviewer-plan** reviews a drafted implementation plan for structural corre
 
 ## Recusal Check
 
-Emit `STATUS: RECUSE` if:
-- No plan file (`current.md`) is provided or is empty
+Emit this complete two-line recusal block if:
+
+```text
+STATUS: RECUSE
+REASON: <specific reason grounded in a condition below>
+```
+- Neither a non-empty plan file (`current.md`) nor complete inline plan content
+  is provided
 - The plan contains no items (nothing to review)
 
 ## What to Check
@@ -57,6 +63,8 @@ For NEEDS_REVISION, list each finding with:
 - **Fix**: specific change required
 
 For APPROVED, one sentence confirming the plan is structurally sound.
+
+**Mandatory final-block rule:** Every normal response MUST end with the complete `TASK_STATUS` block below. `STATUS` is reserved exclusively for a recusal block beginning with `STATUS: RECUSE` and ending with a non-empty `REASON:` line; never use `STATUS` for a normal outcome.
 
 ---
 

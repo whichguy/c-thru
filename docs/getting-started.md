@@ -236,7 +236,7 @@ The repo has a deliberately small surface area. Here is each directory and
   truth for endpoints, routes, the capability table (`llm_profiles`), and the
   agent→capability map (`agent_to_capability`). Most model-routing changes
   are a one-value edit here.
-- **`agents/*.md`** — the 27-agent fleet definitions. Each declares a
+- **`agents/*.md`** — the 98-agent fleet definitions (roles + brand catalog). Each declares a
   logical `model:` name in frontmatter and a `description` (its only
   discovery surface). These are runtime-injected each `c-thru` launch via
   ephemeral `--agents` JSON — they are **not** installed into Claude's
@@ -244,7 +244,7 @@ The repo has a deliberately small surface area. Here is each directory and
   text, never to remap its model.
 - **`skills/`** — the agentic plan/wave system skills (`c-thru-plan`,
   `c-thru-config`, `c-thru-control`, etc.). Invoked via `/c-thru-plan`,
-  `/cplan`, `/c-thru-config`, `/c-thru-advisors` (multi-model panel; requires `cthru`). See [`docs/agent-architecture.md`](agent-architecture.md)
+  `/cplan`, `/c-thru-config`, `/advisors` (multi-model panel; requires `cthru`). See [`docs/agent-architecture.md`](agent-architecture.md)
   for the wave lifecycle.
 - **`docs/`** — the reference layer. Architecture diagrams, the
   endpoint × backend coverage matrix, env-var reference, headers reference,

@@ -1,6 +1,6 @@
 ---
 name: long-context
-description: Use for large-document retrieval and needle-in-haystack over 50K+ token spans — "find X in this large file", "summarize this 200-page doc", "search through all of these files". The oversized context window is the differentiator — prefer generalist for ordinary-length reasoning. Routes to claude-sonnet-5 connected / qwen3.6:35b local.
+description: Use for large-document retrieval and needle-in-haystack over 50K+ token spans — "find X in this large file", "summarize this 200-page doc", "search through all of these files". The oversized context window is the differentiator — prefer generalist for ordinary-length reasoning.
 model: long-context
 tier_budget: 999999
 ---
@@ -19,5 +19,3 @@ The **long-context** agent is a retrieval and analysis specialist optimized for 
 > "Invoke long-context to analyze the `Archive/` directory and find out if any of the old GAS scripts contain hardcoded port numbers."
 
 ## Strategy
-
-Routes to `long-context` capability. Connected: `claude-sonnet-5`. Offline: `qwen3.6:35b` (256K context window — the primary reason to use over generalist). Context window size matters more than model tier; use when the task exceeds the 65K default window.

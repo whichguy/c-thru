@@ -7,6 +7,10 @@
 
 const fs   = require('fs');
 const path = require('path');
+const {
+  preflightAgentContracts,
+  STRUCTURED_AGENTS,
+} = require('./agent-contract-fixtures');
 
 let passed   = 0;
 let failed   = 0;
@@ -33,6 +37,18 @@ const REPO_ROOT  = path.resolve(__dirname, '..');
 const AGENTS_DIR = path.join(REPO_ROOT, 'agents');
 const CONFIG     = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'config', 'model-map.json'), 'utf8'));
 const AGENT_TO_CAPABILITY = CONFIG.agent_to_capability || {};
+
+try {
+  preflightAgentContracts({
+    agentsDir: AGENTS_DIR,
+    modelMapPath: path.join(REPO_ROOT, 'config', 'model-map.json'),
+    requiredRecusalCaseAgents: STRUCTURED_AGENTS,
+    suiteName: 'agent-contract-static',
+  });
+  ok('shared structured-agent contract preflight passes');
+} catch (error) {
+  fail('shared structured-agent contract preflight passes', error.message);
+}
 
 // Valid RECOMMEND targets: known agent names + 'judge' sentinel.
 const KNOWN_AGENTS   = new Set(Object.keys(AGENT_TO_CAPABILITY));
@@ -76,20 +92,28 @@ const ROSTER = {
   'fast-generalist':      { warnOnly: true },
   'fast-scout':           { warnOnly: true },
   'long-context':         { warnOnly: true },
+  'advisors':             { warnOnly: true },
 
   // ── Brand-pin leaves (model: pins; leaf/opinion only) ──────────────────────────
-  'grok':                 { warnOnly: true },
-  'deepseek':             { warnOnly: true },
-  'qwen':                 { warnOnly: true },
-  'kimi':                 { warnOnly: true },
-  'gemini':               { warnOnly: true },
-
+  // Populated from config/brand-agents.json below (primaries + aliases).
   // ── Routing-only entries: no agent file; resolve via agent_to_capability only ──
   // routingOnly: true — skip all file checks; only coverage in agent_to_capability is verified.
   'WebSearch': { routingOnly: true },
   'WebFetch':  { routingOnly: true },
   'Monitor':   { routingOnly: true },
 };
+
+// Brand catalog → warnOnly roster entries
+{
+  const brandCat = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'config', 'brand-agents.json'), 'utf8'));
+  for (const a of brandCat.agents || []) {
+    ROSTER[a.id] = { warnOnly: true };
+    for (const al of a.aliases || []) {
+      const id = typeof al === 'string' ? al : al.id;
+      ROSTER[id] = { warnOnly: true };
+    }
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

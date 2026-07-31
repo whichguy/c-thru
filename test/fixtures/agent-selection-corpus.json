@@ -1,71 +1,555 @@
 {
-  "_comment": "Labeled corpus for agent SELECTION tests (Tier 1 hermetic discriminability lint, Tier 2a LLM-judge, Tier 2b real-session offload-coverage). Each entry: {id, prompt, expect:[primary,...acceptable], note, ambiguous?, inline_ok?}. expect[0] is the primary correct agent; the rest are genuinely-acceptable neighbours (selection is fuzzy). THREE labeling modes: (1) normal expect:[...] — a pick in expect is required (an expect agent MUST be selected). (2) ambiguous:true (expect:[]) — a specialized agent should NOT be selected (the main thread answers inline; judge → 'none'; real-session → no-offload is the win). (3) inline_ok:true together with a NON-EMPTY expect:[...] of generalist-tier agents — a pick in expect is correct, AND declining/answering inline (judge → 'none'; real-session → no-offload) is ALSO correct; picking any agent NOT in expect is WRONG. inline_ok entries are DECISIVE (they have a definite expectation), not ambiguous — the ambiguous bucket keys on ambiguous:true, never on an empty expect. NON-CIRCULARITY RULE: prompts are phrased the way a real user/main-thread would, deliberately NOT reusing the quoted example phrases in agents/*.md descriptions — otherwise the lexical lint and judge degrade into circular keyword matching. Placeholders {{PY}} (a code file), {{DIR}} (a directory), {{PLAN}} (a plan file) are substituted with real scratch paths by the real-session harness; the hermetic + judge loaders replace them with neutral nouns.",
+  "_comment": "Labeled corpus for agent SELECTION tests (Tier 1 hermetic discriminability lint, Tier 2a LLM-judge, Tier 2b real-session offload-coverage). Each entry: {id, prompt, expect:[primary,...acceptable], note, ambiguous?, inline_ok?, evidence_files?}. expect[0] is the primary correct agent; the rest are genuinely-acceptable neighbours (selection is fuzzy). THREE labeling modes: (1) normal expect:[...] — a pick in expect is required (an expect agent MUST be selected). (2) ambiguous:true (expect:[]) — a specialized agent should NOT be selected (the main thread answers inline; judge → 'none'; real-session → no-offload is the win). (3) inline_ok:true together with a NON-EMPTY expect:[...] of generalist-tier agents — a pick in expect is correct, AND declining/answering inline (judge → 'none'; real-session → no-offload) is ALSO correct; picking any agent NOT in expect is WRONG. inline_ok entries are DECISIVE (they have a definite expectation), not ambiguous — the ambiguous bucket keys on ambiguous:true, never on an empty expect. NON-CIRCULARITY RULE: prompts are phrased the way a real user/main-thread would, deliberately NOT reusing the quoted example phrases in agents/*.md descriptions — otherwise the lexical lint and judge degrade into circular keyword matching. Placeholders {{PY}} (a code file), {{DIR}} (a directory), {{PLAN}} (a plan file) are substituted with real scratch paths by the real-session harness; the hermetic + judge loaders replace them with neutral nouns. evidence_files lists scratch assets that the real-session prompt must reference and the habitat must materialize.",
   "prompts": [
-    { "id": "coder-impl-merge", "prompt": "Implement a function in {{PY}} that merges two already-sorted integer lists into one sorted list.", "expect": ["coder", "coder-fallback"], "note": "implementation work" },
-    { "id": "coder-refactor", "prompt": "Refactor the duplicated retry logic in {{PY}} into a single reusable helper and update the call sites.", "expect": ["coder", "coder-fallback"], "note": "edit/refactor existing code" },
-    { "id": "coder-add-flag", "prompt": "Add a --verbose option to the CLI in {{PY}} that prints progress to stderr.", "expect": ["coder", "coder-fallback"], "note": "feature edit to a file" },
-    { "id": "coder-fallback-retry", "prompt": "The previous attempt to fix the parser in {{PY}} was wrong and broke two cases. Try a fresh approach from a different angle.", "expect": ["coder-fallback", "coder"], "note": "explicit second-attempt framing" },
-
-    { "id": "docs-after-change", "prompt": "I just renamed a config key from llm_mode to mode_name. Update CLAUDE.md and the README so they match the new name.", "expect": ["docs", "writer"], "note": "quick doc sync after a change" },
-    { "id": "docs-help-text", "prompt": "We added a new subcommand; write the --help text and a short usage blurb for it.", "expect": ["docs", "writer"], "note": "help text after a change" },
-    { "id": "docs-inline", "prompt": "Update the inline comments and the doc block on this function now that its return type changed.", "expect": ["docs", "writer"], "note": "inline docs sync" },
-
-    { "id": "writer-architecture", "prompt": "Draft a polished, reader-friendly architecture explainer for our routing layer that we can publish on the wiki.", "expect": ["writer", "docs"], "note": "long-form prose, publishable" },
-    { "id": "writer-release-notes", "prompt": "Turn this raw changelog of 30 commits into well-written release notes grouped by theme.", "expect": ["writer", "docs"], "note": "long-form prose from notes" },
-    { "id": "writer-guide", "prompt": "Write a thorough getting-started guide with prose, examples, and a narrative flow for new contributors.", "expect": ["writer", "docs"], "note": "long-form guide (quality over speed)" },
-
-    { "id": "planner-feature", "prompt": "I want to add token-bucket rate limiting to an HTTP API service. Lay out the approach before any code is written.", "expect": ["planner", "planner-hard"], "note": "design/plan framing" },
-    { "id": "planner-breakdown", "prompt": "Break a new CSV-export feature into ordered steps with dependencies so it can be implemented incrementally.", "expect": ["planner", "planner-hard"], "note": "task breakdown" },
-    { "id": "planner-approach", "prompt": "What's a sound approach to add caching to this read-heavy endpoint? Outline the design first.", "expect": ["planner", "planner-hard"], "note": "architecture/approach" },
-
-    { "id": "plannerhard-cross-system", "prompt": "We need to migrate auth from session cookies to signed tokens across the gateway, three services, and the shared DB — get the plan right because a mistake risks locking users out. Design it carefully.", "expect": ["planner-hard", "planner"], "note": "high-stakes, cross-system, security-touching plan" },
-    { "id": "plannerhard-ambiguous-infra", "prompt": "Plan a change to our shared rate-limiter that several teams depend on; requirements conflict and the blast radius is large.", "expect": ["planner-hard", "planner"], "note": "ambiguous + shared infra + high cost of wrong plan" },
-
-    { "id": "tester-write", "prompt": "Write thorough unit tests covering the edge cases for the functions in {{PY}}.", "expect": ["tester", "coder"], "note": "test authoring" },
-    { "id": "tester-run-verify", "prompt": "Run the existing test suite and tell me whether my last change broke anything.", "expect": ["tester", "coder"], "note": "run tests / verify" },
-    { "id": "tester-edge", "prompt": "Check that this date-parsing function behaves correctly on leap years, empty input, and timezone boundaries.", "expect": ["tester", "coder"], "note": "behavior/edge verification" },
-
-    { "id": "codereview-general", "prompt": "Do a careful review of {{PY}} and flag correctness bugs, style issues, and missing edge cases.", "expect": ["code-reviewer", "reviewer-security"], "note": "general code review (non-security)" },
-    { "id": "codereview-pr", "prompt": "Here's a PR that adds a sorting utility — review it for quality and test coverage before I merge.", "expect": ["code-reviewer", "reviewer-security"], "note": "routine PR review" },
-
-    { "id": "secreview-auth", "prompt": "This change reworks how we validate and store auth tokens and calls an external billing API — scrutinize it for security problems before it ships.", "expect": ["reviewer-security", "code-reviewer"], "note": "security-sensitive surface → security reviewer" },
-    { "id": "secreview-input", "prompt": "We added a new endpoint that takes user-supplied SQL filters and shell-style globs. Audit it for injection and privilege issues.", "expect": ["reviewer-security", "code-reviewer"], "note": "injection/authz audit" },
-
-    { "id": "planreview-doc", "prompt": "Here is a drafted plan file: {{PLAN}}. Before we start building, check it for missing steps, broken dependencies, and weak verification.", "expect": ["reviewer-plan", "planner", "code-reviewer"], "note": "reviewing the PLAN document, not code" },
-    { "id": "planreview-ready", "prompt": "Is this implementation plan ready to execute, or are there gaps and ambiguous scope to fix first?", "expect": ["reviewer-plan", "planner"], "note": "plan readiness check" },
-
-    { "id": "dbg-unknown-cause", "prompt": "Users report the export is occasionally empty but we have no idea why. Where would you even start — what are the likely causes?", "expect": ["debugger-hypothesis", "debugger-investigate", "debugger-hard"], "note": "unknown root cause → hypothesis generation" },
-    { "id": "dbg-investigate", "prompt": "We suspect the cache key collides under concurrent writes. Dig into the logs and trace the write path to confirm or rule that out.", "expect": ["debugger-investigate", "debugger-hypothesis", "debugger-hard"], "note": "have a hypothesis → deep investigation" },
-    { "id": "dbg-heisenbug", "prompt": "There's a race that only shows up in production under load and disappears the moment I add logging — it spans the proxy and two workers.", "expect": ["debugger-hard", "debugger-investigate", "debugger-hypothesis"], "note": "heisenbug/concurrency/cross-layer → hard" },
-
-    { "id": "explore-locate", "prompt": "Find where and how the code under {{DIR}} validates its inputs. Just locate it; don't change anything.", "expect": ["explore", "fast-scout"], "note": "read-only reconnaissance" },
-    { "id": "explore-usages", "prompt": "Where is the resolveBackend function defined and what calls it across the repo? Don't modify anything.", "expect": ["explore", "fast-scout"], "note": "find definition + usages" },
-    { "id": "explore-understand", "prompt": "Help me understand how the fallback module is structured and what it depends on before I plan a change.", "expect": ["explore", "fast-scout"], "note": "context-gathering before planning" },
-
-    { "id": "vision-screenshot", "prompt": "Here's a screenshot of a failing UI — describe what it shows and read the error text in it.", "expect": ["vision"], "note": "image/screenshot → vision (not pdf)" },
-    { "id": "vision-diagram", "prompt": "Read this architecture diagram image and transcribe the boxes and arrows into text.", "expect": ["vision"], "note": "diagram OCR" },
-
-    { "id": "pdf-table", "prompt": "Extract the pricing table out of this vendor PDF whitepaper into structured rows.", "expect": ["pdf"], "note": "PDF parsing → pdf (not vision)" },
-    { "id": "pdf-multicol", "prompt": "Pull the key findings out of this multi-column PDF report.", "expect": ["pdf"], "note": "PDF layout parsing" },
-
-    { "id": "longctx-needle", "prompt": "Search across all of these very large log files and find the one request id that triggered the 500.", "expect": ["long-context", "explore"], "note": "needle-in-haystack over huge spans" },
-    { "id": "longctx-bigdoc", "prompt": "Summarize this single 200-page specification document end to end.", "expect": ["long-context", "writer"], "note": "oversized single-doc retrieval/summary" },
-
-    { "id": "grok-second", "prompt": "ask grok / xai for a grok critique of whether this rate-limiter is sound.", "expect": ["grok", "generalist"], "note": "user wants Grok by name" },
-    { "id": "grok-named", "prompt": "ask agent grok to critique this architecture before we commit.", "expect": ["grok"], "note": "explicit ask agent grok" },
-    { "id": "deepseek-named", "prompt": "ask deepseek to run this trade-off analysis instead of Claude.", "expect": ["deepseek", "generalist"], "note": "explicit DeepSeek by name" },
-    { "id": "deepseek-opinion", "prompt": "use deepseek — what would deepseek say about a ring buffer for the journal?", "expect": ["deepseek", "generalist"], "note": "DeepSeek by name" },
-    { "id": "qwen-named", "prompt": "ask qwen to summarize the fallback cascade for me.", "expect": ["qwen", "generalist"], "note": "explicit Qwen by name" },
-    { "id": "qwen-local", "prompt": "use qwen — I want the local qwen model for this explanation.", "expect": ["qwen", "generalist"], "note": "Qwen local preference" },
-    { "id": "kimi-named", "prompt": "ask agent kimi — moonshot kimi opinion on error handling patterns.", "expect": ["kimi", "generalist"], "note": "explicit Kimi by name" },
-    { "id": "kimi-moonshot", "prompt": "use kimi — ask the moonshot kimi model how it would structure this module.", "expect": ["kimi", "generalist"], "note": "Kimi/Moonshot by name" },
-    { "id": "gemini-named", "prompt": "ask gemini to answer this instead of Anthropic.", "expect": ["gemini", "generalist"], "note": "explicit Gemini by name" },
-    { "id": "gemini-compare", "prompt": "ask agent gemini — use the google gemini model to compare these two API designs.", "expect": ["gemini", "generalist"], "note": "Gemini by name" },
-
-    { "id": "amb-greeting", "prompt": "Thanks, that's helpful — what should we look at next?", "expect": [], "ambiguous": true, "note": "conversational; no specialized agent" },
-    { "id": "amb-trivial-q", "prompt": "What does the acronym TTL stand for in this context?", "expect": ["fast-generalist", "generalist"], "inline_ok": true, "note": "quick factual one-liner — fast-generalist's stated purpose; answering inline is also fine" },
-    { "id": "amb-tiny-edit", "prompt": "Rename the local variable x to count on this one line.", "expect": [], "ambiguous": true, "note": "too trivial to delegate; main thread handles" },
-    { "id": "amb-tradeoffs", "prompt": "Help me think through the trade-offs of polling versus webhooks at a high level.", "expect": ["generalist"], "inline_ok": true, "note": "open-ended reasoning — generalist's stated purpose; answering inline is also fine" },
-    { "id": "amb-status", "prompt": "Where are we in the overall task right now?", "expect": [], "ambiguous": true, "note": "meta/status; no delegation" }
+    {
+      "id": "coder-impl-merge",
+      "prompt": "Implement a function in {{PY}} that merges two already-sorted integer lists into one sorted list.",
+      "expect": [
+        "coder",
+        "coder-fallback"
+      ],
+      "note": "implementation work"
+    },
+    {
+      "id": "coder-refactor",
+      "prompt": "Refactor the duplicated retry logic in {{PY}} into a single reusable helper and update the call sites.",
+      "expect": [
+        "coder",
+        "coder-fallback"
+      ],
+      "note": "edit/refactor existing code"
+    },
+    {
+      "id": "coder-add-flag",
+      "prompt": "Add a --verbose option to the CLI in {{PY}} that prints progress to stderr.",
+      "expect": [
+        "coder",
+        "coder-fallback"
+      ],
+      "note": "feature edit to a file"
+    },
+    {
+      "id": "coder-fallback-retry",
+      "prompt": "The previous attempt to fix the parser in {{PY}} was wrong and broke two cases. Try a fresh approach from a different angle.",
+      "expect": [
+        "coder-fallback",
+        "coder"
+      ],
+      "note": "explicit second-attempt framing"
+    },
+    {
+      "id": "docs-after-change",
+      "prompt": "I just renamed a config key from llm_mode to mode_name. Bring {{DIR}}/CLAUDE.md and {{DIR}}/README.md up to date with the new name.",
+      "expect": [
+        "docs",
+        "writer"
+      ],
+      "note": "quick doc sync after a change, with real scratch docs"
+    },
+    {
+      "id": "docs-help-text",
+      "prompt": "The CLI in {{DIR}} just gained an inspect subcommand. Add its --help text and a short usage blurb to the existing docs there.",
+      "expect": [
+        "docs",
+        "writer"
+      ],
+      "note": "help text after a change, with a real scratch CLI and docs"
+    },
+    {
+      "id": "docs-inline",
+      "prompt": "Refresh the inline docs and doc block in {{PY}} to describe its new result format.",
+      "expect": [
+        "docs",
+        "writer"
+      ],
+      "note": "inline docs sync on a real scratch file"
+    },
+    {
+      "id": "writer-architecture",
+      "prompt": "Draft a polished, reader-friendly architecture explainer for our routing layer that we can publish on the wiki.",
+      "expect": [
+        "writer",
+        "docs"
+      ],
+      "note": "long-form prose, publishable"
+    },
+    {
+      "id": "writer-release-notes",
+      "prompt": "Turn this raw changelog of 30 commits into well-written release notes grouped by theme.",
+      "expect": [
+        "writer",
+        "docs"
+      ],
+      "note": "long-form prose from notes"
+    },
+    {
+      "id": "writer-guide",
+      "prompt": "Write a thorough getting-started guide with prose, examples, and a narrative flow for new contributors.",
+      "expect": [
+        "writer",
+        "docs"
+      ],
+      "note": "long-form guide (quality over speed)"
+    },
+    {
+      "id": "planner-feature",
+      "prompt": "I want to add token-bucket rate limiting to an HTTP API service. Lay out the approach before any code is written.",
+      "expect": [
+        "planner",
+        "planner-hard"
+      ],
+      "note": "design/plan framing"
+    },
+    {
+      "id": "planner-breakdown",
+      "prompt": "Break a new CSV-export feature into ordered steps with dependencies so it can be implemented incrementally.",
+      "expect": [
+        "planner",
+        "planner-hard"
+      ],
+      "note": "task breakdown"
+    },
+    {
+      "id": "planner-approach",
+      "prompt": "What's a sound approach to add caching to this read-heavy endpoint? Outline the design first.",
+      "expect": [
+        "planner",
+        "planner-hard"
+      ],
+      "note": "architecture/approach"
+    },
+    {
+      "id": "plannerhard-cross-system",
+      "prompt": "We need to migrate auth from session cookies to signed tokens across the gateway, three services, and the shared DB — get the plan right because a mistake risks locking users out. Design it carefully.",
+      "expect": [
+        "planner-hard",
+        "planner"
+      ],
+      "note": "high-stakes, cross-system, security-touching plan"
+    },
+    {
+      "id": "plannerhard-ambiguous-infra",
+      "prompt": "Plan a change to our shared rate-limiter that several teams depend on; requirements conflict and the blast radius is large.",
+      "expect": [
+        "planner-hard",
+        "planner"
+      ],
+      "note": "ambiguous + shared infra + high cost of wrong plan"
+    },
+    {
+      "id": "tester-write",
+      "prompt": "Write thorough unit tests covering the edge cases for the functions in {{PY}}.",
+      "expect": [
+        "tester",
+        "coder"
+      ],
+      "note": "test authoring"
+    },
+    {
+      "id": "tester-run-verify",
+      "prompt": "Run the existing test suite under {{DIR}} and tell me whether the current implementation broke anything.",
+      "expect": [
+        "tester",
+        "coder"
+      ],
+      "note": "run a real scratch test suite / verify"
+    },
+    {
+      "id": "tester-edge",
+      "prompt": "Add focused tests for {{DIR}}/date_parser.py covering leap years, empty input, and timezone boundaries.",
+      "expect": [
+        "tester",
+        "coder"
+      ],
+      "note": "behavior/edge verification on a real scratch file"
+    },
+    {
+      "id": "codereview-general",
+      "prompt": "Do a careful review of {{PY}} and flag correctness bugs, style issues, and missing edge cases.",
+      "expect": [
+        "code-reviewer",
+        "reviewer-security"
+      ],
+      "note": "general code review (non-security)"
+    },
+    {
+      "id": "codereview-pr",
+      "prompt": "Here's a PR that adds a sorting utility — review it for quality and test coverage before I merge.",
+      "expect": [
+        "code-reviewer",
+        "reviewer-security"
+      ],
+      "note": "routine PR review"
+    },
+    {
+      "id": "secreview-auth",
+      "prompt": "Before this ships, scrutinize {{DIR}}/auth.js: it validates and stores auth tokens and calls an external billing API.",
+      "expect": [
+        "reviewer-security",
+        "code-reviewer"
+      ],
+      "note": "security-sensitive real scratch surface → security reviewer"
+    },
+    {
+      "id": "secreview-input",
+      "prompt": "Audit {{DIR}}/filter.js, an endpoint helper that accepts user-supplied SQL filters and shell-style globs, for injection and privilege issues.",
+      "expect": [
+        "reviewer-security",
+        "code-reviewer"
+      ],
+      "note": "injection/authz audit on a real scratch file"
+    },
+    {
+      "id": "planreview-doc",
+      "prompt": "Here is a drafted plan file: {{PLAN}}. Before we start building, check it for missing steps, broken dependencies, and weak verification.",
+      "expect": [
+        "reviewer-plan",
+        "planner",
+        "code-reviewer"
+      ],
+      "note": "reviewing the PLAN document, not code"
+    },
+    {
+      "id": "planreview-ready",
+      "prompt": "Is this implementation plan ready to execute, or are there gaps and ambiguous scope to fix first?",
+      "expect": [
+        "reviewer-plan",
+        "planner"
+      ],
+      "note": "plan readiness check"
+    },
+    {
+      "id": "dbg-unknown-cause",
+      "prompt": "Exports produced by {{DIR}}/export.js are occasionally empty, and {{DIR}}/export.log has the only evidence. The root cause is unknown; rank the likely causes and the best diagnostics.",
+      "expect": [
+        "debugger-hypothesis",
+        "debugger-investigate",
+        "debugger-hard"
+      ],
+      "note": "unknown root cause with real scratch evidence → hypothesis generation"
+    },
+    {
+      "id": "dbg-investigate",
+      "prompt": "We suspect the cache key in {{DIR}}/cache.js collides under concurrent writes. Use {{DIR}}/cache.log and trace the write path to confirm or rule that out.",
+      "expect": [
+        "debugger-investigate",
+        "debugger-hypothesis",
+        "debugger-hard"
+      ],
+      "note": "have a hypothesis and real scratch evidence → deep investigation"
+    },
+    {
+      "id": "dbg-investigate-reload-handoff",
+      "prompt": "Please hand this bounded diagnosis to the best-suited debugging agent and have them report back. A routine config reload consistently leaves the old timeout active even though its file-change callback runs. Our theory is that the watcher shortens the changed name before the loader looks up its absolute path. Compare the recorded state in {{DIR}}/reload.log with the arguments passed across calls in {{DIR}}/reload-watcher.js, {{DIR}}/reload-queue.js, and {{DIR}}/config-loader.js. Decide whether that explanation fits the evidence.",
+      "expect": [
+        "debugger-investigate",
+        "debugger-hypothesis",
+        "debugger-hard"
+      ],
+      "evidence_files": [
+        "reload-watcher.js",
+        "reload-queue.js",
+        "config-loader.js",
+        "reload.log"
+      ],
+      "note": "specific path-handoff theory requires reconciling three modules with runtime evidence"
+    },
+    {
+      "id": "dbg-heisenbug",
+      "prompt": "The race across {{DIR}}/proxy.js and two workers appears only under load and disappears when logging is added. Track down this production-only timing failure.",
+      "expect": [
+        "debugger-hard",
+        "debugger-investigate",
+        "debugger-hypothesis"
+      ],
+      "note": "heisenbug/concurrency/cross-layer with real scratch code → hard"
+    },
+    {
+      "id": "explore-locate",
+      "prompt": "Find where and how the code under {{DIR}} validates its inputs. Just locate it; don't change anything.",
+      "expect": [
+        "explore",
+        "fast-scout"
+      ],
+      "note": "read-only reconnaissance"
+    },
+    {
+      "id": "explore-usages",
+      "prompt": "Please hand this codebase lookup to the best-suited agent and have them report back. In the project under {{DIR}}, identify where parse_date is implemented and how it is used elsewhere. Return a concise file-and-line map; leave the files unchanged.",
+      "expect": [
+        "explore",
+        "fast-scout"
+      ],
+      "note": "find definition + usages"
+    },
+    {
+      "id": "explore-understand",
+      "prompt": "Help me understand how the fallback module is structured and what it depends on before I plan a change.",
+      "expect": [
+        "explore",
+        "fast-scout"
+      ],
+      "note": "context-gathering before planning"
+    },
+    {
+      "id": "vision-screenshot",
+      "prompt": "Inspect {{DIR}}/generated/ui-failure.png, describe the visible UI, and transcribe the error text.",
+      "expect": [
+        "vision"
+      ],
+      "note": "image/screenshot → vision (not pdf)"
+    },
+    {
+      "id": "vision-diagram",
+      "prompt": "Read {{DIR}}/generated/request-flow.png and transcribe its labeled boxes and arrows into text.",
+      "expect": [
+        "vision"
+      ],
+      "note": "diagram OCR"
+    },
+    {
+      "id": "pdf-table",
+      "prompt": "Extract the pricing table from {{DIR}}/generated/vendor-pricing.pdf into structured rows.",
+      "expect": [
+        "pdf"
+      ],
+      "note": "PDF parsing → pdf (not vision)"
+    },
+    {
+      "id": "pdf-multicol",
+      "prompt": "Parse {{DIR}}/generated/quarterly-findings.pdf as a multi-column PDF document and extract the complete finding data from its complex page layout.",
+      "expect": [
+        "pdf"
+      ],
+      "note": "PDF layout parsing"
+    },
+    {
+      "id": "longctx-needle",
+      "prompt": "Search every file under {{DIR}}/generated/logs/ and report the unique request_id on the one status=500 record.",
+      "expect": [
+        "long-context",
+        "explore"
+      ],
+      "note": "needle-in-haystack over huge spans"
+    },
+    {
+      "id": "longctx-bigdoc",
+      "prompt": "Summarize {{DIR}}/generated/specification-200-pages.txt end to end, including its purpose, midpoint rule, and release condition.",
+      "expect": [
+        "long-context",
+        "writer"
+      ],
+      "note": "oversized single-doc retrieval/summary"
+    },
+    {
+      "id": "grok-second",
+      "prompt": "ask grok / xai for a grok critique of whether this rate-limiter is sound.",
+      "expect": [
+        "grok",
+        "generalist"
+      ],
+      "note": "user wants Grok by name"
+    },
+    {
+      "id": "grok-named",
+      "prompt": "ask agent grok to critique this architecture before we commit.",
+      "expect": [
+        "grok"
+      ],
+      "note": "explicit ask agent grok"
+    },
+    {
+      "id": "deepseek-named",
+      "prompt": "ask deepseek to run this trade-off analysis instead of Claude.",
+      "expect": [
+        "deepseek",
+        "generalist"
+      ],
+      "note": "explicit DeepSeek by name"
+    },
+    {
+      "id": "deepseek-opinion",
+      "prompt": "use deepseek — what would deepseek say about a ring buffer for the journal?",
+      "expect": [
+        "deepseek",
+        "generalist"
+      ],
+      "note": "DeepSeek by name"
+    },
+    {
+      "id": "qwen-named",
+      "prompt": "ask qwen to summarize the fallback cascade for me.",
+      "expect": [
+        "qwen",
+        "generalist"
+      ],
+      "note": "explicit Qwen by name"
+    },
+    {
+      "id": "qwen-local",
+      "prompt": "use qwen — I want the local qwen model for this explanation.",
+      "expect": [
+        "qwen",
+        "generalist"
+      ],
+      "note": "Qwen local preference"
+    },
+    {
+      "id": "kimi-named",
+      "prompt": "ask agent kimi — moonshot kimi opinion on error handling patterns.",
+      "expect": [
+        "kimi",
+        "generalist"
+      ],
+      "note": "explicit Kimi by name"
+    },
+    {
+      "id": "kimi-moonshot",
+      "prompt": "use kimi — ask the moonshot kimi model how it would structure this module.",
+      "expect": [
+        "kimi",
+        "generalist"
+      ],
+      "note": "Kimi/Moonshot by name"
+    },
+    {
+      "id": "gemini-named",
+      "prompt": "ask gemini to answer this instead of Anthropic.",
+      "expect": [
+        "gemini",
+        "generalist"
+      ],
+      "note": "explicit Gemini by name"
+    },
+    {
+      "id": "gemini-compare",
+      "prompt": "ask agent gemini — use the google gemini model to compare these two API designs.",
+      "expect": [
+        "gemini",
+        "generalist"
+      ],
+      "note": "Gemini by name"
+    },
+    {
+      "id": "advisors-panel",
+      "prompt": "Run the multi-model advisors panel on whether we should keep the dual write path; I want independent fleet seats then a host synthesis.",
+      "expect": [
+        "advisors",
+        "planner-hard",
+        "generalist"
+      ],
+      "note": "explicit multi-model advisors panel"
+    },
+    {
+      "id": "advisors-debate",
+      "prompt": "Get three models to debate the trade-offs of this rate-limiter design and converge on a recommendation.",
+      "expect": [
+        "advisors",
+        "planner-hard",
+        "generalist"
+      ],
+      "note": "multi-model debate / panel framing"
+    },
+    {
+      "id": "opus-named",
+      "prompt": "ask agent opus for a second opinion on this lock-ordering design.",
+      "expect": [
+        "opus",
+        "claude-opus-4-8",
+        "generalist"
+      ],
+      "note": "explicit Opus brand leaf"
+    },
+    {
+      "id": "devstral-named",
+      "prompt": "ask devstral to critique this coding-agent architecture.",
+      "expect": [
+        "devstral",
+        "devstral-2-latest",
+        "generalist"
+      ],
+      "note": "explicit Devstral brand leaf"
+    },
+    {
+      "id": "glm-named",
+      "prompt": "ask agent glm — spawn the glm brand leaf for a short second opinion.",
+      "expect": [
+        "glm",
+        "glm-5-2-cloud",
+        "generalist"
+      ],
+      "note": "explicit GLM brand leaf"
+    },
+    {
+      "id": "amb-greeting",
+      "prompt": "Thanks, that's helpful — what should we look at next?",
+      "expect": [],
+      "ambiguous": true,
+      "note": "conversational; no specialized agent"
+    },
+    {
+      "id": "amb-trivial-q",
+      "prompt": "What does the acronym TTL stand for in this context?",
+      "expect": [
+        "fast-generalist",
+        "generalist"
+      ],
+      "inline_ok": true,
+      "note": "quick factual one-liner — fast-generalist's stated purpose; answering inline is also fine"
+    },
+    {
+      "id": "amb-tiny-edit",
+      "prompt": "Rename the local variable x to count on this one line.",
+      "expect": [],
+      "ambiguous": true,
+      "note": "too trivial to delegate; main thread handles"
+    },
+    {
+      "id": "amb-tradeoffs",
+      "prompt": "Help me think through the trade-offs of polling versus webhooks at a high level.",
+      "expect": [
+        "generalist"
+      ],
+      "inline_ok": true,
+      "note": "open-ended reasoning — generalist's stated purpose; answering inline is also fine"
+    },
+    {
+      "id": "amb-status",
+      "prompt": "Where are we in the overall task right now?",
+      "expect": [],
+      "ambiguous": true,
+      "note": "meta/status; no delegation"
+    },
+    {
+      "id": "terra-named",
+      "prompt": "ask agent terra for a second opinion on this API design.",
+      "expect": [
+        "terra",
+        "codex",
+        "gpt-5-6-terra",
+        "generalist"
+      ],
+      "note": "Codex Terra brand leaf"
+    },
+    {
+      "id": "sol-named",
+      "prompt": "ask sol — use the sol brand leaf for a short critique.",
+      "expect": [
+        "sol",
+        "codex-sol",
+        "generalist"
+      ],
+      "note": "Codex SOL brand leaf"
+    },
+    {
+      "id": "luna-named",
+      "prompt": "ask luna for a codex luna opinion on this plan.",
+      "expect": [
+        "luna",
+        "codex-luna",
+        "generalist"
+      ],
+      "note": "Codex Luna brand leaf"
+    }
   ]
 }

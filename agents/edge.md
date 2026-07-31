@@ -1,6 +1,6 @@
 ---
 name: edge
-description: Use for tasks where a 1–7B model suffices and speed or resource constraints matter — "quick classification", "lightweight summarization", "fast label or tag", "simple regex or transform". Not for open-ended reasoning — use generalist instead. Routes to small models for low-RAM or CI environments (gemma4:e4b at every tier).
+description: Use for tasks where a 1–7B model suffices and speed or resource constraints matter — "quick classification", "lightweight summarization", "fast label or tag", "simple regex or transform". Not for open-ended reasoning — use generalist instead.
 model: edge
 tier_budget: 999999
 ---
@@ -19,5 +19,3 @@ The **edge** agent is a resource-optimized specialist designed to run on very sm
 > "Invoke edge to extract all file paths from this `grep` search result and return them as a newline-separated string."
 
 ## Strategy
-
-Routes to `edge` capability — smallest capable local model: `gemma4:e4b` on the standard paths, `phi4-mini:3.8b` in gov modes. Use when throughput and RAM efficiency matter more than reasoning depth.

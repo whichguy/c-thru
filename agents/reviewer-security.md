@@ -1,6 +1,6 @@
 ---
 name: reviewer-security
-description: MUST BE USED for any change touching authentication, authorization, tokens, crypto, input validation, or external API calls. Security-focused code review: injection, credential leaks, privilege escalation, OWASP Top 10. Hard-fail — no degraded substitute. Routes to Opus cloud always; Kimi K2.6 on best-cloud-oss.
+description: MUST BE USED for any change touching authentication, authorization, tokens, crypto, input validation, or external API calls. Security-focused code review: injection, credential leaks, privilege escalation, OWASP Top 10. Hard-fail — no degraded substitute.
 model: reviewer-security
 tier_budget: 999999
 ---
@@ -26,7 +26,12 @@ The **reviewer-security** performs adversarial security review. It looks specifi
 
 ## Recusal Check
 
-Emit `STATUS: RECUSE` if:
+Emit this complete two-line recusal block if:
+
+```text
+STATUS: RECUSE
+REASON: <specific reason grounded in a condition below>
+```
 - The change has zero security surface (pure internal logic, no external inputs, no auth)
 - This exact code was already reviewed for security in this conversation with no changes since
 
@@ -45,6 +50,8 @@ Emit `STATUS: RECUSE` if:
 - **Attack surface identified**: list of external inputs and auth surfaces
 - **Findings**: each finding with severity, description, and specific file:line
 - **VERDICT**: APPROVE | APPROVE_WITH_CONDITIONS | REJECT (with required mitigations)
+
+**Mandatory final-block rule:** Every normal response MUST end with the complete `TASK_STATUS` block below. `STATUS` is reserved exclusively for a recusal block beginning with `STATUS: RECUSE` and ending with a non-empty `REASON:` line; never use `STATUS` for a normal outcome.
 
 ---
 
