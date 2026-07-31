@@ -55,6 +55,7 @@ const usageZero = {
   first_recorded: null, last_recorded: null, cleared_at: '2026-07-30T08:00:00.000Z',
   by_model: {}, by_agent: {}, by_backend: {},
 };
+let clearHits = 0;
 const s = http.createServer((req, res) => {
   res.setHeader('Connection', 'close');
   res.setHeader('Content-Type', 'application/json');
@@ -62,6 +63,22 @@ const s = http.createServer((req, res) => {
   const usage = mode === 'zero' ? usageZero : usageFull;
   if ((req.url || '').includes('/c-thru/status')) {
     res.end(JSON.stringify({ ok: true, mode: 'best-cloud-oss', hardware_tier: '128gb', usage }));
+    return;
+  }
+  // F4 CLI path: first N clears return 503 lock busy, then 200.
+  if (req.method === 'POST' && (req.url || '').includes('/c-thru/stats/clear')) {
+    clearHits += 1;
+    if (mode === 'lockbusy' && clearHits < 3) {
+      res.statusCode = 503;
+      res.end(JSON.stringify({ ok: false, error: 'usage lock busy' }));
+      return;
+    }
+    if (mode === 'lockbusy-fail') {
+      res.statusCode = 503;
+      res.end(JSON.stringify({ ok: false, error: 'usage lock busy' }));
+      return;
+    }
+    res.end(JSON.stringify({ ok: true, cleared_at: '2026-07-31T12:00:00.000Z' }));
     return;
   }
   res.statusCode = 404;
@@ -120,6 +137,40 @@ s.listen(0, '127.0.0.1', () => {
     assertEq(r0.status, 0, 'c-thru stats zero exit 0');
     assert(!/Usage totals \(since clear\)/.test(r0.stdout || ''),
       'zero calls: no Usage totals line');
+
+    // F4: clear retries past 503 lock-busy then succeeds
+    fs.writeFileSync(modeFile, 'lockbusy');
+    const rClear = spawnSync('bash', [CTHRU, 'stats', 'clear'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CLAUDE_PROXY_PORT: String(port),
+        PROXY_PORT: String(port),
+        C_THRU_SKIP_PROXY_AUTOSTART: '1',
+      },
+      timeout: 20000,
+    });
+    assertEq(rClear.status, 0, `stats clear after 503 retries exit 0 (stderr=${(rClear.stderr || '').slice(0, 200)})`);
+    assert(/cleared_at|ok/.test(rClear.stdout || '') || /2026-07-31T12:00:00/.test(rClear.stdout || ''),
+      `clear prints success JSON (got ${JSON.stringify((rClear.stdout || '').slice(0, 200))})`);
+
+    // Persistent 503 → non-zero + lock busy message (not "proxy did not respond")
+    fs.writeFileSync(modeFile, 'lockbusy-fail');
+    const rFail = spawnSync('bash', [CTHRU, 'stats', 'clear'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CLAUDE_PROXY_PORT: String(port),
+        PROXY_PORT: String(port),
+        C_THRU_SKIP_PROXY_AUTOSTART: '1',
+      },
+      timeout: 20000,
+    });
+    assert(rFail.status !== 0, 'persistent lock busy exits non-zero');
+    assert(/lock busy/i.test(rFail.stderr || '') || /lock busy/i.test(rFail.stdout || ''),
+      `stderr mentions lock busy (got ${JSON.stringify((rFail.stderr || rFail.stdout || '').slice(0, 300))})`);
+    assert(!/proxy did not respond/i.test(rFail.stderr || ''),
+      'does not mislabel 503 as proxy down');
   } finally {
     try { child.kill('SIGTERM'); } catch { /* */ }
     fs.rmSync(dir, { recursive: true, force: true });

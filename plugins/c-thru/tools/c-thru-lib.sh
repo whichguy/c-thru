@@ -137,12 +137,22 @@ maybe_reset_usage_stats_on_launch() {
   local _ct_line
   while IFS= read -r _ct_line; do _ct_args+=("$_ct_line"); done < <(control_token_curl_args)
   # bash 3.2 + set -u: empty "${_ct_args[@]}" is unbound — safe expansion.
-  if curl -sf --max-time 2.0 -X POST ${_ct_args[@]+"${_ct_args[@]}"} \
-      "http://127.0.0.1:${port}/c-thru/stats/clear" >/dev/null 2>&1; then
-    _C_THRU_STATS_RESET_DONE=1
-    if [[ "${C_THRU_DEBUG:-0}" != "0" && -n "${C_THRU_DEBUG:-}" ]]; then
-      echo "c-thru: C_THRU_STATS_RESET=launch cleared usage stats on :$port" >&2
+  # Brief retries on 503 lock-busy (F4); do not set DONE unless clear succeeds.
+  local _attempt=0 _code=""
+  while [[ $_attempt -lt 5 ]]; do
+    _attempt=$((_attempt + 1))
+    _code="$(curl -sS --max-time 2.0 -o /dev/null -w '%{http_code}' -X POST \
+      ${_ct_args[@]+"${_ct_args[@]}"} \
+      "http://127.0.0.1:${port}/c-thru/stats/clear" 2>/dev/null || echo 000)"
+    if [[ "$_code" == "200" ]]; then
+      _C_THRU_STATS_RESET_DONE=1
+      if [[ "${C_THRU_DEBUG:-0}" != "0" && -n "${C_THRU_DEBUG:-}" ]]; then
+        echo "c-thru: C_THRU_STATS_RESET=launch cleared usage stats on :$port" >&2
+      fi
+      return 0
     fi
-  fi
+    [[ "$_code" == "503" ]] || break
+    sleep 0.1 2>/dev/null || sleep 1
+  done
   return 0
 }

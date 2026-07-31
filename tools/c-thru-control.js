@@ -132,20 +132,36 @@ async function setMode(mode, persist = false) {
 }
 
 async function clearStats() {
-  try {
-    const res = await request('POST', '/c-thru/stats/clear');
-    console.log(`Success: usage stats cleared${res.cleared_at ? ` at ${res.cleared_at}` : ''}`);
-    console.log('(machine-wide lifetime ledger — not a single Claude session)');
+  // F4: brief retries when the proxy returns 503 usage lock busy.
+  const maxAttempts = 8;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const s = await request('GET', '/c-thru/status');
-      const u = s.usage || {};
-      const calls = Object.values(u.by_model || {}).reduce((n, m) => n + (m.calls || 0), 0);
-      console.log(`Usage totals (since clear): ${calls} calls  ${u.total_input || 0} in  ${u.total_output || 0} out`);
-    } catch { /* optional */ }
-  } catch (e) {
-    console.error(`Error: ${e.message}`);
-    process.exit(1);
+      const res = await request('POST', '/c-thru/stats/clear');
+      console.log(`Success: usage stats cleared${res.cleared_at ? ` at ${res.cleared_at}` : ''}`);
+      console.log('(machine-wide lifetime ledger — not a single Claude session)');
+      try {
+        const s = await request('GET', '/c-thru/status');
+        const u = s.usage || {};
+        const calls = Object.values(u.by_model || {}).reduce((n, m) => n + (m.calls || 0), 0);
+        console.log(`Usage totals (since clear): ${calls} calls  ${u.total_input || 0} in  ${u.total_output || 0} out`);
+      } catch { /* optional */ }
+      return;
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e && e.message || '');
+      if (/lock busy/i.test(msg) && attempt < maxAttempts) {
+        await new Promise(r => setTimeout(r, 150));
+        continue;
+      }
+      break;
+    }
   }
+  console.error(`Error: ${lastErr ? lastErr.message : 'clear failed'}`);
+  if (lastErr && /lock busy/i.test(String(lastErr.message || ''))) {
+    console.error('(usage ledger lock busy — another proxy flush/clear in progress; try again)');
+  }
+  process.exit(1);
 }
 
 async function main() {

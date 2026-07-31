@@ -848,7 +848,7 @@ function acquireUsageLock(budgetMs = 50) {
       try { fs.writeFileSync(path.join(USAGE_LOCK_DIR, 'pid'), String(process.pid)); } catch {}
       return true;
     } catch (e) {
-      if (e.code !== 'EEXIST') return false;  // unexpected fs state — proceed unlocked
+      if (e.code !== 'EEXIST') return false;  // unexpected fs state — callers must not write unlocked
       let ownerPid = 0;
       try { ownerPid = parseInt(fs.readFileSync(path.join(USAGE_LOCK_DIR, 'pid'), 'utf8'), 10) || 0; } catch {}
       let stale = false;
@@ -944,18 +944,39 @@ function reconcileClearIfNeeded(disk) {
 // write failure the snapshot folds back into usageDelta so the next debounce
 // retries. All sync — shutdown handlers depend on it.
 let flushInFlight = false;
-function flushUsageCore() {
+/**
+ * Merge in-memory usageDelta to disk under the advisory lock.
+ * @param {{ shutdown?: boolean }} [opts]
+ *   shutdown=true: longer lock budget + retries (SIGTERM/SIGINT/beforeExit).
+ *   Never write unlocked (F4). On non-shutdown lock failure, requeue via
+ *   scheduleUsageFlush; on shutdown lock failure, log and leave delta in memory
+ *   (process is exiting — async retry would not run).
+ */
+function flushUsageCore(opts) {
+  const shutdown = !!(opts && opts.shutdown);
   if (flushInFlight) return;
   flushInFlight = true;
   try {
     const snapshot = usageDelta;
     if (snapshot.last_recorded === null) return;  // nothing recorded since last flush
     usageDelta = emptyUsage();
-    const locked = acquireUsageLock(50);
+    // Debounced path: one short attempt. Shutdown: several attempts with a
+    // larger per-try budget so a concurrent clear/flush can finish first.
+    const attempts = shutdown ? 20 : 1;
+    const budgetMs = shutdown ? 100 : 50;
+    let locked = false;
+    for (let i = 0; i < attempts; i++) {
+      locked = acquireUsageLock(budgetMs);
+      if (locked) break;
+    }
     if (!locked) {
-      // F4: do not write unlocked — fold snapshot back and retry later.
+      // F4: do not write unlocked — fold snapshot back.
       usageDelta = mergeUsage(usageDelta, snapshot);
-      scheduleUsageFlush();
+      if (shutdown) {
+        console.error('c-thru: usage stats flush skipped — lock busy at shutdown (in-memory delta not written)');
+      } else {
+        scheduleUsageFlush();
+      }
       return;
     }
     try {
@@ -992,9 +1013,11 @@ function scheduleUsageFlush() {
 
 // Sync flush for shutdown handlers. Called from SIGTERM/SIGINT to make sure
 // the last debounce window's delta doesn't get lost when the process exits.
+// Uses shutdown-mode lock retries (not async scheduleUsageFlush — timers
+// will not fire after process.exit).
 function flushPersistentUsageNowSync() {
   if (usageFlushTimer) { clearTimeout(usageFlushTimer); usageFlushTimer = null; }
-  try { flushUsageCore(); } catch (e) { console.error('c-thru: failed to write usage stats:', e.message); }
+  try { flushUsageCore({ shutdown: true }); } catch (e) { console.error('c-thru: failed to write usage stats:', e.message); }
 }
 
 // Ring push, called from the response-finalize hook — fires exactly once per
@@ -4052,6 +4075,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
     // headers would falsely suggest thinking occurred.
     delete geminiBody._thinkingAutoEnabled;
     delete geminiBody._thinkingBudgetAdded;
+    delete geminiBody._thinkingLevel;
   }
   // G4: lazy fire-and-forget context caching. Wave 3 enables this for Vertex
   // — createGeminiCacheAsync branches on backend.vertex to choose the correct
@@ -4869,11 +4893,42 @@ function thinkingLevelToApproxBudget(level) {
   }
 }
 
+const CLAUDE_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+
+// Map Claude's named adaptive-reasoning effort to Gemini 3's model-specific
+// thinkingLevel surface. `exact:false` means the nearest supported Gemini
+// level was chosen and the response must advertise a translation gap.
+function effortToGeminiThinkingLevel(effort, modelName) {
+  const supportsMedium = !/^gemini-3-pro($|-)/i.test(modelName);
+  if (effort === 'low' || effort === 'high') {
+    return { level: effort, exact: true };
+  }
+  if (effort === 'medium') {
+    return supportsMedium
+      ? { level: 'medium', exact: true }
+      : { level: 'high', exact: false };
+  }
+  // Gemini exposes no xhigh/max level. Invalid direct-client values use the
+  // same bounded fallback as the Responses mapper and remain observable.
+  return { level: 'high', exact: false };
+}
+
+// Gemini 2.5 generateContent has only a numeric thinkingBudget. These values
+// are a c-thru approximation of Claude's relative effort scale and stay within
+// the common Gemini 2.5 Flash/Flash-Lite maximum of 24,576.
+function effortToGemini25Budget(effort) {
+  if (effort === 'low') return 1024;
+  if (effort === 'medium') return 8192;
+  return 24576;
+}
+
 function mapAnthropicToGemini(body, effectiveModel) {
   const geminiReq = {
     contents: [],
     generationConfig: {}
   };
+  // Request-level controls and content-block losses share one response header.
+  const translationGap = new Set();
 
   if (body.temperature != null) geminiReq.generationConfig.temperature = body.temperature;
   if (body.top_p != null) geminiReq.generationConfig.topP = body.top_p;
@@ -4889,6 +4944,17 @@ function mapAnthropicToGemini(body, effectiveModel) {
   // Auto-enable on Gemini 3 Pro: the model's flagship reasoning is gated
   // behind opt-in upstream, so absent any thinking field we default it on
   // with a 1024-token budget. Explicit {type:'disabled'} respected as opt-out.
+  const outputConfig = body.output_config;
+  const requestedEffort = outputConfig && typeof outputConfig === 'object'
+    ? outputConfig.effort
+    : undefined;
+  if (outputConfig && typeof outputConfig === 'object' &&
+      Object.keys(outputConfig).some(key => key !== 'effort')) {
+    translationGap.add('output_config');
+  }
+  const hasRequestedEffort = requestedEffort != null;
+  const validRequestedEffort = CLAUDE_EFFORT_LEVELS.has(requestedEffort);
+
   let thinkingEnabled = body.thinking && body.thinking.type === 'enabled';
   let autoEnabled = false;
   let thinkingBudget = 0;
@@ -4904,7 +4970,11 @@ function mapAnthropicToGemini(body, effectiveModel) {
     || effectiveModel === 'gemini-pro'
   );
   const explicitDisabled = body.thinking && body.thinking.type === 'disabled';
-  if (!thinkingEnabled && !explicitDisabled && isGemini3Pro
+  if (!explicitDisabled && hasRequestedEffort) {
+    // Claude Code emits agent frontmatter `effort` as output_config.effort.
+    // Explicit thinking:{type:"disabled"} remains the higher-priority opt-out.
+    thinkingEnabled = true;
+  } else if (!thinkingEnabled && !explicitDisabled && isGemini3Pro
       && (!body.thinking || !body.thinking.type)) {
     thinkingEnabled = true;
     autoEnabled = true;
@@ -4921,11 +4991,20 @@ function mapAnthropicToGemini(body, effectiveModel) {
     if (useLevel) {
       // Preserve explicit 0 (→ 'minimal' on flash); only treat absent budget
       // as null. `|| null` would coerce 0 to null and lose the signal.
-      const explicitBudget = body.thinking?.budget_tokens;
-      const budgetArg = autoEnabled || explicitBudget == null
-        ? null
-        : Number(explicitBudget);
-      const level = budgetToThinkingLevel(budgetArg, effectiveModel);
+      let level;
+      if (hasRequestedEffort) {
+        const mapped = effortToGeminiThinkingLevel(requestedEffort, effectiveModel);
+        level = mapped.level;
+        if (!validRequestedEffort || !mapped.exact) {
+          translationGap.add('output_config.effort');
+        }
+      } else {
+        const explicitBudget = body.thinking?.budget_tokens;
+        const budgetArg = autoEnabled || explicitBudget == null
+          ? null
+          : Number(explicitBudget);
+        level = budgetToThinkingLevel(budgetArg, effectiveModel);
+      }
       geminiReq.generationConfig.thinkingConfig = {
         thinkingLevel: level,
         includeThoughts: true,
@@ -4935,6 +5014,11 @@ function mapAnthropicToGemini(body, effectiveModel) {
         value: level, enumerable: false, configurable: true,
       });
     } else {
+      if (hasRequestedEffort) {
+        thinkingBudget = effortToGemini25Budget(requestedEffort);
+        // Relative effort mapped to a fixed numeric budget is approximate.
+        translationGap.add('output_config.effort');
+      }
       geminiReq.generationConfig.thinkingConfig = {
         thinkingBudget,
         includeThoughts: true,
@@ -4976,7 +5060,6 @@ function mapAnthropicToGemini(body, effectiveModel) {
   // function cannot represent in Gemini's request shape gets added here and
   // surfaced as `x-c-thru-translation-gap` on the response. Lets callers
   // detect that conversation history was lossy without diffing payloads.
-  const translationGap = new Set();
   if (body.tools) {
     // Anthropic server tools (web_search_20250305, code_execution_20250522,
     // computer_20250124, etc.) declare a `type` field naming the upstream
