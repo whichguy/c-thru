@@ -73,6 +73,9 @@ async function main() {
       'dashboard Clear uses method POST');
     assert(dash.bodyText.includes('Usage totals (since clear)') || dash.bodyText.includes('Clear stats'),
       'dashboard labels lifetime totals / Clear stats');
+    // F4: client retries 503 usage lock busy (parity with CLI/control clear)
+    assert(/lock busy/i.test(dash.bodyText) && /attempt/i.test(dash.bodyText),
+      'dashboard Clear retries on lock busy');
     assert(!dash.bodyText.includes('http://') || !/src\s*=\s*"http/.test(dash.bodyText),
       'no external script/CDN references');
 

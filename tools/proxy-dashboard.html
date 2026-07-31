@@ -232,10 +232,25 @@ document.addEventListener('visibilitychange', () => {
 $('btn-clear').addEventListener('click', async () => {
   const msg = $('clear-msg');
   msg.textContent = 'clearing…';
+  msg.style.color = '';
   try {
-    const r = await fetch('/c-thru/stats/clear', { method: 'POST' });
-    const j = await r.json();
-    if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+    // F4: retry 503 usage lock busy (same policy as c-thru stats clear / control).
+    let j = null;
+    let lastErr = 'clear failed';
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      const r = await fetch('/c-thru/stats/clear', { method: 'POST' });
+      try { j = await r.json(); } catch { j = null; }
+      if (r.ok && j && j.ok) break;
+      lastErr = (j && j.error) || ('HTTP ' + r.status);
+      if (r.status === 503 && /lock busy/i.test(String(lastErr)) && attempt < 8) {
+        msg.textContent = 'lock busy — retrying…';
+        await new Promise(res => setTimeout(res, 150));
+        j = null;
+        continue;
+      }
+      throw new Error(lastErr);
+    }
+    if (!j || !j.ok) throw new Error(lastErr);
     msg.textContent = 'cleared' + (j.cleared_at ? ' ' + fmtTime(j.cleared_at) : '');
     poll();
   } catch (e) {
