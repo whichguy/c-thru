@@ -42,35 +42,36 @@ A description must have all four:
    > `Not for multi-step reasoning — use generalist instead.`
    > `Prefer over planner when the task spans >5 files…`
 
-## Optional: the routing tail
+## Keep routing out of selector descriptions
 
-Many descriptions end with a short note on where the agent routes (`Routes to Opus cloud always;
-Kimi K2.6 on best-cloud-oss.`). It's optional and purely informational — the actual mapping lives
-in `config/model-map.json#agent_to_capability` + `llm_profiles`, and is verified by
-`test/agent-mapping-complete.test.js`. Keep it accurate or omit it.
+Do not put concrete model names or hand-maintained routing tails in `description`. The selector's
+job is to choose the right role; the actual mode × tier mapping lives in
+`config/model-map.json#agent_to_capability` + `llm_profiles`, is rendered into the generated README
+routing reference, and is verified by `test/agent-mapping-complete.test.js`. Keeping those concerns
+separate prevents a stale model name from misleading both the user and the selector.
 
 ## Gold-standard templates
 
 Copy the shape of these three:
 
-- **`planner`** — `MUST BE USED` mandate + quoted examples + a routing tail.
+- **`planner`** — `MUST BE USED` mandate + quoted examples.
 
   > MUST BE USED for all planning, architecture, and design tasks. Produces detailed
   > implementation plans before any code is written. Use for "plan how to", "design the
-  > architecture of", "what's the approach for", "break down this feature". Routes to Fable cloud…
+  > architecture of", "what's the approach for", "break down this feature".
 
 - **`reviewer-security`** — `MUST BE USED for <enumerated scope>` (the mandate+scope pattern; no
   quoted examples needed).
 
   > MUST BE USED for any change touching authentication, authorization, tokens, crypto, input
   > validation, or external API calls. Security-focused code review: injection, credential leaks,
-  > privilege escalation, OWASP Top 10. Hard-fail — no degraded substitute. Routes to Opus cloud…
+  > privilege escalation, OWASP Top 10. Hard-fail — no degraded substitute.
 
-- **`coder`** — `MUST BE USED` + quoted examples + a precondition + routing tail.
+- **`coder`** — `MUST BE USED` + quoted examples + a precondition.
 
   > MUST BE USED for all code implementation tasks. Writes, edits, and refactors code according
   > to a plan. Use for "implement", "write the code for", "add this function", "edit this file".
-  > Requires a plan from planner or clear unambiguous intent. Routes to Sonnet cloud…
+  > Requires a plan from planner or clear unambiguous intent.
 
 ## Descriptions are validated for SELECTION, not just form
 
@@ -79,14 +80,48 @@ that it is *discriminable* — i.e. that the description actually causes the rig
 picked for a realistic task, and crucially that it does **not** poach tasks meant for a
 neighbour. All three tiers are driven by one shared labeled corpus,
 `test/fixtures/agent-selection-corpus.json` (entries: `{id, prompt, expect:[primary, …acceptable],
-note, ambiguous?}`; `ambiguous:true` entries carry `expect:[]` and assert that *no* specialist is
-selected):
+note, ambiguous?, inline_ok?}`). Normal entries require an expected delegation;
+`ambiguous:true` entries carry `expect:[]` and require no specialist; `inline_ok:true` entries
+allow either an expected generalist delegation or an inline answer:
 
 | Tier | Test | Cadence | What it checks |
 |---|---|---|---|
 | 1 — hermetic discriminability lint | `test/agent-selection-discriminability.test.js` | every run (fail-closed) | Each corpus task's wording lines up with its expected agent and is separable from the others — purely offline, no API calls |
 | 2a — LLM-judge | `test/agent-selection-llm-judge.test.js` | nightly CI (`C_THRU_LIVE_SELECTION`) | An LLM judge, given only the injected descriptions + a task, picks the expected agent (or `none` for ambiguous tasks) |
-| 2b — real-session offload scorecard | `test/agent-offload-coverage.js` | nightly CI (`C_THRU_OFFLOAD` + threshold gate) | Drives real `claude -p` sessions and checks Claude actually delegates to the right subagent from the description alone; ambiguous tasks must stay inline. Advisory locally; threshold-gated on CI |
+| 2b — real-session offload scorecard | `test/agent-offload-coverage.js` | scheduled agent shard (`C_THRU_OFFLOAD`; one-run quality advisory) | Drives isolated real `claude -p` sessions and checks Claude actually delegates to the right subagent; ambiguous tasks must stay inline. Invocation and route integrity are mandatory. One-run selection quality becomes blocking only with the explicit `C_THRU_OFFLOAD_GATE=1` compatibility opt-in; promotion decisions use pooled repeated evidence. |
+
+Tier 2b uses a bounded worker pool (`C_THRU_OFFLOAD_CONCURRENCY`, default 4, range 1–8).
+Every fixture gets a distinct home, profile, temporary directory, working directory, proxy log,
+and small representative code/docs/log artifacts. Explicit Claude credentials stay in the
+environment; source subscription OAuth is resolved before home isolation and passed transiently;
+a credential file is copied only as a fallback when no usable environment/source token exists.
+Scratch cleanup and owned-process cleanup are mandatory, including internal errors and
+SIGINT/SIGTERM/SIGHUP.
+
+The harness sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`: prompt-level concurrency belongs to
+the bounded worker pool, while each selected Agent must finish and emit a completed transcript
+result before that fixture can score. An `async_launched` record is launch evidence only and
+fails closed instead of being counted as a successful offload.
+
+A parsed `Agent` tool call is not enough to score. The harness joins the bounded tool-use
+metadata to the isolated Claude transcript, derives the proxy-safe HMAC reference from the raw
+Claude agent ID, and rejects arbitrary prompt prefixes or suffix-only matches.
+
+The transcript join accepts either the exact original Agent prompt or the current Claude
+PreToolUse representation: a valid agent-bound signed sentinel, the exact c-thru identity
+guidance block when present, and then the exact original prompt. Once joined, the harness
+requires a same-request lifecycle consisting of:
+
+1. the matching signed sentinel override;
+2. a `POST` whose normalized path is exactly `/v1/messages` (never
+   `/v1/messages/count_tokens`);
+3. the expected logical-role dispatch;
+4. a non-aborted 2xx `request.complete`; and
+5. forwarded child text linked to the original tool-use ID.
+
+Any Claude/process error, malformed agent metadata, missing correlation edge, unsuccessful
+Messages request, or cleanup failure fails the run even when the selection score is advisory.
+The shared suite and every child remain under the repository-wide one-hour wall-clock ceiling.
 
 The corpus is deliberately **non-circular**: prompts are phrased the way a real user would, *not*
 by reusing the quoted example phrases from `agents/*.md` descriptions — otherwise Tier 1 and the
@@ -100,29 +135,40 @@ description's examples) whose `expect[0]` is the new agent, plus genuinely-accep
 in the rest of `expect`. Without them, the new agent is "never selected" in the scorecard and the
 selection tiers can't tell whether its description actually works.
 
-## Brand / named-model leaves (grok, deepseek, kimi, qwen, gemini)
+## Brand / named-model leaves (catalog)
 
-Brand agents are **gateway pin leaves**: the user asks for a vendor by name; the proxy maps
-`agent_to_capability` → concrete model. Same Claude Code limits apply under LiteLLM/OpenRouter
-(Agent `model` enum is only sonnet/opus/haiku/fable; OpenRouter’s `CLAUDE_CODE_SUBAGENT_MODEL`
-is one model for *all* subagents unless the gateway has a per-agent channel like c-thru’s
-sentinel).
+Brand agents are **name-gated pin leaves** from `config/brand-agents.json`, generated by
+`node tools/gen-brand-agents.js` into `agents/<id>.md` (ownership marker; do not hand-edit).
+The proxy maps `agent_to_capability` → `model:<pin>`. Claude Code Agent tool `model` remains
+the enum alias (hook injects `sonnet` etc.); routing identity rides the signed sentinel, not
+the enum field.
 
-**Tools:** omit the `tools` field so the subagent **inherits the full parent toolset**
-(Claude Code default). Do not put a narrow allowlist on brand leaves. Optional
-`disallowedTools` is supported by `build_ephemeral_agents` if you ever need a denylist, but
-the shipped brand agents do not deny tools.
+**Do not confuse with role agents.** Roles win on task shape (`planner`, `coder`). Brands win
+when the user **names** the model/family (`ask terra`, `what would opus say`). Short names
+like `opus` / `sonnet` / `haiku` / `fable` are fleet brand leaves when present in `--agents` —
+not a reason to avoid spawning them in favor of a generic built-in type.
 
-| Do in `agents/<brand>.md` | Don’t |
+**Description template (primaries — enforced by generator):**
+
+> MUST BE USED when the user names &lt;Label&gt; — "ask &lt;id&gt;", …, "what would &lt;id&gt; say",
+> "&lt;id&gt;'s take". Not for multi-file implementation — use coder instead. Not for a multi-model
+> panel — use advisors instead.
+
+**Aliases:** exact agent id only; never embed the bare primary name (poaches family asks).
+
+**Tools:** omit `tools` (inherit full parent toolset). Shipped brand leaves do not deny tools.
+
+| Do | Don’t |
 |---|---|
-| Omit `tools:` (inherit all) | Restrict brand leaves to Read-only / no tools |
-| Description: “Leaf: parent should spawn once… do not chain” | Expect `model: grok` alone to select xAI without the proxy map |
-| Identity: report actual model; if not the brand, say routing may have failed | Roleplay “You are Grok” as the only control (masks mis-routing) |
-| For `grok` only: scope description to opinion/critique; disambiguate multi-file implement to `coder` | Treat brand Grok as interchangeable with Grok Build CLI (`grok-cc`) |
+| Edit `config/brand-agents.json` + regenerate | Hand-edit generated brand `agents/*.md` |
+| Name-bound paraphrases only | Shared “second opinion” on every brand (collides with `advisors`) |
+| Coder + advisors disambiguation walls | Expect `model: grok` alone to select xAI without the proxy map |
+| Identity: report actual model if routing failed | Treat brand Grok as interchangeable with Grok Build CLI (`grok-cc`) |
+| Codex sol/terra/luna: OpenAI API (`OPENAI_API_KEY`) | Assume ChatGPT Codex CLI subscription auth for brand leaves |
 
-Fleet `--append-system-prompt` also tells the **parent** to one-shot brand agents for
-*ask &lt;name&gt;* opinion asks, and to prefer external Grok CLI or `coder` for Grok multi-file
-implement/fix/review. Full ladder: `docs/agent-architecture.md` § Grok surfaces.
+Fleet `--append-system-prompt` tells the **parent** to one-shot brand leaves for *ask &lt;name&gt;*
+and to use `advisors` for multi-model panels. Grok multi-file implement: external `grok-cc` or
+`coder`. Full ladder: `docs/agent-architecture.md` § Grok surfaces.
 
 ## The rest of the frontmatter
 

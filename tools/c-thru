@@ -21,9 +21,9 @@
 # Escape hatch: CLAUDE_PROXY_BYPASS=1 — skip the proxy for a transparent
 # launch or a model resolved to the native Anthropic API.
 # For Ollama-bound launches, match the direct Claude→Ollama client env as closely as possible:
-#   ANTHROPIC_AUTH_TOKEN=ollama
-#   ANTHROPIC_API_KEY=""
-# Mixed-backend transparent configs still fall back to the legacy placeholder-key behavior.
+#   ANTHROPIC_AUTH_TOKEN left clean (or OAuth inject); proxy injects Bearer ollama outbound
+#   ANTHROPIC_API_KEY ambient-only — never invented by default (subscription default)
+# Opt-in local-gate stuffing only: C_THRU_PROXY_PLACEHOLDER_KEY=1 → proxied-placeholder
 # Debug: C_THRU_DEBUG=1 — print resolved env to stderr (transparent and routed).
 #          C_THRU_DEBUG=2 — same plus proxy port, OLLAMA_*, placeholder flag, route keys sample.
 #          CLAUDE_PROXY_DEBUG=1/2 — enable proxy-side debug logs (router forwards inherited env when spawning the proxy).
@@ -116,6 +116,12 @@ fi
 # C_THRU_FROM_CLI marks plugin hooks to no-op (avoid double-fire with inject).
 export C_THRU_SESSION_ID="$$"
 export C_THRU_FROM_CLI=1
+# Snapshot caller ANTHROPIC_API_KEY before any invent/clear (ambient-only policy).
+# Empty means "caller did not set a key" — distinct from later placeholder opt-in.
+# Only snapshot once so later c-thru mutations do not rewrite the collar value.
+if [[ -z "${C_THRU_CALLER_API_KEY_SNAPSHOT+x}" ]]; then
+  C_THRU_CALLER_API_KEY_SNAPSHOT="${ANTHROPIC_API_KEY-}"
+fi
 MODEL_MAP_DEFAULTS_FILE="${CLAUDE_MODEL_MAP_DEFAULTS_PATH:-$CTHRU_REPO_ROOT/config/model-map.json}"
 MODEL_MAP_OVERRIDES_FILE="${CLAUDE_MODEL_MAP_OVERRIDES_PATH:-$CLAUDE_PROFILE_DIR/model-map.overrides.json}"
 MODEL_MAP_SYNC_STATE_FILE="${CLAUDE_MODEL_MAP_SYNC_STATE_FILE:-$CLAUDE_PROFILE_DIR/model-map-defaults-sync.json}"
@@ -310,6 +316,7 @@ build_ephemeral_agents() {
         let prompt = content;
         let model = name;
         let tier_budget = 999999;
+        let effort = null;
         let disallowedTools = null;
         if (m) {
           const frontmatter = m[1];
@@ -319,6 +326,19 @@ build_ephemeral_agents() {
           if (modelMatch) model = modelMatch[1].trim();
           const budgetMatch = frontmatter.match(/^tier_budget:\s*(.*)$/m);
           if (budgetMatch) tier_budget = parseInt(budgetMatch[1].trim(), 10);
+          const effortMatch = frontmatter.match(/^effort:\s*(.*)$/m);
+          if (effortMatch) {
+            effort = effortMatch[1].trim();
+            const effortLevels = new Set(["low", "medium", "high", "xhigh", "max"]);
+            if (!effortLevels.has(effort)) {
+              process.stderr.write(
+                "c-thru: invalid effort " + String.fromCharCode(39) + effort +
+                String.fromCharCode(39) + " in " + file + " " +
+                "(expected low, medium, high, xhigh, or max)\n"
+              );
+              process.exit(2);
+            }
+          }
           // Claude Code --agents accepts disallowedTools as string[] (e.g. ["Agent"]).
           // Frontmatter: "disallowedTools: Agent" or "disallowedTools: Agent, Task".
           const denyMatch = frontmatter.match(/^disallowedTools:\s*(.*)$/m);
@@ -336,6 +356,7 @@ build_ephemeral_agents() {
           prompt = content.slice(m[0].length).trim();
         }
         const entry = { description, prompt, model, tier_budget };
+        if (effort) entry.effort = effort;
         if (Array.isArray(disallowedTools) && disallowedTools.length) {
           entry.disallowedTools = disallowedTools;
         }
@@ -2325,12 +2346,28 @@ apply_background_model_overrides() {
   # Claude Code's automated git operations. /usr/bin/true exits 0 immediately.
   # Mirrors `ollama launch claude` behavior (cmd/config/claude.go).
   [[ -z "${GIT_EDITOR:-}" ]] && export GIT_EDITOR="true"
-  # Clear ambient ANTHROPIC_API_KEY only on proxy-authenticated paths.
-  # apply_provider_block() sets ANTHROPIC_AUTH_TOKEN for proxy/Ollama backends
-  # but leaves it unset for direct-Anthropic backends (kind: "anthropic" with
-  # a real api_key). Clearing API_KEY there would 401 the request — see e.g.
-  # the longContext route → claude-sonnet-5 → anthropic backend chain.
-  [[ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]] && export ANTHROPIC_API_KEY=""
+  # When AUTH_TOKEN is present, clear API keys that c-thru invented (placeholder)
+  # or that were never in the caller collar — so subscription Bearer is clean.
+  # Preserve a non-placeholder ANTHROPIC_API_KEY that the *caller* set
+  # (C_THRU_CALLER_API_KEY_SNAPSHOT) — ambient-only metered opt-in.
+  # Do not clear a real ambient key just because OAuth was also injected/present.
+  if [[ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+    local _cur_key="${ANTHROPIC_API_KEY-}"
+    local _snap="${C_THRU_CALLER_API_KEY_SNAPSHOT-}"
+    if [[ -n "$_cur_key" ]]; then
+      if [[ "$_cur_key" == "proxied-placeholder" ]] || \
+         [[ -z "$_snap" ]] || \
+         [[ "$_snap" == "proxied-placeholder" ]]; then
+        export ANTHROPIC_API_KEY=""
+      elif [[ "$_cur_key" == "$_snap" ]]; then
+        : # keep caller ambient key (metered opt-in)
+      else
+        # Key changed after snapshot (route fill, etc.) while AUTH_TOKEN lives —
+        # prefer subscription Bearer over a non-caller key.
+        export ANTHROPIC_API_KEY=""
+      fi
+    fi
+  fi
 
   local llm_mode
   llm_mode="$(resolve_llm_mode)"
@@ -4849,9 +4886,9 @@ get_system_info_summary() {
 
 Before doing non-trivial work, inspect the available Agent definitions. If one description matches, your first substantive action MUST be an Agent delegation to the best matching named specialist. Do not complete matching work inline merely because you can. For multi-phase work, delegate focused phases to their matching specialists.
 
-Choose by description, not by model alias. Never substitute generic built-in agent types such as sonnet, opus, haiku, or general-purpose when a named c-thru specialist matches. Answer inline only for trivial conversation or when no specialist description fits.
+Choose by description, not by model alias. Prefer named c-thru fleet agents (role specialists and brand leaves from --agents) over Claude Code's generic built-in subagent types such as general-purpose. Fleet brand leaves may reuse short names like opus/sonnet/haiku/fable — those are c-thru brand leaves (name-gated opinion routes), not a reason to avoid spawning them. Answer inline only for trivial conversation or when no specialist description fits.
 
-Named brand agents (opus, sonnet, haiku, fable, grok, deepseek, qwen, kimi, gemini, sol, terra, luna, codex, devstral, glm, gemma, phi, gpt-oss, nemotron, minimax, hermes, mistral, and full-name aliases from config/brand-agents.json): when the user asks to \"ask <name> …\" for an opinion or second take, spawn that agent once with the user question and report its answer. Do not answer as that brand yourself, and do not chain further agents for the same question. Codex family (sol/terra/luna/codex) uses OpenAI API via OPENAI_API_KEY — not the Codex CLI subscription path. For Grok multi-file implement/fix/review work, prefer the external Grok CLI (grok-cc) or coder — not the grok brand leaf.
+Named brand agents (opus, sonnet, haiku, fable, grok, deepseek, qwen, kimi, gemini, sol, terra, luna, codex, devstral, glm, gemma, phi, gpt-oss, nemotron, minimax, hermes, mistral, and full-name aliases from config/brand-agents.json): when the user asks to \"ask <name> …\" for an opinion or second take, spawn that fleet brand leaf once (subagent_type equals the brand id) with the user question and report its answer. Do not answer as that brand yourself, and do not chain further agents for the same question. Codex family (sol/terra/luna/codex) uses OpenAI API via OPENAI_API_KEY — not the Codex CLI subscription path. Multi-model panel → advisors skill/agent, not a single brand leaf. For Grok multi-file implement/fix/review work, prefer the external Grok CLI (grok-cc) or coder — not the grok brand leaf.
 
 Keep each delegated task explicit and self-contained. Do not rely on shared context.
 
@@ -5599,9 +5636,42 @@ if [[ "${1:-}" == "stats" && "${2:-}" == "clear" ]]; then
   # survives word-splitting). Empty when the token file is absent → proxy fails open.
   _ct_args=(); while IFS= read -r _ct_line; do _ct_args+=("$_ct_line"); done < <(control_token_curl_args)
   # bash 3.2 + set -u: empty "${_ct_args[@]}" is unbound — use safe expansion.
-  result="$(curl -sf -X POST ${_ct_args[@]+"${_ct_args[@]}"} "http://127.0.0.1:$port/c-thru/stats/clear" 2>/dev/null || true)"
-  if [[ -z "$result" ]]; then
+  # Do not use curl -f: 503 lock-busy is a real response (retry), not "proxy down".
+  result=""
+  http_code=""
+  _attempt=0
+  while [[ $_attempt -lt 8 ]]; do
+    _attempt=$((_attempt + 1))
+    result="$(curl -sS --max-time 2.0 -X POST ${_ct_args[@]+"${_ct_args[@]}"} \
+      -w '\n%{http_code}' \
+      "http://127.0.0.1:$port/c-thru/stats/clear" 2>/dev/null || true)"
+    http_code="$(printf '%s\n' "$result" | tail -n1)"
+    result="$(printf '%s\n' "$result" | sed '$d')"
+    if [[ "$http_code" == "200" ]]; then
+      break
+    fi
+    if [[ "$http_code" == "503" ]]; then
+      # F4: usage lock busy — brief backoff then retry
+      sleep 0.15 2>/dev/null || sleep 1
+      continue
+    fi
+    break
+  done
+  if [[ -z "$http_code" || "$http_code" == "000" ]]; then
     echo "c-thru: proxy did not respond" >&2; exit 1
+  fi
+  if [[ "$http_code" == "503" ]]; then
+    echo "c-thru: usage lock busy — try again in a moment (stats not cleared)" >&2
+    if [[ -n "$result" ]]; then printf '%s\n' "$result" >&2; fi
+    exit 1
+  fi
+  if [[ "$http_code" != "200" ]]; then
+    echo "c-thru: stats clear failed (HTTP $http_code)" >&2
+    if [[ -n "$result" ]]; then printf '%s\n' "$result" >&2; fi
+    exit 1
+  fi
+  if [[ -z "$result" ]]; then
+    echo "c-thru: proxy returned empty body on clear" >&2; exit 1
   fi
   if command -v jq >/dev/null 2>&1; then
     if ! printf '%s\n' "$result" | jq .; then
@@ -6056,6 +6126,9 @@ apply_resolved_backend() {
       # proxy is load-bearing for everyday sessions, so a hiccup must degrade, not block.
       if ensure_proxy_http_base; then
         export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
+        # Same ambient-only choke as transparent/brand paths: never invent
+        # ANTHROPIC_API_KEY; honor collar key or opt-in C_THRU_PROXY_PLACEHOLDER_KEY=1.
+        ensure_proxy_client_api_key
       else
         echo "c-thru: WARN — proxy unavailable; falling back to direct Anthropic (per-agent routing disabled this session)" >&2
         apply_provider_block "$BASE_URL" "" "$API_KEY" "" "{}"

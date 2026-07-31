@@ -853,6 +853,10 @@ run_suite "capability-alias-resolve (2-hop agent→capability)" \
   node "$REPO_DIR/test/capability-alias-resolve.test.js"
 run_suite "gen-brand-agents-ownership (generated-leaf ownership + safe stale pruning)" \
   node "$REPO_DIR/test/gen-brand-agents-ownership.test.js"
+run_suite "gen-brand-agents --check (catalog ↔ agents/*.md + a2c drift)" \
+  node "$REPO_DIR/tools/gen-brand-agents.js" --check
+run_suite "brand-fleet-contract (pins, routes, prompt, selection templates)" \
+  node "$REPO_DIR/test/brand-fleet-contract.test.js"
 run_suite "agent-mapping-complete (every agent → live endpoint, all modes×tiers)" \
   node "$REPO_DIR/test/agent-mapping-complete.test.js"
 run_suite "agent-invocation-headers (per-agent resolved-via/served-by/journal)" \
