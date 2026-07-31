@@ -2,10 +2,14 @@
 # Shape C: one-shot bootstrap for marketplace plugin installs.
 # Ensures durable CLI tools (symlinks) + stamp so users run `cthru`.
 #
-# Idempotent. Safe to call from SessionStart (fail-open: never abort the host).
+# Primary UX: /c-thru:install-cli (blocking). SessionStart must not own clone.
+# Idempotent. Fail-open when invoked as a hook (never abort the host).
 # Env:
 #   C_THRU_FORCE_BOOTSTRAP=1  — re-run even if stamp healthy
 #   C_THRU_GIT_REMOTE         — override clone URL
+#   C_THRU_SOURCE_REF         — pin override (tag/branch); default v{plugin version}
+#   C_THRU_ALLOW_UNPINNED=1   — allow default-branch clone when pin missing
+#   C_THRU_PACKAGE_ROOT       — plugin package root (auto-set from this script)
 #   C_THRU_BOOTSTRAP_PULL=0   — skip git pull on existing c-thru-src
 #   C_THRU_BOOTSTRAP_LOG      — log file (default: $CLAUDE_DIR/c-thru-bootstrap.log)
 #   CLAUDE_PROFILE_DIR / CLAUDE_CONFIG_DIR / CLAUDE_DIR
@@ -37,8 +41,10 @@ _bs_log() {
   printf '%s\n' "$line" >>"$_log" 2>/dev/null || true
 }
 
-# Package root for version drift: plugin root when running from plugins/c-thru/tools
+# Package root for version drift + pin: plugin root when running from
+# plugins/c-thru/tools (marketplace) or monorepo tools/ (dev).
 _package_root="$(cd "$_BS_DIR/.." 2>/dev/null && pwd -P || true)"
+export C_THRU_PACKAGE_ROOT="${C_THRU_PACKAGE_ROOT:-$_package_root}"
 
 if [[ "${C_THRU_FORCE_BOOTSTRAP:-0}" != "1" ]] && cthru_stamp_is_healthy; then
   if ! cthru_stamp_version_stale_vs "$_package_root"; then
@@ -50,8 +56,8 @@ fi
 # Resolve full monorepo REPO_DIR
 if [[ -n "${REPO_DIR:-}" ]] && cthru_repo_is_complete "$REPO_DIR"; then
   _bs_log "using pre-set REPO_DIR=$REPO_DIR"
-elif cthru_ensure_source_root_s1; then
-  _bs_log "using S1 source REPO_DIR=$REPO_DIR"
+elif cthru_ensure_source_root_s1 "$C_THRU_PACKAGE_ROOT"; then
+  _bs_log "using S1 source REPO_DIR=$REPO_DIR pin_pkg=$C_THRU_PACKAGE_ROOT"
 else
   # Developer layout: script lives at <monorepo>/tools/ → parent is repo root
   _maybe="$(cd "$_BS_DIR/.." 2>/dev/null && pwd -P || true)"

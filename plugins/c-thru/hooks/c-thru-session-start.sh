@@ -82,11 +82,6 @@ _cthru_plugin_setup() {
     if [ "${C_THRU_PLUGIN_LITE:-0}" != "1" ]; then
         return 0
     fi
-    # When CLI tools exist, Shape C still skips durable register unless LITE
-    # explicitly wants plugin-owned routing (rare dual-path).
-    if [ "$_cthru_cli_ready" = "1" ] && [ "${C_THRU_PLUGIN_LITE:-0}" != "1" ]; then
-        return 0
-    fi
     _proxy_bin="$ROUTER_REPO_ROOT/tools/claude-proxy"
     _plugin_port="${C_THRU_PLUGIN_PORT:-10017}"
     [ -f "$_proxy_bin" ] && [ -f "$_eff_map" ] && \

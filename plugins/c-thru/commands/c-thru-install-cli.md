@@ -29,7 +29,8 @@ fi
 
 # Optional: C_THRU_FORCE_BOOTSTRAP=1 to re-link even if stamp healthy
 # Optional: C_THRU_GIT_REMOTE=... for private mirrors
-# Optional: C_THRU_SOURCE_REF=v0.2.3 to pin clone
+# Optional: C_THRU_SOURCE_REF=v0.2.4 to pin clone (default: v{plugin.json version})
+# Optional: C_THRU_ALLOW_UNPINNED=1 if the pin tag is missing (stamps actual SHA only)
 if [ "${ARGUMENTS:-}" = "force" ] || [ "${ARGUMENTS:-}" = "--force" ]; then
   C_THRU_FORCE_BOOTSTRAP=1 bash "$BOOT"
 else
@@ -45,8 +46,11 @@ fi
 
 Log: `~/.claude/c-thru-bootstrap.log`
 
-## Private git
+## Private git / pin miss
 
 ```bash
 export C_THRU_GIT_REMOTE="git@github.com:whichguy/c-thru.git"
+# Pin is fail-closed: clone detaches at v{plugin version}. If that tag is missing:
+export C_THRU_ALLOW_UNPINNED=1
+# Or delete a stale ~/.claude/c-thru-src and re-run install-cli after the tag exists.
 ```

@@ -98,18 +98,28 @@ cthru_repo_is_complete() {
   [[ -f "$root/tools/c-thru" ]] && [[ -d "$root/agents" ]] && [[ -f "$root/config/model-map.json" ]]
 }
 
+# Resolve plugin version string from a package or monorepo root.
+# Roots tried (first wins): explicit arg, C_THRU_PACKAGE_ROOT, REPO_DIR.
+# Layouts: <root>/.claude-plugin/plugin.json (plugin package)
+#          <root>/plugins/c-thru/.claude-plugin/plugin.json (monorepo)
 cthru_plugin_version() {
-  local root="${1:-}"
+  local root="${1:-${C_THRU_PACKAGE_ROOT:-${REPO_DIR:-}}}"
   local pj
+  [[ -n "$root" ]] || return 1
   for pj in \
-    "${root}/plugins/c-thru/.claude-plugin/plugin.json" \
-    "${root}/.claude-plugin/plugin.json"
+    "${root}/.claude-plugin/plugin.json" \
+    "${root}/plugins/c-thru/.claude-plugin/plugin.json"
   do
     if [[ -f "$pj" ]] && command -v node >/dev/null 2>&1; then
-      node -e "try{const v=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).version;if(v)process.stdout.write(String(v))}catch(e){}" "$pj" 2>/dev/null && return 0
+      local v
+      v="$(node -e "try{const v=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).version;if(v)process.stdout.write(String(v))}catch(e){}" "$pj" 2>/dev/null || true)"
+      if [[ -n "$v" ]]; then
+        printf '%s' "$v"
+        return 0
+      fi
     fi
   done
-  return 0
+  return 1
 }
 
 # Remove durable loopback ANTHROPIC_BASE_URL (plugin fixed-port residue).
@@ -315,19 +325,32 @@ cthru_seed_model_map() {
 }
 
 # Desired git ref for S1 pin (tag vX.Y.Z matching plugin version when possible).
-# Override with C_THRU_SOURCE_REF. Fail-closed pin is the default (see ensure).
+#
+# Input override: C_THRU_SOURCE_REF_DESIRED (preferred) or C_THRU_SOURCE_REF when
+# C_THRU_SOURCE_REF_IS_ACTUAL is not 1 (actual exports must not re-enter as pin).
+# Package root: arg → C_THRU_PACKAGE_ROOT → REPO_DIR.
+# Fail-closed: if version undiscoverable and C_THRU_ALLOW_UNPINNED!=1, return 1.
 cthru_desired_source_ref() {
-  local ver root="${1:-}"
-  if [[ -n "${C_THRU_SOURCE_REF:-}" ]]; then
-    printf '%s' "$C_THRU_SOURCE_REF"
+  local ver root="${1:-${C_THRU_PACKAGE_ROOT:-${REPO_DIR:-}}}"
+  local override="${C_THRU_SOURCE_REF_DESIRED:-}"
+  if [[ -z "$override" && "${C_THRU_SOURCE_REF_IS_ACTUAL:-0}" != "1" && -n "${C_THRU_SOURCE_REF:-}" ]]; then
+    override="${C_THRU_SOURCE_REF}"
+  fi
+  if [[ -n "$override" ]]; then
+    printf '%s' "$override"
     return 0
   fi
-  ver="$(cthru_plugin_version "$root")"
-  if [[ -n "$ver" && "$ver" != "unknown" ]]; then
-    printf 'v%s' "$ver"
+  if ver="$(cthru_plugin_version "$root" 2>/dev/null)"; then
+    if [[ -n "$ver" && "$ver" != "unknown" ]]; then
+      printf 'v%s' "$ver"
+      return 0
+    fi
+  fi
+  if [[ "${C_THRU_ALLOW_UNPINNED:-0}" == "1" ]]; then
+    printf 'main'
     return 0
   fi
-  printf 'main'
+  return 1
 }
 
 # True if root HEAD equals the commit named by want (tag/branch/sha).
@@ -349,15 +372,22 @@ cthru_try_pin_checkout() {
   cthru_git_at_ref "$root" "$want"
 }
 
-# After pin attempt: export C_THRU_SOURCE_REF from **actual** checkout only.
+# After pin attempt: record **actual** checkout only (never the desired pin).
+# Sets C_THRU_SOURCE_REF_IS_ACTUAL=1 so desired_source_ref will not treat actual
+# as a user pin override on a later call in the same shell.
 cthru_export_actual_source_ref() {
   local root="$1"
-  local actual
+  local actual sha
   actual="$(cthru_git_actual_ref "$root" 2>/dev/null || true)"
+  sha="$(cthru_git_actual_sha "$root" 2>/dev/null || true)"
+  export C_THRU_SOURCE_ACTUAL_REF="${actual:-}"
+  export C_THRU_SOURCE_ACTUAL_SHA="${sha:-}"
   if [[ -n "$actual" ]]; then
     export C_THRU_SOURCE_REF="$actual"
+    export C_THRU_SOURCE_REF_IS_ACTUAL=1
   else
     unset C_THRU_SOURCE_REF || true
+    unset C_THRU_SOURCE_REF_IS_ACTUAL || true
   fi
 }
 
@@ -367,11 +397,22 @@ cthru_export_actual_source_ref() {
 # default branch and stamp **actual** identity only).
 cthru_ensure_source_root_s1() {
   cthru_core_colors
-  local src remote desired pin_ok=0
+  local src remote desired pin_ok=0 pkg
   src="$(cthru_src_path)"
   remote="${C_THRU_GIT_REMOTE:-$CTHRU_DEFAULT_REMOTE}"
-  # Version for pin may come from monorepo checkout / plugin package root
-  desired="$(cthru_desired_source_ref "${REPO_DIR:-}")"
+  # Package root: optional arg $1, else C_THRU_PACKAGE_ROOT, else REPO_DIR
+  pkg="${1:-${C_THRU_PACKAGE_ROOT:-${REPO_DIR:-}}}"
+  if [[ -n "$pkg" ]]; then
+    export C_THRU_PACKAGE_ROOT="$pkg"
+  fi
+  # Capture user pin override before any actual-export mutates C_THRU_SOURCE_REF
+  if [[ -n "${C_THRU_SOURCE_REF:-}" && "${C_THRU_SOURCE_REF_IS_ACTUAL:-0}" != "1" ]]; then
+    export C_THRU_SOURCE_REF_DESIRED="${C_THRU_SOURCE_REF_DESIRED:-$C_THRU_SOURCE_REF}"
+  fi
+  if ! desired="$(cthru_desired_source_ref "$pkg")"; then
+    echo -e "${RED}c-thru bootstrap: cannot resolve pin ref (set C_THRU_PACKAGE_ROOT to plugin package, or C_THRU_SOURCE_REF / C_THRU_ALLOW_UNPINNED=1)${NC}" >&2
+    return 1
+  fi
 
   if cthru_repo_is_complete "$src"; then
     cthru_chmod_tree_bins "$src"

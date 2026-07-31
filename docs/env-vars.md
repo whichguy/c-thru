@@ -129,8 +129,9 @@ rg 'anthropic\.upstream\.(error|midstream_error)|xai\.sanitize' ~/.claude/proxy.
 | `C_THRU_FROM_CLI=1` | Set by `tools/c-thru` launch; plugin hooks (`C_THRU_PLUGIN_HOOK=1`) no-op to avoid double-fire with CLI inject. |
 | `C_THRU_PLUGIN_HOOK=1` | Set by marketplace `hooks.json` only; not set for CLI-injected hooks. |
 | `C_THRU_PLUGIN_LITE=1` | Opt-in: allow plugin durable fixed-port proxy + `settings.env.ANTHROPIC_BASE_URL`. Default Shape C never writes durable loopback. |
-| `C_THRU_SOURCE_REF` | Override S1 pin ref (default `v` + plugin version). |
-| `C_THRU_ALLOW_UNPINNED=1` | Allow bootstrap when pin tag/ref is missing (stamps **actual** SHA; never pretends the pin landed). |
+| `C_THRU_PACKAGE_ROOT` | Plugin package root for pin version discovery (set by bootstrap from its parent). |
+| `C_THRU_SOURCE_REF` | User pin override (tag/branch) **before** ensure; after ensure holds **actual** checkout (see `C_THRU_SOURCE_REF_IS_ACTUAL`). Prefer `C_THRU_SOURCE_REF_DESIRED` for explicit override. |
+| `C_THRU_ALLOW_UNPINNED=1` | Allow bootstrap when pin tag/ref is missing or version undiscoverable (stamps **actual** SHA; never pretends the pin landed). |
 | `C_THRU_GIT_REMOTE` | Override clone URL for `~/.claude/c-thru-src`. |
 | `C_THRU_FORCE_BOOTSTRAP=1` | Force re-link even if stamp healthy. |
 

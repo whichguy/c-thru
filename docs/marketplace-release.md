@@ -41,6 +41,11 @@ Bump `plugins/c-thru/.claude-plugin/plugin.json` **and** matching
 `.claude-plugin/marketplace.json` on every user-visible plugin change.
 If the family catalog mirrors a version string, bump claude-craft’s entry too.
 
+**Pin fail-closed:** Shape C bootstrap clones `v{plugin.version}` into
+`~/.claude/c-thru-src`. **Always `git tag -a vX.Y.Z` and push the tag** before
+telling users to run `/c-thru:install-cli`. Without the tag, install fails
+unless `C_THRU_ALLOW_UNPINNED=1` (which stamps the actual default-branch SHA).
+
 ## 3. Smoke from published bytes
 
 ```sh

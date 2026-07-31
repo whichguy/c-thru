@@ -57,13 +57,24 @@ if [[ -d "$REPO_DIR/.git" ]]; then
   got="$(cthru_read_stamp_field source_sha)"
   check "R0d-stamp-sha-matches-head" test "$got" = "$want"
 fi
-# Must not invent vX.Y.Z unless that tag is checked out
+# Stamp ref must match actual git identity (never free-pass)
 ref_got="$(cthru_read_stamp_field source_ref)"
-if [[ "$ref_got" =~ ^v[0-9] ]]; then
-  check "R0d-stamp-ref-is-real-tag" cthru_git_at_ref "$REPO_DIR" "$ref_got"
-else
-  check "R0d-stamp-ref-not-fake-tag" true
-fi
+actual_ref="$(cthru_git_actual_ref "$REPO_DIR" 2>/dev/null || true)"
+check "R0d-stamp-ref-matches-actual" test -n "$ref_got" -a "$ref_got" = "$actual_ref"
+
+# G1: pin ref from package root, not empty REPO_DIR
+check "R0d-pin-ref-from-bundle" bash -c '
+  source "'"$REPO_ROOT"'/tools/c-thru-install-core.sh"
+  unset C_THRU_SOURCE_REF C_THRU_SOURCE_REF_DESIRED C_THRU_SOURCE_REF_IS_ACTUAL C_THRU_ALLOW_UNPINNED REPO_DIR
+  export C_THRU_PACKAGE_ROOT="'"$REPO_ROOT"'/plugins/c-thru"
+  d=$(cthru_desired_source_ref) || exit 1
+  test "$d" = "v0.2.4" || test "$d" = "v$(cthru_plugin_version "$C_THRU_PACKAGE_ROOT")"
+'
+check "R0d-pin-empty-root-fails" bash -c '
+  source "'"$REPO_ROOT"'/tools/c-thru-install-core.sh"
+  unset C_THRU_SOURCE_REF C_THRU_SOURCE_REF_DESIRED C_THRU_SOURCE_REF_IS_ACTUAL C_THRU_ALLOW_UNPINNED C_THRU_PACKAGE_ROOT REPO_DIR
+  ! cthru_desired_source_ref ""
+'
 
 # ── R0b gate ───────────────────────────────────────────────────────────────
 unset C_THRU_PLUGIN_HOOK C_THRU_SESSION_ID C_THRU_PLUGIN_LITE C_THRU_FROM_CLI || true
@@ -158,11 +169,13 @@ export C_THRU_GIT_REMOTE="file://${_pin}/remote.git"
 unset C_THRU_ALLOW_UNPINNED || true
 # empty src path under CLAUDE_DIR
 rm -rf "$CLAUDE_DIR/c-thru-src"
+rm -f "$(cthru_stamp_path)" 2>/dev/null || true
 if cthru_ensure_source_root_s1 2>/dev/null; then
   check "R0d-pin-fail-closed" false
 else
   check "R0d-pin-fail-closed" true
 fi
+check "R0d-pin-fail-no-stamp" test ! -f "$(cthru_stamp_path)"
 # escape hatch — remove any partial tree from failed clone
 export C_THRU_ALLOW_UNPINNED=1
 rm -rf "$CLAUDE_DIR/c-thru-src"
@@ -178,7 +191,29 @@ else
   check "R0d-pin-unpinned-escape" false
   check "R0d-pin-unpinned-not-fake-vtag" false
 fi
-unset C_THRU_ALLOW_UNPINNED C_THRU_SOURCE_REF C_THRU_GIT_REMOTE
+# Pin success: tag exists on local remote
+unset C_THRU_ALLOW_UNPINNED
+export C_THRU_SOURCE_REF=v9.9.9
+export C_THRU_SOURCE_REF_DESIRED=v9.9.9
+unset C_THRU_SOURCE_REF_IS_ACTUAL
+(cd "$_up" && git tag -a v9.9.9 -m t && git push -q "$_pin/remote.git" v9.9.9 2>/dev/null || git -C "$_pin/remote.git" tag v9.9.9 "$(git -C "$_up" rev-parse HEAD)" 2>/dev/null || true)
+# re-push tag into bare: easiest re-clone bare
+rm -rf "$_pin/remote.git"
+git clone --bare -q "$_up" "$_pin/remote.git"
+export C_THRU_GIT_REMOTE="file://${_pin}/remote.git"
+rm -rf "$CLAUDE_DIR/c-thru-src"
+export CLAUDE_DIR="$BASE/pin-ok" CLAUDE_PROFILE_DIR="$BASE/pin-ok"
+mkdir -p "$CLAUDE_DIR"
+if cthru_ensure_source_root_s1 2>/dev/null; then
+  check "R0d-pin-success" cthru_git_at_ref "$CLAUDE_DIR/c-thru-src" v9.9.9
+  export REPO_DIR="$CLAUDE_DIR/c-thru-src"
+  cthru_write_stamp "$REPO_DIR"
+  check "R0d-pin-success-stamp-sha" test "$(cthru_read_stamp_field source_sha)" = "$(git -C "$CLAUDE_DIR/c-thru-src" rev-parse HEAD)"
+else
+  check "R0d-pin-success" false
+  check "R0d-pin-success-stamp-sha" false
+fi
+unset C_THRU_ALLOW_UNPINNED C_THRU_SOURCE_REF C_THRU_SOURCE_REF_DESIRED C_THRU_SOURCE_REF_IS_ACTUAL C_THRU_GIT_REMOTE C_THRU_PACKAGE_ROOT
 export REPO_DIR="$REPO_ROOT"
 export CLAUDE_DIR="$BASE/claude"
 export CLAUDE_PROFILE_DIR="$CLAUDE_DIR"
@@ -194,6 +229,7 @@ check "LEAN-bundle-commands" bash -c '
 check "R1-suite-wired" bash -c '
   grep -q shape-c-spec-contract "'"$REPO_ROOT"'/test/run-all.sh" &&
   grep -q shape-c-bootstrap "'"$REPO_ROOT"'/test/run-all.sh" &&
+  grep -q uninstall-shape-c "'"$REPO_ROOT"'/test/run-all.sh" &&
   grep -q setup-docs-alignment "'"$REPO_ROOT"'/test/run-all.sh"
 '
 check "gate-file-exists" test -f "$REPO_ROOT/tools/c-thru-plugin-hook-gate.sh" -a -f "$REPO_ROOT/plugins/c-thru/tools/c-thru-plugin-hook-gate.sh"
