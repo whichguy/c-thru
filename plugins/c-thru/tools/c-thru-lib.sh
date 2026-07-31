@@ -123,6 +123,36 @@ control_token_curl_args() {
   return 0
 }
 
+# Anthropic upstream fingerprint compare (keep-alive / ensure-on-port / launcher).
+# Both empty → match (0). Either side alone or unequal → mismatch (1).
+# Pure function — no I/O, no exports (safe under set -euo).
+cthru_upstream_fingerprints_equal() {
+  local desired="${1:-}"
+  local live="${2:-}"
+  if [[ -z "$desired" && -z "$live" ]]; then
+    return 0
+  fi
+  if [[ -z "$desired" || -z "$live" ]]; then
+    return 1
+  fi
+  [[ "$desired" == "$live" ]]
+}
+
+# Extract anthropic_upstream_fingerprint from a /ping JSON body (or empty).
+# Prefers node (always present with proxy stack); falls back to jq.
+cthru_upstream_fingerprint_from_ping_json() {
+  local body="${1:-}"
+  [[ -n "$body" ]] || return 0
+  if command -v node >/dev/null 2>&1; then
+    node -e 'try{const j=JSON.parse(process.argv[1]||"{}");process.stdout.write(j.anthropic_upstream_fingerprint||"")}catch{}' "$body" 2>/dev/null || true
+    return 0
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$body" | jq -r '.anthropic_upstream_fingerprint // empty' 2>/dev/null || true
+  fi
+  return 0
+}
+
 # Opt-in: C_THRU_STATS_RESET=launch clears the lifetime usage ledger once after
 # the proxy is known ready for this process tree. Default is never (forensics).
 # Uses POST /c-thru/stats/clear so multi-proxy clear-wins applies. Once per shell.

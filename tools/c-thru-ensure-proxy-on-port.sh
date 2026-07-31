@@ -27,11 +27,109 @@ done
 _CTHRU_ENSURE_TOOLS_DIR=$(cd -P "$(dirname "$_cthru_ensure_self")" && pwd)
 unset _cthru_ensure_self _cthru_ensure_dir
 
+# Shared fingerprint helpers (no side effects at source).
+if [[ -r "$_CTHRU_ENSURE_TOOLS_DIR/c-thru-lib.sh" ]]; then
+  # shellcheck source=c-thru-lib.sh
+  . "$_CTHRU_ENSURE_TOOLS_DIR/c-thru-lib.sh"
+fi
+
 # True if /ping on 127.0.0.1:$1 answers within ~1s.
 cthru_proxy_ping_ok() {
   local port="${1:-}"
   [[ -n "$port" ]] || return 1
   curl -sf --max-time 1 "http://127.0.0.1:${port}/ping" >/dev/null 2>&1
+}
+
+# Desired fingerprint: prefer shared lib helper (explicit export or hash URL).
+cthru_ensure_desired_upstream_fingerprint() {
+  if type cthru_desired_anthropic_upstream_fingerprint >/dev/null 2>&1; then
+    cthru_desired_anthropic_upstream_fingerprint
+    return $?
+  fi
+  # Fallback if lib not sourced (should not happen in-repo).
+  if [[ -n "${C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT:-}" ]]; then
+    printf '%s' "$C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT"
+    return 0
+  fi
+  local url="${CLAUDE_PROXY_ANTHROPIC_UPSTREAM:-}"
+  [[ -n "$url" ]] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  node -e '
+const crypto = require("crypto");
+let s = process.argv[1] || "";
+try { s = new URL(s).toString(); } catch {}
+process.stdout.write(crypto.createHash("sha256").update(s).digest("hex").slice(0, 16));
+' "$url" 2>/dev/null || true
+}
+
+# True when live /ping anthropic_upstream_fingerprint matches desired.
+# Symmetric via cthru_upstream_fingerprints_equal (lib) when available.
+cthru_ensure_upstream_fingerprint_ok() {
+  local port="${1:-}"
+  local desired live="" body
+  desired="$(cthru_ensure_desired_upstream_fingerprint)"
+  body="$(curl -sf --max-time 1 "http://127.0.0.1:${port}/ping" 2>/dev/null)" || return 1
+  if type cthru_upstream_fingerprint_from_ping_json >/dev/null 2>&1; then
+    live="$(cthru_upstream_fingerprint_from_ping_json "$body")"
+  elif command -v node >/dev/null 2>&1; then
+    live="$(node -e 'try{const j=JSON.parse(process.argv[1]||"{}");process.stdout.write(j.anthropic_upstream_fingerprint||"")}catch{}' "$body" 2>/dev/null || true)"
+  elif command -v jq >/dev/null 2>&1; then
+    live="$(printf '%s' "$body" | jq -r '.anthropic_upstream_fingerprint // empty' 2>/dev/null || true)"
+  else
+    return 1
+  fi
+  if type cthru_upstream_fingerprints_equal >/dev/null 2>&1; then
+    cthru_upstream_fingerprints_equal "$desired" "$live"
+    return $?
+  fi
+  if [[ -z "$desired" && -z "$live" ]]; then
+    return 0
+  fi
+  if [[ -z "$desired" || -z "$live" ]]; then
+    return 1
+  fi
+  [[ "$desired" == "$live" ]]
+}
+
+# On fingerprint mismatch: kill only when *this session requires* an override
+# (desired non-empty). Empty desired + live override → refuse without killing
+# so a co-tenant gateway-pinned proxy is not hijacked by a no-override hook.
+# Returns 0 if caller may proceed to spawn, 1 if must abort without kill.
+cthru_ensure_handle_fingerprint_mismatch() {
+  local port="${1:-}"
+  local desired
+  desired="$(cthru_ensure_desired_upstream_fingerprint)"
+  if [[ -z "$desired" ]]; then
+    echo "c-thru: ensure-on-port :${port} has Anthropic upstream override; this session has none — not reusing, not killing (set CLAUDE_PROXY_ANTHROPIC_UPSTREAM or use another port)" >&2
+    return 1
+  fi
+  cthru_ensure_kill_proxy_on_port "$port" || true
+  return 0
+}
+
+# Best-effort kill of a live mismatched proxy so we can respawn with the
+# correct CLAUDE_PROXY_ANTHROPIC_UPSTREAM (port must be free).
+cthru_ensure_kill_proxy_on_port() {
+  local port="${1:-}"
+  local body pid=""
+  body="$(curl -sf --max-time 1 "http://127.0.0.1:${port}/ping" 2>/dev/null)" || return 1
+  if command -v node >/dev/null 2>&1; then
+    pid="$(node -e 'try{const j=JSON.parse(process.argv[1]||"{}");if(j.pid)process.stdout.write(String(j.pid))}catch{}' "$body" 2>/dev/null || true)"
+  elif command -v jq >/dev/null 2>&1; then
+    pid="$(printf '%s' "$body" | jq -r '.pid // empty' 2>/dev/null || true)"
+  fi
+  if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]]; then
+    kill "$pid" 2>/dev/null || true
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      cthru_proxy_ping_ok "$port" || return 0
+      sleep 0.15
+    done
+    kill -9 "$pid" 2>/dev/null || true
+    sleep 0.1
+  fi
+  cthru_proxy_ping_ok "$port" && return 1
+  return 0
 }
 
 # Pick a model-map path for a resurrected proxy (prefer durable profile).
@@ -94,9 +192,14 @@ cthru_ensure_proxy_on_port() {
     ""|http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;;
     *) return 1 ;;
   esac
-  # Already live — no work.
+  # Already live — only reuse when Anthropic upstream fingerprint matches
+  # (F6: stale override must not be silently kept).
   if cthru_proxy_ping_ok "$port"; then
-    return 0
+    if cthru_ensure_upstream_fingerprint_ok "$port"; then
+      return 0
+    fi
+    # Desired empty → do not kill co-tenant; desired set → kill+respawn below.
+    cthru_ensure_handle_fingerprint_mismatch "$port" || return 1
   fi
 
   if ! command -v node >/dev/null 2>&1; then
@@ -122,7 +225,9 @@ cthru_ensure_proxy_on_port() {
     # Another ensure in progress — wait briefly for /ping.
     local i
     for i in 1 2 3 4 5 6 7 8; do
-      cthru_proxy_ping_ok "$port" && return 0
+      if cthru_proxy_ping_ok "$port" && cthru_ensure_upstream_fingerprint_ok "$port"; then
+        return 0
+      fi
       sleep 0.25
     done
     return 1
@@ -130,8 +235,14 @@ cthru_ensure_proxy_on_port() {
 
   # Holding lock — recheck then spawn.
   if cthru_proxy_ping_ok "$port"; then
-    rmdir "$lock_dir" 2>/dev/null || true
-    return 0
+    if cthru_ensure_upstream_fingerprint_ok "$port"; then
+      rmdir "$lock_dir" 2>/dev/null || true
+      return 0
+    fi
+    if ! cthru_ensure_handle_fingerprint_mismatch "$port"; then
+      rmdir "$lock_dir" 2>/dev/null || true
+      return 1
+    fi
   fi
 
   log_file="${CLAUDE_DIR:-${HOME:-/tmp}/.claude}/proxy.ensure-${port}.log"
@@ -139,8 +250,13 @@ cthru_ensure_proxy_on_port() {
 
   # Fixed port + READY suppressed by --port (see claude-proxy CLI). Detach so
   # the hook can exit without reaping the proxy.
+  # Inherit CLAUDE_PROXY_ANTHROPIC_UPSTREAM from Claude/hook env (F5/F6).
   local spawn_pid=""
-  nohup node "$proxy_js" --port "$port" --config "$config" \
+  nohup env \
+    ${CLAUDE_PROXY_ANTHROPIC_UPSTREAM:+CLAUDE_PROXY_ANTHROPIC_UPSTREAM="$CLAUDE_PROXY_ANTHROPIC_UPSTREAM"} \
+    ${C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM:+C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM="$C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM"} \
+    ${C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM:+C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM="$C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM"} \
+    node "$proxy_js" --port "$port" --config "$config" \
     >>"$log_file" 2>&1 </dev/null &
   spawn_pid=$!
   disown "$spawn_pid" 2>/dev/null || true
@@ -148,9 +264,14 @@ cthru_ensure_proxy_on_port() {
   local i
   for i in 1 2 3 4 5 6 7 8 9 10; do
     if cthru_proxy_ping_ok "$port"; then
-      rmdir "$lock_dir" 2>/dev/null || true
-      printf 'c-thru: resurrected proxy on :%s\n' "$port" >&2
-      return 0
+      if cthru_ensure_upstream_fingerprint_ok "$port"; then
+        rmdir "$lock_dir" 2>/dev/null || true
+        printf 'c-thru: resurrected proxy on :%s\n' "$port" >&2
+        return 0
+      fi
+      # Spawned but fingerprint wrong (env not applied) — kill and fail closed.
+      cthru_ensure_kill_proxy_on_port "$port" || true
+      break
     fi
     # If the child already exited, stop waiting early.
     if [[ -n "$spawn_pid" ]] && ! kill -0 "$spawn_pid" 2>/dev/null; then

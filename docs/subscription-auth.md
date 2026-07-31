@@ -9,7 +9,7 @@ API keys. This page explains what's available per provider and how to configure 
 
 | Provider | Subscription → API path? | How |
 |---|---|---|
-| **Claude / Anthropic** | Yes | `claude login` sets `ANTHROPIC_AUTH_TOKEN`; c-thru routes via subscription credits |
+| **Claude / Anthropic** | Yes | `claude login` stores OAuth; c-thru injects `ANTHROPIC_AUTH_TOKEN` on the proxy path and routes via subscription credits |
 | **Gemini / Google** | Partial | AI Studio free tier has generous quotas; Google One AI Premium doesn't add API credits |
 | **OpenAI** | No (Platform API) / Yes (Codex CLI only) | ChatGPT Plus/Pro is web-only for the generic `api.openai.com` HTTP API — always metered. The separate **Codex CLI**'s own ChatGPT-sign-in mode bills against plan-included credits instead, but that's a distinct, product-specific integration, not something reachable via a REST API key. See "Delegate CLIs" below. |
 
@@ -25,17 +25,73 @@ Claude Code supports two auth modes:
 
 When you run `claude login`, Claude Code stores an OAuth refresh/access token in the
 macOS Keychain (`Claude Code-credentials`) or, on Linux, in
-`~/.claude/.credentials.json`. c-thru never exports a placeholder
-`ANTHROPIC_AUTH_TOKEN` of its own, so Claude Code's OAuth flow runs end-to-end and the
-proxy forwards the resulting Bearer to Anthropic. The proxy also strips stray
-`x-api-key` headers whenever a Bearer token is being forwarded — so requests charge
-your subscription rather than getting double-billed against an API key.
+`~/.claude/.credentials.json`. By default c-thru lifts the saved access token into
+`ANTHROPIC_AUTH_TOKEN` for the proxy hop. Installed Claude Code 2.1.220 was also
+verified to use its saved login with c-thru's custom `ANTHROPIC_BASE_URL`; setting
+`C_THRU_NO_OAUTH_INJECT=1` opts into that client-managed, version-dependent path.
+The proxy forwards Bearer auth to Anthropic and strips a simultaneous `x-api-key`
+header.
+
+**Ambient-only `ANTHROPIC_API_KEY`:** in the default
+`C_THRU_ANTHROPIC_AUTH_MODE=auto` mode, c-thru does **not** invent or export an API
+key. If the **caller shell** already set `ANTHROPIC_API_KEY`, c-thru preserves it and
+skips OAuth injection. Claude Code then selects API-key auth ahead of saved
+subscription login, so the request uses metered API billing.
+
+Set `C_THRU_ANTHROPIC_AUTH_MODE=subscription` to make that intent deterministic.
+The wrapper removes `ANTHROPIC_API_KEY` before either claude-proxy or Claude Code is
+started, then preserves/injects Bearer OAuth or lets Claude use its saved login. The
+inverse `api` mode removes Bearer/OAuth environment signals and fails closed unless
+`ANTHROPIC_API_KEY` exists. Placeholders (`proxied-placeholder`) are cleared when a
+Bearer is present. Opt-in invent only: `C_THRU_PROXY_PLACEHOLDER_KEY=1` (see
+`docs/env-vars.md`).
+
+### Corporate gateway / ambient `ANTHROPIC_BASE_URL` (upstream override)
+
+Point the **proxy** (not Claude) at an org reverse proxy / LLM gateway:
+
+1. **Claude** still talks only to c-thru’s **loopback** proxy (fleet routing intact).
+2. **claude-proxy** sends Anthropic-family traffic to the override URL
+   (`CLAUDE_PROXY_ANTHROPIC_UPSTREAM`) instead of `endpoints.anthropic.url`.
+3. **Ambient trust is opt-in:** a leftover shell `ANTHROPIC_BASE_URL` is **not**
+   adopted as upstream unless `C_THRU_TRUST_AMBIENT_UPSTREAM=1`. Prefer explicit
+   `--anthropic-upstream` / `C_THRU_ANTHROPIC_UPSTREAM` (no trust gate). Use
+   `C_THRU_IGNORE_AMBIENT_ANTHROPIC_BASE_URL=1` to force-skip ambient even when
+   trust is set.
+4. **Credential policy is Loose (#2):** c-thru still injects subscription OAuth from
+   the keychain when no ambient `ANTHROPIC_API_KEY` is set. The gateway receives the
+   same `Authorization: Bearer` Claude would send to Anthropic (Claude Code may also
+   attach its own keychain token). Only set the override to hosts you trust. A one-line
+   stderr warn fires when the host is not `*.anthropic.com`.
+5. Auth **shape** stays Anthropic-family (`bearer_priority` / `subscription`) via a
+   transport/identity split — the map URL is not rewritten to the gateway host.
+6. Loopback and plain `http://` overrides are refused unless explicit opt-in envs
+   (see `docs/env-vars.md`). If the proxy cannot start while an override is active,
+   c-thru **hard-fails** (never falls through to map `api.anthropic.com`).
+7. **`c-thru reload` (SIGHUP)** re-reads the model-map only — it does **not** change
+   the transport override (env is fixed at process start). Use **`c-thru restart`**
+   (re-resolves ambient/env) or a new launch after changing the upstream.
 
 ```sh
-claude login               # authenticate — stores OAuth in Keychain (macOS) or ~/.claude/.credentials.json (Linux)
-unset ANTHROPIC_API_KEY    # optional: prevent accidental API billing if both are set
-c-thru                     # requests now use subscription billing
+# Preferred: explicit transport (no ambient trust required)
+claude login
+c-thru --anthropic-upstream https://llm-gateway.example.com/anthropic --model sonnet
+
+# Or ambient BASE_URL with explicit trust
+export ANTHROPIC_BASE_URL=https://llm-gateway.example.com/anthropic
+export C_THRU_TRUST_AMBIENT_UPSTREAM=1
+claude login
+c-thru --model sonnet
+# Claude → http://127.0.0.1:<port> ; proxy → https://llm-gateway.example.com/anthropic
 ```
+
+```sh
+claude login
+C_THRU_ANTHROPIC_AUTH_MODE=subscription c-thru --model sonnet
+```
+
+For older installed wrappers without the explicit mode, the equivalent one-shot
+fallback is `env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN c-thru --model sonnet`.
 
 ### Enforcing subscription-only with `auth: "subscription"`
 
@@ -60,12 +116,11 @@ the proxy returns HTTP 401 with a message guiding you to `claude login`. Only
 
 ### Checking which auth mode is active
 
-```sh
-c-thru list   # shows active route; Bearer = subscription, x-api-key = API billing
-```
-
-The response header `x-c-thru-resolved-via` shows `served_by` and includes `auth_missing`
-when no valid auth was found.
+`c-thru list` and `c-thru explain` prove routing, not the credential Claude actually
+selected. For a fail-closed check, route through `anthropic_subscription`: a successful
+request with `x-c-thru-auth-derived: subscription` proves the proxy accepted Bearer auth;
+an API-key-only request is rejected before Anthropic. Provider billing/usage records remain
+the final external check.
 
 ---
 
@@ -129,6 +184,11 @@ entirely — none of the `KNOWN_HOSTS`/`applyOutboundAuth` machinery above appli
 Both, however, implement the same conceptual policy this page documents for Claude:
 **prefer subscription/login-based billing, and fall back to a metered API key only when
 login genuinely isn't available.**
+
+The similarly named c-thru model route `grok-build` is deliberately different:
+it maps Claude Code's Anthropic Messages traffic to `grok-4.5` on
+`api.x.ai/v1/responses` and therefore always requires a billable `XAI_API_KEY`.
+Neither route borrows credentials from the other.
 
 - **Codex CLI**: `codex-worker-run.sh` runs a `codex login status` preflight check
   before every launch/resume. When a ChatGPT session is confirmed, it actively strips

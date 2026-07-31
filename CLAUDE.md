@@ -61,35 +61,7 @@ were not available to the agent.
 
 ## Directory Layout and Path Invariants
 
-The `tools/` + `config/` two-directory structure is **required**. `c-thru` and `claude-proxy` both compute `ROUTER_REPO_ROOT` as `$(dirname $0)/..` and read `$ROUTER_REPO_ROOT/config/model-map.json`. Do not flatten.
-
-```
-tools/
-  c-thru                 # bash, 5000+ lines — the largest bash file in the repo; entrypoint
-  claude-proxy            # node, stdlib-only — Anthropic→provider translation layer
-  c-thru-contract-check.sh # validates agent/skill contracts before committing
-  c-thru-hygiene-check.sh  # reports working-tree hygiene issues before non-trivial work or PRs
-  sync-plugin-bundle.sh    # syncs mirrored source files into plugins/c-thru/
-  model-map-layered.js    # merges 3-tier config stack; no external deps
-  model-map-validate.js   # schema validator; called by router at startup
-  model-map-sync.js       # pulls capability data into the map; calls layered.js
-  model-map-edit.js       # interactive map editor; calls validate + layered
-  llm-capabilities-mcp.js # MCP server exposing list_models + classify_intent tools
-  verify-llm-capabilities-mcp.sh  # shell smoke-test for the MCP server
-  verify-lmstudio-ollama-compat.sh # spike: run when LM Studio available to confirm kind:"ollama" vs kind:"openai"
-  c-thru-session-start.sh # SessionStart hook — proxy+Ollama health check, silent on happy path
-  c-thru-postcompact-context.sh # PreCompact hook — re-inject routing context before Claude Code compresses history
-  c-thru-proxy-health.sh  # UserPromptSubmit hook — warns on stderr (exit 0, fail-open) on proxy down
-  c-thru-map-changed.sh   # FileChanged/PostToolUse hook — validates model-map.json on edit
-  c-thru-classify.sh      # UserPromptSubmit hook — fetches a static /hooks/context block (no classify_intent; proxy ignores prompt content)
-  c-thru-ollama-gc.sh     # GC tool — tracks c-thru-pulled Ollama tags; sweeps unreferenced ones. Subcommands: init|record|sweep|purge
-  c-thru-self-update.sh   # startup self-update: best-effort git ff-merge with 1s grace; opt-out via C_THRU_NO_UPDATE=1
-  hw-profile.js             # shared 5-tier (16gb…128gb) hardware detection (tierForGb); used by router and proxy
-config/
-  model-map.json          # shipped defaults (standard JSON — no comments; parsed with JSON.parse)
-test/
-  model-map-v12-adapter.test.js  # adapter fixture test; run with: node test/model-map-v12-adapter.test.js
-```
+The `tools/` + `config/` two-directory structure is **required**. `c-thru` and `claude-proxy` both compute `ROUTER_REPO_ROOT` as `$(dirname $0)/..` and read `$ROUTER_REPO_ROOT/config/model-map.json`. Do not flatten. (Run `ls tools/ config/ test/` for the current file list.)
 
 Some repo files are derived from `config/model-map.json` and `agents/*.md`; see
 `docs/derived-artifacts.md` before editing generated artifacts by hand.
@@ -205,23 +177,11 @@ MCP server (stdio transport). Exposes tools defined in `TOOL_DEFS` (including al
 | `--profile <tier>` | Force hardware tier (sets `CLAUDE_LLM_PROFILE`). `/ping` reports `active_tier`. |
 | `--port <n>` | Bind to fixed port (suppresses `READY <port>` stdout line). |
 | `--mode <m>` | Set connectivity / routing mode (sets `CLAUDE_LLM_MODE`). |
+| `--anthropic-upstream <url>` | Transport-only Anthropic upstream (sets `CLAUDE_PROXY_ANTHROPIC_UPSTREAM`). Auth identity stays map-canonical; see `docs/subscription-auth.md` (Loose OAuth). |
 
 ## c-thru Router Flags (env-var equivalents)
 
-`tools/c-thru` accepts these flags; each is stripped before forwarding to the real claude binary and exports the equivalent env var. Flag wins over env var.
-
-| Flag | Sets env | Effect |
-|---|---|---|
-| `--mode <m>` | `CLAUDE_LLM_MODE` | Routing mode (5 values): `best-cloud` \| `best-cloud-oss` \| `best-local-oss` \| `best-cloud-gov` \| `best-local-gov` |
-| `--profile <t>` | `CLAUDE_LLM_PROFILE` | Force hardware tier |
-| `--memory-gb <n>` | `CLAUDE_LLM_MEMORY_GB` | Override RAM detection |
-| `--bypass-proxy` | `CLAUDE_PROXY_BYPASS=1` | Skip proxy entirely |
-| `--journal` | `CLAUDE_PROXY_JOURNAL=1` | Enable per-request journaling |
-| `--proxy-debug [N]` | `CLAUDE_PROXY_DEBUG=N` | Proxy verbose logs (default 1, accepts 1\|2) |
-| `--router-debug [N]` | `C_THRU_DEBUG=N` | c-thru script verbose logs |
-| `--no-update` | `C_THRU_NO_UPDATE=1` | Skip git self-update |
-
-For full routing-mode semantics, see `docs/connectivity-modes.md`. For journal format,
+Run `tools/c-thru --help` for the full flag/env-var reference (each flag is stripped before forwarding to the real claude binary and exports the equivalent env var; flag wins over env var). For full routing-mode semantics, see `docs/connectivity-modes.md`. For journal format,
 storage, and privacy guidance, see `docs/journaling.md`.
 
 ## Proxy Lifecycle
@@ -234,8 +194,8 @@ storage, and privacy guidance, see `docs/journaling.md`.
 
 | Command | Effect |
 |---|---|
-| `c-thru reload` | Sends SIGHUP to the running proxy, derives the actual listening port from `lsof`, waits up to 2s for `/ping` to confirm it's alive, prints new tier. Exits non-zero if proxy is not running or crashes. |
-| `c-thru restart` | SIGTERM + waits for listener to vanish, then re-spawns (port inherited from `CLAUDE_PROXY_PORT` env or auto-assigned). `--force` escalates to SIGKILL after timeout. |
+| `c-thru reload` | Sends SIGHUP to the running proxy, derives the actual listening port from `lsof`, waits up to 2s for `/ping` to confirm it's alive, prints new tier. Re-reads **model-map only** — does **not** change `CLAUDE_PROXY_ANTHROPIC_UPSTREAM` (transport override is fixed at process start). Exits non-zero if proxy is not running or crashes. |
+| `c-thru restart` | SIGTERM + waits for listener to vanish, then re-spawns (port inherited from `CLAUDE_PROXY_PORT` env or auto-assigned). Re-resolves Anthropic upstream from ambient/env before spawn. `--force` escalates to SIGKILL after timeout. Use this (not `reload`) after changing the gateway URL. |
 | `c-thru list` | Show active hw profile, configured routes, and local Ollama models. (Renamed from `--list`; both forms still accepted.) |
 | `c-thru explain [--capability X] [--model <name>] [--mode M] [--tier T]` | Print resolution chain for a hypothetical request without sending one. Useful for "why did it pick that?" debugging. Pure JS — no proxy spawn. Also accepts `--agent <name>` to resolve through `agent_to_capability` first. |
 | `c-thru check-deps [--fix]` | Audit system dependencies (node, jq, curl, ollama, etc.); `--fix` runs `brew install` for missing optional tools on macOS. |
@@ -337,84 +297,4 @@ trackers; the two new docs are process/mechanics references.
 Invoke with `/c-thru-plan <intent>`. State in `${TMPDIR:-/tmp}/c-thru/<repo>/<slug>/`. Completed plans archived to `~/.claude/c-thru-archive/`.
 Skills in `skills/`, agents in `agents/`. See `docs/agent-architecture.md`. When adding or editing an agent's `description` (its only discovery surface), follow `docs/agent-authoring.md` — enforced by `test/agent-description-quality.test.js`; dispatch edges enforced by `test/agent-dispatch-graph.test.js`.
 
-### Pipeline agents (13 + 10 utility + brand leaves from catalog)
-
-The agent fleet uses an identity mapping for most agents: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. Three exceptions alias to a different capability: `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`, `advisors` → `planner-hard`. Five named agents pin directly to vendor models via `model:` pins: `grok`, `deepseek`, `qwen`, `kimi`, `gemini` (see `docs/agent-architecture.md`).
-
-**Delivery:** fleet definitions are repo `agents/*.md`, runtime-injected each `c-thru` launch as ephemeral `--agents` JSON — never installed into Claude's durable agent store (`~/.claude/agents/`).
-
-For full dispatch-graph and role detail, see `docs/agent-architecture.md`. That document defers to `config/model-map.json#agent_to_capability` and the generated README "Agent routing reference" table as canonical; if it disagrees with either, they win. For full tier-resolution detail, see `docs/hardware-profile-matrix.md`.
-
-**13 pipeline agents (planner → coder → tester → reviewer flow):**
-
-tier_budget values are hand-copied from each `agents/*.md` frontmatter — update here when an agent's `tier_budget:` changes.
-
-| Agent / Capability | Tier budget |
-|---|---|
-| `planner` | 999999 |
-| `planner-hard` | 999999 |
-| `explore` | 10000 |
-| `coder` | 50000 |
-| `coder-fallback` | 10000 |
-| `tester` | 10000 |
-| `docs` | 10000 |
-| `code-reviewer` | 50000 |
-| `reviewer-plan` | 50000 |
-| `reviewer-security` | 999999 |
-| `debugger-hypothesis` | 50000 |
-| `debugger-investigate` | 50000 |
-| `debugger-hard` | 999999 |
-
-**10 retained utility agents:**
-
-| Agent | Purpose |
-|---|---|
-| `vision` | Image/screenshot analysis |
-| `pdf` | PDF reading and extraction |
-| `writer` | Long-form prose |
-| `edge` | Minimal-footprint tasks |
-| `generalist` | General-purpose |
-| `fast-generalist` | Fast/cheap background work |
-| `fast-scout` | Latency-optimized search |
-| `long-context` | Large context window tasks |
-| `plan-scheduler` | Dispatches wave READY_ITEMS to worker agents via /schedule-plan-tasks |
-| `advisors` | Multi-seat panel host (`/advisors`; seats from `advisor_panels`; host → planner-hard) |
-
-**Brand model-pin agents** (leaf; invoke by shorthand or full-name alias — “ask agent opus …”, “ask devstral …”; require vendor keys / local Ollama tags as applicable):
-
-See `config/brand-agents.json` (written into `agents/*.md` via `node tools/gen-brand-agents.js`).
-Includes Claude-family shorthands (`opus` / `sonnet` / `haiku` / `fable` with mode-conditional
-`model_routes`), existing pins (`grok`, `deepseek`, `qwen`, `kimi`, `gemini`), Ollama-family
-leaves (`devstral`, `glm`, `gemma`, `phi`, `gpt-oss`, `nemotron`, `minimax`, `hermes`, `mistral`, …),
-and Claude-safe full-name aliases for concrete tags.
-
-### Pipeline orchestration
-
-Each pipeline agent ends its response with an `UNBLOCKED_TASKS` block containing
-`Task()` calls for the next agent(s). The orchestrator follows these breadcrumbs
-rather than memorizing a fixed pipeline sequence.
-
-Typical flow:
-  planner → (UNBLOCKED_TASKS) → coder
-  coder   → (UNBLOCKED_TASKS) → tester → code-reviewer
-  any agent → (UNBLOCKED_TASKS) → debugger-hypothesis (on failure)
-
-Debug subloop (triggered by coder/tester failure):
-  debugger-hypothesis → debugger-investigate → (loop) → debugger-hard on exhaustion
-
-See docs/agent-architecture.md for the full wave lifecycle and worker STATUS contract.
-
-### agent_to_capability resolution
-
-See docs/agent-architecture.md for agent_to_capability traversal and identity mapping details.
-
-### Adding/rebinding
-
-- Swap a capability's model for one mode×tier cell: one value change in `llm_profiles[cap][mode][tier]`.
-- Swap all tiers for a mode: replace the entire mode-value object.
-- Agent files are never modified for either operation.
-
-### Model tags
-
-Cloud-OSS via OpenRouter: `deepseek/deepseek-r2`, `moonshotai/kimi-k2`, `thudm/glm-4-plus`.
-Local Ollama tags are injected dynamically by the SessionStart hook (`ollama list`).
+Agent fleet reference (pipeline agents, tier budgets, utility/brand leaves, orchestration convention, model tags) lives in `agents/CLAUDE.md` — loads automatically when working with files under `agents/`.

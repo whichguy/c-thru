@@ -122,6 +122,31 @@ export C_THRU_FROM_CLI=1
 if [[ -z "${C_THRU_CALLER_API_KEY_SNAPSHOT+x}" ]]; then
   C_THRU_CALLER_API_KEY_SNAPSHOT="${ANTHROPIC_API_KEY-}"
 fi
+# Snapshot ambient ANTHROPIC_BASE_URL before we overwrite it with loopback proxy.
+# Used as lowest-precedence Anthropic *upstream* override for claude-proxy only
+# (Claude always sees ENSURED_PROXY_HTTP_BASE on proxy paths).
+if [[ -z "${C_THRU_CALLER_ANTHROPIC_BASE_URL+x}" ]]; then
+  C_THRU_CALLER_ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL-}"
+fi
+# Make Anthropic billing intent explicit before either claude-proxy or Claude
+# Code inherits credentials. `auto` preserves the historical ambient-key
+# behavior; the two explicit modes remove the competing credential class.
+C_THRU_ANTHROPIC_AUTH_MODE="${C_THRU_ANTHROPIC_AUTH_MODE:-auto}"
+case "$C_THRU_ANTHROPIC_AUTH_MODE" in
+  auto)
+    ;;
+  subscription)
+    unset ANTHROPIC_API_KEY
+    C_THRU_CALLER_API_KEY_SNAPSHOT=""
+    ;;
+  api)
+    unset ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+    ;;
+  *)
+    echo "c-thru: invalid C_THRU_ANTHROPIC_AUTH_MODE '$C_THRU_ANTHROPIC_AUTH_MODE' (expected auto, subscription, or api)" >&2
+    exit 2
+    ;;
+esac
 MODEL_MAP_DEFAULTS_FILE="${CLAUDE_MODEL_MAP_DEFAULTS_PATH:-$CTHRU_REPO_ROOT/config/model-map.json}"
 MODEL_MAP_OVERRIDES_FILE="${CLAUDE_MODEL_MAP_OVERRIDES_PATH:-$CLAUDE_PROFILE_DIR/model-map.overrides.json}"
 MODEL_MAP_SYNC_STATE_FILE="${CLAUDE_MODEL_MAP_SYNC_STATE_FILE:-$CLAUDE_PROFILE_DIR/model-map-defaults-sync.json}"
@@ -265,16 +290,19 @@ build_ephemeral_agents() {
       local name src
       while IFS= read -r name; do
         [[ -z "$name" ]] && continue
+        case "$name" in AGENTS.md|CLAUDE.md) continue ;; esac
         src="$ORIGINAL_CLAUDE_PROFILE_DIR/agents/$name"
         [[ -e "$src" ]] || continue
         ln -s "$src" "$EPHEMERAL_SESSION_DIR/agents/$name" 2>/dev/null || true
       done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR/agents" 2>/dev/null)
     fi
     if [[ -d "$CTHRU_REPO_ROOT/agents" ]]; then
-      local item
+      local item item_name
       for item in "$CTHRU_REPO_ROOT/agents"/*.md; do
         [ -f "$item" ] || continue
-        ln -s "$item" "$EPHEMERAL_SESSION_DIR/agents/$(basename "$item")" 2>/dev/null || true
+        item_name="$(basename "$item")"
+        case "$item_name" in AGENTS.md|CLAUDE.md) continue ;; esac
+        ln -s "$item" "$EPHEMERAL_SESSION_DIR/agents/$item_name" 2>/dev/null || true
       done
     fi
   fi
@@ -296,13 +324,14 @@ build_ephemeral_agents() {
     const agents = Object.create(null);
     const callerParseable = [];
     const callerNames = new Set();
+    const reservedAgentFiles = new Set(["AGENTS.md", "CLAUDE.md"]);
     const isPlainObject = value =>
       value !== null && typeof value === "object" && !Array.isArray(value) &&
       Object.getPrototypeOf(value) === Object.prototype;
 
     if (noAgents !== "1" && fs.existsSync(agentsDir)) {
       fs.readdirSync(agentsDir).forEach(file => {
-        if (!file.endsWith(".md")) return;
+        if (!file.endsWith(".md") || reservedAgentFiles.has(file)) return;
         const name = file.replace(".md", "");
         let content;
         try {
@@ -329,6 +358,18 @@ build_ephemeral_agents() {
           const effortMatch = frontmatter.match(/^effort:\s*(.*)$/m);
           if (effortMatch) {
             effort = effortMatch[1].trim();
+            // This is a deliberately tiny YAML scalar reader, not a general
+            // frontmatter parser. Accept the native quoted/commented enum
+            // spellings so valid Claude agent files do not fail at launch.
+            const commentAt = effort.search(/\s+#/);
+            if (commentAt >= 0) effort = effort.slice(0, commentAt).trim();
+            if (effort.length >= 2) {
+              const quote = effort.charCodeAt(0);
+              if ((quote === 34 || quote === 39) &&
+                  effort.charCodeAt(effort.length - 1) === quote) {
+                effort = effort.slice(1, -1);
+              }
+            }
             const effortLevels = new Set(["low", "medium", "high", "xhigh", "max"]);
             if (!effortLevels.has(effort)) {
               process.stderr.write(
@@ -1046,6 +1087,7 @@ cmd_help() {
   echo -e "  ${GRAY}    phi4-reasoning) always reason internally — no flag needed.${NC}"
   echo -e "  ${GRAY}    When --thinking is enabled, judge/planner caps are routed to a cloud thinking-capable model.${NC}"
   echo "  --bypass-proxy            skip proxy entirely (= CLAUDE_PROXY_BYPASS=1)"
+  echo "  --anthropic-upstream <url>  proxy Anthropic transport URL (Claude still uses loopback)"
   echo "  --journal                 enable per-request journaling (= CLAUDE_PROXY_JOURNAL=1)"
   echo "  --proxy-debug [N]         proxy verbose logs (= CLAUDE_PROXY_DEBUG=N; default 1)"
   echo "  --router-debug [N]        router verbose logs (= C_THRU_DEBUG=N; default 1; CLAUDE_ROUTER_DEBUG still accepted)"
@@ -1061,6 +1103,10 @@ cmd_help() {
   echo -e "  CLAUDE_LLM_MODE=<mode>        where calls go and how models are selected"
   echo -e "  ${GRAY}    best-cloud|best-cloud-oss|best-local-oss|best-cloud-gov|best-local-gov${NC}"
   echo "  CLAUDE_LLM_MEMORY_GB=<n>      override RAM detection for hw tier selection"
+  echo "  C_THRU_ANTHROPIC_UPSTREAM=<url>  same as --anthropic-upstream (proxy transport)"
+  echo "  CLAUDE_PROXY_ANTHROPIC_UPSTREAM=<url>  proxy child transport override (exported by c-thru)"
+  echo "  C_THRU_TRUST_AMBIENT_UPSTREAM=1  adopt ambient ANTHROPIC_BASE_URL as upstream (default: off)"
+  echo "  C_THRU_IGNORE_AMBIENT_ANTHROPIC_BASE_URL=1  never adopt ambient BASE_URL as upstream"
   echo "  C_THRU_NO_UPDATE=1     disable git self-update at startup"
   echo "  C_THRU_COORDINATOR=1      opt into the experimental session coordinator"
   echo "  CLAUDE_PROXY_JOURNAL=1        record every request/response to ~/.claude/journal/"
@@ -1316,9 +1362,10 @@ fi
 #   follows — treat as valueless), "1" (bare/valueless flag, or value-taking
 #   flag with no legitimate value to consume), or "2" (flag + one value token
 #   consumed). Encodes two peek rules:
-#     - --model/--route/--mode/--profile/--memory-gb/--settings/--agents: consume the next token
-#       as the value only if it doesn't look like a flag (doesn't start with
-#       '-') — otherwise a following flag (e.g. --print) would be swallowed.
+#     - --model/--route/--mode/--profile/--memory-gb/--settings/--agents/
+#       --anthropic-upstream: consume the next token as the value only if it
+#       doesn't look like a flag (doesn't start with '-') — otherwise a
+#       following flag (e.g. --print) would be swallowed.
 #     - --proxy-debug/--router-debug: optional numeric value; consume the
 #       next token only if it matches ^[12]$.
 #   Equals-form flags (--model=x) and flags with no value at all
@@ -1326,7 +1373,7 @@ fi
 cthru_flag_width() {
   local flag="$1" next="$2" has_next="$3"
   case "$flag" in
-    --model | --route | --mode | --profile | --memory-gb | --settings | --agents)
+    --model | --route | --mode | --profile | --memory-gb | --settings | --agents | --anthropic-upstream)
       if [[ "$has_next" == "1" && "$next" != -* ]]; then
         printf '2'
       else
@@ -1446,7 +1493,7 @@ strip_cthru_cli_args() {
         i=$((i + 1))
         continue
         ;;
-      --mode | --profile | --memory-gb)
+      --mode | --profile | --memory-gb | --anthropic-upstream)
         if [[ $((i + 1)) -lt ${#ORIG_ARGS[@]} ]]; then
           _w="$(cthru_flag_width "$arg" "${ORIG_ARGS[i+1]}" 1)"
         else
@@ -1455,7 +1502,7 @@ strip_cthru_cli_args() {
         i=$((i + _w))
         continue
         ;;
-      --mode=* | --profile=* | --memory-gb=* | --proxy-debug=* | --router-debug=* | --thinking=*)
+      --mode=* | --profile=* | --memory-gb=* | --proxy-debug=* | --router-debug=* | --thinking=* | --anthropic-upstream=*)
         i=$((i + 1))
         continue
         ;;
@@ -1630,13 +1677,16 @@ run_native_claude_subcommand() {
       echo "c-thru: native subcommand with --model '${route_model}' requires a loaded model-map" >&2
       return 1
     }
+    resolve_and_export_anthropic_upstream || return 1
     inject_subscription_oauth_from_store || true
     # Brand agents default KEEP_PROXY=1, so prior opens leave a live proxy.
     # Prefer reusing the durable gateway's port when it still answers /ping —
     # otherwise every open gets a new dynamic port, restages gateway, and
     # stop+respawns every live brand job ("recycled session …") for no gain.
+    # M3/F5: also require Anthropic upstream fingerprint match (stale gateway
+    # proxy with a different override must not be silently reused).
     if [[ -z "${CLAUDE_PROXY_PORT:-}" && "${C_THRU_BRAND_REUSE_GATEWAY_PROXY:-1}" != "0" ]]; then
-      local _gw_settings _gw_base _gw_port
+      local _gw_settings _gw_base _gw_port _gw_ping
       _gw_settings="${ORIGINAL_CLAUDE_PROFILE_DIR:-$HOME/.claude}/c-thru-agent-gateway/settings.json"
       if [[ -n "${C_THRU_AGENT_GATEWAY_DIR:-}" && -f "${C_THRU_AGENT_GATEWAY_DIR}/settings.json" ]]; then
         _gw_settings="${C_THRU_AGENT_GATEWAY_DIR}/settings.json"
@@ -1652,10 +1702,17 @@ run_native_claude_subcommand() {
         if [[ "$_gw_base" =~ ^https?://(127\.0\.0\.1|localhost|\[::1\]):([0-9]+) ]]; then
           _gw_port="${BASH_REMATCH[2]}"
         fi
-        if [[ -n "$_gw_port" ]] && curl -sf --max-time 1 "http://127.0.0.1:${_gw_port}/ping" >/dev/null 2>&1; then
-          export CLAUDE_PROXY_PORT="$_gw_port"
-          if [[ -n "${C_THRU_DEBUG:-}" && "${C_THRU_DEBUG}" != "0" ]]; then
-            echo "c-thru: reusing keep-alive gateway proxy on :${_gw_port}" >&2
+        if [[ -n "$_gw_port" ]]; then
+          _gw_ping="$(proxy_ping_json "$_gw_port" 2>/dev/null || true)"
+          if [[ -n "$_gw_ping" ]] && proxy_upstream_fingerprint_matches "$_gw_ping"; then
+            export CLAUDE_PROXY_PORT="$_gw_port"
+            if [[ -n "${C_THRU_DEBUG:-}" && "${C_THRU_DEBUG}" != "0" ]]; then
+              echo "c-thru: reusing keep-alive gateway proxy on :${_gw_port}" >&2
+            fi
+          elif [[ -n "$_gw_ping" ]]; then
+            if [[ -n "${C_THRU_DEBUG:-}" && "${C_THRU_DEBUG}" != "0" ]]; then
+              echo "c-thru: keep-alive gateway proxy on :${_gw_port} has different Anthropic upstream — not reusing" >&2
+            fi
           fi
         fi
       fi
@@ -2467,12 +2524,13 @@ proxy_placeholder_mode() {
 
 # Read Claude Code's subscription OAuth from the OS-native store and inject
 # it as ANTHROPIC_AUTH_TOKEN so it survives the c-thru → proxy → Anthropic
-# hop. Without this the proxy receives no auth and Anthropic returns 401:
-# Claude Code only consults its keychain when calling api.anthropic.com
-# directly (i.e. when ANTHROPIC_BASE_URL is unset), and we always set it.
+# hop on older/less predictable client setups. Current Claude Code can also
+# use its saved login with a custom ANTHROPIC_BASE_URL; set
+# C_THRU_NO_OAUTH_INJECT=1 to leave credential management entirely to Claude.
 # Skips when the caller already set AUTH_TOKEN or a real ANTHROPIC_API_KEY
 # (ambient API key = intentional metered mode; do not overwrite with OAuth).
 inject_subscription_oauth_from_store() {
+  [[ "${C_THRU_ANTHROPIC_AUTH_MODE:-auto}" == "api" ]] && return 0
   [[ "${C_THRU_NO_OAUTH_INJECT:-}" == "1" ]] && return 0
   [[ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]] && return 0
   [[ -n "${ANTHROPIC_API_KEY:-}"   ]] && return 0
@@ -2954,6 +3012,186 @@ is_local_http_base_url() {
   esac
 }
 
+# M5 — Anthropic upstream override eligibility (transport host for claude-proxy).
+# Returns 0 if $1 may become CLAUDE_PROXY_ANTHROPIC_UPSTREAM.
+# Not the same as is_local_http_base_url (that helper is too narrow for security).
+# opts via env:
+#   C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM=1  allow plain http:// non-loopback
+#   C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM=1  allow loopback (hermetic tests only)
+#   C_THRU_UPSTREAM_FORCE_ANTHROPIC_COM=1       keep *.anthropic.com (CLI/env force)
+upstream_override_eligible() {
+  local raw="${1:-}"
+  [[ -n "$raw" ]] || return 1
+  # Structural parse via node (python3/jq not guaranteed for URL host rules).
+  command -v node >/dev/null 2>&1 || return 1
+  node -e '
+const raw = process.argv[1] || "";
+const allowInsecure = process.env.C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM === "1";
+const allowLoopback = process.env.C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM === "1";
+const forceAnthropic = process.env.C_THRU_UPSTREAM_FORCE_ANTHROPIC_COM === "1";
+function isLoopback(host) {
+  const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
+  if (!h) return false;
+  if (h === "localhost" || h === "0.0.0.0" || h === "::" || h === "::1") return true;
+  if (h.endsWith(".localhost")) return true;
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (h.startsWith("::ffff:127.")) return true;
+  return false;
+}
+function isAnthropic(host) {
+  const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "anthropic.com" || h.endsWith(".anthropic.com");
+}
+let u;
+try { u = new URL(raw); } catch { process.exit(1); }
+if (u.protocol !== "http:" && u.protocol !== "https:") process.exit(1);
+if (isLoopback(u.hostname) && !allowLoopback) process.exit(1);
+if (!forceAnthropic && isAnthropic(u.hostname)
+    && (u.pathname === "/" || u.pathname === "") && !u.search && !u.hash) {
+  process.exit(1); // no-op ambient default
+}
+if (u.protocol === "http:" && !allowInsecure && !isLoopback(u.hostname)) process.exit(1);
+process.exit(0);
+' "$raw" 2>/dev/null
+}
+
+fingerprint_anthropic_upstream() {
+  local raw="${1:-}"
+  [[ -n "$raw" ]] || return 1
+  command -v node >/dev/null 2>&1 || return 1
+  # Hash URL.toString() after parse — must match tools/claude-proxy fingerprintUpstreamUrl.
+  node -e '
+const crypto = require("crypto");
+let s = process.argv[1] || "";
+try { s = new URL(s).toString(); } catch {}
+process.stdout.write(crypto.createHash("sha256").update(s).digest("hex").slice(0, 16));
+' "$raw" 2>/dev/null
+}
+
+# Resolve {url, source, fingerprint} into exports for proxy + hooks.
+# Precedence: CLI --anthropic-upstream > C_THRU_ANTHROPIC_UPSTREAM >
+#   existing CLAUDE_PROXY_ANTHROPIC_UPSTREAM > eligible ambient BASE_URL snapshot.
+# Product #2 Loose: does NOT skip OAuth inject for non-anthropic.com hosts.
+resolve_and_export_anthropic_upstream() {
+  local cand="" source="" fp="" host=""
+  # Highest: Phase-1 CLI capture
+  if [[ -n "${C_THRU_CLI_ANTHROPIC_UPSTREAM:-}" ]]; then
+    cand="$C_THRU_CLI_ANTHROPIC_UPSTREAM"
+    source="cli"
+    export C_THRU_UPSTREAM_FORCE_ANTHROPIC_COM=1
+  elif [[ -n "${C_THRU_ANTHROPIC_UPSTREAM:-}" ]]; then
+    cand="$C_THRU_ANTHROPIC_UPSTREAM"
+    source="c_thru_env"
+    export C_THRU_UPSTREAM_FORCE_ANTHROPIC_COM=1
+  elif [[ -n "${CLAUDE_PROXY_ANTHROPIC_UPSTREAM:-}" ]]; then
+    # Already set (nested c-thru / ensure-on-port inheritance)
+    cand="$CLAUDE_PROXY_ANTHROPIC_UPSTREAM"
+    source="proxy_env"
+    export C_THRU_UPSTREAM_FORCE_ANTHROPIC_COM=1
+  elif [[ -n "${C_THRU_CALLER_ANTHROPIC_BASE_URL:-}" ]]; then
+    cand="$C_THRU_CALLER_ANTHROPIC_BASE_URL"
+    source="ambient_base_url"
+    unset C_THRU_UPSTREAM_FORCE_ANTHROPIC_COM 2>/dev/null || true
+  fi
+
+  if [[ -z "$cand" ]]; then
+    unset CLAUDE_PROXY_ANTHROPIC_UPSTREAM C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT \
+      C_THRU_ANTHROPIC_UPSTREAM_SOURCE 2>/dev/null || true
+    return 0
+  fi
+
+  # Opt-in trust for *implicit* ambient ANTHROPIC_BASE_URL only.
+  # Explicit CLI / C_THRU_ANTHROPIC_UPSTREAM / already-set CLAUDE_PROXY_* skip this.
+  # Refuse (quiet no-op + one note) so leftover direnv/mock gateways cannot
+  # forward subscription OAuth to an unvetted host without operator consent.
+  if [[ "$source" == "ambient_base_url" ]]; then
+    if [[ "${C_THRU_IGNORE_AMBIENT_ANTHROPIC_BASE_URL:-0}" == "1" ]]; then
+      if [[ "${C_THRU_AMBIENT_UPSTREAM_NOTED:-}" != "1" ]]; then
+        echo "c-thru: ignoring ambient ANTHROPIC_BASE_URL (C_THRU_IGNORE_AMBIENT_ANTHROPIC_BASE_URL=1)" >&2
+        export C_THRU_AMBIENT_UPSTREAM_NOTED=1
+      fi
+      unset CLAUDE_PROXY_ANTHROPIC_UPSTREAM C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT \
+        C_THRU_ANTHROPIC_UPSTREAM_SOURCE 2>/dev/null || true
+      return 0
+    fi
+    if [[ "${C_THRU_TRUST_AMBIENT_UPSTREAM:-0}" != "1" ]]; then
+      local _amb_host=""
+      _amb_host="$(node -e 'try{process.stdout.write(new URL(process.argv[1]).hostname)}catch{}' "$cand" 2>/dev/null || true)"
+      if [[ "${C_THRU_AMBIENT_UPSTREAM_NOTED:-}" != "1" ]]; then
+        echo "c-thru: ambient ANTHROPIC_BASE_URL (${_amb_host:-$cand}) not used as Anthropic upstream — set C_THRU_TRUST_AMBIENT_UPSTREAM=1 to allow, or use --anthropic-upstream / C_THRU_ANTHROPIC_UPSTREAM" >&2
+        export C_THRU_AMBIENT_UPSTREAM_NOTED=1
+      fi
+      unset CLAUDE_PROXY_ANTHROPIC_UPSTREAM C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT \
+        C_THRU_ANTHROPIC_UPSTREAM_SOURCE 2>/dev/null || true
+      return 0
+    fi
+  fi
+
+  if ! upstream_override_eligible "$cand"; then
+    if [[ -n "${C_THRU_DEBUG:-}" && "${C_THRU_DEBUG}" != "0" ]]; then
+      echo "c-thru: Anthropic upstream candidate from ${source:-?} not eligible (ignored): ${cand}" >&2
+    fi
+    # Explicit CLI/env that fails eligibility → hard refuse (not silent ignore).
+    if [[ "$source" == "cli" || "$source" == "c_thru_env" ]]; then
+      echo "c-thru: refusing Anthropic upstream override from ${source}: ${cand}" >&2
+      echo "c-thru: use https:// non-loopback host (or C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM=1 for http)" >&2
+      return 1
+    fi
+    unset CLAUDE_PROXY_ANTHROPIC_UPSTREAM C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT \
+      C_THRU_ANTHROPIC_UPSTREAM_SOURCE 2>/dev/null || true
+    return 0
+  fi
+
+  # Normalize via URL.toString() so export + fingerprint match claude-proxy.
+  local normalized=""
+  normalized="$(node -e 'try{process.stdout.write(new URL(process.argv[1]).toString())}catch{process.stdout.write(process.argv[1]||"")}' "$cand" 2>/dev/null || true)"
+  [[ -n "$normalized" ]] || normalized="$cand"
+  fp="$(fingerprint_anthropic_upstream "$normalized" || true)"
+  [[ -n "$fp" ]] || {
+    echo "c-thru: failed to fingerprint Anthropic upstream" >&2
+    return 1
+  }
+  export CLAUDE_PROXY_ANTHROPIC_UPSTREAM="$normalized"
+  export C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT="$fp"
+  export C_THRU_ANTHROPIC_UPSTREAM_SOURCE="$source"
+  # Loose OAuth disclosure when host is not *.anthropic.com
+  host="$(node -e 'try{process.stdout.write(new URL(process.argv[1]).hostname)}catch{}' "$cand" 2>/dev/null || true)"
+  host_lc="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  case "$host_lc" in
+    anthropic.com|*.anthropic.com) ;;
+    *)
+      if [[ "${C_THRU_LOOSE_UPSTREAM_WARNED:-}" != "1" ]]; then
+        echo "c-thru: Anthropic upstream override ${host:-$cand} — subscription OAuth will be forwarded to this host (Loose policy)." >&2
+        export C_THRU_LOOSE_UPSTREAM_WARNED=1
+      fi
+      ;;
+  esac
+  if [[ -n "${HTTPS_PROXY:-${https_proxy:-}}" || -n "${HTTP_PROXY:-${http_proxy:-}}" ]]; then
+    if [[ "${C_THRU_HTTPS_PROXY_UPSTREAM_WARNED:-}" != "1" ]]; then
+      echo "c-thru: WARN — HTTPS_PROXY is set but claude-proxy does not use CONNECT; corporate TLS may need NODE_EXTRA_CA_CERTS" >&2
+      export C_THRU_HTTPS_PROXY_UPSTREAM_WARNED=1
+    fi
+  fi
+  return 0
+}
+
+# True when an Anthropic upstream override is active for this launch.
+anthropic_upstream_override_active() {
+  [[ -n "${CLAUDE_PROXY_ANTHROPIC_UPSTREAM:-}" ]]
+}
+
+# Keep-alive / ensure reuse: live /ping fingerprint must match desired.
+# Desired uses cthru_desired_anthropic_upstream_fingerprint (explicit export or
+# hash of CLAUDE_PROXY_ANTHROPIC_UPSTREAM) — same derivation as ensure-on-port.
+# Symmetric via cthru_upstream_fingerprints_equal in c-thru-lib.sh.
+proxy_upstream_fingerprint_matches() {
+  local ping_json="$1"
+  local desired live=""
+  desired="$(cthru_desired_anthropic_upstream_fingerprint)"
+  live="$(cthru_upstream_fingerprint_from_ping_json "$ping_json")"
+  cthru_upstream_fingerprints_equal "$desired" "$live"
+}
+
 proxy_logging_enabled() {
   [[ -n "${CLAUDE_PROXY_LOG_FILE:-}" || -n "${CLAUDE_PROXY_LOG_DIR:-}" ]]
 }
@@ -3318,7 +3556,8 @@ ensure_proxy_running() {
     ping_ok="$(printf '%s' "$ping_json" | jq -r '.ok // false' 2>/dev/null || echo false)"
     existing_config="$(printf '%s' "$ping_json" | jq -r '.config_path // empty' 2>/dev/null || true)"
     existing_pid="$(printf '%s' "$ping_json" | jq -r '.pid // empty' 2>/dev/null || true)"
-    if [[ "$ping_ok" == "true" && "$existing_config" == "${CONFIG:-}" ]]; then
+    if [[ "$ping_ok" == "true" && "$existing_config" == "${CONFIG:-}" ]] \
+        && proxy_upstream_fingerprint_matches "$ping_json"; then
       local _rcfg _rtier _rmode
       _rcfg="$(printf '%s' "$ping_json" | jq -r '.config_path // empty' 2>/dev/null | sed "s|$HOME|~|" || true)"
       _rtier="$(printf '%s' "$ping_json" | jq -r '.active_tier // empty' 2>/dev/null || true)"
@@ -3335,7 +3574,11 @@ ensure_proxy_running() {
       kill_pid="$(proxy_listener_pid "$port" || true)"
     fi
     if [[ -n "$kill_pid" ]]; then
-      echo "c-thru: restarting claude-proxy on :$port due to config mismatch (${existing_config:-<unknown>} != ${CONFIG:-<unset>})" >&2
+      if [[ "$existing_config" != "${CONFIG:-}" ]]; then
+        echo "c-thru: restarting claude-proxy on :$port due to config mismatch (${existing_config:-<unknown>} != ${CONFIG:-<unset>})" >&2
+      else
+        echo "c-thru: restarting claude-proxy on :$port due to Anthropic upstream fingerprint mismatch" >&2
+      fi
       kill "$kill_pid" >/dev/null 2>&1 || true
       wait_proxy_listener_gone "$port" 30 || true
       ping_json=""
@@ -4884,11 +5127,11 @@ get_system_info_summary() {
     "Available models by capability: ${caps_str}." \
     "Use specialized agents as the default execution path.
 
-Before doing non-trivial work, inspect the available Agent definitions. If one description matches, your first substantive action MUST be an Agent delegation to the best matching named specialist. Do not complete matching work inline merely because you can. For multi-phase work, delegate focused phases to their matching specialists.
+Before non-trivial work, inspect Agent descriptions. If one matches, your first substantive action MUST be an Agent delegation to the best named specialist. Do not complete matching work inline. Delegate distinct phases only when needed.
 
-Choose by description, not by model alias. Prefer named c-thru fleet agents (role specialists and brand leaves from --agents) over Claude Code's generic built-in subagent types such as general-purpose. Fleet brand leaves may reuse short names like opus/sonnet/haiku/fable — those are c-thru brand leaves (name-gated opinion routes), not a reason to avoid spawning them. Answer inline only for trivial conversation or when no specialist description fits.
+Choose by description, not model alias. Never substitute generic built-in agent types for a matching named c-thru fleet agent. Short names such as opus/sonnet/haiku/fable are fleet brand leaves. Answer inline only for trivial conversation or when no specialist fits.
 
-Named brand agents (opus, sonnet, haiku, fable, grok, deepseek, qwen, kimi, gemini, sol, terra, luna, codex, devstral, glm, gemma, phi, gpt-oss, nemotron, minimax, hermes, mistral, and full-name aliases from config/brand-agents.json): when the user asks to \"ask <name> …\" for an opinion or second take, spawn that fleet brand leaf once (subagent_type equals the brand id) with the user question and report its answer. Do not answer as that brand yourself, and do not chain further agents for the same question. Codex family (sol/terra/luna/codex) uses OpenAI API via OPENAI_API_KEY — not the Codex CLI subscription path. Multi-model panel → advisors skill/agent, not a single brand leaf. For Grok multi-file implement/fix/review work, prefer the external Grok CLI (grok-cc) or coder — not the grok brand leaf.
+Named-brand requests: for opus, sonnet, haiku, fable, grok, deepseek, qwen, kimi, gemini, sol, terra, luna, codex, devstral, glm, gemma, phi, gpt-oss, nemotron, minimax, hermes, mistral, or a full-name catalog alias, spawn that exact fleet leaf once and report its answer. Do not impersonate it or chain another leaf. Codex leaves use the OpenAI API, not the Codex subscription CLI. Multi-model panel → advisors. Grok multi-file work → grok-cc or coder.
 
 Keep each delegated task explicit and self-contained. Do not rely on shared context.
 
@@ -4998,6 +5241,20 @@ debug_print_final_claude_command() {
 
 run_real_claude() {
   local -a cmd=("$@")
+  case "${C_THRU_ANTHROPIC_AUTH_MODE:-auto}" in
+    subscription)
+      # Defense in depth: provider setup must not reintroduce a metered key
+      # after the startup-time credential split.
+      unset ANTHROPIC_API_KEY
+      ;;
+    api)
+      unset ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+      if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+        echo "c-thru: C_THRU_ANTHROPIC_AUTH_MODE=api requires ANTHROPIC_API_KEY" >&2
+        return 2
+      fi
+      ;;
+  esac
   local url="${ANTHROPIC_BASE_URL:-}"
   local tok="${ANTHROPIC_AUTH_TOKEN:-}"
   local ec
@@ -5495,6 +5752,12 @@ cmd_restart() {
   local force=0
   [[ "${2:-}" == "--force" ]] && force=1
 
+  # Preserve Anthropic transport override across respawn (egress / gateway).
+  # Early subcommand path never reaches the main-path resolve at launch time.
+  # Uses ambient snapshot + env (CLI --anthropic-upstream is parsed later on
+  # the chat path; for restart prefer C_THRU_ANTHROPIC_UPSTREAM= or ambient + trust).
+  resolve_and_export_anthropic_upstream || return 1
+
   local pid_file="$CLAUDE_PROFILE_DIR/proxy.pid"
   local proxy_pid=""
   local old_port=""
@@ -5762,6 +6025,17 @@ while [[ $i -lt $n ]]; do
     --best-opensource)         export CLAUDE_LLM_MODE="best-cloud-oss"; i=$((i + 1)) ;;
     --offline)                 export CLAUDE_LLM_MODE="best-local-oss"; i=$((i + 1)) ;;
     --bypass-proxy)     export CLAUDE_PROXY_BYPASS=1; i=$((i + 1)) ;;
+    --anthropic-upstream=*)
+      C_THRU_CLI_ANTHROPIC_UPSTREAM="${a#--anthropic-upstream=}"
+      i=$((i + 1)) ;;
+    --anthropic-upstream)
+      if [[ $((i+1)) -lt $n ]]; then _w="$(cthru_flag_width "$a" "${ORIG_ARGS[i+1]}" 1)"; else _w="$(cthru_flag_width "$a" "" 0)"; fi
+      if [[ "$_w" == "2" ]]; then
+        C_THRU_CLI_ANTHROPIC_UPSTREAM="${ORIG_ARGS[i+1]}"
+        i=$((i + _w))
+      else
+        echo "c-thru: --anthropic-upstream requires a URL" >&2; exit 1
+      fi ;;
     --print-routing | --dry-run)  print_routing_only=1; i=$((i + 1)) ;;
     --thinking | --thinking=*)  export C_THRU_THINKING=1; i=$((i + 1)) ;;
     --journal)          export CLAUDE_PROXY_JOURNAL=1; i=$((i + 1)) ;;
@@ -5917,11 +6191,20 @@ elif [[ -n "$route_name" ]]; then
   MODEL="$_resolved"
 fi
 
-# Lift Claude Code's subscription OAuth out of the keychain into the env so it
-# survives the c-thru → proxy → Anthropic hop. Skipped on --bypass-proxy: in
-# that path claude talks to api.anthropic.com directly and reads keychain itself
-# (preserving auto-refresh). On every other path we set ANTHROPIC_BASE_URL to
-# the proxy, which suppresses Claude Code's keychain lookup — so we must inject.
+# Ambient / CLI Anthropic transport override for claude-proxy (Claude still uses
+# loopback). Product #2 Loose: resolve before OAuth inject so inject still runs
+# when the override host is a corporate gateway (no inject skip).
+if [[ "${CLAUDE_PROXY_BYPASS:-}" != "1" ]]; then
+  resolve_and_export_anthropic_upstream || exit 1
+fi
+
+# Lift Claude Code's subscription OAuth out of the keychain into the env for a
+# stable c-thru → proxy → Anthropic hop. Skipped on --bypass-proxy, where
+# Claude talks to api.anthropic.com directly. Current Claude Code can also use
+# saved login with a custom base URL, but injection remains the compatibility
+# default; C_THRU_NO_OAUTH_INJECT=1 opts into Claude-managed selection.
+# #2 Loose: inject still runs when CLAUDE_PROXY_ANTHROPIC_UPSTREAM is a non-
+# anthropic.com gateway (Bearer is forwarded via transport/identity split).
 [[ "${CLAUDE_PROXY_BYPASS:-}" != "1" ]] && inject_subscription_oauth_from_store
 
 # No explicit/default model: transparent proxy fallback (legacy behavior) + real claude binary.
@@ -6015,10 +6298,10 @@ apply_provider_block() {
       # "ollama" is a sentinel meaning "the route targets an Ollama-style backend
       # via the proxy". The proxy injects Bearer ollama itself toward Ollama
       # (applyOutboundAuth). We deliberately do NOT export a placeholder
-      # ANTHROPIC_AUTH_TOKEN here: doing so would shadow Claude Code's keychain
-      # OAuth on Anthropic-fallback hops, where the proxy forwards the incoming
-      # Bearer verbatim to api.anthropic.com (bearer_priority profile). Leaving
-      # the env clean lets Claude Code's own OAuth flow run end-to-end.
+      # ANTHROPIC_AUTH_TOKEN here: the subscription token may already have been
+      # injected before route resolution, and replacing it would break
+      # Anthropic-fallback hops. With C_THRU_NO_OAUTH_INJECT=1, current Claude
+      # Code may instead select its saved login for the custom proxy base URL.
       :
     else
       # Explicit non-"ollama" auth_token from the route is treated as a deliberate override.
@@ -6103,6 +6386,10 @@ apply_resolved_backend() {
     OLLAMA_BACKEND_URL="$BASE_URL"
     ensure_proxy_http_base || exit 1
     apply_ollama_client_block "$ENSURED_PROXY_HTTP_BASE" "" "{}"
+    # Ambient-only API key policy on every proxy path (ollama/gemini/local too).
+    # Without this, default best-cloud-oss → ollama_cloud never ran ensure_proxy_client_api_key,
+    # so C_THRU_PROXY_PLACEHOLDER_KEY=1 was a no-op on the common live route.
+    ensure_proxy_client_api_key
     OLLAMA_CLI_KEY="$(ollama_secret_from_backend_json "$backend_json")"
     ensure_ollama_running "$effective_model" "$OLLAMA_BACKEND_URL" "$OLLAMA_CLI_KEY" "active" "$backend_id"
     [[ "$OLLAMA_PREP_SWEEP_STARTED" != "1" ]] && run_background_ollama_prep_sweep "$effective_model" "$(ollama_cli_host "$OLLAMA_BACKEND_URL")" "$OLLAMA_CLI_KEY" "$backend_id"
@@ -6124,17 +6411,30 @@ apply_resolved_backend() {
       # proxy can't be brought up, fall back to direct so the session still launches
       # (per-agent routing is lost for THIS session only) rather than failing — the
       # proxy is load-bearing for everyday sessions, so a hiccup must degrade, not block.
+      # EXCEPTION (F1): when Anthropic upstream override is active, never fall
+      # through to map api.anthropic.com (would discard the corporate gateway).
       if ensure_proxy_http_base; then
         export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
         # Same ambient-only choke as transparent/brand paths: never invent
         # ANTHROPIC_API_KEY; honor collar key or opt-in C_THRU_PROXY_PLACEHOLDER_KEY=1.
         ensure_proxy_client_api_key
+      elif anthropic_upstream_override_active; then
+        echo "c-thru: fatal — Anthropic upstream override is active but local proxy failed to start" >&2
+        echo "c-thru: refusing direct map Anthropic path (would discard gateway ${CLAUDE_PROXY_ANTHROPIC_UPSTREAM})" >&2
+        echo "c-thru: fix the proxy (see ~/.claude/proxy.log) or unset the override / --anthropic-upstream" >&2
+        exit 1
       else
         echo "c-thru: WARN — proxy unavailable; falling back to direct Anthropic (per-agent routing disabled this session)" >&2
         apply_provider_block "$BASE_URL" "" "$API_KEY" "" "{}"
       fi
+    elif anthropic_upstream_override_active; then
+      # U2: no hybrid PROXY_ALWAYS=0 + override (half-direct discards gateway).
+      echo "c-thru: fatal — Anthropic upstream override requires C_THRU_PROXY_ALWAYS=1 (or unset)" >&2
+      echo "c-thru: remove C_THRU_PROXY_ALWAYS=0 or unset the upstream override" >&2
+      exit 1
     elif final_model_has_fallback_strategy "$effective_model"; then
       apply_proxy_fallback_client_block "" "{}"
+      ensure_proxy_client_api_key
     else
       apply_provider_block "$BASE_URL" "" "$API_KEY" "" "{}"
     fi

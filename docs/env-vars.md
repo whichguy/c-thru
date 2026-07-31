@@ -45,8 +45,17 @@ list: [Claude Code env-vars](https://code.claude.com/docs/en/env-vars). Gateway 
 
 | Variable | Effect when using c-thru |
 |---|---|
-| `ANTHROPIC_BASE_URL` | Set by `c-thru` to the proxy (often with `/s/<session-id>` prefix). Routes all Messages traffic through the proxy. |
-| `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` | Credential Claude Code sends to the proxy; proxy rewrites outbound auth per endpoint (`applyOutboundAuth`). |
+| `ANTHROPIC_BASE_URL` | **Client (Claude):** set by `c-thru` to the **local** proxy (often with `/s/<session-id>` prefix). Routes all Messages traffic through the proxy. **Caller ambient value:** snapshotted at launch; adopted as proxy transport only when trusted (see `C_THRU_TRUST_AMBIENT_UPSTREAM`). Claude still always sees loopback. |
+| `C_THRU_ANTHROPIC_UPSTREAM` / `--anthropic-upstream` | Explicit Anthropic **transport** URL for `claude-proxy` (highest precedence after CLI). Does not change Claude's `ANTHROPIC_BASE_URL` (loopback). Only applies to endpoints `anthropic` and `anthropic_subscription`. No ambient-trust gate. |
+| `CLAUDE_PROXY_ANTHROPIC_UPSTREAM` | Proxy child env: transport override URL. Exported by the launcher so SessionStart / ensure-on-port inherit it. `/ping` reports `anthropic_upstream_fingerprint` (hash only). Keep-alive / ensure-on-port reuse is **symmetric**: empty↔empty or equal hashes only. Hooks with **no** desired override refuse reuse of a gateway-bound proxy **without killing** it. **SIGHUP `c-thru reload` does not re-read this env** (parsed once at process start); re-apply via new launch or `c-thru restart` (which re-resolves ambient/env). |
+| `C_THRU_TRUST_AMBIENT_UPSTREAM=1` | **Opt-in:** allow ambient `ANTHROPIC_BASE_URL` (caller shell) to become `CLAUDE_PROXY_ANTHROPIC_UPSTREAM`. Default is **off** so leftover direnv/mock URLs cannot forward subscription OAuth to an unvetted host. Explicit `--anthropic-upstream` / `C_THRU_ANTHROPIC_UPSTREAM` do not need this. |
+| `C_THRU_IGNORE_AMBIENT_ANTHROPIC_BASE_URL=1` | Always skip ambient BASE_URL as upstream (even if trust is set). |
+| `C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM=1` | Allow plain `http://` non-loopback upstream override (default: refuse). |
+| `C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM=1` | Allow loopback upstream override (hermetic tests only; default: refuse). |
+| `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` | Credential Claude Code sends to the proxy; proxy rewrites outbound auth per endpoint (`applyOutboundAuth`). **Ambient-only API key:** c-thru does not invent `ANTHROPIC_API_KEY` by default (subscription via OAuth inject). A key the **caller shell** already set is preserved (metered opt-in). A real ambient key also skips OAuth inject. See `docs/subscription-auth.md`. **Upstream override (#2 Loose):** keychain OAuth inject still runs when the override host is not `*.anthropic.com`; the gateway receives the same Bearer. Only point the override at hosts you trust. |
+| `C_THRU_PROXY_PLACEHOLDER_KEY` | Opt-in only. Default / unset / `off` / `auto`: **never** invent `ANTHROPIC_API_KEY`. Set to `1` / `true` / `on` to export the legacy `proxied-placeholder` client gate stuffing when neither AUTH_TOKEN nor a real API key is present (local/Ollama-oriented). Do not use for subscription Anthropic traffic. |
+| `C_THRU_ANTHROPIC_AUTH_MODE` | Anthropic credential policy applied before the proxy and Claude launch: `auto` (default) preserves an ambient API key, `subscription` removes `ANTHROPIC_API_KEY`, and `api` removes Bearer/OAuth env signals and requires `ANTHROPIC_API_KEY`. |
+| `C_THRU_NO_OAUTH_INJECT=1` | Skip lifting Claude Code keychain OAuth into `ANTHROPIC_AUTH_TOKEN` (tests / special cases). |
 | `ENABLE_TOOL_SEARCH=true` | Re-enables MCP tool search. Off by default on non-first-party base URLs. Safe with c-thru: Anthropic passthrough does not strip `tool_reference` blocks (pinned in `test/proxy-gateway-protocol.test.js`). |
 | `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` | Opt-in: Claude Code GETs the proxy’s `/v1/models` and adds matching IDs to `/model`. Only IDs starting with `claude` or `anthropic` are kept — use `claude-via-*` aliases (default endpoints: `gemini_ai`, `gemini_vertex`, `xai`). |
 | `CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=1` | Opt-in fine-grained tool streaming (off by default on custom base URL). |
@@ -134,4 +143,3 @@ rg 'anthropic\.upstream\.(error|midstream_error)|xai\.sanitize' ~/.claude/proxy.
 | `C_THRU_ALLOW_UNPINNED=1` | Allow bootstrap when pin tag/ref is missing or version undiscoverable (stamps **actual** SHA; never pretends the pin landed). |
 | `C_THRU_GIT_REMOTE` | Override clone URL for `~/.claude/c-thru-src`. |
 | `C_THRU_FORCE_BOOTSTRAP=1` | Force re-link even if stamp healthy. |
-

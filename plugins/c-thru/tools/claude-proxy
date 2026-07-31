@@ -69,7 +69,14 @@ const FLAG_ENV_MAP = {
   '--profile':     'CLAUDE_LLM_PROFILE',
   '--mode':        'CLAUDE_LLM_MODE',
   '--port':        'CLAUDE_PROXY_PORT',
+  // Transport-only Anthropic upstream (corporate gateway). Does not change
+  // endpoint identity / auth profile — see normalizeBackend upstream_url.
+  '--anthropic-upstream': 'CLAUDE_PROXY_ANTHROPIC_UPSTREAM',
 };
+
+// Endpoint ids that may honor CLAUDE_PROXY_ANTHROPIC_UPSTREAM (transport only).
+// Never apply to openrouter / ollama / format:"anthropic" third parties.
+const ANTHROPIC_UPSTREAM_OVERRIDE_IDS = new Set(['anthropic', 'anthropic_subscription']);
 const UNRECOGNIZED_CLI_FLAGS = [];
 // Permissive: unknown flags are buffered (logged once proxyLog is up at
 // L1387) rather than rejected — hard-fail bricks the proxy on a future-flag
@@ -103,6 +110,91 @@ function parseCliFlags(argv) {
   }
 }
 parseCliFlags(process.argv.slice(2));
+
+// ── Anthropic upstream transport override (Loose OAuth policy) ───────────────
+// Changes where Anthropic-family bytes go; does not rewrite backend.url, so
+// deriveAuthProfile / bearer_priority still key off map identity (api.anthropic.com).
+// Launcher eligibility is authoritative for ambient BASE_URL; proxy re-validates
+// so standalone --anthropic-upstream cannot bypass host rules.
+
+function isLoopbackHostname(host) {
+  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!h) return false;
+  if (h === 'localhost' || h === '0.0.0.0' || h === '::' || h === '::1') return true;
+  if (h.endsWith('.localhost')) return true;
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (h.startsWith('::ffff:127.')) return true;
+  return false;
+}
+
+function isAnthropicComHostname(host) {
+  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
+  return h === 'anthropic.com' || h.endsWith('.anthropic.com');
+}
+
+function fingerprintUpstreamUrl(urlStr) {
+  return crypto.createHash('sha256').update(String(urlStr)).digest('hex').slice(0, 16);
+}
+
+// Returns { url, fingerprint } | { error } | null (no-op / empty).
+// opts.forceAnthropicCom: true for explicit CLI (may still point at api.anthropic.com).
+function parseAnthropicUpstreamOverride(raw, opts = {}) {
+  const forceAnthropicCom = opts.forceAnthropicCom === true;
+  const allowInsecure = opts.allowInsecure === true
+    || process.env.C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM === '1';
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  let u;
+  try {
+    u = new URL(s);
+  } catch {
+    return { error: 'invalid_url', message: `invalid Anthropic upstream URL: ${s}` };
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    return { error: 'bad_scheme', message: `Anthropic upstream must be http(s): ${s}` };
+  }
+  if (isLoopbackHostname(u.hostname)
+      && process.env.C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM !== '1') {
+    return { error: 'loopback', message: `Anthropic upstream refuses loopback host: ${u.hostname}` };
+  }
+  // Ambient default map host is a no-op (avoid dual code paths) unless forced.
+  if (!forceAnthropicCom && isAnthropicComHostname(u.hostname)
+      && (u.pathname === '/' || u.pathname === '')
+      && !u.search && !u.hash) {
+    return null;
+  }
+  // Plain http to non-loopback needs explicit opt-in (OAuth on the wire).
+  // Loopback http is allowed only with C_THRU_ALLOW_LOOPBACK_… (hermetic tests);
+  // plaintext to 127.0.0.1 does not require the insecure flag (matches launcher).
+  if (u.protocol === 'http:' && !allowInsecure && !isLoopbackHostname(u.hostname)) {
+    return {
+      error: 'insecure_http',
+      message: 'Anthropic upstream refuses plain http:// without C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM=1',
+    };
+  }
+  // Preserve path prefix (gateway mounts); drop trailing slash on path root only
+  // for fingerprint stability; full href otherwise (no strip of /v1 — M8).
+  const normalized = u.toString();
+  return { url: normalized, fingerprint: fingerprintUpstreamUrl(normalized) };
+}
+
+const _upstreamParse = parseAnthropicUpstreamOverride(
+  process.env.CLAUDE_PROXY_ANTHROPIC_UPSTREAM || '',
+  // Env set by launcher or --anthropic-upstream: treat non-empty as intentional
+  // (including api.anthropic.com when operator forced it via CLI/env).
+  { forceAnthropicCom: true },
+);
+// forceAnthropicCom true above would keep api.anthropic.com — that's fine for
+// explicit CLAUDE_PROXY_ANTHROPIC_UPSTREAM. Loopback / bad scheme still error.
+let ANTHROPIC_UPSTREAM_OVERRIDE = null;
+if (_upstreamParse && _upstreamParse.error) {
+  console.error(`[c-thru] ${ _upstreamParse.message || _upstreamParse.error}`);
+  // Fail closed: do not start with a misconfigured override.
+  process.exit(2);
+} else if (_upstreamParse && _upstreamParse.url) {
+  ANTHROPIC_UPSTREAM_OVERRIDE = _upstreamParse;
+}
 
 // 0 = OS assigns a free port; the actual port is reported via "READY <port>" on stdout.
 // Set CLAUDE_PROXY_PORT to a specific number only when you need a fixed port
@@ -1209,7 +1301,33 @@ function normalizeBackend(id, raw) {
   result.call_style = (raw.call_style != null && VALID_CALL_STYLES.has(raw.call_style))
     ? raw.call_style
     : inferCallStyle(format);
+  // Transport override: where bytes go. Identity (url) stays map-canonical so
+  // deriveAuthProfile keeps bearer_priority / subscription for Anthropic family.
+  if (ANTHROPIC_UPSTREAM_OVERRIDE_IDS.has(id) && ANTHROPIC_UPSTREAM_OVERRIDE) {
+    result.upstream_url = ANTHROPIC_UPSTREAM_OVERRIDE.url;
+  }
   return result;
+}
+
+// Origin + optional path prefix for outbound Anthropic-family HTTP.
+// Prefer upstream_url (override transport); fall back to map identity url.
+function backendTransportUrlString(backend) {
+  return (backend && (backend.upstream_url || backend.url)) || '';
+}
+
+// Join backend base pathname with client req.url (Messages + catch-all).
+// No special-case stripping of trailing /v1 (M8 parity with Claude Code join).
+function joinAnthropicUpstreamPath(backend, reqUrl) {
+  const transport = backendTransportUrlString(backend);
+  const targetUrl = new URL(transport);
+  const basePrefix = (targetUrl.pathname === '/' ? '' : targetUrl.pathname.replace(/\/$/, ''));
+  const pathAndQuery = reqUrl || '/';
+  return {
+    targetUrl,
+    isHttps: targetUrl.protocol === 'https:',
+    path: basePrefix + pathAndQuery,
+    basePrefix,
+  };
 }
 
 // Returns true if this backend uses the legacy /api/chat translation path
@@ -1911,8 +2029,7 @@ function forwardToAnthropicCatchAll(req, res) {
   const anthropicCfg = (CONFIG.endpoints || CONFIG.backends || {}).anthropic;
   if (!anthropicCfg) return false;
   const backend = normalizeBackend('anthropic', anthropicCfg);
-  const targetUrl = new URL(backend.url);
-  const isHttps = targetUrl.protocol === 'https:';
+  const { targetUrl, isHttps, path: forwardedPath } = joinAnthropicUpstreamPath(backend, req.url);
   const lib = isHttps ? https : http;
   const fwdHeaders = scrubCthruHeaders(req.headers, {
     preserveClaudeCodeCorrelation: shouldPreserveClaudeCodeCorrelation(backend),
@@ -1982,7 +2099,7 @@ function forwardToAnthropicCatchAll(req, res) {
   const up = lib.request({
     hostname: targetUrl.hostname,
     port: targetUrl.port || (isHttps ? 443 : 80),
-    path: req.url,
+    path: forwardedPath,
     method: req.method,
     headers: fwdHeaders,
   }, upRes => {
@@ -2109,7 +2226,15 @@ function shouldPreserveClaudeCodeCorrelation(backend) {
   if (backend.preserve_claude_code_correlation !== undefined) {
     return backend.preserve_claude_code_correlation === true;
   }
-  const host = String(backendHost(backend) || '').toLowerCase();
+  // Trust-boundary keys off transport host (upstream_url override), not map
+  // identity. Corporate gateways must not receive session/agent correlation
+  // headers unless the operator sets preserve_claude_code_correlation: true.
+  let host = '';
+  try {
+    host = new URL(backendTransportUrlString(backend) || 'http://invalid').hostname.toLowerCase();
+  } catch {
+    host = String(backendHost(backend) || '').toLowerCase();
+  }
   return host === 'anthropic.com' || host.endsWith('.anthropic.com');
 }
 
@@ -2632,8 +2757,9 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     requestMeta.toolsIn = body.tools.length;
   }
 
-  const targetUrl = new URL(backend.url);
-  const isHttps = targetUrl.protocol === 'https:';
+  // Transport vs identity: joinAnthropicUpstreamPath uses upstream_url when set
+  // (corporate gateway) while applyOutboundAuth still sees map-canonical backend.url.
+  const { targetUrl, isHttps, path: forwardedPath, basePrefix } = joinAnthropicUpstreamPath(backend, req.url);
   const lib = isHttps ? https : http;
 
   const headers = scrubCthruHeaders(req.headers, {
@@ -2651,9 +2777,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   // Combine the backend's optional base path with the client's request path.
   // - Anthropic backend url=https://api.anthropic.com -> pathname='/' -> use req.url verbatim ("/v1/messages?beta=true")
   // - OpenRouter backend url=https://openrouter.ai/api/v1 -> pathname='/api/v1' -> prefix req.url ("/api/v1/v1/messages?beta=true")
-  // Treating backend.url as origin+optional-prefix (rather than full endpoint) handles both cases.
-  const basePrefix = (targetUrl.pathname === '/' ? '' : targetUrl.pathname.replace(/\/$/, ''));
-  const forwardedPath = basePrefix + req.url;
+  // - Override upstream_url=https://gw.example/llm -> prefix path on Messages AND catch-all.
+  // Treating transport URL as origin+optional-prefix (rather than full endpoint) handles both cases.
   // Serialize once so Content-Length matches the exact bytes we write (model
   // rewrite + xAI sanitize both change the body after the client Content-Length).
   const outBody = injectSamplingDefaults(wireBody, effectiveModel, requestMeta.capability, backend);
@@ -3836,16 +3961,13 @@ function buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta)
   if (geminiBody && Array.isArray(geminiBody._translationGap) && geminiBody._translationGap.length) {
     h['x-c-thru-translation-gap'] = geminiBody._translationGap.join(',');
   }
-  // Thinking observability: surface auto-enable, budget expansion, and the
+  // Thinking observability: surface auto-enable, the selected level, and the
   // upstream-reported thoughtsTokenCount so callers can see what was paid.
   if (geminiBody && geminiBody._thinkingAutoEnabled) {
     h['x-c-thru-thinking-auto-enabled'] = '1';
   }
   if (geminiBody && typeof geminiBody._thinkingLevel === 'string') {
     h['x-c-thru-thinking-level'] = geminiBody._thinkingLevel;
-  }
-  if (geminiBody && typeof geminiBody._thinkingBudgetAdded === 'number') {
-    h['x-c-thru-thinking-budget-added'] = String(geminiBody._thinkingBudgetAdded);
   }
   if (geminiBody && typeof geminiBody._thinkingTokens === 'number') {
     h['x-c-thru-thinking-tokens'] = String(geminiBody._thinkingTokens);
@@ -4067,14 +4189,16 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
   const isCountTokens = typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens');
   const isStream = !isCountTokens && !!body.stream;
   const geminiBody = mapAnthropicToGemini(body, effectiveModel);
+  const includeThoughtSummaries = !!body?.thinking &&
+    body.thinking.type !== 'disabled' &&
+    body.thinking.display !== 'omitted';
   if (isCountTokens) {
     // countTokens accepts only contents/systemInstruction/tools — strip generationConfig.
     delete geminiBody.generationConfig;
     // Clear thinking telemetry: count_tokens never invokes the model, so
-    // auto-enable / budget-expansion didn't actually happen. Leaking these
+    // auto-enable / level selection didn't actually happen. Leaking these
     // headers would falsely suggest thinking occurred.
     delete geminiBody._thinkingAutoEnabled;
-    delete geminiBody._thinkingBudgetAdded;
     delete geminiBody._thinkingLevel;
   }
   // G4: lazy fire-and-forget context caching. Wave 3 enables this for Vertex
@@ -4311,6 +4435,13 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
               const parts = (candidate.content && candidate.content.parts) || [];
 
               for (const part of parts) {
+                // Gemini may attach the thought signature to the following
+                // text/functionCall part. Capture it before that part closes
+                // the open thinking block so signature_delta is not lost.
+                if (part.thought !== true && part.thoughtSignature &&
+                    openBlockType === 'thinking') {
+                  currentThinkingSignature = part.thoughtSignature;
+                }
                 if (part.thought === true) {
                   // Thinking part: open thinking block lazily, stream as
                   // thinking_delta. Track the most recent thoughtSignature so
@@ -4324,7 +4455,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
                     })}\n\n`);
                     openBlockType = 'thinking';
                   }
-                  if (part.text) {
+                  if (includeThoughtSummaries && part.text) {
                     res.write(`event: content_block_delta\ndata: ${JSON.stringify({
                       type: 'content_block_delta',
                       index: currentBlockIndex,
@@ -4527,14 +4658,8 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           // Anthropic clients expect thinking blocks before any text/tool_use.
           // Partition + reassemble so order is: thinking[] -> text/tool_use[].
           //
-          // G12 emission policy: thought parts only appear here when the client
-          // opted in upstream — mapAnthropicToGemini sets
-          // generationConfig.thinkingConfig.includeThoughts=true iff
-          // body.thinking.type==='enabled' (see L2531). Without that flag Gemini
-          // won't emit thought:true parts, so the "double-render on
-          // non-thinking models" concern is gated at the request-build site,
-          // not here. Pass thought parts through unconditionally so that any
-          // future upstream-initiated thinking still surfaces to the client.
+          // Honor display:"omitted" defensively even if an upstream response
+          // contains a thought part despite includeThoughts:false.
           //
           // thoughtSignature placement varies: Gemini 3+ may attach it to a
           // sibling text/functionCall part rather than the thought part itself.
@@ -4552,7 +4677,7 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
             if (p.thought === true) {
               thinkingBlocks.push({
                 type: 'thinking',
-                thinking: p.text || '',
+                thinking: includeThoughtSummaries ? (p.text || '') : '',
                 signature: p.thoughtSignature || firstSeenSignature || '',
               });
               continue;
@@ -4863,34 +4988,46 @@ function isGemini3FamilyModel(modelName) {
     || modelName === 'gemini-flash';
 }
 
-// Map Anthropic numeric `budget_tokens` to Gemini's `thinkingLevel` enum.
-// Per-model support varies: gemini-3-pro supports only 'low'/'high';
-// gemini-3.1-pro adds 'medium'; gemini-3-flash adds 'minimal'. We pick the
-// nearest level the target model supports.
-function budgetToThinkingLevel(budgetTokens, modelName) {
-  // Auto-enable default (no explicit budget) → 'low'.
-  if (budgetTokens == null) return 'low';
-  const supportsMinimal = /^gemini-3.*flash/i.test(modelName);
-  // gemini-3-pro (NOT gemini-3.1-pro) supports only low/high — no medium.
-  const supportsMedium = !/^gemini-3-pro($|-)/i.test(modelName);
-  if (budgetTokens === 0) return supportsMinimal ? 'minimal' : 'low';
-  if (budgetTokens <= 2048) return 'low';
-  if (budgetTokens >= 16384) return 'high';
-  return supportsMedium ? 'medium' : 'high';
+// Current Gemini 3 thinking levels vary by model. Keep exceptional image and
+// legacy Pro surfaces explicit so a broad gemini-3* route never sends an enum
+// the selected model rejects with 400.
+function geminiThinkingLevelCapabilities(modelName) {
+  const name = String(modelName || '').toLowerCase();
+  if (/^gemini-3\.1-flash-lite-image(?:-|$)/.test(name)) {
+    return new Set(['minimal', 'high']);
+  }
+  if (/^gemini-3-pro(?:-|$)/.test(name)) {
+    return new Set(['low', 'high']);
+  }
+  if (name === 'gemini-pro' || name === 'gemini-pro-latest' ||
+      /^gemini-3(?:\.\d+)?-pro(?:-|$)/.test(name)) {
+    return new Set(['low', 'medium', 'high']);
+  }
+  return new Set(['minimal', 'low', 'medium', 'high']);
 }
 
-// Approximate per-level budget for maxOutputTokens expansion. Gemini 3
-// counts thinking against maxOutputTokens, so when caller set max_tokens we
-// expand by an estimate of the level's typical consumption. Conservative
-// upper-bound estimates so visible answers don't get truncated.
-function thinkingLevelToApproxBudget(level) {
-  switch (level) {
-    case 'minimal': return 256;
-    case 'low':     return 2048;
-    case 'medium':  return 8192;
-    case 'high':    return 16384;
-    default:        return 1024;
+function coerceGeminiThinkingLevel(level, modelName) {
+  const supported = geminiThinkingLevelCapabilities(modelName);
+  if (supported.has(level)) return { level, exact: true };
+  if (level === 'minimal' && supported.has('low')) {
+    return { level: 'low', exact: false };
   }
+  if (level === 'low' && supported.has('minimal')) {
+    return { level: 'minimal', exact: false };
+  }
+  return { level: 'high', exact: false };
+}
+
+// Map Anthropic numeric `budget_tokens` to the nearest valid Gemini 3 level.
+function budgetToThinkingLevel(budgetTokens, modelName) {
+  let requested = 'low';
+  if (budgetTokens === 0) requested = 'minimal';
+  else if (budgetTokens != null && budgetTokens > 2048 && budgetTokens < 16384) {
+    requested = 'medium';
+  } else if (budgetTokens != null && budgetTokens >= 16384) {
+    requested = 'high';
+  }
+  return coerceGeminiThinkingLevel(requested, modelName);
 }
 
 const CLAUDE_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -4899,18 +5036,14 @@ const CLAUDE_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 // thinkingLevel surface. `exact:false` means the nearest supported Gemini
 // level was chosen and the response must advertise a translation gap.
 function effortToGeminiThinkingLevel(effort, modelName) {
-  const supportsMedium = !/^gemini-3-pro($|-)/i.test(modelName);
-  if (effort === 'low' || effort === 'high') {
-    return { level: effort, exact: true };
-  }
-  if (effort === 'medium') {
-    return supportsMedium
-      ? { level: 'medium', exact: true }
-      : { level: 'high', exact: false };
-  }
+  const valid = CLAUDE_EFFORT_LEVELS.has(effort);
+  const requested = effort === 'low' || effort === 'medium'
+    ? effort
+    : 'high';
+  const mapped = coerceGeminiThinkingLevel(requested, modelName);
   // Gemini exposes no xhigh/max level. Invalid direct-client values use the
   // same bounded fallback as the Responses mapper and remain observable.
-  return { level: 'high', exact: false };
+  return { level: mapped.level, exact: valid && mapped.exact && effort === requested };
 }
 
 // Gemini 2.5 generateContent has only a numeric thinkingBudget. These values
@@ -4941,9 +5074,9 @@ function mapAnthropicToGemini(body, effectiveModel) {
   // silently ignore — no model-version gate. Caller-wins: omit if absent so
   // we don't override capability_sampling_defaults.
   //
-  // Auto-enable on Gemini 3 Pro: the model's flagship reasoning is gated
-  // behind opt-in upstream, so absent any thinking field we default it on
-  // with a 1024-token budget. Explicit {type:'disabled'} respected as opt-out.
+  // When no thinking control is present, pin Gemini 3 Pro to low rather than
+  // inheriting its higher dynamic default. Explicit disabled is translated to
+  // the nearest model-supported off/low setting below.
   const outputConfig = body.output_config;
   const requestedEffort = outputConfig && typeof outputConfig === 'object'
     ? outputConfig.effort
@@ -4970,6 +5103,11 @@ function mapAnthropicToGemini(body, effectiveModel) {
     || effectiveModel === 'gemini-pro'
   );
   const explicitDisabled = body.thinking && body.thinking.type === 'disabled';
+  const hasExplicitBudget = thinkingEnabled && body.thinking?.budget_tokens != null;
+  if (thinkingEnabled) {
+    const parsedBudget = Number(body.thinking?.budget_tokens);
+    thinkingBudget = Number.isFinite(parsedBudget) ? parsedBudget : 1024;
+  }
   if (!explicitDisabled && hasRequestedEffort) {
     // Claude Code emits agent frontmatter `effort` as output_config.effort.
     // Explicit thinking:{type:"disabled"} remains the higher-priority opt-out.
@@ -4979,20 +5117,45 @@ function mapAnthropicToGemini(body, effectiveModel) {
     thinkingEnabled = true;
     autoEnabled = true;
     thinkingBudget = 1024;
-  } else if (thinkingEnabled) {
-    thinkingBudget = Number(body.thinking.budget_tokens) || 1024;
   }
-  if (thinkingEnabled) {
+  const useLevel = isGemini3FamilyModel(effectiveModel);
+  const includeThoughts = !!body.thinking &&
+    body.thinking.type !== 'disabled' &&
+    body.thinking.display !== 'omitted';
+
+  if (explicitDisabled) {
+    // Omission is not an opt-out: Gemini thinking models reason dynamically by
+    // default. Send the nearest supported off/low control and make every
+    // inexact disable visible to callers.
+    if (hasRequestedEffort) translationGap.add('output_config.effort');
+    if (useLevel) {
+      const mapped = coerceGeminiThinkingLevel('minimal', effectiveModel);
+      geminiReq.generationConfig.thinkingConfig = {
+        thinkingLevel: mapped.level,
+        includeThoughts: false,
+      };
+      translationGap.add('thinking.type:disabled');
+      Object.defineProperty(geminiReq, '_thinkingLevel', {
+        value: mapped.level, enumerable: false, configurable: true,
+      });
+    } else {
+      const cannotDisable = /^gemini-2\.5-pro(?:-|$)/i.test(String(effectiveModel || ''));
+      thinkingBudget = cannotDisable ? 128 : 0;
+      geminiReq.generationConfig.thinkingConfig = {
+        thinkingBudget,
+        includeThoughts: false,
+      };
+      if (cannotDisable) translationGap.add('thinking.type:disabled');
+    }
+  } else if (thinkingEnabled) {
     // Gemini 3+ uses `thinkingLevel` (low/medium/high/minimal); older
     // Gemini models keep the legacy numeric `thinkingBudget`. Mixing both
     // returns 400 from upstream.
-    const useLevel = isGemini3FamilyModel(effectiveModel);
-    let appliedBudget;
     if (useLevel) {
       // Preserve explicit 0 (→ 'minimal' on flash); only treat absent budget
       // as null. `|| null` would coerce 0 to null and lose the signal.
       let level;
-      if (hasRequestedEffort) {
+      if (hasRequestedEffort && !hasExplicitBudget) {
         const mapped = effortToGeminiThinkingLevel(requestedEffort, effectiveModel);
         level = mapped.level;
         if (!validRequestedEffort || !mapped.exact) {
@@ -5003,43 +5166,44 @@ function mapAnthropicToGemini(body, effectiveModel) {
         const budgetArg = autoEnabled || explicitBudget == null
           ? null
           : Number(explicitBudget);
-        level = budgetToThinkingLevel(budgetArg, effectiveModel);
+        const mapped = budgetToThinkingLevel(budgetArg, effectiveModel);
+        level = mapped.level;
+        if (!mapped.exact) translationGap.add('thinking.budget_tokens');
+        if (hasRequestedEffort) translationGap.add('output_config.effort');
       }
       geminiReq.generationConfig.thinkingConfig = {
         thinkingLevel: level,
-        includeThoughts: true,
+        includeThoughts,
       };
-      appliedBudget = thinkingLevelToApproxBudget(level);
       Object.defineProperty(geminiReq, '_thinkingLevel', {
         value: level, enumerable: false, configurable: true,
       });
     } else {
-      if (hasRequestedEffort) {
+      if (hasRequestedEffort && !hasExplicitBudget) {
         thinkingBudget = effortToGemini25Budget(requestedEffort);
         // Relative effort mapped to a fixed numeric budget is approximate.
+        translationGap.add('output_config.effort');
+      } else if (hasRequestedEffort) {
+        // A fixed caller budget is the stronger constraint. Gemini has no
+        // second control with which to preserve Anthropic effort as well.
         translationGap.add('output_config.effort');
       }
       geminiReq.generationConfig.thinkingConfig = {
         thinkingBudget,
-        includeThoughts: true,
+        includeThoughts,
       };
-      appliedBudget = thinkingBudget;
-    }
-    // Budget arithmetic: Gemini 3 counts thinking against maxOutputTokens.
-    // Expand the cap by the (approximate, level-derived) budget so
-    // max_tokens means "visible answer length" — matching Anthropic
-    // semantics — rather than "pooled budget".
-    if (body.max_tokens != null) {
-      geminiReq.generationConfig.maxOutputTokens = Number(body.max_tokens) + appliedBudget;
-      Object.defineProperty(geminiReq, '_thinkingBudgetAdded', {
-        value: appliedBudget, enumerable: false, configurable: true,
-      });
     }
     if (autoEnabled) {
       Object.defineProperty(geminiReq, '_thinkingAutoEnabled', {
         value: true, enumerable: false, configurable: true,
       });
     }
+  }
+  if (body.thinking?.display === 'omitted' &&
+      !geminiReq.generationConfig.thinkingConfig) {
+    // Display is independent of depth. Preserve it even when adaptive thinking
+    // is otherwise left at the Gemini model default.
+    geminiReq.generationConfig.thinkingConfig = { includeThoughts: false };
   }
 
   if (body.system) {
@@ -6778,6 +6942,12 @@ const server = http.createServer((req, res) => {
           version: AGENT_TOKEN_IDENTITY_VERSION,
           fingerprint: AGENT_TOKEN_FINGERPRINT,
         },
+        // Fingerprint only (no raw gateway host) — keep-alive / ensure-on-port
+        // compare this to the launcher's desired override before reuse.
+        anthropic_upstream_override: !!ANTHROPIC_UPSTREAM_OVERRIDE,
+        anthropic_upstream_fingerprint: ANTHROPIC_UPSTREAM_OVERRIDE
+          ? ANTHROPIC_UPSTREAM_OVERRIDE.fingerprint
+          : '',
         plan_dashboard: DASHBOARD_URL ? DASHBOARD_URL.replace('/c-thru/dashboard', '/c-thru/plan/dashboard') : '',
         gemini_cache: { ...GEMINI_CACHE_STATS, entries: GEMINI_CACHE_MAP.size },
         vertex_env_ok: !!(process.env.GOOGLE_CLOUD_REGION && process.env.GOOGLE_CLOUD_PROJECT),

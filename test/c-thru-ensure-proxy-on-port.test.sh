@@ -182,6 +182,82 @@ fi
 rm -f "$BAD_MAP"
 rm -rf "${TMPDIR:-/tmp}/c-thru-ensure-fail-$$"
 
+# ── 7. R2: fingerprint mismatch kills and respawns with new override ─────────
+echo "7. wrong upstream fingerprint → kill + respawn (R2)"
+if ! command -v node >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+  echo "  SKIP  node/curl missing"
+else
+  FREE_FP="$(node -e 'const n=require("net");const s=n.createServer();s.listen(0,"127.0.0.1",()=>{process.stdout.write(String(s.address().port));s.close();})')"
+  CLAUDE_DIR_FP="${TMPDIR:-/tmp}/c-thru-ensure-fp-$$"
+  mkdir -p "$CLAUDE_DIR_FP"
+  export CLAUDE_MODEL_MAP_PATH="$MAP"
+  export CLAUDE_DIR="$CLAUDE_DIR_FP"
+  unset ANTHROPIC_BASE_URL
+  export ANTHROPIC_BASE_URL="http://127.0.0.1:${FREE_FP}"
+
+  URL_A="https://gw-a.example.com/anthropic"
+  URL_B="https://gw-b.example.com/anthropic"
+  FP_A="$(node -e 'const c=require("crypto");let s=process.argv[1];try{s=new URL(s).toString()}catch{}process.stdout.write(c.createHash("sha256").update(s).digest("hex").slice(0,16))' "$URL_A")"
+  FP_B="$(node -e 'const c=require("crypto");let s=process.argv[1];try{s=new URL(s).toString()}catch{}process.stdout.write(c.createHash("sha256").update(s).digest("hex").slice(0,16))' "$URL_B")"
+
+  # Spawn with override A
+  export CLAUDE_PROXY_ANTHROPIC_UPSTREAM="$URL_A"
+  export C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT="$FP_A"
+  if ! cthru_ensure_proxy_on_port "$FREE_FP"; then
+    fail "initial spawn with override A"
+  else
+    LIVE_A="$(curl -sf --max-time 2 "http://127.0.0.1:${FREE_FP}/ping" 2>/dev/null || true)"
+    LIVE_FP_A="$(node -e 'try{const j=JSON.parse(process.argv[1]||"{}");process.stdout.write(j.anthropic_upstream_fingerprint||"")}catch{}' "$LIVE_A" 2>/dev/null || true)"
+    if [[ "$LIVE_FP_A" == "$FP_A" ]]; then
+      pass "live fingerprint is A after first ensure"
+    else
+      fail "live fingerprint A (got=$LIVE_FP_A expect=$FP_A)"
+    fi
+    PID_A="$(node -e 'try{const j=JSON.parse(process.argv[1]||"{}");if(j.pid)process.stdout.write(String(j.pid))}catch{}' "$LIVE_A" 2>/dev/null || true)"
+
+    # Desired B — should kill A and respawn
+    export CLAUDE_PROXY_ANTHROPIC_UPSTREAM="$URL_B"
+    export C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT="$FP_B"
+    if cthru_ensure_proxy_on_port "$FREE_FP"; then
+      LIVE_B="$(curl -sf --max-time 2 "http://127.0.0.1:${FREE_FP}/ping" 2>/dev/null || true)"
+      LIVE_FP_B="$(node -e 'try{const j=JSON.parse(process.argv[1]||"{}");process.stdout.write(j.anthropic_upstream_fingerprint||"")}catch{}' "$LIVE_B" 2>/dev/null || true)"
+      PID_B="$(node -e 'try{const j=JSON.parse(process.argv[1]||"{}");if(j.pid)process.stdout.write(String(j.pid))}catch{}' "$LIVE_B" 2>/dev/null || true)"
+      if [[ "$LIVE_FP_B" == "$FP_B" ]]; then
+        pass "after ensure, live fingerprint is B"
+      else
+        fail "after ensure fingerprint B (got=$LIVE_FP_B expect=$FP_B)"
+      fi
+      if [[ -n "$PID_A" && -n "$PID_B" && "$PID_A" != "$PID_B" ]]; then
+        pass "respawned new pid (A=$PID_A B=$PID_B)"
+      elif [[ -n "$PID_B" ]]; then
+        # Same pid only if process replaced in-place (unlikely); still ok if fp matches
+        pass "listener answers with B (pid_a=$PID_A pid_b=$PID_B)"
+      else
+        fail "no live pid after B ensure"
+      fi
+      if [[ -n "$PID_A" ]] && kill -0 "$PID_A" 2>/dev/null; then
+        # Old pid still alive is ok only if it's the same process that updated — we require new fp
+        if [[ "$PID_A" == "$PID_B" ]]; then
+          pass "same pid retained after env change is acceptable if fp is B"
+        else
+          fail "old pid A still alive after kill/respawn"
+        fi
+      else
+        pass "old pid A no longer running"
+      fi
+    else
+      fail "ensure with override B after A"
+    fi
+  fi
+  # Cleanup listener on FREE_FP
+  if command -v lsof >/dev/null 2>&1; then
+    kill $(lsof -nP -iTCP:"$FREE_FP" -sTCP:LISTEN -t 2>/dev/null) 2>/dev/null || true
+  fi
+  pkill -f "claude-proxy --port ${FREE_FP}" 2>/dev/null || true
+  unset CLAUDE_PROXY_ANTHROPIC_UPSTREAM C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT ANTHROPIC_BASE_URL
+  rm -rf "$CLAUDE_DIR_FP"
+fi
+
 echo
 echo "ensure-proxy-on-port: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

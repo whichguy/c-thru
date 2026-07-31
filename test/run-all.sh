@@ -919,6 +919,14 @@ run_suite "proxy-usage-stats (debounce, SIGTERM flush, multi-instance merge)" \
   node "$REPO_DIR/test/proxy-usage-stats.test.js"
 run_suite "proxy-correlation-headers (preserve vs scrub Claude Code correlation)" \
   node "$REPO_DIR/test/proxy-correlation-headers.test.js"
+run_suite "proxy-anthropic-upstream-override (transport/identity + Loose OAuth)" \
+  node "$REPO_DIR/test/proxy-anthropic-upstream-override.test.js"
+run_suite "c-thru-anthropic-upstream-fixes (ambient trust + fingerprint no-kill)" \
+  bash "$REPO_DIR/test/c-thru-anthropic-upstream-fixes.test.sh"
+run_suite "c-thru-anthropic-upstream-failclosed (A8 override + proxy fail hard-fail)" \
+  node "$REPO_DIR/test/c-thru-anthropic-upstream-failclosed.test.js"
+run_suite "c-thru-upstream-fingerprint (symmetric match + URL derive)" \
+  bash "$REPO_DIR/test/c-thru-upstream-fingerprint.test.sh"
 run_suite "proxy-usage-large-stream (F4: message_delta recovered past the 256KB head-cap)" \
   node "$REPO_DIR/test/proxy-usage-large-stream.test.js"
 run_suite "proxy-sampling-param-guard (sampling defaults guard)" \
