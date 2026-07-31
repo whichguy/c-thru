@@ -708,6 +708,63 @@ async function testGeminiUsageRecorded() {
   }
 }
 
+// ── Test M: live lock → clear returns 503, does not stamp cleared_at (F4) ─
+
+async function testLockBusyClear() {
+  console.log('\nTest M: live usage lock → POST /c-thru/stats/clear → 503 (no unlocked write)');
+  const sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-usage-lockbusy-'));
+  const statsFile = path.join(sharedDir, 'usage-stats.json');
+  const lockDir = `${statsFile}.lock`;
+  let p1;
+  try {
+    fs.writeFileSync(statsFile, JSON.stringify({
+      total_input: 50,
+      total_output: 5,
+      total_duration_ms: 1,
+      by_model: {
+        [CONCRETE_MODEL]: {
+          input: 50, output: 5, calls: 5, total_duration_ms: 1,
+          first_call: null, last_call: null,
+        },
+      },
+      by_agent: {},
+      by_backend: {},
+      first_recorded: '2026-01-01T00:00:00.000Z',
+      last_recorded: '2026-01-01T00:00:00.000Z',
+    }, null, 2));
+    // Live holder: this test process is still running → lock not stale.
+    fs.mkdirSync(lockDir);
+    fs.writeFileSync(path.join(lockDir, 'pid'), String(process.pid));
+
+    p1 = await spawnUsageProxySharing(statsFile);
+    const clearBusy = await httpJson(p1.port, 'POST', '/c-thru/stats/clear', null, {});
+    assertEq(clearBusy.status, 503, 'Test M: clear under live lock → 503');
+    const body = clearBusy.json || clearBusy.body || {};
+    assert(body.ok === false, 'Test M: body.ok false');
+    assert(/lock busy/i.test(String(body.error || '')),
+      `Test M: error mentions lock busy (got ${JSON.stringify(body.error)})`);
+
+    const mid = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    assertEq(mid.by_model[CONCRETE_MODEL].calls, 5,
+      'Test M: counters intact while lock held');
+    assert(!mid.cleared_at, 'Test M: no cleared_at stamped unlocked');
+
+    fs.rmSync(lockDir, { recursive: true, force: true });
+    const clearOk = await httpJson(p1.port, 'POST', '/c-thru/stats/clear', null, {});
+    assertEq(clearOk.status, 200, 'Test M: clear after lock release → 200');
+    assert((clearOk.json || clearOk.body || {}).ok === true, 'Test M: clear ok after unlock');
+
+    await killAndWait(p1.child, 'SIGTERM');
+    await p1.stub.close();
+    cleanup(p1.tmpHome);
+  } catch (e) {
+    await teardownInstance(p1);
+    throw e;
+  } finally {
+    try { fs.rmSync(sharedDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
 // ── Test L: incomplete/legacy usage file — defensive fill + unknown keys ─
 
 async function testLegacyIncompleteUsageFile() {
@@ -789,6 +846,7 @@ async function main() {
   await testStaleLockReclaim();
   await testGeminiUsageRecorded();
   await testLegacyIncompleteUsageFile();
+  await testLockBusyClear();
 
   const failed = summary();
   process.exit(failed ? 1 : 0);

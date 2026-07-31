@@ -2416,10 +2416,13 @@ model_map_has_non_ollama_backend() {
   ' "$CONFIG" >/dev/null 2>&1
 }
 
+# C_THRU_PROXY_PLACEHOLDER_KEY — opt-in only for inventing ANTHROPIC_API_KEY=proxied-placeholder.
+# Default / auto / unset / off: never invent a key (ambient-only API_KEY policy — subscription default).
+# Explicit 1|true|yes|on: legacy local-gate stuffing for Ollama-only setups that need a client key shape.
 proxy_placeholder_mode() {
   local raw="${C_THRU_PROXY_PLACEHOLDER_KEY:-}"
   if [[ -z "$raw" ]]; then
-    printf '%s' "auto"
+    printf '%s' "off"
     return 0
   fi
   printf '%s' "$raw"
@@ -2430,6 +2433,8 @@ proxy_placeholder_mode() {
 # hop. Without this the proxy receives no auth and Anthropic returns 401:
 # Claude Code only consults its keychain when calling api.anthropic.com
 # directly (i.e. when ANTHROPIC_BASE_URL is unset), and we always set it.
+# Skips when the caller already set AUTH_TOKEN or a real ANTHROPIC_API_KEY
+# (ambient API key = intentional metered mode; do not overwrite with OAuth).
 inject_subscription_oauth_from_store() {
   [[ "${C_THRU_NO_OAUTH_INJECT:-}" == "1" ]] && return 0
   [[ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]] && return 0
@@ -2453,6 +2458,12 @@ inject_subscription_oauth_from_store() {
   return 0
 }
 
+# Ambient-only ANTHROPIC_API_KEY policy (subscription default):
+#   1) If the caller shell already set ANTHROPIC_API_KEY → keep it (metered opt-in).
+#   2) If ANTHROPIC_AUTH_TOKEN is set (injected OAuth or caller) → leave API_KEY alone
+#      (do not invent a key that would override subscription per Claude Code rules).
+#   3) Otherwise → do NOT invent/export ANTHROPIC_API_KEY (no proxied-placeholder by default).
+# Opt-in legacy placeholder: C_THRU_PROXY_PLACEHOLDER_KEY=1 (local-gate stuffing only).
 ensure_proxy_client_api_key() {
   [[ -n "${ANTHROPIC_API_KEY:-}" ]] && return 0
   # Real Bearer token (e.g. from `claude login` subscription session) is sufficient —
@@ -2460,11 +2471,12 @@ ensure_proxy_client_api_key() {
   [[ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]] && return 0
 
   case "$(proxy_placeholder_mode)" in
-    0|false|FALSE|no|NO|off|OFF)
+    1|true|TRUE|yes|YES|on|ON)
+      export ANTHROPIC_API_KEY="proxied-placeholder"
       return 0
       ;;
     *)
-      export ANTHROPIC_API_KEY="proxied-placeholder"
+      # Default (off/auto/unset): ambient-only — never invent API_KEY.
       return 0
       ;;
   esac
@@ -3099,41 +3111,9 @@ require_proxy_agent_token_identity() {
   return 0
 }
 
-# C23 — emit the control-token curl header args for a mutating route, or nothing
-# when the token file is absent (proxy fails open in that case). Reads the same
-# per-user file the proxy reads. Prints args suitable for `curl ... $(...)`.
-control_token_curl_args() {
-  local tf="${CLAUDE_PROXY_CONTROL_TOKEN_FILE:-$CLAUDE_PROFILE_DIR/proxy.control-token}"
-  local tok=""
-  [[ -n "${CLAUDE_PROXY_CONTROL_TOKEN:-}" ]] && tok="$CLAUDE_PROXY_CONTROL_TOKEN"
-  [[ -z "$tok" && -s "$tf" ]] && tok="$(cat "$tf" 2>/dev/null)"
-  [[ -n "$tok" ]] && printf -- '-H\nX-C-Thru-Control: %s\n' "$tok"
-  return 0
-}
-
-# Opt-in: C_THRU_STATS_RESET=launch clears the lifetime usage ledger once after
-# the proxy is known ready for this process tree. Default is never (forensics).
-# Uses POST /c-thru/stats/clear so multi-proxy clear-wins applies. Once per shell.
-maybe_reset_usage_stats_on_launch() {
-  [[ "${C_THRU_STATS_RESET:-never}" == "launch" ]] || return 0
-  [[ "${_C_THRU_STATS_RESET_DONE:-0}" == "1" ]] && return 0
-  local port=""
-  port="${PROXY_PORT:-${CLAUDE_PROXY_PORT:-}}"
-  [[ -z "$port" ]] && port="$(claude_proxy_listen_port 2>/dev/null || true)"
-  [[ -n "$port" ]] || return 0
-  local _ct_args=()
-  while IFS= read -r _ct_line; do _ct_args+=("$_ct_line"); done < <(control_token_curl_args)
-  # bash 3.2 + set -u: empty "${_ct_args[@]}" is unbound; use the same
-  # safe form as set_launch_default_model so no-token clears still work.
-  if curl -sf --max-time 2.0 -X POST ${_ct_args[@]+"${_ct_args[@]}"} \
-      "http://127.0.0.1:${port}/c-thru/stats/clear" >/dev/null 2>&1; then
-    _C_THRU_STATS_RESET_DONE=1
-    if [[ "${C_THRU_DEBUG:-0}" != "0" && -n "${C_THRU_DEBUG:-}" ]]; then
-      echo "c-thru: C_THRU_STATS_RESET=launch cleared usage stats on :$port" >&2
-    fi
-  fi
-  return 0
-}
+# control_token_curl_args + maybe_reset_usage_stats_on_launch live in
+# c-thru-lib.sh (sourced above) so tests can exercise them without extracting
+# from this entrypoint.
 
 # ARCH: ensure_proxy_running — per-shell proxy spawner (one proxy per c-thru invocation).
 #   1. If CLAUDE_PROXY_PORT is set (explicit path), connect to that port — no spawn.
@@ -5900,9 +5880,10 @@ if [[ -z "$MODEL" ]]; then
   # Ollama-only routing: the proxy injects `Bearer ollama` itself toward Ollama
   # (see applyOutboundAuth in tools/claude-proxy). For Claude Code's own auth env
   # we deliberately export nothing — Claude Code falls back to its keychain/file
-  # OAuth, and the proxy strips that auth on Ollama hops (endpoint auth: "none").
-  # If the user has truly no credentials, ensure_proxy_client_api_key exports a
-  # placeholder API key (governed by proxy_placeholder_mode).
+  # OAuth (or the AUTH_TOKEN inject above), and the proxy strips that auth on
+  # Ollama hops (endpoint auth: "none"). ensure_proxy_client_api_key is
+  # ambient-only: it never invents ANTHROPIC_API_KEY unless the caller set one
+  # or C_THRU_PROXY_PLACEHOLDER_KEY=1 (opt-in local-gate stuffing).
   ensure_proxy_client_api_key
   claude_router_debug_dump transparent
   apply_background_model_overrides "${MODEL:-}"

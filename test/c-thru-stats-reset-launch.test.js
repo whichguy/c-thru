@@ -124,34 +124,22 @@ fi
       last_recorded: '2026-01-01T00:00:00.000Z',
     }, null, 2));
 
-    const cthruSrc = fs.readFileSync(path.join(REPO, 'tools', 'c-thru'), 'utf8');
-    function extractFn(src, name) {
-      const re = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, 'm');
-      const m = src.match(re);
-      if (!m) throw new Error(`cannot extract ${name} from tools/c-thru`);
-      return m[0];
-    }
     const harness = path.join(tmpHome, 'reset-harness.sh');
-    // T-E: intentionally NO CLAUDE_PROXY_CONTROL_TOKEN and no token file — the
-    // empty _ct_args path must survive bash 3.2 + set -u (safe expansion).
-    // Do not "fix" the test by planting a token; that would hide the regression.
+    // T-E / P5: real helpers live in c-thru-lib.sh (sourceable, no side effects
+    // at source time). Intentionally NO control token — empty _ct_args + set -u.
     fs.writeFileSync(harness, `#!/usr/bin/env bash
 set -euo pipefail
-# Avoid set -u trips inside extracted helpers when profile paths are unused.
 CLAUDE_PROFILE_DIR="${tmpHome}"
 CLAUDE_DIR="${tmpHome}"
 unset CLAUDE_PROXY_CONTROL_TOKEN CLAUDE_PROXY_CONTROL_TOKEN_FILE 2>/dev/null || true
-${extractFn(cthruSrc, 'control_token_curl_args')}
-${extractFn(cthruSrc, 'maybe_reset_usage_stats_on_launch')}
-# also need claude_proxy_listen_port for the fallback branch — stub it
-claude_proxy_listen_port() { printf '%s' "\${PROXY_PORT:-}"; }
+# shellcheck source=c-thru-lib.sh
+source "${REPO}/tools/c-thru-lib.sh"
 C_THRU_STATS_RESET=launch
 PROXY_PORT=${port}
 CLAUDE_PROXY_PORT=${port}
 _C_THRU_STATS_RESET_DONE=0
 maybe_reset_usage_stats_on_launch
 echo "done_flag=\${_C_THRU_STATS_RESET_DONE:-0}"
-# second call must be a no-op (once per shell)
 maybe_reset_usage_stats_on_launch
 echo "done_flag2=\${_C_THRU_STATS_RESET_DONE:-0}"
 `);

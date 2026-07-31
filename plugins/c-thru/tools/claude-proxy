@@ -825,16 +825,16 @@ function atomicWriteUsage(obj) {
 // as test/run-all.sh's full-run lock): a lock DIRECTORY with a pid file.
 // Reclaims when the recorded pid is dead (ESRCH) or the lock is pid-less and
 // ~10s stale (holder crashed in the mkdir→pid-write window). All sync —
-// callers include the SIGTERM flush. Best-effort by design: on budget
-// exhaustion the caller proceeds unlocked, shrinking the residual race from
-// lifetime-clobber to at most one <=5s delta in a sub-millisecond window.
+// callers include the SIGTERM flush.
+// On budget exhaustion acquireUsageLock returns false: flush requeues the
+// snapshot and retries via scheduleUsageFlush; clear returns 503 without
+// stamping cleared_at (F4 — never write unlocked).
 // CAUTION: sleepSyncMs uses Atomics.wait, which blocks Node's entire
 // single-threaded event loop (not just this flush) — new connections, active
 // SSE ping/stall timers, and streaming writes all freeze for the duration.
 // The retry budget below is kept deliberately small so worst-case contention
-// (two proxy instances, or a /c-thru/stats/clear request racing a debounced
-// flush) can only stall the whole process briefly, not for the full 200ms a
-// larger budget would allow.
+// can only stall the whole process briefly, not for the full 200ms a larger
+// budget would allow.
 const USAGE_LOCK_DIR = `${USAGE_STATS_FILE}.lock`;
 function sleepSyncMs(ms) {
   try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch {}
@@ -952,6 +952,12 @@ function flushUsageCore() {
     if (snapshot.last_recorded === null) return;  // nothing recorded since last flush
     usageDelta = emptyUsage();
     const locked = acquireUsageLock(50);
+    if (!locked) {
+      // F4: do not write unlocked — fold snapshot back and retry later.
+      usageDelta = mergeUsage(usageDelta, snapshot);
+      scheduleUsageFlush();
+      return;
+    }
     try {
       const disk = readUsageFileFresh();
       const toMerge = reconcileClearIfNeeded(disk) ? emptyUsage() : snapshot;
@@ -962,7 +968,7 @@ function flushUsageCore() {
         throw e;
       }
     } finally {
-      if (locked) releaseUsageLock();
+      releaseUsageLock();
     }
   } finally {
     flushInFlight = false;
@@ -1211,8 +1217,8 @@ const SAMPLING_UNSUPPORTED_MODEL_PATTERNS = [
   /^claude-mythos-/,
   /^claude-opus-4-7/,
   /^claude-opus-4-8/,
-  /^claude-opus-5(?:$|[^.\d])/,
-  /^claude-sonnet-5(?:$|[^.\d])/,
+  /^claude-opus-5(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?$/,
+  /^claude-sonnet-5(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?$/,
 ];
 
 function modelRejectsSamplingParams(model) {
@@ -6705,17 +6711,21 @@ const server = http.createServer((req, res) => {
 
       if (req.method === 'POST' && (req.url === '/c-thru/stats/clear' || req.url === '/c-thru/stats/clear/')) {
         if (!controlAuthorized(req, res)) return;  // C23
-        const clearedAt = new Date().toISOString();
         // Write the cleared file under the lock; the cleared_at stamp is how
         // other live instances learn to drop their pre-clear deltas (clear-wins
         // check in flushUsageCore / the status view).
+        // F4: never stamp cleared_at unlocked — return 503 so callers retry.
         const locked = acquireUsageLock(50);
+        if (!locked) {
+          return send(res, 503, { ok: false, error: 'usage lock busy' });
+        }
+        const clearedAt = new Date().toISOString();
         try {
           atomicWriteUsage(Object.assign(emptyUsage(), { cleared_at: clearedAt }));
         } catch (e) {
           return send(res, 500, { ok: false, error: `failed to clear stats: ${e.message}` });
         } finally {
-          if (locked) releaseUsageLock();
+          releaseUsageLock();
         }
         usageDelta = emptyUsage();
         lastSeenClearedAt = clearedAt;

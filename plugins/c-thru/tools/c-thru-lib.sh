@@ -110,3 +110,39 @@ cthru_original_profile_dir() {
 cthru_durable_profile_dir() {
   printf '%s' "${C_THRU_ORIGINAL_PROFILE_DIR:-${CLAUDE_DIR:-$HOME/.claude}}"
 }
+
+# C23 — emit control-token curl header args for a mutating route, or nothing
+# when the token is absent (proxy fails open for loopback). Prints args suitable
+# for `curl ... $(...)` / array capture. Side effects only when *called*.
+control_token_curl_args() {
+  local tf="${CLAUDE_PROXY_CONTROL_TOKEN_FILE:-${CLAUDE_PROFILE_DIR:-${CLAUDE_DIR:-$HOME/.claude}}/proxy.control-token}"
+  local tok=""
+  [[ -n "${CLAUDE_PROXY_CONTROL_TOKEN:-}" ]] && tok="$CLAUDE_PROXY_CONTROL_TOKEN"
+  [[ -z "$tok" && -s "$tf" ]] && tok="$(cat "$tf" 2>/dev/null)"
+  [[ -n "$tok" ]] && printf -- '-H\nX-C-Thru-Control: %s\n' "$tok"
+  return 0
+}
+
+# Opt-in: C_THRU_STATS_RESET=launch clears the lifetime usage ledger once after
+# the proxy is known ready for this process tree. Default is never (forensics).
+# Uses POST /c-thru/stats/clear so multi-proxy clear-wins applies. Once per shell.
+maybe_reset_usage_stats_on_launch() {
+  [[ "${C_THRU_STATS_RESET:-never}" == "launch" ]] || return 0
+  [[ "${_C_THRU_STATS_RESET_DONE:-0}" == "1" ]] && return 0
+  local port=""
+  port="${PROXY_PORT:-${CLAUDE_PROXY_PORT:-}}"
+  [[ -z "$port" ]] && port="$(claude_proxy_listen_port 2>/dev/null || true)"
+  [[ -n "$port" ]] || return 0
+  local _ct_args=()
+  local _ct_line
+  while IFS= read -r _ct_line; do _ct_args+=("$_ct_line"); done < <(control_token_curl_args)
+  # bash 3.2 + set -u: empty "${_ct_args[@]}" is unbound — safe expansion.
+  if curl -sf --max-time 2.0 -X POST ${_ct_args[@]+"${_ct_args[@]}"} \
+      "http://127.0.0.1:${port}/c-thru/stats/clear" >/dev/null 2>&1; then
+    _C_THRU_STATS_RESET_DONE=1
+    if [[ "${C_THRU_DEBUG:-0}" != "0" && -n "${C_THRU_DEBUG:-}" ]]; then
+      echo "c-thru: C_THRU_STATS_RESET=launch cleared usage stats on :$port" >&2
+    fi
+  fi
+  return 0
+}

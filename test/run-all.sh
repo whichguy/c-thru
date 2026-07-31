@@ -913,6 +913,8 @@ run_suite "proxy-cli-flags (parseCliFlags edge cases)" \
   node "$REPO_DIR/test/proxy-cli-flags.test.js"
 run_suite "proxy-usage-stats (debounce, SIGTERM flush, multi-instance merge)" \
   node "$REPO_DIR/test/proxy-usage-stats.test.js"
+run_suite "proxy-correlation-headers (preserve vs scrub Claude Code correlation)" \
+  node "$REPO_DIR/test/proxy-correlation-headers.test.js"
 run_suite "proxy-usage-large-stream (F4: message_delta recovered past the 256KB head-cap)" \
   node "$REPO_DIR/test/proxy-usage-large-stream.test.js"
 run_suite "proxy-sampling-param-guard (sampling defaults guard)" \
