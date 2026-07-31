@@ -20,6 +20,7 @@ You can use natural language prompts to control the proxy. The skill interprets 
 - `/c-thru-control go offline` (Switch to `best-local-oss`, fully local)
 - `/c-thru-control switch to connected and save` (Persistent mode switch)
 - `/c-thru-control refresh the config` (Reload from disk)
+- `/c-thru-control clear stats` (Reset machine-wide usage ledger)
 
 ```bash
 "$REPO_ROOT/tools/c-thru-control" "$ARGUMENTS"
@@ -38,6 +39,7 @@ For the AI agent's situational awareness, here is the mapping from logical inten
 | **Open Stats Dashboard** | `GET` | `/c-thru/dashboard` | N/A — live HTML dashboard (give the user the URL; also in `dashboard_url` of `/c-thru/status`) |
 | **Set Connectivity Mode** | `POST` | `/c-thru/mode` | `{"mode": "<mode_name>"}` |
 | **Reload Config** | `POST` | `/c-thru/reload` | N/A |
+| **Clear Usage Stats** | `POST` | `/c-thru/stats/clear` | N/A — zeros the lifetime ledger (`usage-stats.json`); not per Claude session |
 
 ### Valid Modes:
 5 canonical modes: `best-cloud`, `best-cloud-oss`, `best-local-oss`, `best-cloud-gov`, `best-local-gov`.

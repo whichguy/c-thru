@@ -13,11 +13,22 @@ const REPO = path.join(__dirname, '..');
 const CTHRU_PATH = path.join(REPO, 'tools', 'c-thru');
 
 function extractEphemeral(src) {
-  const scriptMatch = src.match(/EPHEMERAL_SETTINGS_JSON=\$\(node -e '\n([\s\S]*?)\n  ' ((?:"\$\w+" ?)+)\)/);
+  const scriptMatch = src.match(/EPHEMERAL_SETTINGS_JSON=\$\(node -e '\n([\s\S]*?)\n  '([^\n]*)\) \|\| \{/);
   if (!scriptMatch) throw new Error('could not locate the EPHEMERAL_SETTINGS_JSON node -e script in tools/c-thru');
+  const argSource = scriptMatch[2].trim();
+  const argPattern = /"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\})"(?:\s+|$)/y;
+  const argVarNames = [];
+  let offset = 0;
+  while (offset < argSource.length) {
+    argPattern.lastIndex = offset;
+    const argMatch = argPattern.exec(argSource);
+    if (!argMatch) throw new Error(`unsupported EPHEMERAL_SETTINGS_JSON argv near: ${argSource.slice(offset)}`);
+    argVarNames.push(argMatch[1] || argMatch[2]);
+    offset = argPattern.lastIndex;
+  }
   return {
     jsBody: scriptMatch[1],
-    argVarNames: [...scriptMatch[2].matchAll(/\$(\w+)/g)].map(m => m[1]),
+    argVarNames,
   };
 }
 
@@ -48,6 +59,8 @@ function main() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-statusline-injection-'));
   try {
     const extracted = extractEphemeral(fs.readFileSync(CTHRU_PATH, 'utf8'));
+    assert(extracted.argVarNames.includes('C_THRU_COORDINATOR_ACTIVE'),
+      'extractor retains the appended defaulted coordinator argv');
 
     const envNoOptOut = { ...process.env };
     delete envNoOptOut.C_THRU_NO_STATUSLINE;

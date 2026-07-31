@@ -742,6 +742,14 @@ run_suite "c-thru-durable-profile (statusline writes survive session shadow)" \
   node "$REPO_DIR/test/c-thru-durable-profile.test.js"
 run_suite "proxy-statusline-endpoint (GET /c-thru/statusline slim feed)" \
   node "$REPO_DIR/test/proxy-statusline-endpoint.test.js"
+run_suite "c-thru-stats-reset-launch (C_THRU_STATS_RESET=launch clears usage)" \
+  node "$REPO_DIR/test/c-thru-stats-reset-launch.test.js"
+run_suite "c-thru-control-stats (NL/argv clear → POST /c-thru/stats/clear)" \
+  node "$REPO_DIR/test/c-thru-control-stats.test.js"
+run_suite "c-thru-statusline-command-routing (static skill/command clear+statusline pins)" \
+  node "$REPO_DIR/test/c-thru-statusline-command-routing.test.js"
+run_suite "c-thru-stats-cli (Usage totals label + cleared_at window)" \
+  node "$REPO_DIR/test/c-thru-stats-cli.test.js"
 run_suite "agent-router-hook (subagent_type → capability model rewrite)" \
   bash "$REPO_DIR/test/agent-router-hook.test.js"
 run_suite "strict-models (C_THRU_STRICT_MODELS=1 enforcement)" \
@@ -843,6 +851,8 @@ run_suite "proxy-runtime-fallback (fallback chains, cycle detection)" \
   node "$REPO_DIR/test/proxy-runtime-fallback.test.js"
 run_suite "capability-alias-resolve (2-hop agent→capability)" \
   node "$REPO_DIR/test/capability-alias-resolve.test.js"
+run_suite "gen-brand-agents-ownership (generated-leaf ownership + safe stale pruning)" \
+  node "$REPO_DIR/test/gen-brand-agents-ownership.test.js"
 run_suite "agent-mapping-complete (every agent → live endpoint, all modes×tiers)" \
   node "$REPO_DIR/test/agent-mapping-complete.test.js"
 run_suite "agent-invocation-headers (per-agent resolved-via/served-by/journal)" \

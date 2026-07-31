@@ -4,7 +4,7 @@ description: |
   Unified c-thru configuration: diagnose the active setup, resolve what a
   capability alias maps to, switch connectivity modes, remap per-capability
   models, validate the config, or reload the running proxy.
-  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | agent list | agent set <agent> <cap> [--reload] | agent pin <agent> <model> [--reload] | agent reset <agent> [--reload] | alias list | alias set <pattern> <cap> [--reload] | alias remove <pattern> [--reload] | override list | override set <from> <to> [--reload] | override remove <from> [--reload] | validate | reload | restart [--force]
+  Subcommands: diag [--verbose] | resolve <cap> | mode [<mode>] [--reload] | remap <cap> <model> [--tier <tier>] [--reload] | set-cloud-best-model <cap> <model> [--tier <tier>] [--reload] | set-local-best-model <cap> <model> [--tier <tier>] [--reload] | route <model> <backend> [--reload] | backend <name> <url> [--kind <kind>] [--auth-env <VAR>] [--reload] | agent list | agent set <agent> <cap> [--reload] | agent pin <agent> <model> [--reload] | agent reset <agent> [--reload] | alias list | alias set <pattern> <cap> [--reload] | alias remove <pattern> [--reload] | override list | override set <from> <to> [--reload] | override remove <from> [--reload] | statusline [status|on|off|style <s>] | validate | reload | restart [--force]
 color: cyan
 ---
 
@@ -60,6 +60,11 @@ clarifying question only if the intent is genuinely ambiguous.
 | "disable planner hint", "stop planning hints" | `planning off` | |
 | "enable planner hint", "start planning hints" | `planning on` | |
 | "toggle planner hint", "flip planner hint" | toggle → planning (infer current state, then enable/disable) | |
+| "enable statusline", "enable status line", "show c-thru bar", "turn on statusline" | `statusline on` | restart Claude to see bar |
+| "disable statusline", "turn off status line", "hide c-thru bar" | `statusline off` | |
+| "statusline status", "is the statusline on" | `statusline status` | |
+| "statusline stats", "fancy statusline", "stats style statusline" | `statusline style stats` | |
+| "minimal statusline" | `statusline style minimal` | |
 
 **Capability/agent reference table** — when the user mentions a capability or
 agent by a natural-language role, resolve to the canonical key:
@@ -644,6 +649,36 @@ Substitute `${RELOAD_FLAG}` with `--reload` when present in `$ARGUMENTS`, otherw
 
 ---
 
+## Subcommand: `statusline`
+
+**Usage:**
+- `/c-thru-config statusline` / `statusline status` — durable enablement + style
+- `/c-thru-config statusline on [--force]` — write durable `settings.json` statusLine
+- `/c-thru-config statusline off [--force]` — remove c-thru statusLine only
+- `/c-thru-config statusline style <minimal|default|stats>` — persist style pref
+
+Writes go to the **durable** profile (`C_THRU_ORIGINAL_PROFILE_DIR` / `~/.claude`), never the ephemeral session shadow. Claude binds `statusLine` at **session start** — tell the user to restart Claude / re-run `c-thru` after on/off.
+
+```bash
+HELPER="${CLAUDE_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js"
+# Prefer durable tools path when present
+[ -f "${C_THRU_ORIGINAL_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js" ] && \
+  HELPER="${C_THRU_ORIGINAL_PROFILE_DIR:-$HOME/.claude}/tools/c-thru-config-helpers.js"
+[ ! -f "$HELPER" ] && HELPER="$(git rev-parse --show-toplevel 2>/dev/null)/tools/c-thru-config-helpers.js"
+
+case "${ARGUMENTS#statusline }" in
+  ""|status) node "$HELPER" statusline-status ;;
+  on*|enable*) node "$HELPER" statusline-on ${ARGUMENTS#statusline on} ${ARGUMENTS#statusline enable} ;;
+  off*|disable*) node "$HELPER" statusline-off ${ARGUMENTS#statusline off} ${ARGUMENTS#statusline disable} ;;
+  style\ *) node "$HELPER" statusline-style ${ARGUMENTS#statusline style } ;;
+  *) node "$HELPER" statusline-status ;;
+esac
+```
+
+Style pref file: `~/.claude/c-thru-statusline.json` (env `C_THRU_STATUSLINE_STYLE` overrides). Foreign custom bars refuse overwrite without `--force`.
+
+---
+
 ## Subcommand: `planning`
 
 **Usage:** `/c-thru-config planning [<anything>]`
@@ -674,7 +709,7 @@ one short clarifying question before acting. Do not guess.
 Report current state — whether the hook is registered and whether the opt-out override is set.
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+CLAUDE_DIR="${C_THRU_ORIGINAL_PROFILE_DIR:-${CLAUDE_DIR:-$HOME/.claude}}"
 SETTINGS="$CLAUDE_DIR/settings.json"
 OVERRIDES="$CLAUDE_DIR/model-map.overrides.json"
 HOOK_CMD="$CLAUDE_DIR/tools/c-thru-enter-plan-hook"
@@ -712,7 +747,7 @@ fi
 Read current state, then enable if off or disable if on. Single deterministic block — do not split into two steps.
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+CLAUDE_DIR="${C_THRU_ORIGINAL_PROFILE_DIR:-${CLAUDE_DIR:-$HOME/.claude}}"
 SETTINGS="$CLAUDE_DIR/settings.json"
 OVERRIDES="$CLAUDE_DIR/model-map.overrides.json"
 HOOK_CMD="$CLAUDE_DIR/tools/c-thru-enter-plan-hook"
@@ -766,7 +801,7 @@ fi
 Remove the `EnterPlanMode` hook and write `planner_hint: false` to overrides.
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+CLAUDE_DIR="${C_THRU_ORIGINAL_PROFILE_DIR:-${CLAUDE_DIR:-$HOME/.claude}}"
 SETTINGS="$CLAUDE_DIR/settings.json"
 OVERRIDES="$CLAUDE_DIR/model-map.overrides.json"
 HOOK_CMD="$CLAUDE_DIR/tools/c-thru-enter-plan-hook"
@@ -802,7 +837,7 @@ echo "  re-enable: /c-thru-config planning on"
 Register the `EnterPlanMode` hook (idempotent) and clear the opt-out override.
 
 ```bash
-CLAUDE_DIR="${CLAUDE_PROFILE_DIR:-$HOME/.claude}"
+CLAUDE_DIR="${C_THRU_ORIGINAL_PROFILE_DIR:-${CLAUDE_DIR:-$HOME/.claude}}"
 SETTINGS="$CLAUDE_DIR/settings.json"
 OVERRIDES="$CLAUDE_DIR/model-map.overrides.json"
 HOOK_CMD="$CLAUDE_DIR/tools/c-thru-enter-plan-hook"

@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 'use strict';
+/* global CONFIG:readonly, REQUEST_SESSION_ID:readonly, REQUEST_MODE:readonly */
+// These names are intentional Node globals installed with
+// Object.defineProperty below. Their getters read AsyncLocalStorage so each
+// concurrent request sees its pinned config, session id, and mode snapshot.
 
 const http = require('http');
 const https = require('https');
@@ -34,7 +38,12 @@ const {
   backendHost,
   deriveAuthProfile,
 } = require('./model-map-resolve.js');
-const { parseAgentSentinel, stripAgentSentinelFromBody } = require('./agent-sentinel.js');
+const {
+  parseAgentSentinel,
+  stripAgentSentinelFromBody,
+  isUsableSentinelSecret,
+  verifyAgentSentinelTag,
+} = require('./agent-sentinel.js');
 const {
   collectStreamBody,
   formatUpstreamErrorMessage,
@@ -134,6 +143,15 @@ const OLLAMA_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_OLLAMA_TIMEOUT_MS
 // upstream timeout so a hermetic test can drive the C32 'timeout'→destroy path
 // without a 60s stall (see test/proxy-gemini-timeout.test.js).
 const GEMINI_UPSTREAM_TIMEOUT_MS = numberFromEnv('CLAUDE_PROXY_GEMINI_TIMEOUT_MS', 60000);
+// OpenAI-compatible Responses endpoints can spend most of an hour reasoning
+// before returning headers. Keep this policy independent from Gemini's shorter
+// Files/chat watchdog. This is a socket-inactivity timeout, not a wall-clock
+// generation limit; streaming activity rearms it. The 55-minute default leaves
+// five minutes for client/test teardown inside the one-hour outer ceiling.
+const RESPONSES_UPSTREAM_TIMEOUT_MS = numberFromEnv(
+  'CLAUDE_PROXY_RESPONSES_TIMEOUT_MS',
+  3300000,
+);
 // Anthropic-shape upstream socket timeout. forwardAnthropic is the dispatch
 // target for real Anthropic, OpenRouter, AND default/modern local-Ollama
 // /v1/messages passthrough — none of those previously had any timeout at all,
@@ -420,7 +438,9 @@ function proxyLog(event, fields = {}) {
   })}\n`;
   if (PROXY_LOG_FILE) {
     try {
-      fs.appendFileSync(PROXY_LOG_FILE, line);
+      // Restrict newly-created custom/default ops logs without changing modes
+      // on existing operator-managed files.
+      fs.appendFileSync(PROXY_LOG_FILE, line, { encoding: 'utf8', mode: 0o600 });
       maintainProxyLog();
     } catch (e) {
       if (!_proxyLogWriteWarned) {
@@ -437,11 +457,56 @@ function proxyLog(event, fields = {}) {
   }
 }
 
+const TELEMETRY_STATIC_PATHS = new Set([
+  '/',
+  '/ping',
+  '/hooks/context',
+  '/v1/messages',
+  '/v1/messages/count_tokens',
+  '/v1/models',
+  '/v1/active-models',
+  '/v1/probe-llm',
+  '/v1/files',
+  '/c-thru/status',
+  '/c-thru/recent',
+  '/c-thru/dashboard',
+  '/c-thru/plan/dashboard',
+  '/c-thru/plan',
+  '/c-thru/stats/clear',
+  '/c-thru/launch-default',
+  '/c-thru/mode',
+  '/c-thru/reload',
+]);
+
+// Request targets are routing inputs, not safe telemetry. Preserve req.url for
+// dispatch, but expose only query-free, bounded route classes to logs/rings.
+function requestPathForTelemetry(value) {
+  if (typeof value !== 'string') return '/[redacted]';
+  let pathname;
+  try {
+    pathname = new URL(value, 'http://c-thru.invalid').pathname;
+  } catch {
+    return '/[redacted]';
+  }
+  const normalized = pathname.length > 1
+    ? pathname.replace(/\/+$/, '')
+    : pathname;
+  if (TELEMETRY_STATIC_PATHS.has(normalized)) return normalized;
+  if (normalized.startsWith('/v1/files/')) return '/v1/files/[item]';
+  if (normalized.startsWith('/v1/messages/batches/')) {
+    return '/v1/messages/batches/[item]';
+  }
+  if (normalized.startsWith('/v1/')) return '/v1/[other]';
+  if (normalized.startsWith('/c-thru/')) return '/c-thru/[other]';
+  if (normalized.startsWith('/hooks/')) return '/hooks/[other]';
+  return '/[other]';
+}
+
 // Request-correlated logging — gives every event in one request's lifecycle a
 // shared req_id and elapsed_ms, so concurrent traffic stays grep-friendly.
 function newRequestContext() {
   return {
-    id: crypto.randomBytes(2).toString('hex'),  // 4-hex-char id, e.g. "a3f9"
+    id: crypto.randomBytes(16).toString('hex'),
     started: Date.now(),
   };
 }
@@ -514,13 +579,12 @@ const PID_FILE = process.env.CLAUDE_PROXY_PID_FILE
   || path.join(process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude'), 'proxy.pid');
 const PROXY_STARTED_AT = nowIso();
 
-// ── Per-user control token (C23) ───────────────────────────────────────────
-// Mutating control routes share one STABLE PER-USER file (0600 under ~/.claude)
-// that tools/c-thru generates once at launch. The proxy only READS it at startup.
-// Env overrides exist so the test harness can point at fixtures.
-//
-// Agent-sentinel trust is loopback-client-only (no shared HMAC key). Default bind
-// is 127.0.0.1; remote clients cannot force routing via body markers.
+// ── Secret scopes ──────────────────────────────────────────────────────────
+// Agent routing and control mutations use distinct stable per-user 0600 tokens.
+// A stable agent token is required because fixed-port proxies are intentionally
+// reused by independent c-thru sessions. The proxy reads each token once.
+const AGENT_SENTINEL_SECRET_FILE = process.env.C_THRU_AGENT_SENTINEL_SECRET_FILE
+  || path.join(process.env.CLAUDE_PROFILE_DIR || path.join(os.homedir(), '.claude'), 'proxy.agent-token');
 const CONTROL_TOKEN_FILE = process.env.CLAUDE_PROXY_CONTROL_TOKEN_FILE || path.join(os.homedir(), '.claude', 'proxy.control-token');
 
 function readSecretFileOnce(filePath) {
@@ -528,6 +592,36 @@ function readSecretFileOnce(filePath) {
     const v = fs.readFileSync(filePath, 'utf8').trim();
     return v || null;
   } catch { return null; }
+}
+
+// Direct-value override exists for hermetic tests/manual setups. Missing or
+// weak state fails closed: markers are stripped but never trusted. No secret
+// value is logged or surfaced through status endpoints.
+const _agentSentinelSecretCandidate = process.env.C_THRU_AGENT_SENTINEL_SECRET
+  || readSecretFileOnce(AGENT_SENTINEL_SECRET_FILE);
+const AGENT_SENTINEL_SECRET = isUsableSentinelSecret(_agentSentinelSecretCandidate)
+  ? _agentSentinelSecretCandidate
+  : null;
+const AGENT_TOKEN_IDENTITY_VERSION = 1;
+const AGENT_TOKEN_FINGERPRINT = AGENT_SENTINEL_SECRET
+  ? crypto.createHash('sha256')
+    .update('c-thru-agent-token-identity-v1\0', 'utf8')
+    .update(AGENT_SENTINEL_SECRET, 'utf8')
+    .digest('hex')
+  : null;
+
+// Ops logs need stable per-spawn correlation without retaining Claude Code's
+// raw agent IDs. HMAC keeps low-entropy/guessable IDs non-enumerable; the
+// process-local fallback still protects logs when agent auth is unavailable.
+const AGENT_LOG_CORRELATION_KEY = AGENT_SENTINEL_SECRET || crypto.randomBytes(32);
+function claudeAgentCorrelationRef(normalizedId) {
+  if (!normalizedId) return null;
+  const digest = crypto.createHmac('sha256', AGENT_LOG_CORRELATION_KEY)
+    .update('c-thru-claude-agent-log-ref-v1\0', 'utf8')
+    .update(normalizedId, 'utf8')
+    .digest('hex')
+    .slice(0, 32);
+  return `h1:${digest}`;
 }
 
 /** True when the TCP peer is on the loopback adapter (IPv4/IPv6/mapped).
@@ -542,6 +636,19 @@ function isLoopbackClient(req) {
   if (a === '::1' || a === '[::1]') return true;
   if (a === '127.0.0.1' || a === 'localhost') return true;
   return LOOPBACK_ADDRS.has(a) || LOOPBACK_ADDRS.has(String(raw));
+}
+
+// Claude Code correlation IDs are opaque HTTP token values. Do not assume a UUID
+// shape: the gateway contract only promises that spawned agents carry an ID.
+// The bound prevents an attacker from turning a correlation field into an
+// unbounded log/request value; commas reject Node's joined representation of a
+// duplicated singleton header.
+const CLAUDE_AGENT_CORRELATION_ID_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+function normalizeClaudeAgentCorrelationId(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (!normalized || Buffer.byteLength(normalized, 'utf8') > 512) return null;
+  return CLAUDE_AGENT_CORRELATION_ID_RE.test(normalized) ? normalized : null;
 }
 
 // Scoreboard / journal agent key: prefer explicit sentinel identity, else capability.
@@ -586,7 +693,11 @@ function controlAuthorized(req, res) {
           ') — non-loopback mutating routes are REJECTED. Run tools/c-thru to generate one, or bind loopback only.',
       });
     }
-    proxyLog('control.auth_rejected', { url: req.url, method: req.method, reason: 'non_loopback_no_token' });
+    proxyLog('control.auth_rejected', {
+      url: requestPathForTelemetry(req.url),
+      method: req.method,
+      reason: 'non_loopback_no_token',
+    });
     send(res, 403, { ok: false, error: 'forbidden: control token required for non-loopback clients' });
     return false;
   }
@@ -600,7 +711,11 @@ function controlAuthorized(req, res) {
     }
   }
   if (!ok) {
-    proxyLog('control.auth_rejected', { url: req.url, method: req.method, reason: provided ? 'mismatch' : 'missing' });
+    proxyLog('control.auth_rejected', {
+      url: requestPathForTelemetry(req.url),
+      method: req.method,
+      reason: provided ? 'mismatch' : 'missing',
+    });
     send(res, 403, { ok: false, error: 'forbidden: missing or invalid X-C-Thru-Control token' });
     return false;
   }
@@ -888,13 +1003,13 @@ function pushRecentRequest(ctx, req, res, aborted) {
   RECENT_REQUESTS.push({
     ts: nowIso(),
     req_id: ctx.id,
-    endpoint: req.url,
+    endpoint: requestPathForTelemetry(req.url),
     model: m.originalModel || null,
     served_by: m.servedBy || null,
     capability: m.capability || null,
     backend: m.backendId || null,
     status: res.statusCode || 0,
-    ok: !aborted && res.statusCode >= 200 && res.statusCode < 400,
+    ok: !aborted && res.statusCode >= 200 && res.statusCode < 300,
     aborted: !!aborted,
     stream: !!m.stream,
     input_tokens: m._tokens ? m._tokens.input : null,
@@ -944,7 +1059,14 @@ const JOURNAL_STREAM_EVENT_CAP = 1000;
 const JOURNAL_INCLUDE = (process.env.CLAUDE_PROXY_JOURNAL_INCLUDE || '').split(',').filter(Boolean);
 const JOURNAL_EXCLUDE = (process.env.CLAUDE_PROXY_JOURNAL_EXCLUDE || '').split(',').filter(Boolean);
 const JOURNAL_MAX_BYTES = numberFromEnv('CLAUDE_PROXY_JOURNAL_MAX_BYTES', 100 * 1024 * 1024);
-const SCRUB_HEADERS = new Set(['authorization', 'x-api-key', 'cookie', 'set-cookie']);
+const SCRUB_HEADERS = new Set([
+  'authorization',
+  'x-api-key',
+  'cookie',
+  'set-cookie',
+  'x-claude-code-agent-id',
+  'x-claude-code-parent-agent-id',
+]);
 
 function scrubHeaders(headers) {
   if (!headers) return {};
@@ -1089,6 +1211,7 @@ const SAMPLING_UNSUPPORTED_MODEL_PATTERNS = [
   /^claude-mythos-/,
   /^claude-opus-4-7/,
   /^claude-opus-4-8/,
+  /^claude-opus-5(?:$|[^.\d])/,
   /^claude-sonnet-5(?:$|[^.\d])/,
 ];
 
@@ -1355,7 +1478,7 @@ function isSentinelRoutable(name, cfg) {
   return false;
 }
 
-function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
+function resolveBackend(model, cfg, tier, mode, _seen, _chain, _preferAgentModelPin = false) {
   const endpointsOrBackends = cfg.endpoints || cfg.backends || {};
   const modelRoutes = cfg.model_routes || {};
   // Cycle/depth guard: model_routes can chain (target = another model name that
@@ -1370,6 +1493,17 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
   if (seen.has(model)) return { error: `model_routes resolution cycle detected at '${model}'`, status: 400 };
   if (seen.size >= 8) return { error: `model_routes resolution depth exceeded at '${model}' (chain too long)`, status: 400 };
   seen.add(model);
+  const capAlias = resolveCapabilityAlias(model, cfg);
+  // Only the trusted-sentinel caller opts in. Plain model requests retain the
+  // normal route-first order when an agent name also exists in model_routes.
+  const preferAgentModelPin = _preferAgentModelPin
+    && typeof capAlias === 'string'
+    && capAlias.startsWith(MODEL_PIN_PREFIX)
+    // A concrete/exact brand leaf may intentionally pin its own route key
+    // (claude-sonnet-5 → model:claude-sonnet-5). Suppressing that same-name
+    // route would recurse back into the already-seen agent key and report a
+    // false cycle. Route-first is already the desired behavior for a self-pin.
+    && capAlias.slice(MODEL_PIN_PREFIX.length) !== model;
 
   // Resolve a route target. Targets can be:
   //   string  — either a backend id (terminal) or another model name (recurse).
@@ -1409,9 +1543,11 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
     }
   }
 
-  const routeMatch = matchModelRoute(modelRoutes, model, {
-    onBadPattern: (pattern, e) => console.error(`c-thru: invalid regex in model_routes key '${pattern}': ${e.message}`),
-  });
+  const routeMatch = preferAgentModelPin
+    ? null
+    : matchModelRoute(modelRoutes, model, {
+      onBadPattern: (pattern, e) => console.error(`c-thru: invalid regex in model_routes key '${pattern}': ${e.message}`),
+    });
   if (routeMatch) {
     const id = routeMatch.target;
     // v2 alias object form: { endpoint: "...", name: "..." }
@@ -1437,7 +1573,6 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain) {
     }
   }
 
-  const capAlias = resolveCapabilityAlias(model, cfg);
   if (capAlias) {
     if (capAlias.startsWith(MODEL_PIN_PREFIX)) {
       const pinnedModel = capAlias.slice(MODEL_PIN_PREFIX.length);
@@ -1750,7 +1885,9 @@ function forwardToAnthropicCatchAll(req, res) {
   const targetUrl = new URL(backend.url);
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
-  const fwdHeaders = scrubCthruHeaders(req.headers);
+  const fwdHeaders = scrubCthruHeaders(req.headers, {
+    preserveClaudeCodeCorrelation: shouldPreserveClaudeCodeCorrelation(backend),
+  });
   const v1Meta = {};
   if (!applyOutboundAuth(backend, req.headers, fwdHeaders, v1Meta)) {
     sendAnthropicError(res, 401,
@@ -1767,7 +1904,10 @@ function forwardToAnthropicCatchAll(req, res) {
   for (const pat of denylist) {
     let re; try { re = new RegExp(pat); } catch { continue; }
     if (re.test(req.url || '')) {
-      proxyLog('passthrough_denied', { url: req.url, matched: pat });
+      proxyLog('passthrough_denied', {
+        url: requestPathForTelemetry(req.url),
+        matched: pat,
+      });
       send(res, 403, { type: 'error', error: { type: 'forbidden_error', message: 'path matches passthrough_denylist' } });
       return true;
     }
@@ -1780,7 +1920,11 @@ function forwardToAnthropicCatchAll(req, res) {
       if (re.test(req.url || '')) { matched = true; break; }
     }
     if (!matched) {
-      proxyLog('passthrough_denied', { url: req.url, matched: null, reason: 'no_allowlist_match' });
+      proxyLog('passthrough_denied', {
+        url: requestPathForTelemetry(req.url),
+        matched: null,
+        reason: 'no_allowlist_match',
+      });
       send(res, 403, { type: 'error', error: { type: 'forbidden_error', message: 'path does not match passthrough_allowlist' } });
       return true;
     }
@@ -1797,11 +1941,15 @@ function forwardToAnthropicCatchAll(req, res) {
   else if (fwdHeaders['x-api-key']) auth_kind = 'x-api-key';
   proxyLog('catch_all_forward', {
     method: req.method,
-    path: req.url,
+    path: requestPathForTelemetry(req.url),
     host: targetUrl.hostname,
     auth_kind,
   });
-  proxyLog('v1_passthrough', { method: req.method, path: req.url, backend: 'anthropic' });
+  proxyLog('v1_passthrough', {
+    method: req.method,
+    path: requestPathForTelemetry(req.url),
+    backend: 'anthropic',
+  });
   const up = lib.request({
     hostname: targetUrl.hostname,
     port: targetUrl.port || (isHttps ? 443 : 80),
@@ -1913,7 +2061,30 @@ function flattenMessagesForOllama(body) {
 // Scrub headers on the REQUEST side only (client -> upstream). The response side
 // either writes its own headers (streaming SSE, non-streaming JSON) or pipes
 // upstream headers verbatim with an unmodified body, so no scrub is needed there.
-function scrubCthruHeaders(headers) {
+const CLAUDE_CODE_CORRELATION_HEADERS = new Set([
+  'x-claude-code-session-id',
+  'x-claude-code-agent-id',
+  'x-claude-code-parent-agent-id',
+]);
+
+// Claude's gateway protocol uses correlation headers for attribution. They are
+// appropriate only for an explicitly trusted gateway boundary because they
+// expose session-scoped and per-spawn agent identifiers to upstream providers.
+//
+// Endpoint policy is tri-state:
+//   true/false — explicit operator decision
+//   absent     — legacy trust only for anthropic.com or a subdomain
+// Invalid present values fail closed when validation is bypassed.
+function shouldPreserveClaudeCodeCorrelation(backend) {
+  if (!backend || typeof backend !== 'object') return false;
+  if (backend.preserve_claude_code_correlation !== undefined) {
+    return backend.preserve_claude_code_correlation === true;
+  }
+  const host = String(backendHost(backend) || '').toLowerCase();
+  return host === 'anthropic.com' || host.endsWith('.anthropic.com');
+}
+
+function scrubCthruHeaders(headers, { preserveClaudeCodeCorrelation = false } = {}) {
   const out = { ...headers };
   delete out.host;
   // Drop content-length: the proxy rewrites the request body before forwarding —
@@ -1922,7 +2093,11 @@ function scrubCthruHeaders(headers) {
   delete out['content-length'];
   // Remove any x-c-thru specific headers if they exist
   for (const k of Object.keys(out)) {
-    if (k.toLowerCase().startsWith('x-c-thru-')) delete out[k];
+    const lk = k.toLowerCase();
+    if (lk.startsWith('x-c-thru-') ||
+        (!preserveClaudeCodeCorrelation && CLAUDE_CODE_CORRELATION_HEADERS.has(lk))) {
+      delete out[k];
+    }
   }
   // Force uncompressed upstream responses. Translate paths (Gemini / Ollama-legacy)
   // and usage tees parse bodies as UTF-8 text; forwarding client Accept-Encoding
@@ -2272,10 +2447,11 @@ function shouldFallbackOnStatus(code) {
 // Body is forwarded VERBATIM for true Anthropic-family backends. Callers rewrite
 // body.model. Ollama/Anthropic share /v1/messages dialect (tool_use, thinking).
 //
-// xAI exception: api.x.ai rejects role:"system"|"developer"|"tool" inside
-// messages[] (400 invalid-argument "Invalid message role"). Claude Code agents
-// often put the subagent system prompt as messages[{role:system}]. Fold those
-// into top-level `system` (accepted by xAI) via sanitizeXaiAnthropicBody.
+// Legacy xAI exception: retain this sanitizer for user-defined xAI endpoints
+// that explicitly select format:"anthropic". The shipped xAI endpoint uses the
+// supported Responses adapter instead. Legacy api.x.ai Messages rejects
+// role:"system"|"developer"|"tool" inside messages[], so fold those roles into
+// the top-level `system` field via sanitizeXaiAnthropicBody.
 //
 // For older Ollama installs or LM Studio's Ollama-compat shim that lack
 // /v1/messages, opt the backend into forwardOllamaLegacy() with
@@ -2385,7 +2561,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   // Ollama's /v1/messages adapter does not implement /v1/messages/count_tokens
   // (returns 404). Gemini maps it to :countTokens; Ollama has no equivalent, so
   // short-circuit with a proxy-side heuristic estimate instead of forwarding.
-  // Same for xAI (Anthropic Messages is legacy/compat; count_tokens not reliable).
+  // Same for explicitly configured legacy xAI Messages endpoints. The shipped
+  // xAI route uses forwardOpenAI and its local non-billable token estimate.
   // Real Anthropic backends still forward natively.
   if (typeof req.url === 'string' && req.url.startsWith('/v1/messages/count_tokens')) {
     const host = backendHost(backend) || '';
@@ -2430,7 +2607,9 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
   const isHttps = targetUrl.protocol === 'https:';
   const lib = isHttps ? https : http;
 
-  const headers = scrubCthruHeaders(req.headers);
+  const headers = scrubCthruHeaders(req.headers, {
+    preserveClaudeCodeCorrelation: shouldPreserveClaudeCodeCorrelation(backend),
+  });
   if (!applyOutboundAuth(backend, req.headers, headers, requestMeta)) {
     return sendAnthropicError(res, 401,
       `Endpoint "${backend.id}" is configured with auth:"subscription" — ` +
@@ -2462,7 +2641,10 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
     headers,
     timeout: ANTHROPIC_UPSTREAM_TIMEOUT_MS,
   };
-  ctxDebug(ctx, 'anthropic.request.path', { backend: backend.id, target: `${targetUrl.origin}${forwardedPath}` });
+  ctxDebug(ctx, 'anthropic.request.path', {
+    backend: backend.id,
+    target: `${targetUrl.origin}${basePrefix}${requestPathForTelemetry(req.url)}`,
+  });
   const backendStartedAt = Date.now();
   if (requestMeta) requestMeta.backendStartedAt = backendStartedAt;
 
@@ -2685,7 +2867,7 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
             capability: requestMeta.capability || null,
             mode: requestMeta.activeMode,
             served_by: effectiveModel,
-            endpoint: req.url,
+            endpoint: requestPathForTelemetry(req.url),
             latency_ms: Date.now() - (requestMeta.startedAt || Date.now()),
             stream: !!body.stream,
             ...(body.stream && { stream_events: streamEvents, stream_events_truncated: streamEventsTruncated }),
@@ -3102,7 +3284,7 @@ function setupOllamaStream(ctx, req, res, backend, effectiveModel, requestMeta, 
         capability: requestMeta.capability || null,
         mode: requestMeta.activeMode,
         served_by: effectiveModel,
-        endpoint: req.url,
+        endpoint: requestPathForTelemetry(req.url),
         latency_ms: Date.now() - (requestMeta.startedAt || requestStartedAt || Date.now()),
         stream: true,
         stream_events: [],
@@ -3310,7 +3492,7 @@ function handleOllamaNonStream(ctx, req, res, body, backend, effectiveModel, req
           capability: requestMeta.capability || null,
           mode: requestMeta.activeMode,
           served_by: effectiveModel,
-          endpoint: req.url,
+          endpoint: requestPathForTelemetry(req.url),
           latency_ms: Date.now() - (requestMeta.startedAt || nonStreamStart),
           stream: false,
           request: Object.assign({}, body, {
@@ -3531,7 +3713,11 @@ async function handleFilesApi(req, res) {
     }
   }
 
-  return sendAnthropicError(res, 404, `not found: ${req.method} ${req.url}`);
+  return sendAnthropicError(
+    res,
+    404,
+    `not found: ${req.method} ${requestPathForTelemetry(req.url)}`,
+  );
 }
 
 // Build the observability headers attached to every Gemini-path response.
@@ -4867,6 +5053,13 @@ function mapAnthropicToGemini(body, effectiveModel) {
             const textParts = responseObj.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n');
             responseObj = { content: textParts || JSON.stringify(responseObj) };
           }
+          // FunctionResponse.response is a protobuf Struct, so a JSON scalar
+          // parsed from Anthropic's string content (for example "18") cannot
+          // be sent as the response root. Preserve its JSON type under the
+          // documented `output` key instead of stringifying it.
+          if (responseObj === null || typeof responseObj !== 'object' || Array.isArray(responseObj)) {
+            responseObj = { output: responseObj };
+          }
           // Anthropic tool_result.is_error=true signals upstream that the tool
           // failed and the model should consider retry/error handling. Gemini's
           // functionResponse uses an `error` field on response. Wrap the original
@@ -4959,15 +5152,266 @@ function mapAnthropicToGemini(body, effectiveModel) {
 // intentionally distinct from Chat Completions: Responses uses typed input and
 // output items, flat function-tool declarations, and in-band response status.
 
-// OpenAI's Responses parameters dialect is used with strict:false here, so it
-// accepts standard JSON Schema constructs that Gemini rejects. Keep the named
-// wrapper (and observability Set contract) so a future proven upstream
-// restriction can be isolated here without changing the request mapper.
-function scrubOpenAiSchema(schema, removed) {
+// Anthropic's tool_use block cannot carry a provider's opaque Responses
+// reasoning item. Keep the encrypted item process-local, keyed by a
+// privacy-safe session/user scope + endpoint + model + function call id that
+// Claude Code will echo as tool_use.id. If no stable identity is available,
+// caching is disabled rather than creating a proxy-wide opaque-state bucket.
+// Entries are size-, count-, and time-bounded; a cache miss simply falls back
+// to the ordinary stateless history translation.
+function boundedPositiveIntegerFromEnv(key, fallback, maximum) {
+  const raw = process.env[key];
+  if (raw == null || raw.trim() === '') return fallback;
+  if (!/^[1-9]\d*$/.test(raw.trim())) return fallback;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value <= maximum ? value : fallback;
+}
+
+const RESPONSES_REASONING_CACHE_MAX_ENTRIES = boundedPositiveIntegerFromEnv(
+  'RESPONSES_REASONING_CACHE_MAX_ENTRIES', 1000, 10000,
+);
+const RESPONSES_REASONING_CACHE_TTL_MS = boundedPositiveIntegerFromEnv(
+  'RESPONSES_REASONING_CACHE_TTL_MS', 3600000, 24 * 60 * 60 * 1000,
+);
+const RESPONSES_REASONING_CACHE_MAX_ITEM_BYTES = boundedPositiveIntegerFromEnv(
+  'RESPONSES_REASONING_CACHE_MAX_ITEM_BYTES', 1024 * 1024, 8 * 1024 * 1024,
+);
+const RESPONSES_REASONING_CACHE_MAX_BYTES = boundedPositiveIntegerFromEnv(
+  'RESPONSES_REASONING_CACHE_MAX_BYTES', 64 * 1024 * 1024, 256 * 1024 * 1024,
+);
+const RESPONSES_REASONING_CACHE = new Map();
+let responsesReasoningCacheBytes = 0;
+
+function hashResponsesIdentifier(namespace, value) {
+  return crypto.createHash('sha256')
+    .update(`${namespace}\0`, 'utf8')
+    .update(String(value), 'utf8')
+    .digest('hex');
+}
+
+function responsesReasoningScope(backendId, model, requestMeta) {
+  const identity = (requestMeta && requestMeta.userId) || REQUEST_SESSION_ID;
+  // Opaque provider reasoning must never use a proxy-wide fallback namespace:
+  // without a stable client/session identity, skip cache/replay entirely.
+  if (!identity) return null;
+  const identityRef = hashResponsesIdentifier(
+    'c-thru-responses-reasoning-scope-v1',
+    identity,
+  );
+  return `${backendId || ''}\0${model || ''}\0${identityRef}`;
+}
+
+function responsesReasoningCacheKey(scope, callId) {
+  return `${scope || ''}\0${callId || ''}`;
+}
+
+function deleteResponsesReasoningCacheEntry(key) {
+  const entry = RESPONSES_REASONING_CACHE.get(key);
+  if (!entry) return false;
+  RESPONSES_REASONING_CACHE.delete(key);
+  responsesReasoningCacheBytes = Math.max(
+    0,
+    responsesReasoningCacheBytes - entry.bytes,
+  );
+  return true;
+}
+
+function pruneExpiredResponsesReasoning(now = Date.now()) {
+  for (const [key, entry] of RESPONSES_REASONING_CACHE) {
+    if (now - entry.ts > RESPONSES_REASONING_CACHE_TTL_MS) {
+      deleteResponsesReasoningCacheEntry(key);
+    }
+  }
+}
+
+function rememberResponsesReasoning(scope, callId, items) {
+  if (!scope || !callId || !Array.isArray(items) || !items.length) return;
+  let serialized;
+  try { serialized = JSON.stringify(items); } catch { return; }
+  const bytes = Buffer.byteLength(serialized);
+  if (bytes > RESPONSES_REASONING_CACHE_MAX_ITEM_BYTES ||
+      bytes > RESPONSES_REASONING_CACHE_MAX_BYTES) return;
+  pruneExpiredResponsesReasoning();
+  const key = responsesReasoningCacheKey(scope, callId);
+  deleteResponsesReasoningCacheEntry(key);
+  while (RESPONSES_REASONING_CACHE.size >= RESPONSES_REASONING_CACHE_MAX_ENTRIES ||
+      responsesReasoningCacheBytes + bytes > RESPONSES_REASONING_CACHE_MAX_BYTES) {
+    const oldestKey = RESPONSES_REASONING_CACHE.keys().next().value;
+    if (oldestKey === undefined) break;
+    deleteResponsesReasoningCacheEntry(oldestKey);
+  }
+  RESPONSES_REASONING_CACHE.set(key, {
+    items: JSON.parse(serialized),
+    ts: Date.now(),
+    bytes,
+  });
+  responsesReasoningCacheBytes += bytes;
+}
+
+function lookupResponsesReasoning(scope, callId) {
+  const key = responsesReasoningCacheKey(scope, callId);
+  const entry = RESPONSES_REASONING_CACHE.get(key);
+  if (!entry) return [];
+  if (Date.now() - entry.ts > RESPONSES_REASONING_CACHE_TTL_MS) {
+    deleteResponsesReasoningCacheEntry(key);
+    return [];
+  }
+  return entry.items;
+}
+
+function rememberResponsesReasoningForToolCalls(scope, output) {
+  let reasoningItems = [];
+  let sawFunctionCall = false;
+  for (const item of (Array.isArray(output) ? output : [])) {
+    if (item && item.type === 'reasoning') {
+      if (sawFunctionCall) reasoningItems = [];
+      sawFunctionCall = false;
+      if (typeof item.encrypted_content === 'string' && item.encrypted_content) {
+        reasoningItems.push(item);
+      }
+    } else if (item && item.type === 'function_call') {
+      if (typeof item.call_id === 'string' && item.call_id && reasoningItems.length) {
+        rememberResponsesReasoning(scope, item.call_id, reasoningItems);
+      }
+      sawFunctionCall = true;
+    }
+  }
+}
+
+// Responses accepts the standard JSON Schema constructs that Gemini rejects.
+// Strictness is selected per provider by the request mapper below; keep this
+// named wrapper (and observability Set contract) so a future proven upstream
+// schema restriction can be isolated without changing that mapper.
+function scrubOpenAiSchema(schema, _removed) {
   return schema;
 }
 
-function mapAnthropicToOpenAI(body, effectiveModel) {
+function mapAnthropicBase64ImageToOpenAI(block, translationGap, gapPrefix = 'image') {
+  const source = block && block.source;
+  if (!source || source.type !== 'base64' ||
+      typeof source.media_type !== 'string' || !source.media_type ||
+      typeof source.data !== 'string' || !source.data) {
+    translationGap.add(gapPrefix + '.source');
+    return null;
+  }
+  return {
+    type: 'input_image',
+    image_url: `data:${source.media_type};base64,${source.data}`,
+    detail: 'auto',
+  };
+}
+
+function mapAnthropicToolResultOutputToOpenAI(block, translationGap) {
+  if (typeof block.content === 'string') return block.content;
+  if (!Array.isArray(block.content)) {
+    translationGap.add('tool_result.content');
+    return '';
+  }
+
+  const output = [];
+  for (const item of block.content) {
+    if (item && item.type === 'text') {
+      output.push({ type: 'input_text', text: item.text || '' });
+    } else if (item && item.type === 'image') {
+      const image = mapAnthropicBase64ImageToOpenAI(
+        item,
+        translationGap,
+        'tool_result.image',
+      );
+      if (image) output.push(image);
+    } else if (item && typeof item.type === 'string') {
+      translationGap.add('tool_result:' + item.type);
+    } else {
+      translationGap.add('tool_result:unknown');
+    }
+  }
+  return output;
+}
+
+function mapAnthropicToolChoiceToResponses(toolChoice, backend) {
+  if (!toolChoice) return undefined;
+  const choice = typeof toolChoice === 'string'
+    ? { type: toolChoice }
+    : toolChoice;
+  if (choice.type === 'auto') return 'auto';
+  if (choice.type === 'any') return 'required';
+  if (choice.type === 'none') return 'none';
+  if (choice.type !== 'tool' || !choice.name) return undefined;
+  // OpenAI Responses uses a flat named-function selector. xAI currently
+  // documents the Chat-compatible nested selector even on its Responses route.
+  return isXaiBackend(backend)
+    ? { type: 'function', function: { name: choice.name } }
+    : { type: 'function', name: choice.name };
+}
+
+function mapAnthropicThinkingToResponses(body, backend, translationGap) {
+  const thinking = body.thinking;
+  const outputConfig = body.output_config;
+  const requestedEffort = outputConfig &&
+    typeof outputConfig === 'object'
+    ? outputConfig.effort
+    : undefined;
+  let effort;
+  if (requestedEffort != null) {
+    // Grok 4.5 accepts only low/medium/high. Generic Responses providers can
+    // preserve every current Anthropic effort level; model-specific rejection
+    // remains the upstream provider's responsibility.
+    const supportedEfforts = isXaiBackend(backend)
+      ? ['low', 'medium', 'high']
+      : ['low', 'medium', 'high', 'xhigh', 'max'];
+    if (supportedEfforts.includes(requestedEffort)) {
+      effort = requestedEffort;
+    } else {
+      translationGap.add('output_config.effort');
+      effort = 'high';
+    }
+  }
+  if (outputConfig && typeof outputConfig === 'object' &&
+      Object.keys(outputConfig).some(key => key !== 'effort')) {
+    translationGap.add('output_config');
+  }
+
+  if (!thinking || typeof thinking !== 'object') {
+    return effort ? { effort, summary: 'auto' } : undefined;
+  }
+  if (thinking.type === 'disabled') {
+    // Grok 4.5 cannot disable reasoning. Low is the nearest cost/latency
+    // approximation, and the gap header makes the semantic difference visible.
+    translationGap.add('thinking.type:disabled');
+    return isXaiBackend(backend) ? { effort: 'low' } : undefined;
+  }
+  if (thinking.type === 'adaptive') {
+    // Responses reasoning effort is a depth control, not Claude's decision to
+    // think or skip thinking per request, so preserve effort and expose the gap.
+    translationGap.add('thinking.type:adaptive');
+    const mapped = { effort: effort || 'high' };
+    if (thinking.display !== 'omitted') mapped.summary = 'auto';
+    return mapped;
+  }
+  if (thinking.type === 'enabled') {
+    const budget = Number(thinking.budget_tokens) || 0;
+    if (thinking.budget_tokens != null) {
+      translationGap.add('thinking.budget_tokens');
+    }
+    const mapped = {
+      effort: effort ||
+        (budget > 8192 ? 'high' : (budget > 1024 ? 'medium' : 'low')),
+    };
+    if (thinking.display !== 'omitted') mapped.summary = 'auto';
+    return mapped;
+  }
+  if (thinking.type != null) {
+    translationGap.add('thinking.type');
+  }
+  return effort ? { effort, summary: 'auto' } : undefined;
+}
+
+function mapAnthropicToOpenAI(
+  body,
+  effectiveModel,
+  reasoningCacheScope,
+  backend,
+) {
   const openaiReq = {
     model: effectiveModel,
     input: [],
@@ -4988,12 +5432,20 @@ function mapAnthropicToOpenAI(body, effectiveModel) {
   if (body.max_tokens != null) openaiReq.max_output_tokens = body.max_tokens;
   if (body.top_k != null) translationGap.add('param:top_k');
   if (body.stop_sequences != null) translationGap.add('param:stop_sequences');
-
-  if (body.thinking && body.thinking.type === 'enabled') {
-    const budget = Number(body.thinking.budget_tokens) || 0;
-    const effort = budget > 8192 ? 'high' : (budget > 1024 ? 'medium' : 'low');
-    openaiReq.reasoning = { effort, summary: 'auto' };
+  if (body.metadata && typeof body.metadata.user_id === 'string' &&
+      body.metadata.user_id) {
+    openaiReq.prompt_cache_key = hashResponsesIdentifier(
+      'c-thru-responses-prompt-cache-v1',
+      body.metadata.user_id,
+    );
   }
+
+  const reasoning = mapAnthropicThinkingToResponses(
+    body,
+    backend,
+    translationGap,
+  );
+  if (reasoning) openaiReq.reasoning = reasoning;
 
   if (Array.isArray(body.tools)) {
     const tools = [];
@@ -5003,27 +5455,52 @@ function mapAnthropicToOpenAI(body, effectiveModel) {
         translationGap.add('tool:' + tool.type);
         continue;
       }
-      tools.push({
+      const mappedTool = {
         type: 'function',
         name: tool.name,
         description: tool.description,
         parameters: scrubOpenAiSchema(tool.input_schema || { type: 'object', properties: {} }, schemaRemoved),
-        strict: false,
-      });
+      };
+      if (isXaiBackend(backend)) {
+        // xAI tool schemas are implicitly strict and its documented shape
+        // omits this OpenAI field. Anthropic's omitted/false forms are
+        // best-effort, so surface either semantic mismatch explicitly.
+        if (tool.strict !== true) {
+          translationGap.add(
+            tool.strict === false ? 'tool.strict:false' : 'tool.strict',
+          );
+        }
+      } else {
+        mappedTool.strict = tool.strict === true;
+      }
+      tools.push(mappedTool);
     }
-    if (tools.length) openaiReq.tools = tools;
+    if (tools.length) {
+      openaiReq.tools = tools;
+      openaiReq.include = ['reasoning.encrypted_content'];
+    }
   }
-  if (body.tool_choice) {
-    const tc = typeof body.tool_choice === 'string' ? { type: body.tool_choice } : body.tool_choice;
-    if (tc.type === 'auto') openaiReq.tool_choice = 'auto';
-    else if (tc.type === 'any') openaiReq.tool_choice = 'required';
-    else if (tc.type === 'tool' && tc.name) openaiReq.tool_choice = { type: 'function', name: tc.name };
-    else if (tc.type === 'none') openaiReq.tool_choice = 'none';
+  const toolChoice = mapAnthropicToolChoiceToResponses(
+    body.tool_choice,
+    backend,
+  );
+  if (toolChoice !== undefined) openaiReq.tool_choice = toolChoice;
+  if (body.tool_choice &&
+      typeof body.tool_choice === 'object' &&
+      body.tool_choice.disable_parallel_tool_use === true) {
+    openaiReq.parallel_tool_calls = false;
   }
 
+  const translatedToolUseIds = new Set();
+  const replayedReasoningItems = new Set();
   for (const msg of (Array.isArray(body.messages) ? body.messages : [])) {
     if (!msg || typeof msg !== 'object') continue;
-    const content = [];
+    let content = [];
+    const flushMessage = () => {
+      if (!content.length) return;
+      openaiReq.input.push({ type: 'message', role: msg.role, content });
+      content = [];
+    };
     if (typeof msg.content === 'string') {
       content.push({ type: 'input_text', text: msg.content });
     } else if (Array.isArray(msg.content)) {
@@ -5031,14 +5508,56 @@ function mapAnthropicToOpenAI(body, effectiveModel) {
         if (block && block.type === 'text') {
           if (block.citations) translationGap.add('text.citations');
           content.push({ type: 'input_text', text: block.text || '' });
+        } else if (block && block.type === 'image' && msg.role === 'user') {
+          const image = mapAnthropicBase64ImageToOpenAI(block, translationGap);
+          if (image) content.push(image);
+        } else if (block && block.type === 'tool_use' && msg.role === 'assistant') {
+          flushMessage();
+          if (typeof block.id !== 'string' || !block.id ||
+              typeof block.name !== 'string' || !block.name) {
+            translationGap.add('tool_use.shape');
+            continue;
+          }
+          for (const reasoningItem of lookupResponsesReasoning(reasoningCacheScope, block.id)) {
+            const replayKey = reasoningItem.id || crypto.createHash('sha256')
+              .update(reasoningItem.encrypted_content || '', 'utf8')
+              .digest('hex');
+            if (replayedReasoningItems.has(replayKey)) continue;
+            replayedReasoningItems.add(replayKey);
+            openaiReq.input.push(reasoningItem);
+          }
+          openaiReq.input.push({
+            type: 'function_call',
+            call_id: block.id,
+            name: block.name,
+            arguments: JSON.stringify(block.input === undefined ? {} : block.input),
+          });
+          translatedToolUseIds.add(block.id);
+        } else if (block && block.type === 'tool_result' && msg.role === 'user') {
+          flushMessage();
+          if (typeof block.tool_use_id !== 'string' || !block.tool_use_id) {
+            translationGap.add('tool_result.shape');
+            continue;
+          }
+          openaiReq.input.push({
+            type: 'function_call_output',
+            call_id: block.tool_use_id,
+            output: mapAnthropicToolResultOutputToOpenAI(block, translationGap),
+          });
+          if (!translatedToolUseIds.has(block.tool_use_id)) {
+            translationGap.add('tool_result:unmatched');
+          }
+          if (block.is_error === true) translationGap.add('tool_result.is_error');
         } else if (block && typeof block.type === 'string') {
-          // P0 is text-only. In particular, function_call/function_call_output
-          // history is a P1 round-trip, so drop it visibly rather than guessing.
           translationGap.add(block.type);
+        } else {
+          translationGap.add('content:unknown');
         }
       }
+    } else {
+      translationGap.add('message.content');
     }
-    openaiReq.input.push({ type: 'message', role: msg.role, content });
+    flushMessage();
   }
 
   if (schemaRemoved.size > 0) {
@@ -5069,19 +5588,30 @@ function mapOpenAIStatusToAnthropic(status, opts) {
   const output = o.output || [];
   const hasToolUse = o.hasToolUse || openAIOutputHasType(output, 'function_call');
   const hasRefusal = o.hasRefusal || openAIOutputHasType(output, 'refusal');
+  const stopped = (stopReason, stopSequence = null) => ({
+    stop_reason: stopReason,
+    stop_sequence: stopSequence,
+    stop_details: stopReason === 'refusal'
+      ? {
+        type: 'refusal',
+        category: null,
+        explanation: null,
+      }
+      : null,
+  });
   if (status === 'incomplete') {
     if (o.incomplete_details && o.incomplete_details.reason === 'max_output_tokens') {
-      return { stop_reason: 'max_tokens', stop_sequence: null };
+      return stopped('max_tokens');
     }
-    return { stop_reason: 'stop_sequence', stop_sequence: 'openai_content_block' };
+    return stopped('stop_sequence', 'openai_content_block');
   }
   if (status === 'completed' || !status) {
-    if (hasToolUse) return { stop_reason: 'tool_use', stop_sequence: null };
-    if (hasRefusal) return { stop_reason: 'refusal', stop_sequence: null };
-    return { stop_reason: 'end_turn', stop_sequence: null };
+    if (hasToolUse) return stopped('tool_use');
+    if (hasRefusal) return stopped('refusal');
+    return stopped('end_turn');
   }
   if (o.ctx) ctxLog(o.ctx, 'openai.unknown_response_status', { status });
-  return { stop_reason: 'stop_sequence', stop_sequence: 'openai_content_block' };
+  return stopped('stop_sequence', 'openai_content_block');
 }
 
 function mapOpenAIOutputToAnthropic(output, gapTarget) {
@@ -5092,7 +5622,11 @@ function mapOpenAIOutputToAnthropic(output, gapTarget) {
     if (item.type === 'function_call') {
       let input = {};
       if (typeof item.arguments === 'string' && item.arguments) {
-        try { input = JSON.parse(item.arguments); } catch {}
+        try {
+          input = JSON.parse(item.arguments);
+        } catch {
+          translationGap.add('function_call.arguments');
+        }
       } else if (item.arguments && typeof item.arguments === 'object') {
         input = item.arguments;
       }
@@ -5100,13 +5634,23 @@ function mapOpenAIOutputToAnthropic(output, gapTarget) {
       continue;
     }
     if (item.type === 'reasoning') { translationGap.add('reasoning'); continue; }
-    const parts = Array.isArray(item.content) ? item.content : [item];
+    const itemHasContent = Array.isArray(item.content);
+    const knownTopLevelPart = item.type === 'output_text' ||
+      item.type === 'text' ||
+      item.type === 'refusal';
+    if (item.type !== 'message' && !knownTopLevelPart) {
+      translationGap.add(`response_item:${item.type || 'unknown'}`);
+    }
+    const parts = itemHasContent ? item.content : (knownTopLevelPart ? [item] : []);
     for (const part of parts) {
       if (!part || typeof part !== 'object') continue;
       if (part.type === 'output_text' || part.type === 'text') {
         content.push({ type: 'text', text: part.text || '' });
       } else if (part.type === 'refusal') {
-        content.push({ type: 'refusal', refusal: part.refusal || part.text || '' });
+        const refusalText = part.refusal || part.text || '';
+        if (refusalText) content.push({ type: 'text', text: refusalText });
+      } else {
+        translationGap.add(`response_part:${part.type || 'unknown'}`);
       }
     }
   }
@@ -5127,7 +5671,17 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
   }
 
   const isStream = !!body.stream;
-  const openaiBody = mapAnthropicToOpenAI(body, effectiveModel);
+  const reasoningCacheScope = responsesReasoningScope(
+    backend.id,
+    effectiveModel,
+    requestMeta,
+  );
+  const openaiBody = mapAnthropicToOpenAI(
+    body,
+    effectiveModel,
+    reasoningCacheScope,
+    backend,
+  );
   if (body && body.metadata && typeof body.metadata.user_id === 'string') {
     Object.defineProperty(openaiBody, '_userId', { value: body.metadata.user_id, enumerable: false, configurable: true });
   }
@@ -5149,20 +5703,21 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
   let stopOpenAiPingFn = () => {};
   let upstreamCancelled = false;
   let streamTerminated = false;
+  const responsesEndpointLabel = `Responses endpoint "${backend.id}"`;
 
   const relayPreCommitFailure = async (failure) => {
     const statusCode = Number(failure.statusCode) || 502;
     const raw = failure.raw || (failure.error ? JSON.stringify(failure.error) : '');
-    const message = failure.message || 'OpenAI upstream failure';
+    const message = failure.message || `${responsesEndpointLabel} upstream failure`;
     markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(statusCode, message));
     try {
       const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, {
-        reason: `openai ${statusCode}: ${message.slice(0, 200)}`,
+        reason: `${responsesEndpointLabel} ${statusCode}: ${message.slice(0, 200)}`,
         statusCode,
       });
       if (handled || res.headersSent) return;
     } catch {}
-    if (!res.headersSent) sendAnthropicError(res, statusCode, `OpenAI error: ${message}`, raw);
+    if (!res.headersSent) sendAnthropicError(res, statusCode, `${responsesEndpointLabel} error: ${message}`, raw);
   };
 
   const up = lib.request({
@@ -5171,7 +5726,7 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
     path: targetUrl.pathname + targetUrl.search,
     method: 'POST',
     headers,
-    timeout: GEMINI_UPSTREAM_TIMEOUT_MS,
+    timeout: RESPONSES_UPSTREAM_TIMEOUT_MS,
   }, upRes => {
     const statusCode = upRes.statusCode || 502;
     if (statusCode >= 400) {
@@ -5194,7 +5749,10 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
         if (respBytes > UPSTREAM_NONSTREAM_BODY_CAP) {
           nonStreamAborted = true;
           try { upRes.destroy(); } catch {}
-          relayPreCommitFailure({ statusCode: 502, message: `OpenAI non-stream response exceeded ${UPSTREAM_NONSTREAM_BODY_CAP} bytes` });
+          relayPreCommitFailure({
+            statusCode: 502,
+            message: `${responsesEndpointLabel} non-stream response exceeded ${UPSTREAM_NONSTREAM_BODY_CAP} bytes`,
+          });
           return;
         }
         respBody += d;
@@ -5217,8 +5775,11 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
               error: openaiData.error,
             });
           }
+          rememberResponsesReasoningForToolCalls(reasoningCacheScope, openaiData.output);
           const usage = openaiData.usage || {};
           const reasoningTokens = usage.output_tokens_details && usage.output_tokens_details.reasoning_tokens;
+          const cachedInputTokens = usage.input_tokens_details &&
+            usage.input_tokens_details.cached_tokens;
           if (typeof reasoningTokens === 'number' && reasoningTokens > 0) {
             Object.defineProperty(openaiBody, '_thinkingTokens', { value: reasoningTokens, enumerable: false, configurable: true });
           }
@@ -5235,9 +5796,14 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
             content: mapOpenAIOutputToAnthropic(openaiData.output, openaiBody),
             stop_reason: finish.stop_reason,
             stop_sequence: finish.stop_sequence,
+            stop_details: finish.stop_details,
             usage: {
               input_tokens: usage.input_tokens || 0,
               output_tokens: usage.output_tokens || 0,
+              cache_read_input_tokens: typeof cachedInputTokens === 'number'
+                ? cachedInputTokens
+                : 0,
+              cache_creation_input_tokens: 0,
             },
           };
           res.writeHead(200, Object.assign(
@@ -5249,7 +5815,10 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
             anthropicRes.usage.output_tokens, Date.now() - startedAt, attributionName(requestMeta));
           clearBackendCooldown(backend.id);
         } catch (e) {
-          relayPreCommitFailure({ statusCode: 502, message: `failed to parse OpenAI response: ${e.message}` });
+          relayPreCommitFailure({
+            statusCode: 502,
+            message: `failed to parse ${responsesEndpointLabel} response: ${e.message}`,
+          });
         }
       });
       return;
@@ -5267,6 +5836,8 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
     let hasRefusal = false;
     const itemBlocks = new Map();
     const openBlocks = new Map();
+    const functionCallArguments = new Map();
+    const refusalTextState = new Map();
     let reasoningBlock = null;
 
     const ensureMessageStart = () => {
@@ -5277,7 +5848,8 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
       sseWrite(res, 'message_start', {
         type: 'message_start',
         message: { id: messageId, type: 'message', role: 'assistant', model: effectiveModel,
-          content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } },
+          content: [], stop_reason: null, stop_sequence: null, stop_details: null,
+          usage: { input_tokens: 0, output_tokens: 0 } },
       });
       messageStarted = true;
       return true;
@@ -5299,9 +5871,137 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
     const closeAllBlocks = () => {
       for (const key of [...openBlocks.keys()]) closeBlock(key);
     };
+    const refusalState = key => {
+      let state = refusalTextState.get(key);
+      if (!state) {
+        state = { candidate: '', sawDelta: false, wholeEmitted: false };
+        refusalTextState.set(key, state);
+      }
+      return state;
+    };
+    const startRefusalBlock = (key, refusalText) => {
+      hasRefusal = true;
+      const state = refusalState(key);
+      if (typeof refusalText === 'string' && refusalText) {
+        state.candidate = refusalText;
+      }
+      return startBlock(key, { type: 'text', text: '' });
+    };
+    const emitRefusalDelta = (key, text) => {
+      const index = startRefusalBlock(key, '');
+      if (index == null) return;
+      refusalState(key).sawDelta = true;
+      sseWrite(res, 'content_block_delta', {
+        type: 'content_block_delta',
+        index,
+        delta: { type: 'text_delta', text: text || '' },
+      });
+    };
+    const emitWholeRefusal = key => {
+      const state = refusalTextState.get(key);
+      if (!state || state.sawDelta || state.wholeEmitted || !state.candidate) {
+        return;
+      }
+      const index = startRefusalBlock(key, state.candidate);
+      if (index == null) return;
+      sseWrite(res, 'content_block_delta', {
+        type: 'content_block_delta',
+        index,
+        delta: { type: 'text_delta', text: state.candidate },
+      });
+      state.wholeEmitted = true;
+    };
+    const flushWholeRefusals = output => {
+      for (const [outputIndex, item] of (Array.isArray(output)
+        ? output.entries()
+        : [])) {
+        if (!item || typeof item !== 'object') continue;
+        if (item.type === 'refusal') {
+          const key = `item:${outputIndex}`;
+          if (!refusalTextState.has(key)) {
+            startRefusalBlock(key, item.refusal || item.text || '');
+            itemBlocks.set(outputIndex, key);
+          }
+        }
+        for (const [contentIndex, part] of (Array.isArray(item.content)
+          ? item.content.entries()
+          : [])) {
+          if (part && part.type === 'refusal') {
+            const key = `part:${outputIndex}:${contentIndex}`;
+            if (!refusalTextState.has(key)) {
+              startRefusalBlock(key, part.refusal || part.text || '');
+            }
+          }
+        }
+      }
+      for (const key of refusalTextState.keys()) emitWholeRefusal(key);
+    };
+    const functionCallState = outputIndex => {
+      let state = functionCallArguments.get(outputIndex);
+      if (!state) {
+        state = { sawDelta: false, wholeEmitted: false, candidate: null };
+        functionCallArguments.set(outputIndex, state);
+      }
+      return state;
+    };
+    const ensureFunctionCallBlock = (outputIndex, item) => {
+      hasToolUse = true;
+      const itemKey = `item:${outputIndex}`;
+      const key = itemBlocks.get(outputIndex) || itemKey;
+      const state = functionCallState(outputIndex);
+      if (item && typeof item.arguments === 'string' && item.arguments) {
+        state.candidate = item.arguments;
+      }
+      if (!openBlocks.has(key)) {
+        const index = startBlock(key, {
+          type: 'tool_use',
+          id: (item && (item.call_id || item.id)) ||
+            ('call_' + crypto.randomBytes(4).toString('hex')),
+          name: (item && item.name) || '',
+          input: {},
+        });
+        if (index != null) itemBlocks.set(outputIndex, key);
+      }
+      return key;
+    };
+    const emitWholeFunctionCallArguments = (outputIndex, item) => {
+      const state = functionCallState(outputIndex);
+      if (item && typeof item.arguments === 'string' && item.arguments) {
+        state.candidate = item.arguments;
+      }
+      if (state.sawDelta || state.wholeEmitted || !state.candidate) return;
+      const key = ensureFunctionCallBlock(outputIndex, item);
+      const index = openBlocks.get(key);
+      if (index == null) return;
+      sseWrite(res, 'content_block_delta', {
+        type: 'content_block_delta',
+        index,
+        delta: { type: 'input_json_delta', partial_json: state.candidate },
+      });
+      state.wholeEmitted = true;
+    };
+    const flushWholeFunctionCalls = output => {
+      for (const [outputIndex, item] of (Array.isArray(output) ? output.entries() : [])) {
+        if (item && item.type === 'function_call') {
+          const state = functionCallArguments.get(outputIndex);
+          if (state && (state.sawDelta || state.wholeEmitted)) continue;
+          ensureFunctionCallBlock(outputIndex, item);
+          emitWholeFunctionCallArguments(outputIndex, item);
+        }
+      }
+      for (const [outputIndex] of functionCallArguments) {
+        emitWholeFunctionCallArguments(outputIndex, null);
+      }
+    };
     const emitTerminal = response => {
       if (terminalSent || streamTerminated) return;
+      rememberResponsesReasoningForToolCalls(
+        reasoningCacheScope,
+        response && response.output,
+      );
       ensureMessageStart();
+      flushWholeFunctionCalls(response && response.output);
+      flushWholeRefusals(response && response.output);
       closeAllBlocks();
       const usage = (response && response.usage) || {};
       lastInputTokens = usage.input_tokens != null ? usage.input_tokens : lastInputTokens;
@@ -5316,7 +6016,11 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
         hasToolUse, hasRefusal, ctx,
       });
       sseWrite(res, 'message_delta', { type: 'message_delta',
-        delta: { stop_reason: finish.stop_reason, stop_sequence: finish.stop_sequence },
+        delta: {
+          stop_reason: finish.stop_reason,
+          stop_sequence: finish.stop_sequence,
+          stop_details: finish.stop_details,
+        },
         usage: { output_tokens: lastOutputTokens },
       });
       sseWrite(res, 'message_stop', { type: 'message_stop' });
@@ -5370,19 +6074,15 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
           if (type === 'response.output_item.added') {
             const item = data.item || {};
             if (item.type === 'function_call') {
-              hasToolUse = true;
-              const index = startBlock(itemKey, { type: 'tool_use', id: item.call_id || item.id || ('call_' + crypto.randomBytes(4).toString('hex')), name: item.name, input: {} });
-              if (index != null) itemBlocks.set(outputIndex, itemKey);
+              ensureFunctionCallBlock(outputIndex, item);
             } else if (item.type === 'refusal') {
-              hasRefusal = true;
-              startBlock(itemKey, { type: 'refusal', refusal: item.refusal || '' });
+              startRefusalBlock(itemKey, item.refusal || item.text || '');
               itemBlocks.set(outputIndex, itemKey);
             }
           } else if (type === 'response.content_part.added') {
             const part = data.part || {};
             if (part.type === 'refusal') {
-              hasRefusal = true;
-              startBlock(partKey, { type: 'refusal', refusal: part.refusal || '' });
+              startRefusalBlock(partKey, part.refusal || part.text || '');
             } else if (part.type === 'output_text' || part.type === 'text') {
               startBlock(partKey, { type: 'text', text: '' });
             }
@@ -5394,16 +6094,23 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
             });
           } else if (type === 'response.refusal.delta') {
             const key = openBlocks.has(partKey) ? partKey : itemKey;
-            const index = startBlock(key, { type: 'refusal', refusal: '' });
-            if (index != null) sseWrite(res, 'content_block_delta', { type: 'content_block_delta', index,
-              delta: { type: 'text_delta', text: data.delta || '' },
-            });
+            emitRefusalDelta(key, data.delta || '');
           } else if (type === 'response.function_call_arguments.delta') {
+            functionCallState(outputIndex).sawDelta = true;
             const key = itemBlocks.get(outputIndex) || itemKey;
             const index = openBlocks.get(key);
             if (index != null) sseWrite(res, 'content_block_delta', { type: 'content_block_delta', index,
               delta: { type: 'input_json_delta', partial_json: data.delta || '' },
             });
+          } else if (type === 'response.function_call_arguments.done') {
+            const item = {
+              type: 'function_call',
+              call_id: data.call_id,
+              name: data.name,
+              arguments: data.arguments,
+            };
+            ensureFunctionCallBlock(outputIndex, item);
+            emitWholeFunctionCallArguments(outputIndex, item);
           } else if (type === 'response.reasoning_summary_part.added') {
             const key = `reasoning:${outputIndex}`;
             reasoningBlock = key;
@@ -5415,11 +6122,21 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
               delta: { type: 'thinking_delta', thinking: data.delta || '' },
             });
           } else if (type === 'response.content_part.done') {
+            emitWholeRefusal(partKey);
             closeBlock(partKey);
           } else if (type === 'response.refusal.done') {
-            closeBlock(openBlocks.has(partKey) ? partKey : itemKey);
+            const key = openBlocks.has(partKey) ? partKey : itemKey;
+            emitWholeRefusal(key);
+            closeBlock(key);
           } else if (type === 'response.output_item.done') {
-            closeBlock(itemBlocks.get(outputIndex) || itemKey);
+            const item = data.item || {};
+            if (item.type === 'function_call' || functionCallArguments.has(outputIndex)) {
+              ensureFunctionCallBlock(outputIndex, item);
+              emitWholeFunctionCallArguments(outputIndex, item);
+            }
+            const key = itemBlocks.get(outputIndex) || itemKey;
+            emitWholeRefusal(key);
+            closeBlock(key);
           } else if (type === 'response.failed') {
             realTerminalSeen = true;
             failStream(data);
@@ -5431,6 +6148,16 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
           } else if (type === 'response.completed') {
             realTerminalSeen = true;
             emitTerminal(data.response || data);
+          } else if (type !== 'response.created' &&
+              type !== 'response.in_progress' &&
+              type !== 'response.queued' &&
+              type !== 'response.output_text.done' &&
+              type !== 'response.reasoning_summary_text.done' &&
+              type !== 'response.reasoning_summary_part.done') {
+            ctxLog(ctx, 'responses.stream.unknown_event', {
+              backend: backend.id,
+              type: type || 'unknown',
+            });
           }
         } catch (e) {
           ctxLog(ctx, 'openai.stream.parse_error', { error: e.message, line });
@@ -5440,7 +6167,7 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
     upRes.on('end', () => {
       stopOpenAiPingFn();
       if (!streamTerminated && !terminalSent && !realTerminalSeen) {
-        const message = 'OpenAI stream ended without a terminal event';
+        const message = `${responsesEndpointLabel} stream ended without a terminal event`;
         if (!messageStarted) {
           streamTerminated = true;
           relayPreCommitFailure({ statusCode: 502, message });
@@ -5471,9 +6198,12 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
 
   up.on('error', e => {
     if (res.headersSent) return;
-    relayPreCommitFailure({ statusCode: 502, message: `backend openai at ${targetUrl.origin} error: ${e.message}` });
+    relayPreCommitFailure({
+      statusCode: 502,
+      message: `${responsesEndpointLabel} at ${targetUrl.origin} error: ${e.message}`,
+    });
   });
-  up.on('timeout', () => up.destroy(new Error('openai upstream timeout')));
+  up.on('timeout', () => up.destroy(new Error(`${responsesEndpointLabel} upstream timeout`)));
   const cancelUpstream = () => {
     if (upstreamCancelled) return;
     upstreamCancelled = true;
@@ -5903,13 +6633,18 @@ const server = http.createServer((req, res) => {
       refreshConfigIfChanged();
       ctxLog(ctx, 'request', {
         method: req.method,
-        url: req.url,
-        raw_url: sessionMatch ? rawUrl : undefined,
+        url: requestPathForTelemetry(req.url),
         session: sessionId,
         bytes_in: Number(req.headers['content-length']) || 0,
         client: req.headers['user-agent'] || '',
       });
-      traceLog(ctx, 'in.client', req.method, req.url, req.headers);
+      traceLog(
+        ctx,
+        'in.client',
+        req.method,
+        requestPathForTelemetry(req.url),
+        req.headers,
+      );
 
       // Discovery: every response carries the dashboard URL so any client of
       // the proxy can find the human surface without out-of-band config.
@@ -5922,6 +6657,20 @@ const server = http.createServer((req, res) => {
         if (finalized) return;
         finalized = true;
         activeRequests--;
+        const statusCode = Number(res.statusCode) || 0;
+        const telemetryPath = requestPathForTelemetry(req.url);
+        const completionPath = (
+          telemetryPath === '/v1/messages' ||
+          telemetryPath === '/v1/messages/count_tokens' ||
+          telemetryPath === '/[redacted]'
+        ) ? telemetryPath : '/[other]';
+        ctxLog(ctx, 'request.complete', {
+          method: req.method,
+          path: completionPath,
+          status_code: statusCode,
+          aborted: !!aborted,
+          success: !aborted && statusCode >= 200 && statusCode < 300,
+        });
         try { pushRecentRequest(ctx, req, res, aborted); } catch {}
       };
       res.on('finish', () => finalize(false));
@@ -5936,6 +6685,10 @@ const server = http.createServer((req, res) => {
         ok: true, pid: process.pid, config_path: CONFIG_PATH,
         active_tier: resolveActiveTier(CONFIG), active_mode: REQUEST_MODE,
         bind_address: server.address().address,
+        agent_token_identity: {
+          version: AGENT_TOKEN_IDENTITY_VERSION,
+          fingerprint: AGENT_TOKEN_FINGERPRINT,
+        },
         plan_dashboard: DASHBOARD_URL ? DASHBOARD_URL.replace('/c-thru/dashboard', '/c-thru/plan/dashboard') : '',
         gemini_cache: { ...GEMINI_CACHE_STATS, entries: GEMINI_CACHE_MAP.size },
         vertex_env_ok: !!(process.env.GOOGLE_CLOUD_REGION && process.env.GOOGLE_CLOUD_PROJECT),
@@ -5968,6 +6721,62 @@ const server = http.createServer((req, res) => {
         lastSeenClearedAt = clearedAt;
         proxyLog('stats.cleared', { cleared_at: clearedAt });
         return send(res, 200, { ok: true, cleared_at: clearedAt });
+      }
+
+      // Slim feed for the TUI statusline (one cheap GET). Unauthenticated like
+      // /c-thru/status and /c-thru/recent — loopback proxy only.
+      // Session scope mirrors GET /c-thru/recent: /s/<id>/c-thru/statusline
+      // filters last/fallback to that session's ring entries. Bare path stays
+      // global. usage_window remains the machine-wide lifetime ledger.
+      if (req.method === 'GET' && (req.url === '/c-thru/statusline' || req.url === '/c-thru/statusline/' || req.url.startsWith('/c-thru/statusline?'))) {
+        const tier = resolveActiveTier(CONFIG);
+        const mode = REQUEST_MODE;
+        const diskUsage = readUsageFileFresh();
+        reconcileClearIfNeeded(diskUsage);
+        const usage = mergeUsage(diskUsage, usageDelta);
+        let calls = 0;
+        for (const m of Object.values(usage.by_model || {})) calls += (m && m.calls) || 0;
+        const scopedSessionId = REQUEST_SESSION_ID;
+        const pool = scopedSessionId
+          ? RECENT_REQUESTS.filter(r => r.session_id === scopedSessionId)
+          : RECENT_REQUESTS;
+        // Ring is oldest→newest; newest is the last element (same as /recent reverse).
+        const lastReq = pool.length ? pool[pool.length - 1] : null;
+        let fallback = null;
+        const now = Date.now();
+        for (let i = pool.length - 1; i >= 0; i--) {
+          const r = pool[i];
+          if (r && r.fallback_from != null) {
+            const ts = r.ts ? Date.parse(r.ts) : NaN;
+            if (Number.isFinite(ts) && (now - ts) < 120000) {
+              fallback = { served_by: r.served_by || null, fallback_from: r.fallback_from, ts: r.ts || null };
+              break;
+            }
+          }
+        }
+        const port = (server.address() && server.address().port) || null;
+        return send(res, 200, {
+          ok: true,
+          mode,
+          tier,
+          port,
+          session: scopedSessionId || null,
+          last: lastReq ? {
+            served_by: lastReq.served_by || null,
+            input_tokens: lastReq.input_tokens != null ? lastReq.input_tokens : null,
+            output_tokens: lastReq.output_tokens != null ? lastReq.output_tokens : null,
+            fallback_from: lastReq.fallback_from != null ? lastReq.fallback_from : null,
+            ts: lastReq.ts || null,
+            capability: lastReq.capability || null,
+          } : null,
+          fallback,
+          usage_window: {
+            calls,
+            input: usage.total_input || 0,
+            output: usage.total_output || 0,
+            since: usage.cleared_at || usage.first_recorded || null,
+          },
+        });
       }
 
       if (req.method === 'GET' && (req.url === '/c-thru/status' || req.url === '/c-thru/status/' || req.url.startsWith('/c-thru/status?'))) {
@@ -6419,11 +7228,14 @@ const server = http.createServer((req, res) => {
         }
 
         // ── Per-agent sentinel routing (the hook handshake) ─────────────────
-        // The PreToolUse hook prepends [[c-thru-agent:<name>]] to each delegation's
-        // task prompt, so the marker rides in the request body on the subagent's
-        // requests. It is the only reliable channel for the agent identity to reach the
-        // proxy (Claude Code exposes no per-subagent header / out-of-band tag, and the
-        // Agent tool's model param is a 4-alias enum — see
+        // The PreToolUse hook prepends a shared-agent-token-authenticated marker
+        // to each delegation's task prompt, so the marker rides in the request
+        // body on the subagent's requests. It remains the reliable channel for
+        // the configured routing name:
+        // current Claude Code gateway requests carry session/agent/parent correlation
+        // IDs, but the protocol does not document those IDs as the configured
+        // subagent_type key used by agent_to_capability. The Agent tool's model param
+        // is a 4-alias enum — see
         // docs/planning/agent-delegation-findings.md). Routing is PER-REQUEST and
         // stateless, so many agents → many models run concurrently in one session
         // without races.
@@ -6436,35 +7248,69 @@ const server = http.createServer((req, res) => {
         // client already sent (hook alias or main-thread model). Never invent a
         // model name that would hit the bare Ollama fallback with a 400.
         //
-        // Detection is cheapest-first and does NOT parse the payload (the JSON parse
-        // above is needed for routing regardless; we add no structured walk):
-        //   1. O(1) header check — well-known identifier, future-proof (empty today).
-        //   2. one raw-body lastIndexOf scan so the *newest* marker wins when multi-turn
-        //      history still carries older sentinels — then a fixed window extract.
+        // Detection is narrow and structure-aware (the JSON parse above is already
+        // required for routing):
+        //   1. O(1) header check — name plus x-c-thru-agent-signature.
+        //   2. direct user-message string / type:text blocks only; assistant
+        //      tool_use input and user tool_result blocks are never candidates.
+        // Both channels require a full HMAC-SHA256 tag under the shared agent token,
+        // a loopback peer, and Claude Code's syntactically valid agent correlation
+        // header. First-level agents have x-claude-code-agent-id but no parent ID;
+        // nested agents additionally carry x-claude-code-parent-agent-id. The parent
+        // header is validated when present but is not a prerequisite. Main-thread
+        // requests have no agent ID, so a valid marker retained inside the parent
+        // transcript still cannot replay there. Missing/malformed agent IDs, missing
+        // secrets, unsigned/legacy tags, mismatches, and remote clients fail closed
+        // without changing body.model.
         // After routing, stripAgentSentinelFromBody removes all markers before forward.
         let sentinelAgent = null;
         let agentIdentitySource = 'none'; // sentinel | header | none — for observability
         {
           // parseAgentSentinel (tools/agent-sentinel.js) does the cheapest-first
-          // detection: header check, then lastIndexOf body scan + fixed-window read.
+          // detection: header check, then structured direct-user-text scan.
+          // Pass the body parsed above so large requests are not JSON-parsed twice.
           // Kept as a pure, hermetically-tested unit (test/proxy-sentinel-detection.test.js).
-          // Returns { name, tag, index } | null — tag is the optional HMAC stamp.
-          const parsed = parseAgentSentinel(bodyText, req.headers['x-c-thru-agent']);
+          // Returns { name, tag, index?, source } | null.
+          const parsed = parseAgentSentinel(
+            body,
+            req.headers['x-c-thru-agent'],
+            req.headers['x-c-thru-agent-signature'],
+          );
           const agentName = parsed && parsed.name;
           if (agentName) {
-            // Trust gate: header is an intentional OOB channel; body markers are
-            // honored only for loopback clients (default bind 127.0.0.1). No HMAC.
-            const fromHeader = typeof req.headers['x-c-thru-agent'] === 'string'
-              && req.headers['x-c-thru-agent'].trim() === agentName;
-            let trusted = fromHeader;
-            if (!fromHeader) {
-              if (isLoopbackClient(req)) {
-                trusted = true;
-              } else {
-                ctxLog(ctx, 'sentinel_rejected', { agent: agentName, reason: 'non_loopback' });
-              }
+            const source = parsed.source === 'header' ? 'header' : 'sentinel';
+            const rawAgentId = req.headers['x-claude-code-agent-id'];
+            const rawParentAgentId = req.headers['x-claude-code-parent-agent-id'];
+            const agentId = normalizeClaudeAgentCorrelationId(rawAgentId);
+            const parentAgentId = normalizeClaudeAgentCorrelationId(rawParentAgentId);
+            const parentAgentIdPresent = rawParentAgentId !== undefined;
+            const agentRef = claudeAgentCorrelationRef(agentId);
+            const parentAgentRef = claudeAgentCorrelationRef(parentAgentId);
+            let rejectionReason = null;
+            if (!isLoopbackClient(req)) {
+              rejectionReason = 'non_loopback';
+            } else if (rawAgentId === undefined) {
+              rejectionReason = 'missing_agent_id';
+            } else if (!agentId) {
+              rejectionReason = 'invalid_agent_id';
+            } else if (parentAgentIdPresent && !parentAgentId) {
+              rejectionReason = 'invalid_parent_agent_id';
+            } else if (!AGENT_SENTINEL_SECRET) {
+              rejectionReason = 'auth_unavailable';
+            } else if (!verifyAgentSentinelTag(agentName, parsed.tag, AGENT_SENTINEL_SECRET)) {
+              rejectionReason = parsed.tag ? 'invalid_signature' : 'unsigned';
             }
-            if (trusted) {
+            if (rejectionReason) {
+              ctxLog(ctx, 'sentinel_rejected', {
+                agent: agentName,
+                reason: rejectionReason,
+                source,
+                nested: parentAgentIdPresent,
+                agent_ref: agentRef || undefined,
+                parent_agent_ref: parentAgentRef || undefined,
+              });
+            }
+            if (!rejectionReason) {
               // Opaque routing key when it actually resolves: agent name, capability,
               // concrete model tag, advisor: pin, etc. If it does not resolve, keep
               // body.model (default) — do not force an unmapped name through.
@@ -6472,23 +7318,37 @@ const server = http.createServer((req, res) => {
                 ctxLog(ctx, 'sentinel_unroutable', {
                   agent: agentName,
                   kept_model: body.model,
-                  source: fromHeader ? 'header' : 'sentinel',
+                  source,
+                  nested: !!parentAgentId,
+                  agent_ref: agentRef,
+                  parent_agent_ref: parentAgentRef || undefined,
                 });
               } else {
                 ctxLog(ctx, 'sentinel_override', {
                   agent: agentName,
                   from_model: body.model,
-                  source: fromHeader ? 'header' : 'sentinel',
+                  source,
+                  nested: !!parentAgentId,
+                  agent_ref: agentRef,
+                  parent_agent_ref: parentAgentRef || undefined,
                 });
                 body.model = agentName;
                 sentinelAgent = agentName;
-                agentIdentitySource = fromHeader ? 'header' : 'sentinel';
+                agentIdentitySource = source;
               }
             }
           }
         }
 
-        let resolved = resolveBackend(body.model, CONFIG, hwTier, activeMode);
+        let resolved = resolveBackend(
+          body.model,
+          CONFIG,
+          hwTier,
+          activeMode,
+          undefined,
+          undefined,
+          !!sentinelAgent,
+        );
         if (resolved.error) {
           ctxLog(ctx, 'routing_error', { incoming_model: body.model, error: resolved.error });
           return sendAnthropicError(res, resolved.status || 400, resolved.error);
@@ -6606,16 +7466,7 @@ const server = http.createServer((req, res) => {
           if (handled) return;
         }
 
-        if (isOllamaLegacy(backend)) {
-          return dispatchOllamaBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
-        }
-        if (backend.call_style === 'gemini') {
-          return dispatchGeminiBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
-        }
-        if (backend.call_style === 'openai') {
-          return dispatchOpenAIBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
-        }
-        return forwardAnthropic(ctx, req, res, body, backend, effectiveModel, requestMeta);
+        return dispatchBackend(ctx, req, res, body, backend, effectiveModel, requestMeta);
       }
 
       // Forward unhandled /v1/* to Anthropic so Claude Code auth checks (/v1/me,
@@ -6632,8 +7483,16 @@ const server = http.createServer((req, res) => {
       // operators can see which endpoints Claude Code (or any client) is
       // hitting that the proxy doesn't yet handle — drives the gate
       // philosophy ("answer everything") forward.
-      proxyLog('unhandled_url', { method: req.method, url: req.url, host: req.headers.host });
-      sendAnthropicError(res, 404, `not found: ${req.method} ${req.url}`);
+      proxyLog('unhandled_url', {
+        method: req.method,
+        url: requestPathForTelemetry(req.url),
+        host: req.headers.host,
+      });
+      sendAnthropicError(
+        res,
+        404,
+        `not found: ${req.method} ${requestPathForTelemetry(req.url)}`,
+      );
     } catch (err) {
       if (err.status === 413) {
         return sendAnthropicError(res, 413, 'request body too large');

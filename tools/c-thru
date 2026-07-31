@@ -3123,7 +3123,9 @@ maybe_reset_usage_stats_on_launch() {
   [[ -n "$port" ]] || return 0
   local _ct_args=()
   while IFS= read -r _ct_line; do _ct_args+=("$_ct_line"); done < <(control_token_curl_args)
-  if curl -sf --max-time 2.0 -X POST "${_ct_args[@]}" \
+  # bash 3.2 + set -u: empty "${_ct_args[@]}" is unbound; use the same
+  # safe form as set_launch_default_model so no-token clears still work.
+  if curl -sf --max-time 2.0 -X POST ${_ct_args[@]+"${_ct_args[@]}"} \
       "http://127.0.0.1:${port}/c-thru/stats/clear" >/dev/null 2>&1; then
     _C_THRU_STATS_RESET_DONE=1
     if [[ "${C_THRU_DEBUG:-0}" != "0" && -n "${C_THRU_DEBUG:-}" ]]; then
@@ -5616,7 +5618,8 @@ if [[ "${1:-}" == "stats" && "${2:-}" == "clear" ]]; then
   # C23: send the per-user control token (read into an array so the header value
   # survives word-splitting). Empty when the token file is absent → proxy fails open.
   _ct_args=(); while IFS= read -r _ct_line; do _ct_args+=("$_ct_line"); done < <(control_token_curl_args)
-  result="$(curl -sf -X POST "${_ct_args[@]}" "http://127.0.0.1:$port/c-thru/stats/clear" 2>/dev/null || true)"
+  # bash 3.2 + set -u: empty "${_ct_args[@]}" is unbound — use safe expansion.
+  result="$(curl -sf -X POST ${_ct_args[@]+"${_ct_args[@]}"} "http://127.0.0.1:$port/c-thru/stats/clear" 2>/dev/null || true)"
   if [[ -z "$result" ]]; then
     echo "c-thru: proxy did not respond" >&2; exit 1
   fi

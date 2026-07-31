@@ -102,3 +102,11 @@ cthru_effective_profile_dir() {
 cthru_original_profile_dir() {
   printf '%s' "${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 }
+
+# Durable profile for child processes / skills that must survive the ephemeral
+# session shadow. Prefer the launcher-exported C_THRU_ORIGINAL_PROFILE_DIR
+# (set before CLAUDE_PROFILE_DIR is pointed at the mktemp shadow). Never consult
+# CLAUDE_PROFILE_DIR or CLAUDE_CONFIG_DIR — those may be the disposable shadow.
+cthru_durable_profile_dir() {
+  printf '%s' "${C_THRU_ORIGINAL_PROFILE_DIR:-${CLAUDE_DIR:-$HOME/.claude}}"
+}

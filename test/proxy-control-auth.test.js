@@ -71,12 +71,24 @@ async function main() {
 
     // ── 2. Forced non-loopback + token configured → require token ───────────
     console.log('\n2. non-loopback (forced) + token configured → require X-C-Thru-Control');
+    const statsFile = path.join(tmpRoot, 'usage-stats-remote.json');
+    fs.writeFileSync(statsFile, JSON.stringify({
+      total_input: 50,
+      total_output: 5,
+      total_duration_ms: 10,
+      by_model: { 'wh-model': { input: 50, output: 5, calls: 7, total_duration_ms: 10, first_call: null, last_call: null } },
+      by_agent: {},
+      by_backend: {},
+      first_recorded: '2026-01-01T00:00:00.000Z',
+      last_recorded: '2026-01-02T00:00:00.000Z',
+    }));
     await withProxy({
       configPath, profile: '16gb',
       env: {
         CLAUDE_LLM_MODE: 'best-cloud',
         CLAUDE_PROXY_CONTROL_TOKEN: TOKEN,
         CLAUDE_PROXY_TEST_FORCE_REMOTE_CLIENT: '1',
+        CLAUDE_PROXY_USAGE_STATS_FILE: statsFile,
       },
     }, async ({ port }) => {
       const okMode = await httpJson(port, 'POST', '/c-thru/mode', { mode: 'best-cloud' }, { 'X-C-Thru-Control': TOKEN });
@@ -84,6 +96,38 @@ async function main() {
 
       const okReload = await httpJson(port, 'POST', '/c-thru/reload', {}, { 'X-C-Thru-Control': TOKEN });
       assert(okReload.status === 200, `remote correct token /c-thru/reload → 200 (got ${okReload.status})`);
+
+      // Unauthorized clear: 403 and counters preserved
+      const beforeStatus = await httpJson(port, 'GET', '/c-thru/status');
+      const beforeCalls = ((beforeStatus.json || beforeStatus.body || {}).usage || {}).by_model?.['wh-model']?.calls
+        || ((beforeStatus.json || beforeStatus.body || {}).usage || {}).total_input;
+
+      const noTokClear = await httpJson(port, 'POST', '/c-thru/stats/clear', null);
+      assert(noTokClear.status === 403, `remote missing token /c-thru/stats/clear → 403 (got ${noTokClear.status})`);
+
+      const badTokClear = await httpJson(port, 'POST', '/c-thru/stats/clear', {}, { 'X-C-Thru-Control': 'b'.repeat(64) });
+      assert(badTokClear.status === 403, `remote wrong token /c-thru/stats/clear → 403 (got ${badTokClear.status})`);
+
+      const midStatus = await httpJson(port, 'GET', '/c-thru/status');
+      const midUsage = (midStatus.json || midStatus.body || {}).usage || {};
+      const midCalls = midUsage.by_model?.['wh-model']?.calls ?? midUsage.total_input;
+      assert(midCalls === beforeCalls || midCalls === 7 || midCalls === 50,
+        `unauthorized clear did not zero usage (got mid=${midCalls} before=${beforeCalls})`);
+
+      const okClearRemote = await httpJson(port, 'POST', '/c-thru/stats/clear', {}, { 'X-C-Thru-Control': TOKEN });
+      assert(okClearRemote.status === 200, `remote correct token /c-thru/stats/clear → 200 (got ${okClearRemote.status})`);
+      const clearBody = okClearRemote.json || okClearRemote.body || {};
+      assert(clearBody.ok === true && typeof clearBody.cleared_at === 'string',
+        'remote clear returns ok + cleared_at');
+      const after = (await httpJson(port, 'GET', '/c-thru/statusline')).json
+        || (await httpJson(port, 'GET', '/c-thru/statusline')).body;
+      // re-fetch status for usage zeros
+      const afterStatus = await httpJson(port, 'GET', '/c-thru/status');
+      const afterUsage = (afterStatus.json || afterStatus.body || {}).usage || {};
+      const afterModelCalls = (afterUsage.by_model && afterUsage.by_model['wh-model'] && afterUsage.by_model['wh-model'].calls) || 0;
+      assert(afterModelCalls === 0 && (afterUsage.total_input || 0) === 0,
+        'authorized remote clear zeros counters');
+      void after;
 
       const noTokMode = await httpJson(port, 'POST', '/c-thru/mode', { mode: 'best-cloud' });
       assert(noTokMode.status === 403, `remote missing token /c-thru/mode → 403 (got ${noTokMode.status})`);

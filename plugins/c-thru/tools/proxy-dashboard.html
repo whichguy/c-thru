@@ -44,6 +44,12 @@
   .arrow { color: var(--dim); padding: 0 3px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+  button.clear-stats {
+    background: var(--chip); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 10px; font: inherit; cursor: pointer; margin-left: 10px;
+  }
+  button.clear-stats:hover { border-color: var(--accent); color: var(--accent); }
+  #clear-msg { color: var(--ok); margin-left: 8px; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -64,7 +70,10 @@
   <h2>Recent requests <span class="dim" id="recent-meta"></span></h2>
   <div id="recent"></div>
 
-  <h2>Lifetime totals <span class="dim" id="totals-meta"></span></h2>
+  <h2>Usage totals (since clear) <span class="dim" id="totals-meta"></span>
+    <button type="button" class="clear-stats" id="btn-clear" title="POST /c-thru/stats/clear — machine-wide ledger">Clear stats</button>
+    <span id="clear-msg"></span>
+  </h2>
   <div id="by-model"></div>
 
   <div class="grid">
@@ -219,6 +228,23 @@ function stop() { if (timer) { clearInterval(timer); timer = null; } }
 document.addEventListener('visibilitychange', () => {
   document.visibilityState === 'hidden' ? stop() : start();
 });
+
+$('btn-clear').addEventListener('click', async () => {
+  const msg = $('clear-msg');
+  msg.textContent = 'clearing…';
+  try {
+    const r = await fetch('/c-thru/stats/clear', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+    msg.textContent = 'cleared' + (j.cleared_at ? ' ' + fmtTime(j.cleared_at) : '');
+    poll();
+  } catch (e) {
+    msg.textContent = 'failed: ' + e.message;
+    msg.style.color = 'var(--err)';
+    setTimeout(() => { msg.style.color = ''; }, 4000);
+  }
+});
+
 start();
 </script>
 </body>

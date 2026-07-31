@@ -51,11 +51,11 @@ async function main() {
       configPath, tmpHome,
       env: { CLAUDE_PROXY_USAGE_STATS_FILE: statsFile },
     }));
-    await waitForPing(port, 5000);
+    await waitForPing(port);
 
     // ── 1. GET /c-thru/dashboard serves the HTML asset ────────────────────
     console.log('1. GET /c-thru/dashboard serves HTML');
-    const dash = await httpJson(port, 'GET', '/c-thru/dashboard', null, {}, 3000);
+    const dash = await httpJson(port, 'GET', '/c-thru/dashboard', null, {});
     assertEq(dash.status, 200, 'dashboard returns 200');
     assert((dash.headers['content-type'] || '').startsWith('text/html'),
       `content-type is text/html (got ${dash.headers['content-type']})`);
@@ -64,10 +64,19 @@ async function main() {
     assert(dash.bodyText.includes('c-thru'), 'body carries the c-thru marker');
     assert(dash.bodyText.includes('/c-thru/recent'), 'page polls /c-thru/recent');
     assert(dash.bodyText.includes('/c-thru/status'), 'page polls /c-thru/status');
+    // T-B: Clear stats button contract (machine-wide ledger POST)
+    assert(dash.bodyText.includes('id="btn-clear"') || dash.bodyText.includes("id='btn-clear'"),
+      'dashboard has id="btn-clear" Clear stats control');
+    assert(/fetch\(\s*['"]\/c-thru\/stats\/clear['"]/.test(dash.bodyText),
+      'dashboard Clear posts to /c-thru/stats/clear');
+    assert(/method:\s*['"]POST['"]/.test(dash.bodyText),
+      'dashboard Clear uses method POST');
+    assert(dash.bodyText.includes('Usage totals (since clear)') || dash.bodyText.includes('Clear stats'),
+      'dashboard labels lifetime totals / Clear stats');
     assert(!dash.bodyText.includes('http://') || !/src\s*=\s*"http/.test(dash.bodyText),
       'no external script/CDN references');
 
-    const dashSlash = await httpJson(port, 'GET', '/c-thru/dashboard/', null, {}, 3000);
+    const dashSlash = await httpJson(port, 'GET', '/c-thru/dashboard/', null, {});
     assertEq(dashSlash.status, 200, 'trailing-slash variant returns 200');
 
     // ── 1b. DOM-level structural smoke (the page's actual content, not just
@@ -78,7 +87,7 @@ async function main() {
     const EXPECTED_IDS = [
       'topbar', 'kv-mode', 'kv-tier', 'kv-port', 'kv-pid', 'kv-uptime',
       'kv-config', 'kv-default', 'conn', 'cooldown', 'recent-meta', 'recent',
-      'totals-meta', 'by-model', 'by-agent', 'by-backend',
+      'totals-meta', 'by-model', 'by-agent', 'by-backend', 'btn-clear',
     ];
     for (const id of EXPECTED_IDS) {
       assert(new RegExp(`id="${id}"`).test(dash.bodyText), `markup has id="${id}"`);
@@ -86,13 +95,18 @@ async function main() {
     const fetchTargets = [...dash.bodyText.matchAll(/fetch\(\s*'([^']+)'/g)].map(m => m[1]);
     assert(fetchTargets.length > 0, 'page issues at least one fetch() call');
     assert(
-      fetchTargets.every(t => t.startsWith('/c-thru/status') || t.startsWith('/c-thru/recent')),
-      `every fetch() target is one of the page's own two endpoints (got: ${JSON.stringify(fetchTargets)})`,
+      fetchTargets.every(t =>
+        t.startsWith('/c-thru/status')
+        || t.startsWith('/c-thru/recent')
+        || t.startsWith('/c-thru/stats/clear')),
+      `every fetch() target is a known dashboard endpoint (got: ${JSON.stringify(fetchTargets)})`,
     );
+    assert(fetchTargets.some(t => t.startsWith('/c-thru/stats/clear')),
+      'page includes Clear stats fetch to /c-thru/stats/clear');
 
     // ── 2. /c-thru/status identity + discovery fields ─────────────────────
     console.log('\n2. /c-thru/status gains pid/port/uptime_s/started_at/dashboard_url');
-    const st = await httpJson(port, 'GET', '/c-thru/status', null, {}, 3000);
+    const st = await httpJson(port, 'GET', '/c-thru/status', null, {});
     assertEq(st.status, 200, 'status returns 200');
     assert(typeof st.json.pid === 'number' && st.json.pid > 0, `status.pid is the proxy pid (got ${st.json.pid})`);
     assertEq(st.json.port, port, 'status.port matches the listening port');
@@ -122,7 +136,7 @@ async function main() {
     // Proxy owns the control-plane URL + endpoint list. Long adds "when to
     // query" for rare channels only; UserPromptSubmit (prompt present) stays short.
     console.log('\n4a. POST /hooks/context empty body → long control-plane block');
-    const hkLong = await httpJson(port, 'POST', '/hooks/context', null, {}, 3000);
+    const hkLong = await httpJson(port, 'POST', '/hooks/context', null, {});
     assertEq(hkLong.status, 200, '/hooks/context returns 200');
     const addlLong = hkLong.json && hkLong.json.hookSpecificOutput && hkLong.json.hookSpecificOutput.additionalContext;
     assert(typeof addlLong === 'string' && addlLong.length > 0, 'long additionalContext is a non-empty string');
@@ -136,19 +150,19 @@ async function main() {
     assert(addlLong.length <= 1200, `long block stays budgeted (got ${addlLong.length} chars)`);
 
     console.log('\n4b. POST /hooks/context event=SessionStart → long');
-    const hkSs = await httpJson(port, 'POST', '/hooks/context', { event: 'SessionStart' }, {}, 3000);
+    const hkSs = await httpJson(port, 'POST', '/hooks/context', { event: 'SessionStart' }, {});
     assertEq(hkSs.status, 200, 'SessionStart hooks/context 200');
     const addlSs = hkSs.json?.hookSpecificOutput?.additionalContext || '';
     assert(addlSs.includes('When to query'), 'SessionStart gets long when-to-query');
 
     console.log('\n4c. POST /hooks/context event=PreCompact → long');
-    const hkPc = await httpJson(port, 'POST', '/hooks/context', { event: 'PreCompact' }, {}, 3000);
+    const hkPc = await httpJson(port, 'POST', '/hooks/context', { event: 'PreCompact' }, {});
     assertEq(hkPc.status, 200, 'PreCompact hooks/context 200');
     const addlPc = hkPc.json?.hookSpecificOutput?.additionalContext || '';
     assert(addlPc.includes('When to query'), 'PreCompact gets long when-to-query');
 
     console.log('\n4d. POST /hooks/context with prompt (UPS) → short, no when-to-query');
-    const hkShort = await httpJson(port, 'POST', '/hooks/context', { prompt: 'fix the typo in README' }, {}, 3000);
+    const hkShort = await httpJson(port, 'POST', '/hooks/context', { prompt: 'fix the typo in README' }, {});
     assertEq(hkShort.status, 200, 'UPS hooks/context 200');
     const addlShort = hkShort.json?.hookSpecificOutput?.additionalContext || '';
     assert(addlShort.includes('/c-thru/status'), 'short block still lists status');
