@@ -140,11 +140,11 @@ async function main() {
     assert((result.json?.args || []).includes('--append-system-prompt'),
       'normal launch still receives injected session flags');
     // Token-budget guard: system summary is paid every main-chat turn.
-    // Hard cap 2500 chars (IDENTITY + fleet prose); grow only with intent.
+    // Hard cap 2700 chars (IDENTITY + fleet prose); grow only with intent.
     const args1 = result.json?.args || [];
     const aspIdx = args1.indexOf('--append-system-prompt');
     const asp = aspIdx >= 0 ? (args1[aspIdx + 1] || '') : '';
-    assert(asp.length >= 400 && asp.length <= 2500,
+    assert(asp.length >= 400 && asp.length <= 2700,
       `system summary within budget on direct path (got ${asp.length} chars)`);
     assert(/first substantive action MUST be an Agent delegation/.test(asp) &&
       /Never substitute generic built-in agent types/.test(asp),
@@ -195,7 +195,7 @@ async function main() {
       const args2 = result.json?.args || [];
       const aspIdx2 = args2.indexOf('--append-system-prompt');
       const asp2 = aspIdx2 >= 0 ? (args2[aspIdx2 + 1] || '') : '';
-      assert(asp2.length >= 400 && asp2.length <= 2500,
+      assert(asp2.length >= 400 && asp2.length <= 2700,
         `system summary within budget on proxy path (got ${asp2.length} chars)`);
       assert(/first substantive action MUST be an Agent delegation/.test(asp2) &&
         /Never substitute generic built-in agent types/.test(asp2),

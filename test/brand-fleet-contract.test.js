@@ -23,6 +23,8 @@ function assert(cond, msg) {
 
 function covers(model) {
   if (Object.prototype.hasOwnProperty.call(routes, model)) return true;
+  const latest = map.latest_models?.[model];
+  if (latest && latest !== model) return covers(latest);
   for (const k of Object.keys(routes)) {
     if (!k.startsWith('re:')) continue;
     try { if (new RegExp(k.slice(3)).test(model)) return true; } catch (_) { /* ignore */ }
@@ -85,10 +87,10 @@ console.log('\n2. Description templates (selection surface)');
 console.log('\n3. Codex brand leaves + advisors host');
 {
   for (const [id, pin] of [
-    ['sol', 'model:gpt-5.6-sol'],
-    ['terra', 'model:gpt-5.6-terra'],
-    ['luna', 'model:gpt-5.6-luna'],
-    ['codex', 'model:gpt-5.6-terra'],
+    ['sol', 'model:sol'],
+    ['terra', 'model:terra'],
+    ['luna', 'model:luna'],
+    ['codex', 'model:codex'],
   ]) {
     assert(a2c[id] === pin, `${id} → ${pin}`);
     assert(covers(pin.slice(6)), `${id} pin target routed`);

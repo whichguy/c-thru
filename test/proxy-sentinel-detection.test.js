@@ -80,7 +80,7 @@ console.log('proxy sentinel detection (parseAgentSentinel) + C19 trust gate\n');
 
 {
   const r = parseAgentSentinel('prefix text [[c-thru-agent:docs]] suffix', undefined);
-  assert(r && r.name === 'docs' && r.tag === null, 'plain-string body with marker → docs');
+  assert(r === null, 'plain-string non-JSON body fails closed → null');
 }
 
 {
@@ -175,7 +175,7 @@ assert(parseAgentSentinel(undefined, undefined) === null, 'undefined body → nu
 
 const longOk = 'org/model-' + 'x'.repeat(100) + ':cloud';
 {
-  const r = parseAgentSentinel(`[[c-thru-agent:${longOk}]]`, undefined);
+  const r = parseAgentSentinel(body({ messages: [{ role: 'user', content: `[[c-thru-agent:${longOk}]]` }] }), undefined);
   assert(r && r.name === longOk, 'long arbitrary model-like name parses (no tight 80-byte window)');
 }
 const tooLong = 'a'.repeat(600);

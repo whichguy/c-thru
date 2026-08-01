@@ -141,17 +141,12 @@ async function main() {
         for (const [cap, model] of [['cap-anth', 'anth-model'], ['cap-ollama', 'ollama-model'], ['cap-gemini', 'gemini-model']]) {
           assertEq(byCap[cap].headers['x-c-thru-served-by'], model, `${cap}: x-c-thru-served-by=${model}`);
         }
-        // x-c-thru-resolved-via is stamped only on the anthropic/ollama dispatch
-        // paths (forwardAnthropic / forwardOllama), NOT on forwardGemini's
-        // buildCthruResponseHeaders — so assert it for those two providers and
-        // assert it is correctly ABSENT (not mis-attributed) on the gemini hit.
-        for (const [cap, model] of [['cap-anth', 'anth-model'], ['cap-ollama', 'ollama-model']]) {
+        // Every provider dispatch stamps x-c-thru-resolved-via for header parity.
+        for (const [cap, model] of [['cap-anth', 'anth-model'], ['cap-ollama', 'ollama-model'], ['cap-gemini', 'gemini-model']]) {
           const via = JSON.parse(byCap[cap].headers['x-c-thru-resolved-via'] || '{}');
           assertEq(via.capability, cap, `${cap}: resolved-via.capability=${cap}`);
           assertEq(via.served_by, model, `${cap}: resolved-via.served_by=${model}`);
         }
-        assert(byCap['cap-gemini'].headers['x-c-thru-resolved-via'] === undefined,
-          'cap-gemini: resolved-via absent (gemini path stamps served-by only) — no mis-attribution');
 
         // ── No cross-provider auth bleed ─────────────────────────────────────
         const anthHdrs = JSON.stringify(anth.requests[0].headers || {});

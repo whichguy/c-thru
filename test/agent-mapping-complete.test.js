@@ -26,6 +26,7 @@ const path = require('path');
 const {
   resolveCapabilityAlias,
   resolveProfileModel,
+  resolveModelRoute,
   LLM_MODE_ENUM,
   MODEL_PIN_PREFIX,
 } = require('../tools/model-map-resolve.js');
@@ -39,8 +40,9 @@ function assert(condition, message) {
 
 const REPO    = path.resolve(__dirname, '..');
 const CONFIG  = JSON.parse(fs.readFileSync(path.join(REPO, 'config', 'model-map.json'), 'utf8'));
+const RESERVED_AGENT_FILES = new Set(['AGENTS.md', 'CLAUDE.md']);
 const AGENTS  = fs.readdirSync(path.join(REPO, 'agents'))
-  .filter(f => f.endsWith('.md'))
+  .filter(f => f.endsWith('.md') && !RESERVED_AGENT_FILES.has(f))
   .map(f => f.replace(/\.md$/, ''))
   .sort();
 
@@ -48,26 +50,6 @@ const MODES = [...LLM_MODE_ENUM];
 const TIERS = ['16gb', '32gb', '48gb', '64gb', '128gb'];
 const ROUTES    = CONFIG.model_routes || {};
 const ENDPOINTS = CONFIG.endpoints || CONFIG.backends || {};
-
-// Resolve a model name to its endpoint id via model_routes (direct key, then
-// regex `re:` key), honoring an explicit @sigil endpoint pin. Mirrors the
-// proxy's resolveBackend route lookup. Returns null on no match.
-function routeEndpointId(model) {
-  const sig = typeof model === 'string' ? model.match(/^(.+)@([A-Za-z0-9_-]+)$/) : null;
-  const base = sig ? sig[1] : model;
-  if (sig) return { base, endpointId: sig[2] };
-  let route = Object.prototype.hasOwnProperty.call(ROUTES, base) ? ROUTES[base] : undefined;
-  if (route === undefined) {
-    for (const k of Object.keys(ROUTES)) {
-      if (!k.startsWith('re:')) continue;
-      try { if (new RegExp(k.slice(3)).test(base)) { route = ROUTES[k]; break; } } catch {}
-    }
-  }
-  if (route === undefined) return { base, endpointId: null };
-  if (typeof route === 'string') return { base, endpointId: route };
-  if (route && typeof route === 'object') return { base, endpointId: route.endpoint || null };
-  return { base, endpointId: null };
-}
 
 console.log(`agent-mapping-complete: ${AGENTS.length} agents × ${MODES.length} modes × ${TIERS.length} tiers\n`);
 
@@ -125,32 +107,28 @@ console.log('\n2. Full chain: agent → capability → model → route → endpo
     for (const mode of MODES) {
       for (const tier of TIERS) {
         combos++;
-        function resolvePinnedModel(rawPin, mode) {
-          let model = rawPin;
-          const route = ROUTES[model];
-          if (route && typeof route === 'object' && !route.endpoint) {
-            model = route[mode] || route.connected || route.offline || null;
-          } else if (route && typeof route === 'object' && route.name) {
-            model = route.name;
-          }
-          return model;
-        }
         const model = pinned
-          ? resolvePinnedModel(cap.slice(MODEL_PIN_PREFIX.length), mode)
+          ? cap.slice(MODEL_PIN_PREFIX.length)
           : resolveProfileModel(entry, tier, mode);
         if (!model || typeof model !== 'string') {
           assert(false, `${agent} → ${cap} @ ${mode}/${tier}: empty model (got ${JSON.stringify(model)})`);
           brokeOne = true;
           continue;
         }
-        const { base, endpointId } = routeEndpointId(model);
-        if (!endpointId) {
-          assert(false, `${agent} → ${cap} @ ${mode}/${tier} model='${base}': no model_routes match`);
+        const resolved = resolveModelRoute(model, {
+          routes: ROUTES,
+          endpoints: ENDPOINTS,
+          mode,
+          latest_models: CONFIG.latest_models,
+        });
+        if (!resolved?.endpointId) {
+          assert(false, `${agent} → ${cap} @ ${mode}/${tier} model='${model}': no model_routes match`);
           brokeOne = true;
           continue;
         }
+        const { endpointId } = resolved;
         if (!ENDPOINTS[endpointId]) {
-          assert(false, `${agent} → ${cap} @ ${mode}/${tier} model='${base}' endpoint='${endpointId}': not in endpoints`);
+          assert(false, `${agent} → ${cap} @ ${mode}/${tier} model='${model}' endpoint='${endpointId}': not in endpoints`);
           brokeOne = true;
           continue;
         }
@@ -185,10 +163,10 @@ console.log('\n3. Documented non-1:1 remaps hold (guards the README "⚠" rows +
     assert(a2c[agent] === pin,
       `${agent} → brand pin ${pin} (got ${JSON.stringify(a2c[agent])})`);
   }
-  // Claude-family brand leaves pin to concrete Claude models (name-gated brands).
+  // Claude-family brand leaves pin through their public shorthands.
   for (const name of ['opus', 'sonnet', 'haiku', 'fable']) {
-    assert(typeof a2c[name] === 'string' && a2c[name].startsWith('model:claude-'),
-      `${name} brand leaf pins a concrete Claude model (got ${JSON.stringify(a2c[name])})`);
+    assert(a2c[name] === `model:${name}` && typeof CONFIG.latest_models?.[name] === 'string',
+      `${name} brand leaf pins model:${name} with latest_models expansion (got ${JSON.stringify(a2c[name])})`);
   }
   // Every OTHER agent maps 1:1 to its own name.
   const remapped = new Set(['reviewer-plan', 'plan-scheduler', 'advisors', ...Object.keys(brandPins)]);

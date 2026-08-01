@@ -53,7 +53,10 @@ const REPO        = path.resolve(__dirname, '..');
 const AGENTS_DIR  = path.join(REPO, 'agents');
 const CORPUS_PATH = path.join(REPO, 'test', 'fixtures', 'agent-selection-corpus.json');
 const OFFLOAD_HARNESS_PATH = path.join(REPO, 'test', 'agent-offload-coverage.js');
-const AGENT_FILES = fs.readdirSync(AGENTS_DIR).filter(f => f.endsWith('.md')).sort();
+const RESERVED_AGENT_FILES = new Set(['AGENTS.md', 'CLAUDE.md']);
+const AGENT_FILES = fs.readdirSync(AGENTS_DIR)
+  .filter(f => f.endsWith('.md') && !RESERVED_AGENT_FILES.has(f))
+  .sort();
 
 // Brand catalog leaves share intentional leaf boilerplate; pairwise lexical
 // overlap among them is expected. Still check brand↔role and role↔role pairs.

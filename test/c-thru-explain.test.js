@@ -65,8 +65,10 @@ console.log('\n3b. --agent brand pin resolves model:<id> through model_routes');
 {
   const r = run(['--agent', 'grok', '--mode', 'best-cloud-oss', '--tier', '64gb']);
   assert(r.code === 0, `brand pin exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
-  assert(r.stdout.includes('agent=grok') && r.stdout.includes('model=grok-4.5'),
-    `trace names agent and direct model pin (got: ${r.stdout.slice(0, 300)})`);
+  assert(r.stdout.includes('agent=grok') && /model=grok(?:-4\.5)?\b/.test(r.stdout),
+    `trace names agent and shorthand/direct model pin (got: ${r.stdout.slice(0, 300)})`);
+  assert(r.stdout.includes('grok-4.5'),
+    `trace expands grok through latest_models (got: ${r.stdout.slice(0, 300)})`);
   assert(r.stdout.includes('endpoint') && r.stdout.includes('xai'),
     `grok brand pin resolves to xai endpoint (got: ${r.stdout.slice(0, 400)})`);
   const servedBy = (r.stdout.match(/served_by\s+(\S+)/) || [])[1];

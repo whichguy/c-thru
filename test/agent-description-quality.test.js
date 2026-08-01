@@ -51,7 +51,9 @@ function assert(condition, message) {
 
 const REPO = path.resolve(__dirname, '..');
 const AGENTS_DIR = path.join(REPO, 'agents');
-const AGENT_FILES = fs.readdirSync(AGENTS_DIR).filter(f => f.endsWith('.md')).sort();
+const RESERVED_AGENT_FILES = new Set(['AGENTS.md', 'CLAUDE.md']);
+const AGENT_FILES = fs.readdirSync(AGENTS_DIR)
+  .filter(f => f.endsWith('.md') && !RESERVED_AGENT_FILES.has(f)).sort();
 
 const MIN_LEN = 120;
 

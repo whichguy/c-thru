@@ -46,8 +46,9 @@ function assert(condition, message) {
 const REPO    = path.resolve(__dirname, '..');
 const CONFIG  = JSON.parse(fs.readFileSync(path.join(REPO, 'config', 'model-map.json'), 'utf8'));
 const AGENTS_DIR = path.join(REPO, 'agents');
+const RESERVED_AGENT_FILES = new Set(['AGENTS.md', 'CLAUDE.md']);
 const AGENT_FILES = fs.readdirSync(AGENTS_DIR)
-  .filter(f => f.endsWith('.md'))
+  .filter(f => f.endsWith('.md') && !RESERVED_AGENT_FILES.has(f))
   .map(f => f.replace(/\.md$/, ''))
   .sort();
 const AGENT_SET = new Set(AGENT_FILES);
