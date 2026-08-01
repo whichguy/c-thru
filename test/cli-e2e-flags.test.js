@@ -568,8 +568,10 @@ console.log('\n18. (C1/C2) ollama-backed run: ephemeral --settings shape + syste
   assert(pointerLines.length === 1 &&
     /^c-thru proxy control plane: http:\/\/127\.0\.0\.1:\d+ — see SessionStart context for endpoints$/.test(pointerLines[0]),
     `pointer line matches the canonical one-line form (got ${JSON.stringify(pointerLines[0])})`);
-  assert(!promptLines.some(l => /GET \/c-thru\//.test(l)),
-    'no endpoint enumeration (GET /c-thru/...) leaked in-band (drift guard)');
+  // Identity/ops tip may cite GET /c-thru/recent once as proof channel.
+  // Drift guard: multi-endpoint catalog lines (status+recent+dashboard) must stay out of band.
+  assert(!promptLines.some(l => ((l.match(/GET \/c-thru\//g) || []).length >= 2)),
+    'no multi-endpoint enumeration (GET /c-thru/...) leaked in-band (drift guard)');
 
   // Injected claude options must stay before the first positional/subcommand.
   const positionalRun = runCthru(['--model=claude-sonnet-5', 'agents']);
