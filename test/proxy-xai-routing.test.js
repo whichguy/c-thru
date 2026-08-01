@@ -3,16 +3,19 @@
 // Run: node test/proxy-xai-routing.test.js
 'use strict';
 
-const assert = require('assert');
 const fs = require('fs');
-const http = require('http');
-const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawnSync } = require('child_process');
+const {
+  httpJson,
+  makeIsolatedTmpDir,
+  startStubServer,
+  withProxy,
+  writeConfig,
+} = require('./helpers');
 
 const ROOT = path.join(__dirname, '..');
 const MAP = path.join(ROOT, 'config', 'model-map.json');
-const PROXY = path.join(ROOT, 'tools', 'claude-proxy');
 
 let failed = 0;
 function ok(cond, msg) {
@@ -24,13 +27,20 @@ function ok(cond, msg) {
 console.log('1. model-map xai + brand pins');
 const map = JSON.parse(fs.readFileSync(MAP, 'utf8'));
 ok(map.endpoints.xai && map.endpoints.xai.url === 'https://api.x.ai', 'endpoints.xai url is origin without /v1');
+ok(map.endpoints.xai.format === 'openai', 'endpoints.xai uses the Responses API translator');
 ok(map.endpoints.xai.auth && map.endpoints.xai.auth.env === 'XAI_API_KEY', 'endpoints.xai auth env XAI_API_KEY');
 ok(map.model_routes.grok && map.model_routes.grok.endpoint === 'xai', 'model_routes.grok → xai');
 ok(map.model_routes.grok.name === 'grok-4.5', 'model_routes.grok name grok-4.5');
+ok(map.model_routes['grok-build']?.endpoint === 'xai'
+  && map.model_routes['grok-build']?.name === 'grok-4.5',
+  'model_routes.grok-build → grok-4.5 @ xai');
+ok(map.model_routes['grok-build-latest']?.endpoint === 'xai'
+  && map.model_routes['grok-build-latest']?.name === 'grok-4.5',
+  'model_routes.grok-build-latest → grok-4.5 @ xai');
 ok(map.agent_to_capability.grok === 'model:grok-4.5', 'agent_to_capability.grok pin');
 ok(map.agent_to_capability.deepseek === 'model:deepseek-v4-pro:cloud', 'deepseek pin');
 ok(map.agent_to_capability.qwen === 'model:qwen3.6:35b', 'qwen pin');
-ok(map.agent_to_capability.kimi === 'model:kimi-k2.7-code:cloud', 'kimi pin');
+ok(map.agent_to_capability.kimi === 'model:kimi-k3:cloud', 'kimi pin');
 ok(map.agent_to_capability.gemini === 'model:gemini-pro', 'gemini pin');
 
 // best-cloud-gov: generalist/writer use Grok at 32gb+; 16gb stays small local
@@ -45,180 +55,227 @@ const { isChineseOrigin } = require(path.join(ROOT, 'tools', 'model-map-resolve.
 ok(isChineseOrigin('grok-4.5') === false, 'grok-4.5 is not Chinese-origin');
 ok(isChineseOrigin('deepseek-v4-pro:cloud') === true, 'deepseek pin is Chinese-origin (gov filter)');
 ok(isChineseOrigin('qwen3.6:35b') === true, 'qwen pin is Chinese-origin');
-ok(isChineseOrigin('kimi-k2.7-code:cloud') === true || isChineseOrigin('moonshotai/kimi') === true,
+ok(isChineseOrigin('kimi-k3:cloud') === true || isChineseOrigin('moonshotai/kimi') === true,
   'kimi family Chinese-origin via vendor or name');
 
 // Kimi may or may not match isChineseOrigin depending on family tokens — document actual:
-console.log('     isChineseOrigin(kimi-k2.7-code:cloud)=', isChineseOrigin('kimi-k2.7-code:cloud'));
+console.log('     isChineseOrigin(kimi-k3:cloud)=', isChineseOrigin('kimi-k3:cloud'));
 
 // ── 2. explain resolve (child node) ─────────────────────────────────────────
 console.log('\n2. resolveBackend via explain-style require');
-const resolve = require(path.join(ROOT, 'tools', 'model-map-resolve.js'));
-// Prefer proxy-free explain helper if present
-let explained = null;
-try {
-  const { spawnSync } = require('child_process');
-  const r = spawnSync(process.execPath, [
-    path.join(ROOT, 'tools', 'c-thru-explain.js'),
-    '--model', 'grok',
-    '--mode', 'best-cloud',
-    '--tier', '64gb',
-    '--config', MAP,
-  ], { encoding: 'utf8', env: { ...process.env, CLAUDE_MODEL_MAP_PATH: MAP } });
-  if (r.status === 0) {
-    explained = (r.stdout || '') + (r.stderr || '');
-    ok(/grok-4\.5|xai/i.test(explained), 'explain --model grok mentions grok-4.5 or xai');
-  } else {
-    console.log('     explain exit', r.status, (r.stderr || '').slice(0, 200));
-    ok(true, 'explain optional (skipped on fail)');
-  }
-} catch (e) {
-  console.log('     explain skip:', e.message);
-}
+const explainResult = spawnSync(process.execPath, [
+  path.join(ROOT, 'tools', 'c-thru-explain.js'),
+  '--model', 'grok-build',
+  '--mode', 'best-cloud',
+  '--tier', '64gb',
+], { encoding: 'utf8', env: { ...process.env, CLAUDE_MODEL_MAP_PATH: MAP } });
+const explained = (explainResult.stdout || '') + (explainResult.stderr || '');
+ok(!explainResult.error && explainResult.status === 0,
+  'explain --model grok-build exits 0');
+ok(
+  /^Resolution chain — model=grok-build$/m.test(explained)
+    && /^  name swap\s+grok-build → grok-4\.5$/m.test(explained)
+    && /^  endpoint\s+xai$/m.test(explained)
+    && /^  served_by\s+grok-4\.5$/m.test(explained)
+    && /^  endpoint\.format\s+openai$/m.test(explained),
+  'explain resolves exactly grok-build → grok-4.5 @ xai using openai format',
+);
 
 // ── 3. Proxy path + auth e2e with stub ──────────────────────────────────────
 console.log('\n3. proxy path + auth (stub xAI)');
 
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const s = http.createServer();
-    s.listen(0, '127.0.0.1', () => {
-      const p = s.address().port;
-      s.close(() => resolve(p));
-    });
-    s.on('error', reject);
-  });
-}
-
 async function runProxyE2e() {
-  const stubPort = await freePort();
-  const seen = { path: null, headers: null, body: null };
-
-  const stub = http.createServer((req, res) => {
-    const chunks = [];
-    req.on('data', c => chunks.push(c));
-    req.on('end', () => {
-      seen.path = req.url;
-      seen.headers = req.headers;
-      seen.body = Buffer.concat(chunks).toString('utf8');
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({
-        id: 'msg_test',
-        type: 'message',
-        role: 'assistant',
-        content: [{ type: 'text', text: 'pong' }],
-        model: 'grok-4.5',
-        stop_reason: 'end_turn',
-        usage: { input_tokens: 3, output_tokens: 1 },
-      }));
-    });
-  });
-  await new Promise(r => stub.listen(stubPort, '127.0.0.1', r));
-
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-xai-'));
-  const cfgPath = path.join(tmpDir, 'model-map.json');
-  // Point xai at local stub; keep url path as origin (no /v1) so forwardAnthropic
-  // concatenates /v1/messages correctly — stub receives that path.
-  const cfg = {
-    endpoints: {
-      xai: {
-        url: `http://127.0.0.1:${stubPort}`,
-        format: 'anthropic',
-        auth: { header: 'Authorization', scheme: 'Bearer', env: 'XAI_API_KEY' },
-      },
-      anthropic: { url: 'https://api.anthropic.com', format: 'anthropic' },
-    },
-    model_routes: {
-      grok: { endpoint: 'xai', name: 'grok-4.5' },
-      'grok-4.5': 'xai',
-    },
-    agent_to_capability: { grok: 'model:grok-4.5' },
-    llm_profiles: {},
-    llm_mode: 'best-cloud',
-  };
-  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
-
-  const proxyPort = await freePort();
-  const prevKey = process.env.XAI_API_KEY;
-  process.env.XAI_API_KEY = 'xai-live-test-key';
-  process.env.CLAUDE_MODEL_MAP_PATH = cfgPath;
-  process.env.CLAUDE_PROXY_PORT = String(proxyPort);
-
-  const child = spawn(process.execPath, [PROXY, '--port', String(proxyPort), '--config', cfgPath], {
-    env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let proxyLog = '';
-  child.stderr.on('data', d => { proxyLog += d; });
-  child.stdout.on('data', d => { proxyLog += d; });
-
-  // Wait for listen
-  await new Promise((resolve, reject) => {
-    const t0 = Date.now();
-    const tick = () => {
-      http.get(`http://127.0.0.1:${proxyPort}/ping`, res => {
-        res.resume();
-        resolve();
-      }).on('error', () => {
-        if (Date.now() - t0 > 8000) reject(new Error('proxy did not start\n' + proxyLog));
-        else setTimeout(tick, 50);
-      });
-    };
-    tick();
-  });
-
+  const tmpDir = makeIsolatedTmpDir('c-thru-xai-');
+  let stub = null;
   try {
-    const body = JSON.stringify({
-      model: 'grok',
-      max_tokens: 16,
-      messages: [{ role: 'user', content: 'ping' }],
-    });
-    const resp = await new Promise((resolve, reject) => {
-      const req = http.request({
-        hostname: '127.0.0.1',
-        port: proxyPort,
-        path: '/v1/messages',
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'content-length': Buffer.byteLength(body),
-          'x-api-key': 'sk-ant-MUST-NOT-LEAK',
-          'anthropic-version': '2023-06-01',
-        },
-      }, res => {
-        const chunks = [];
-        res.on('data', c => chunks.push(c));
-        res.on('end', () => resolve({
-          status: res.statusCode,
-          headers: res.headers,
-          body: Buffer.concat(chunks).toString('utf8'),
-        }));
-      });
-      req.on('error', reject);
-      req.write(body);
-      req.end();
+    stub = await startStubServer({
+      '*': {
+        id: 'resp_test',
+        status: 'completed',
+        model: 'grok-4.5',
+        output: [{
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'pong' }],
+        }],
+        usage: { input_tokens: 3, output_tokens: 1 },
+      },
     });
 
-    ok(resp.status === 200, 'proxy /v1/messages → 200 via xai stub');
-    ok(seen.path === '/v1/messages' || seen.path === '/v1/messages?',
-      'stub path is /v1/messages (not /v1/v1/messages): ' + seen.path);
-    ok(!/\/v1\/v1\//.test(seen.path || ''), 'no double /v1 in path');
-    const auth = seen.headers && (seen.headers.authorization || seen.headers.Authorization);
-    ok(auth === 'Bearer xai-live-test-key', 'outbound Authorization is XAI key: ' + auth);
-    ok(!seen.headers['x-api-key'] || seen.headers['x-api-key'] !== 'sk-ant-MUST-NOT-LEAK',
-      'inbound Anthropic x-api-key not forwarded');
-    let parsedBody;
-    try { parsedBody = JSON.parse(seen.body); } catch (_) { parsedBody = null; }
-    ok(parsedBody && parsedBody.model === 'grok-4.5',
-      'upstream model rewritten to grok-4.5: ' + (parsedBody && parsedBody.model));
+    // Point xAI at a local Responses stub; keep url as an origin so the shared
+    // Responses forwarder appends /v1/responses exactly once.
+    const cfgPath = writeConfig(tmpDir, {
+      endpoints: {
+        xai: {
+          url: stub.url,
+          format: 'openai',
+          auth: { header: 'Authorization', scheme: 'Bearer', env: 'XAI_API_KEY' },
+        },
+        anthropic: { url: 'https://api.anthropic.com', format: 'anthropic' },
+      },
+      model_routes: {
+        grok: { endpoint: 'xai', name: 'grok-4.5' },
+        'grok-4.5': 'xai',
+        'grok-build': { endpoint: 'xai', name: 'grok-4.5' },
+        'grok-build-latest': { endpoint: 'xai', name: 'grok-4.5' },
+      },
+      agent_to_capability: { grok: 'model:grok-4.5' },
+      llm_profiles: {},
+      llm_mode: 'best-cloud',
+    });
+
+    await withProxy({
+      configPath: cfgPath,
+      env: { XAI_API_KEY: 'xai-live-test-key' },
+    }, async ({ port }) => {
+      const resp = await httpJson(port, 'POST', '/v1/messages', {
+        model: 'grok-build',
+        max_tokens: 16,
+        thinking: { type: 'disabled' },
+        messages: [{ role: 'user', content: 'ping' }],
+        tools: [{
+          name: 'lookup',
+          description: 'Look up a value',
+          input_schema: {
+            type: 'object',
+            properties: { key: { type: 'string' } },
+            required: ['key'],
+          },
+          strict: true,
+        }],
+        tool_choice: {
+          type: 'tool',
+          name: 'lookup',
+          disable_parallel_tool_use: true,
+        },
+      }, {
+        'x-api-key': 'sk-ant-MUST-NOT-LEAK',
+        'anthropic-version': '2023-06-01',
+        'x-claude-code-session-id': 'session-xai-canary',
+        'x-claude-code-agent-id': 'agent-xai-canary',
+        'x-claude-code-parent-agent-id': 'parent-xai-canary',
+      });
+
+      const seen = stub.requests.at(-1) || {};
+      ok(resp.status === 200, 'proxy /v1/messages → 200 via xAI Responses stub');
+      ok(seen.url === '/v1/responses' || seen.url === '/v1/responses?',
+        'stub path is /v1/responses (not /v1/v1/responses): ' + seen.url);
+      ok(!/\/v1\/v1\//.test(seen.url || ''), 'no double /v1 in path');
+      const auth = seen.headers && (seen.headers.authorization || seen.headers.Authorization);
+      ok(auth === 'Bearer xai-live-test-key', 'outbound Authorization is XAI key: ' + auth);
+      ok(!seen.headers?.['x-api-key'] || seen.headers['x-api-key'] !== 'sk-ant-MUST-NOT-LEAK',
+        'inbound Anthropic x-api-key not forwarded');
+      for (const name of [
+        'x-claude-code-session-id',
+        'x-claude-code-agent-id',
+        'x-claude-code-parent-agent-id',
+      ]) {
+        ok(!Object.prototype.hasOwnProperty.call(seen.headers || {}, name),
+          `xAI upstream does not receive ${name}`);
+      }
+      const parsedBody = seen.body;
+      ok(parsedBody && parsedBody.model === 'grok-4.5',
+        'grok-build alias rewritten to grok-4.5: ' + (parsedBody && parsedBody.model));
+      ok(parsedBody && parsedBody.store === false
+        && parsedBody.input?.[0]?.type === 'message'
+        && parsedBody.input?.[0]?.content?.[0]?.type === 'input_text',
+        'Anthropic request is translated to stateless typed Responses input');
+      ok(parsedBody?.reasoning?.effort === 'low'
+        && parsedBody.reasoning.summary === undefined,
+      'xAI disabled thinking request uses the nearest low-effort approximation');
+      ok((resp.headers['x-c-thru-translation-gap'] || '')
+        .split(',')
+        .includes('thinking.type:disabled'),
+      'xAI disabled thinking mismatch is explicitly traceable');
+      ok(parsedBody?.tools?.[0]?.type === 'function'
+        && parsedBody.tools[0].name === 'lookup'
+        && parsedBody.tools[0].strict === undefined,
+      'xAI Responses tool stays flat and relies on implicit strict mode');
+      const strictTrueGaps =
+        (resp.headers['x-c-thru-translation-gap'] || '').split(',');
+      ok(!strictTrueGaps.includes('tool.strict')
+        && !strictTrueGaps.includes('tool.strict:false'),
+      'xAI strict:true uses implicit strict mode without a false gap');
+      ok(JSON.stringify(parsedBody?.tool_choice) === JSON.stringify({
+        type: 'function',
+        function: { name: 'lookup' },
+      }), 'xAI named tool_choice uses documented nested function selector');
+      ok(parsedBody?.parallel_tool_calls === false,
+        'xAI route preserves Anthropic disable_parallel_tool_use');
+      ok(resp.json?.content?.[0]?.type === 'text'
+        && resp.json?.content?.[0]?.text === 'pong',
+        'Responses output is translated back to Anthropic content');
+
+      const supportedEffort = await httpJson(port, 'POST', '/v1/messages', {
+        model: 'grok-build',
+        max_tokens: 16,
+        output_config: { effort: 'medium' },
+        messages: [{ role: 'user', content: 'supported effort' }],
+        tools: [{
+          name: 'lookup',
+          description: 'Look up a value',
+          input_schema: { type: 'object', properties: {} },
+          strict: true,
+        }],
+      });
+      const supportedEffortBody = stub.requests.at(-1)?.body;
+      const supportedEffortGaps =
+        (supportedEffort.headers['x-c-thru-translation-gap'] || '').split(',');
+      ok(supportedEffortBody?.reasoning?.effort === 'medium',
+        'xAI preserves a supported medium effort value');
+      ok(!supportedEffortGaps.includes('output_config.effort')
+        && !supportedEffortGaps.includes('tool.strict')
+        && !supportedEffortGaps.includes('tool.strict:false'),
+      'xAI supported effort and strict:true produce no false semantic gaps');
+
+      const omittedStrict = await httpJson(port, 'POST', '/v1/messages', {
+        model: 'grok-build',
+        max_tokens: 16,
+        output_config: { effort: 'xhigh' },
+        messages: [{ role: 'user', content: 'implicit strict' }],
+        tools: [{
+          name: 'lookup',
+          description: 'Look up a value',
+          input_schema: { type: 'object', properties: {} },
+        }],
+      });
+      const omittedStrictBody = stub.requests.at(-1)?.body;
+      const omittedStrictGaps =
+        (omittedStrict.headers['x-c-thru-translation-gap'] || '').split(',');
+      ok(omittedStrictBody?.tools?.[0]?.strict === undefined,
+        'xAI omits strict on the wire when Anthropic strict is omitted');
+      ok(omittedStrictGaps.includes('tool.strict'),
+        'xAI implicit strict mismatch is traced for an omitted Anthropic strict');
+      ok(omittedStrictBody?.reasoning?.effort === 'high'
+        && omittedStrictGaps.includes('output_config.effort'),
+      'xAI clamps unsupported xhigh effort to high and traces the mismatch');
+
+      const falseStrict = await httpJson(port, 'POST', '/v1/messages', {
+        model: 'grok-build',
+        max_tokens: 16,
+        output_config: { effort: 'max' },
+        messages: [{ role: 'user', content: 'explicit non-strict' }],
+        tools: [{
+          name: 'lookup',
+          description: 'Look up a value',
+          input_schema: { type: 'object', properties: {} },
+          strict: false,
+        }],
+      });
+      const falseStrictBody = stub.requests.at(-1)?.body;
+      const falseStrictGaps =
+        (falseStrict.headers['x-c-thru-translation-gap'] || '').split(',');
+      ok(falseStrictBody?.tools?.[0]?.strict === undefined,
+        'xAI omits explicit strict:false from its Responses request');
+      ok(falseStrictGaps.includes('tool.strict:false'),
+        'xAI explicit strict:false mismatch is traceable');
+      ok(falseStrictBody?.reasoning?.effort === 'high'
+        && falseStrictGaps.includes('output_config.effort'),
+      'xAI clamps unsupported max effort to high and traces the mismatch');
+    });
   } finally {
-    child.kill('SIGTERM');
-    await new Promise(r => stub.close(r));
+    if (stub) await stub.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
-    if (prevKey === undefined) delete process.env.XAI_API_KEY;
-    else process.env.XAI_API_KEY = prevKey;
-    delete process.env.CLAUDE_MODEL_MAP_PATH;
-    delete process.env.CLAUDE_PROXY_PORT;
   }
 }
 

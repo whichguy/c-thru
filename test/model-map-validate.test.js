@@ -348,6 +348,40 @@ console.log('\n22. endpoint.vertex must be boolean');
   assert(!errsWarn.some(e => /vertex/.test(e)), `vertex:true + format:anthropic → no hard error, only warning (got: ${errsWarn.join('; ')})`);
 }
 
+// ── 22b. endpoint correlation trust policy must be boolean ─────────────────
+console.log('\n22b. endpoint.preserve_claude_code_correlation must be boolean');
+{
+  for (const value of [true, false]) {
+    const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+    cfg.endpoints = {
+      local: {
+        kind: 'ollama',
+        url: 'http://localhost:11434',
+        preserve_claude_code_correlation: value,
+      },
+    };
+    delete cfg.backends;
+    const errs = validate(cfg);
+    assert(!errs.some(e => /preserve_claude_code_correlation/.test(e)),
+      `preserve_claude_code_correlation:${value} → no schema error (got: ${errs.join('; ')})`);
+  }
+
+  for (const value of ['true', null]) {
+    const cfg = JSON.parse(JSON.stringify(VALID_BASE));
+    cfg.endpoints = {
+      local: {
+        kind: 'ollama',
+        url: 'http://localhost:11434',
+        preserve_claude_code_correlation: value,
+      },
+    };
+    delete cfg.backends;
+    const errs = validate(cfg);
+    assert(errs.some(e => /preserve_claude_code_correlation.*boolean/.test(e)),
+      `preserve_claude_code_correlation:${JSON.stringify(value)} → boolean error (got: ${errs.join('; ')})`);
+  }
+}
+
 // ── 23. /model picker exposure: claude-via-gemini-* aliases resolve to gemini_ai
 console.log('\n23. claude-via-gemini-* aliases resolve to gemini_ai');
 {
@@ -363,6 +397,8 @@ console.log('\n23. claude-via-gemini-* aliases resolve to gemini_ai');
     `claude-via-gemini-flash routes to gemini_ai (got ${JSON.stringify(flashRoute)})`);
   assert(flashRoute && flashRoute.name === 'gemini-flash-latest',
     `claude-via-gemini-flash names gemini-flash-latest (got ${flashRoute && flashRoute.name})`);
+  assert(shippedConfig.endpoints?.anthropic?.preserve_claude_code_correlation === true,
+    'shipped endpoints.anthropic explicitly preserves Claude Code correlation headers');
   // The shipped config must validate cleanly with the new aliases in place.
   const errs = validate(shippedConfig);
   assert(errs.length === 0, `shipped config validates with new aliases (errs: ${errs.slice(0,3).join('; ')})`);
@@ -612,12 +648,16 @@ console.log('\nAuto-derived auth diagnostics');
     console.warn = origWarn;
     console.error = origError;
   }
-  const expectedNote = "model-map-validate: note: endpoint 'anthropic_known_no_auth' auth auto-derived from host (bearer_priority); ensure $ANTHROPIC_API_KEY is set";
   assert(errs.length === 0, `known host without explicit auth → no hard error (got: ${errs.join('; ') || 'none'})`);
-  assert(noteMessages.includes(expectedNote), `known host emits auto-derived auth note (got: ${noteMessages.join(' | ') || 'none'})`);
+  // bearer_priority is the normal Anthropic dual-mode path — no launch-time note spam.
+  assert(!noteMessages.some(m => m.includes('anthropic_known_no_auth') || m.includes('bearer_priority')),
+    `bearer_priority auto-derived must be silent (got notes: ${noteMessages.join(' | ') || 'none'})`);
+  assert(!noteMessages.some(m => /ensure \$ANTHROPIC_API_KEY is set/.test(m)),
+    `must not nag about ANTHROPIC_API_KEY on bearer_priority (got: ${noteMessages.join(' | ') || 'none'})`);
   assert(!noteMessages.concat(warnMessages).some(m => m.includes('STRIPPED')),
     `known host does not emit STRIPPED warning (got: ${noteMessages.concat(warnMessages).join(' | ') || 'none'})`);
   assert(warnMessages.length === 0, `auth note leaves numeric warning count unchanged at 0 (got: ${warnMessages.length})`);
+  assert(noteMessages.length === 0, `bearer_priority path emits zero notes (got: ${noteMessages.join(' | ') || 'none'})`);
 }
 
 {

@@ -11,11 +11,12 @@
 // Run: node test/cli-e2e-flags.test.js
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { makeIsolatedTmpDir, modelTestTimeoutMs } = require('./helpers');
 
 const CTHRU = path.join(__dirname, '..', 'tools', 'c-thru');
+const COORDINATOR_ONLY = process.env.C_THRU_TEST_ONLY === 'coordinator';
 
 let passed = 0;
 let failed = 0;
@@ -25,6 +26,14 @@ function assert(condition, message) {
   else            { console.error(`  FAIL  ${message}`); failed++; }
 }
 
+function formatArgs(args) {
+  return JSON.stringify((args || []).map((arg) => (
+    typeof arg === 'string' && arg.length > 160
+      ? `${arg.slice(0, 80)}…<${arg.length} chars>`
+      : arg
+  )));
+}
+
 function makeStubClaude(binDir) {
   const stubPath = path.join(binDir, 'claude');
   // Stub claude: JSON-dumps args + select env vars to stdout. Also captures the
@@ -32,12 +41,17 @@ function makeStubClaude(binDir) {
   // inline, not as a file path) so C1 can assert its shape.
   const script = `#!/bin/sh
 node -e '
+const fs = require("fs");
+const path = require("path");
 const args = process.argv.slice(1);
 let settings_content = null;
 const si = args.indexOf("--settings");
 if (si >= 0 && args[si + 1]) {
   // c-thru passes settings inline as a JSON string, not a file path.
   settings_content = args[si + 1];
+} else {
+  const settingsEquals = args.find(arg => arg.startsWith("--settings="));
+  if (settingsEquals) settings_content = settingsEquals.slice("--settings=".length);
 }
 const agents_occurrences = [];
 for (let i = 0; i < args.length; i++) {
@@ -48,10 +62,29 @@ for (let i = 0; i < args.length; i++) {
     agents_occurrences.push({ form: "equals", value: args[i].slice("--agents=".length) });
   }
 }
+const config_dir = process.env.CLAUDE_CONFIG_DIR || null;
+const physical_settings_path = config_dir ? path.join(config_dir, "settings.json") : null;
+let physical_settings_content = null;
+if (physical_settings_path) {
+  try { physical_settings_content = fs.readFileSync(physical_settings_path, "utf8"); } catch {}
+}
+const coordinator_agent_path = config_dir ? path.join(config_dir, "agents", "c-thru-coordinator.md") : null;
+let coordinator_agent_is_symlink = false;
+let coordinator_agent_realpath = null;
+if (coordinator_agent_path) {
+  try {
+    coordinator_agent_is_symlink = fs.lstatSync(coordinator_agent_path).isSymbolicLink();
+    coordinator_agent_realpath = fs.realpathSync(coordinator_agent_path);
+  } catch {}
+}
 console.log(JSON.stringify({
   args,
   settings_content,
   agents_occurrences,
+  config_dir,
+  physical_settings_content,
+  coordinator_agent_is_symlink,
+  coordinator_agent_realpath,
   anthropic_base_url:    process.env.ANTHROPIC_BASE_URL    || null,
   claude_llm_mode:       process.env.CLAUDE_LLM_MODE       || null,
   claude_llm_profile:    process.env.CLAUDE_LLM_PROFILE    || null,
@@ -60,8 +93,11 @@ console.log(JSON.stringify({
   claude_proxy_journal:  process.env.CLAUDE_PROXY_JOURNAL  || null,
   claude_proxy_debug:    process.env.CLAUDE_PROXY_DEBUG    || null,
   claude_router_debug:   process.env.C_THRU_DEBUG          || null,
+  claude_proxy_anthropic_upstream: process.env.CLAUDE_PROXY_ANTHROPIC_UPSTREAM || null,
+  c_thru_anthropic_upstream_fingerprint: process.env.C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT || null,
   c_thru_no_update: process.env.C_THRU_NO_UPDATE || null,
   c_thru_session_id: process.env.C_THRU_SESSION_ID || null,
+  c_thru_coordinator_active: process.env.C_THRU_COORDINATOR_ACTIVE || null,
 }));
 ' -- "$@"
 `;
@@ -70,10 +106,11 @@ console.log(JSON.stringify({
 }
 
 function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-cli-e2e-'));
+  const tmpRoot = makeIsolatedTmpDir('c-thru-cli-e2e-');
   const homeDir = path.join(tmpRoot, 'home');
+  const claudeDir = path.join(homeDir, '.claude');
   const fakeBin = path.join(tmpRoot, 'bin');
-  fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true });
+  fs.mkdirSync(claudeDir, { recursive: true });
   fs.mkdirSync(fakeBin, { recursive: true });
   // Optionally seed the DURABLE ~/.claude/settings.json before the launch so a
   // test can prove the ephemeral write never touches it. Captures its mtime.
@@ -83,7 +120,7 @@ function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
     fs.writeFileSync(durableSettings, opts.seedSettings);
     seedMtimeMs = fs.statSync(durableSettings).mtimeMs;
   }
-  fs.symlinkSync(path.join(__dirname, '..', 'tools'), path.join(homeDir, '.claude', 'tools'));
+  fs.symlinkSync(path.join(__dirname, '..', 'tools'), path.join(claudeDir, 'tools'));
   makeStubClaude(fakeBin);
 
   const config = Object.assign({
@@ -104,24 +141,45 @@ function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
   const configPath = path.join(tmpRoot, 'model-map.json');
   fs.writeFileSync(configPath, JSON.stringify(config));
 
+  const childEnv = { ...process.env };
+  for (const key of [
+    'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+    'CLAUDE_BIN', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROFILE_DIR', 'CLAUDE_DIR',
+    'CLAUDE_MODEL_MAP_PATH', 'CLAUDE_MODEL_MAP_LAUNCH_CWD',
+    'CLAUDE_PROXY_BYPASS', 'CLAUDE_PROXY_PORT', 'CLAUDE_PROXY_JOURNAL',
+    'CLAUDE_PROXY_DEBUG', 'CLAUDE_PROXY_USE_OLLAMA_PORT',
+    'CLAUDE_PROXY_ANTHROPIC_UPSTREAM', 'C_THRU_ANTHROPIC_UPSTREAM',
+    'C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT', 'C_THRU_CLI_ANTHROPIC_UPSTREAM',
+    'CLAUDE_LLM_MODE', 'CLAUDE_LLM_MEMORY_GB', 'CLAUDE_CONNECTIVITY_MODE',
+    'C_THRU_DEBUG', 'C_THRU_SESSION_ID', 'C_THRU_LAUNCH_DEFAULT_MODEL',
+    'C_THRU_PROXY_ALWAYS', 'C_THRU_COORDINATOR', 'C_THRU_COORDINATOR_ACTIVE',
+  ]) {
+    delete childEnv[key];
+  }
+  Object.assign(childEnv, {
+    HOME: homeDir,
+    TMPDIR: tmpRoot,
+    PATH: `${fakeBin}:${process.env.PATH}`,
+    CLAUDE_CONFIG_DIR: claudeDir,
+    CLAUDE_PROFILE_DIR: claudeDir,
+    CLAUDE_DIR: claudeDir,
+    CLAUDE_MODEL_MAP_PATH: configPath,
+    CLAUDE_MODEL_MAP_LAUNCH_CWD: tmpRoot,
+    C_THRU_NO_UPDATE: '1',
+    C_THRU_NO_MARKETPLACE_UPDATE: '1',
+    C_THRU_NO_OAUTH_INJECT: '1',
+    C_THRU_SKIP_PREPULL: '1',
+    C_THRU_SKIP_PREFLIGHT: '1',
+    CLAUDE_PROXY_STARTUP_PROBE: '0',
+    CLAUDE_PROXY_SKIP_OLLAMA_WARMUP: '1',
+    OLLAMA_URL: 'http://127.0.0.1:11434',
+    CLAUDE_LLM_PROFILE: '16gb',
+  }, envOverrides);
+
   const result = spawnSync(CTHRU, args, {
     encoding: 'utf8',
-    timeout: 15000,
-    env: {
-      ...process.env,
-      HOME: homeDir,
-      PATH: `${fakeBin}:${process.env.PATH}`,
-      CLAUDE_MODEL_MAP_PATH: configPath,
-      C_THRU_NO_UPDATE: '1',
-      C_THRU_NO_MARKETPLACE_UPDATE: '1',
-      C_THRU_SKIP_PREPULL: '1',
-      C_THRU_SKIP_PREFLIGHT: '1',
-      CLAUDE_PROXY_STARTUP_PROBE: '0',
-      CLAUDE_PROXY_SKIP_OLLAMA_WARMUP: '1',
-      OLLAMA_URL: 'http://127.0.0.1:11434',
-      CLAUDE_LLM_PROFILE: '16gb',
-      ...envOverrides,
-    },
+    timeout: modelTestTimeoutMs(),
+    env: childEnv,
     cwd: tmpRoot,
   });
 
@@ -134,6 +192,7 @@ function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
 
 console.log('c-thru CLI flag-stripping e2e tests\n');
 
+if (!COORDINATOR_ONLY) {
 // ── Test 1: --route is stripped, --model is set to resolved value ──────────
 console.log('1. --route name → strips --route, forwards resolved model');
 {
@@ -141,10 +200,10 @@ console.log('1. --route name → strips --route, forwards resolved model');
   assert(r.code === 0, `exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
   assert(r.json !== null, 'stub claude received args');
   const args = r.json?.args || [];
-  assert(!args.includes('--route'), `--route stripped (got args: ${JSON.stringify(args)})`);
+  assert(!args.includes('--route'), `--route stripped (got args: ${formatArgs(args)})`);
   assert(!args.includes('heavy'), `route value 'heavy' stripped`);
   assert(args.some(a => a === '--model=claude-opus-4-6' || a === 'claude-opus-4-6'),
-    `--model resolved to claude-opus-4-6 (got ${JSON.stringify(args)})`);
+    `--model resolved to claude-opus-4-6 (got ${formatArgs(args)})`);
 }
 
 // ── Test 2: --mode <value> sets CLAUDE_LLM_MODE and is stripped ────────────
@@ -153,7 +212,7 @@ console.log('\n2. --mode offline → sets CLAUDE_LLM_MODE, strips flag');
   const r = runCthru(['--mode', 'offline', '--model', 'claude-sonnet-5']);
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
-  assert(!args.includes('--mode'), `--mode stripped (got: ${JSON.stringify(args)})`);
+  assert(!args.includes('--mode'), `--mode stripped (got: ${formatArgs(args)})`);
   assert(!args.includes('offline'), `'offline' value stripped from args`);
   // --mode offline is normalized at export to best-local-oss (selectable mode name).
   assert(r.json?.claude_llm_mode === 'best-local-oss',
@@ -168,7 +227,7 @@ console.log('\n3. --mode=connected (= form) → stripped, env set');
   const args = r.json?.args || [];
   // Tight check: --mode or --mode=, NOT --model (which has --mode as prefix).
   assert(!args.some(a => a === '--mode' || a.startsWith('--mode=')),
-    `--mode=... stripped (got: ${JSON.stringify(args)})`);
+    `--mode=... stripped (got: ${formatArgs(args)})`);
   // --mode connected normalizes to best-cloud-oss (DEFAULT_MODE).
   assert(r.json?.claude_llm_mode === 'best-cloud-oss',
     `CLAUDE_LLM_MODE=best-cloud-oss after connected normalize (got ${JSON.stringify(r.json?.claude_llm_mode)})`);
@@ -198,7 +257,7 @@ console.log('\n5. --mode + --profile + --route together');
   assert(r.json?.claude_llm_mode === 'best-local-oss', 'CLAUDE_LLM_MODE=best-local-oss (offline normalized)');
   assert(r.json?.claude_llm_profile === '128gb', 'CLAUDE_LLM_PROFILE=128gb');
   assert(args.some(a => a === '--model=claude-opus-4-6' || a === 'claude-opus-4-6'),
-    `route resolved to opus (got ${JSON.stringify(args)})`);
+    `route resolved to opus (got ${formatArgs(args)})`);
 }
 
 // ── Test 6: ollama-backed model → proxy is spawned, BASE_URL points to it ──
@@ -244,14 +303,98 @@ console.log('\n8. --profile without value → exit non-zero');
     `error message present (got: ${r.stderr.slice(0, 200)})`);
 }
 
-// ── Test 9: --bypass-proxy ────────────────────────────────────────────────
-console.log('\n9. --bypass-proxy → CLAUDE_PROXY_BYPASS=1, stripped from args');
+// ── Test 9: --bypass-proxy explicit + transparent paths ───────────────────
+console.log('\n9. --bypass-proxy skips proxy on explicit-model and transparent paths');
 {
-  const r = runCthru(['--bypass-proxy', '--model', 'claude-sonnet-5']);
+  const r = runCthru(['--bypass-proxy', '--model', 'claude-sonnet-5'], {
+    backends: {
+      anthropic: { kind: 'anthropic', url: 'https://api.anthropic.com' },
+    },
+  });
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const args = r.json?.args || [];
   assert(!args.includes('--bypass-proxy'), `--bypass-proxy stripped`);
   assert(r.json?.claude_proxy_bypass === '1', `CLAUDE_PROXY_BYPASS=1 (got ${JSON.stringify(r.json?.claude_proxy_bypass)})`);
+  assert(r.json?.anthropic_base_url === 'https://api.anthropic.com',
+    `explicit model bypass uses direct backend URL (got ${JSON.stringify(r.json?.anthropic_base_url)})`);
+  assert(!/proxy\s+starting/.test(r.stderr),
+    `explicit model bypass does not spawn proxy (stderr: ${r.stderr.slice(0, 200)})`);
+
+  const prompt = 'transparent-bypass-prompt';
+  const transparent = runCthru(['--bypass-proxy', '-p', prompt], {
+    routes: {},
+  });
+  assert(transparent.code === 0,
+    `transparent bypass exit 0 (got ${transparent.code}, stderr: ${transparent.stderr.slice(0, 200)})`);
+  const transparentArgs = transparent.json?.args || [];
+  assert(!transparentArgs.includes('--bypass-proxy'),
+    `transparent bypass strips private flag (got ${formatArgs(transparentArgs)})`);
+  assert(transparentArgs.includes('-p') && transparentArgs.includes(prompt),
+    `transparent bypass preserves Claude-owned prompt args (got ${formatArgs(transparentArgs)})`);
+  assert(transparent.json?.anthropic_base_url === null,
+    `transparent bypass does not inject a proxy URL (got ${JSON.stringify(transparent.json?.anthropic_base_url)})`);
+  assert(!/proxy\s+starting/.test(transparent.stderr),
+    `transparent bypass does not spawn proxy (stderr: ${transparent.stderr.slice(0, 200)})`);
+
+  for (const [model, kind] of [
+    ['gemini-test-model', 'gemini'],
+    ['openai-test-model', 'openai'],
+    ['ollama-legacy-test-model', 'ollama'],
+  ]) {
+    const incompatible = runCthru(['--bypass-proxy', '--model', model], {
+      backends: {
+        anthropic: { kind: 'anthropic', url: 'https://anthropic.example' },
+        incompatible: { kind, url: `https://${kind}.example` },
+      },
+      routes: { default: 'claude-sonnet-5' },
+      model_routes: {
+        'claude-sonnet-5': 'anthropic',
+        [model]: 'incompatible',
+      },
+    });
+    assert(incompatible.code !== 0,
+      `${kind} bypass fails before launching Claude (got ${incompatible.code})`);
+    assert(new RegExp(`format=${kind}`).test(incompatible.stderr) &&
+      /requires c-thru protocol translation/.test(incompatible.stderr),
+    `${kind} bypass explains the protocol boundary (stderr: ${incompatible.stderr.slice(0, 240)})`);
+    assert(!/proxy\s+starting/.test(incompatible.stderr),
+      `${kind} bypass rejection does not start a proxy`);
+  }
+
+  const xaiLike = runCthru(['--bypass-proxy', '--model', 'xai-test-model'], {
+    backends: {
+      anthropic: { kind: 'anthropic', url: 'https://api.anthropic.com' },
+      xai: {
+        kind: 'anthropic',
+        url: 'https://api.x.ai',
+        auth: { header: 'Authorization', scheme: 'Bearer', env: 'XAI_API_KEY' },
+      },
+    },
+    routes: { default: 'claude-sonnet-5' },
+    model_routes: {
+      'claude-sonnet-5': 'anthropic',
+      'xai-test-model': 'xai',
+    },
+  });
+  assert(xaiLike.code !== 0,
+    `non-native Anthropic-shape bypass fails before launching Claude (got ${xaiLike.code})`);
+  assert(/supports only the native Anthropic API/.test(xaiLike.stderr),
+    `non-native Anthropic-shape bypass explains auth/path boundary (stderr: ${xaiLike.stderr.slice(0, 240)})`);
+  assert(!/proxy\s+starting/.test(xaiLike.stderr),
+    `non-native Anthropic-shape bypass rejection does not start a proxy`);
+
+  const unresolved = runCthru(['--bypass-proxy', '--model', 'unmapped-test-model'], {
+    backends: {
+      anthropic: { kind: 'anthropic', url: 'https://api.anthropic.com' },
+    },
+    model_routes: {},
+  });
+  assert(unresolved.code !== 0,
+    `unmapped bypass fails before launching Claude (got ${unresolved.code})`);
+  assert(/select a model mapped to the native Anthropic API/.test(unresolved.stderr),
+    `unmapped bypass explains the native route requirement (stderr: ${unresolved.stderr.slice(0, 240)})`);
+  assert(!/proxy\s+starting/.test(unresolved.stderr),
+    `unmapped bypass rejection does not start a proxy`);
 }
 
 // ── Test 10: --journal ────────────────────────────────────────────────────
@@ -316,6 +459,30 @@ console.log('\n15. --memory-gb 32 → CLAUDE_LLM_MEMORY_GB=32, stripped');
   assert(r.json?.claude_llm_memory_gb === '32', `CLAUDE_LLM_MEMORY_GB=32`);
 }
 
+// ── Test 15b: --anthropic-upstream (A1 loopback + export override) ────────
+console.log('\n15b. --anthropic-upstream → export override; Claude BASE_URL loopback; flag stripped');
+{
+  const gw = 'https://llm-gateway.example.com/anthropic';
+  const r = runCthru(['--anthropic-upstream', gw, '--model', 'claude-sonnet-5'], {
+    backends: {
+      anthropic: { kind: 'anthropic', url: 'https://api.anthropic.com' },
+    },
+  });
+  assert(r.code === 0, `exit 0 (got ${r.code}; stderr=${(r.stderr || '').slice(0, 200)})`);
+  const args = r.json?.args || [];
+  assert(!args.includes('--anthropic-upstream'), `--anthropic-upstream stripped`);
+  assert(!args.includes(gw), `gateway URL not in Claude argv`);
+  const base = r.json?.anthropic_base_url || '';
+  assert(/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(base),
+    `Claude ANTHROPIC_BASE_URL is loopback (got ${base})`);
+  assert(String(r.json?.claude_proxy_anthropic_upstream || '').includes('llm-gateway.example.com'),
+    `CLAUDE_PROXY_ANTHROPIC_UPSTREAM exported (got ${r.json?.claude_proxy_anthropic_upstream})`);
+  assert(!!r.json?.c_thru_anthropic_upstream_fingerprint,
+    'C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT exported');
+  assert(/Loose policy|upstream override/i.test(r.stderr || ''),
+    'Loose OAuth warn on stderr');
+}
+
 // ── Test 16: --memory-gb non-numeric → error ──────────────────────────────
 console.log('\n16. --memory-gb foo → exit non-zero');
 {
@@ -355,7 +522,7 @@ console.log('\n18. (C1/C2) ollama-backed run: ephemeral --settings shape + syste
   const args = r.json?.args || [];
 
   // ── C1: the launcher forwarded --settings, and the file is valid JSON ──────
-  assert(args.includes('--settings'), `--settings forwarded to claude (got ${JSON.stringify(args)})`);
+  assert(args.includes('--settings'), `--settings forwarded to claude (got ${formatArgs(args)})`);
   let settings = null;
   try { settings = JSON.parse(r.json?.settings_content || ''); } catch {}
   assert(settings !== null,
@@ -380,7 +547,7 @@ console.log('\n18. (C1/C2) ollama-backed run: ephemeral --settings shape + syste
 
   // ── C2: --append-system-prompt is the one-line pointer (drift guard) ───────
   const ai = args.indexOf('--append-system-prompt');
-  assert(ai >= 0, `--append-system-prompt present (got ${JSON.stringify(args)})`);
+  assert(ai >= 0, `--append-system-prompt present (got ${formatArgs(args)})`);
   const sysPrompt = ai >= 0 ? (args[ai + 1] || '') : '';
   assert(/see SessionStart context for endpoints/.test(sysPrompt),
     `pointer references SessionStart context (got ${JSON.stringify(sysPrompt.slice(0, 200))})`);
@@ -529,8 +696,8 @@ console.log('\n22. (F2) transparent no-model path forwards --settings/--agents/-
   assert(args.includes('--agents'),
     `--agents forwarded on transparent path (got ${JSON.stringify(args.slice(0, 12))}…)`);
   // The user's -p and prompt text still pass through.
-  assert(args.includes('-p'), `user -p flag passes through (got ${JSON.stringify(args)})`);
-  assert(args.includes('hello'), `user prompt text passes through (got ${JSON.stringify(args)})`);
+  assert(args.includes('-p'), `user -p flag passes through (got ${formatArgs(args)})`);
+  assert(args.includes('hello'), `user prompt text passes through (got ${formatArgs(args)})`);
 }
 
 // ── Test 23 (F2.1): --print-routing on the transparent path is a dry-run ───
@@ -615,21 +782,21 @@ console.log('\n25. caller --agents payloads merge with the c-thru fleet');
   const aa = getAgents(a);
   assert(a.code === 0, `25a inline payload exit 0 (got ${a.code}, stderr: ${a.stderr.slice(0, 200)})`);
   assert(aa.length === 1 && parse(aa[0]).myrev && parse(aa[0]).coder,
-    `25a merged inline agents contain caller and fleet (got ${JSON.stringify(aa)})`);
+    `25a merged inline agents contain caller and fleet (got ${formatArgs(aa)})`);
 
   const b = runCthru(['--no-agents', '--agents', '{"myrev":{"description":"d","prompt":"p"}}']);
   const ba = getAgents(b);
   assert(b.code === 0, `25b --no-agents caller payload exit 0 (got ${b.code}, stderr: ${b.stderr.slice(0, 200)})`);
   assert(ba.length === 1 && parse(ba[0]).myrev && !parse(ba[0]).coder,
-    `25b --no-agents suppresses fleet but preserves caller (got ${JSON.stringify(ba)})`);
+    `25b --no-agents suppresses fleet but preserves caller (got ${formatArgs(ba)})`);
 
-  const agentsFileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-agents-file-'));
+  const agentsFileDir = makeIsolatedTmpDir('c-thru-agents-file-');
   const agentsFile = path.join(agentsFileDir, 'caller-agents.json');
   fs.writeFileSync(agentsFile, JSON.stringify({ fromFile: { description: 'file' } }));
   const c = runCthru(['--agents', agentsFile]);
   const ca = getAgents(c);
   assert(c.code === 0 && ca.length === 1 && parse(ca[0]).fromFile && parse(ca[0]).coder,
-    `25c absolute file --agents payload merges with fleet (got ${JSON.stringify(ca)})`);
+    `25c absolute file --agents payload merges with fleet (got ${formatArgs(ca)})`);
   fs.rmSync(agentsFileDir, { recursive: true, force: true });
 
   const d = runCthru(['--agents', '{"rev":{"description":"A"}}', '--agents', '{"rev":{"description":"B"}}']);
@@ -653,10 +820,50 @@ console.log('\n25. caller --agents payloads merge with the c-thru fleet');
   assert(e2.code === 0 && e2a.length === 2 && parse(e2a[0]).coder && parse(e2a[0]).myrev && e2a[1].value === 'not-json',
     `25e2 mixed payload keeps merged caller/fleet first and raw invalid second (got ${JSON.stringify(e2a)})`);
 
-  const f = runCthru(['--bypass-proxy', '--agents', '{"x":{"description":"d"}}']);
+  const f = runCthru(
+    ['--bypass-proxy', '--agents', '{"x":{"description":"d"}}',
+      '--settings', '{"permissions":{"allow":["Read"]}}'],
+    {
+      backends: {
+        anthropic: { kind: 'anthropic', url: 'https://api.anthropic.com' },
+      },
+    },
+  );
   const fa = getAgents(f);
   assert(f.code === 0 && fa.length === 1 && fa[0].form === 'space' && fa[0].value === '{"x":{"description":"d"}}',
     `25f bypass forwards caller --agents untouched (got ${JSON.stringify(fa)})`);
+  assert(f.json?.settings_content === '{"permissions":{"allow":["Read"]}}',
+    `25f bypass forwards caller --settings untouched (got ${JSON.stringify(f.json?.settings_content)})`);
+  assert(!/proxy\s+starting/.test(f.stderr),
+    `25f bypass does not start a proxy (stderr: ${f.stderr.slice(0, 200)})`);
+  const fModelFlags = (f.json?.args || []).filter(
+    arg => arg === '--model' || arg.startsWith('--model='),
+  );
+  assert(fModelFlags.length === 1 && !f.json?.args?.includes('--bypass-proxy'),
+    `25f default-route bypass forwards one resolved model and strips private flags (got ${JSON.stringify(fModelFlags)})`);
+
+  const fEquals = runCthru(
+    ['--bypass-proxy', '--model', 'claude-sonnet-5',
+      '--agents={"y":{"description":"eq"}}',
+      '--settings={"permissions":{"allow":["Glob"]}}'],
+    {
+      backends: {
+        anthropic: { kind: 'anthropic', url: 'https://api.anthropic.com' },
+      },
+    },
+  );
+  const fea = getAgents(fEquals);
+  const fEqualsModelFlags = (fEquals.json?.args || []).filter(
+    arg => arg === '--model' || arg.startsWith('--model='),
+  );
+  assert(fEquals.code === 0 && fea.length === 1 && fea[0].form === 'equals' &&
+    fea[0].value === '{"y":{"description":"eq"}}',
+  `25f equals-form bypass forwards caller --agents untouched (got ${JSON.stringify(fea)})`);
+  assert(fEquals.json?.settings_content === '{"permissions":{"allow":["Glob"]}}',
+    `25f equals-form bypass forwards caller --settings untouched (got ${JSON.stringify(fEquals.json?.settings_content)})`);
+  assert(fEqualsModelFlags.length === 1 && !fEquals.json?.args?.includes('--bypass-proxy') &&
+    !/proxy\s+starting/.test(fEquals.stderr),
+  `25f explicit-model equals-form bypass forwards one model, strips private flags, and starts no proxy (got ${JSON.stringify(fEqualsModelFlags)})`);
 
   const g0 = runCthru(['--agents']);
   assert(g0.code !== 0 && /c-thru: --agents requires a value/.test(g0.stderr),
@@ -664,6 +871,198 @@ console.log('\n25. caller --agents payloads merge with the c-thru fleet');
   const g1 = runCthru(['--agents', '--print', 'hello']);
   assert(g1.code !== 0 && /c-thru: --agents requires a value/.test(g1.stderr),
     `25g --agents does not swallow --print as its value (got exit ${g1.code}, stderr: ${g1.stderr.slice(0, 200)})`);
+}
+}
+
+function runCoordinatorCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
+  return runCthru(args, configOverrides, {
+    ...envOverrides,
+    C_THRU_PROXY_ALWAYS: '0',
+  }, opts);
+}
+
+// ── Test 26: opt-in session coordinator and precedence contract ────────────
+console.log('\n26. opt-in coordinator stays outside routed fleet and preserves precedence');
+{
+  const parseJson = value => {
+    try { return JSON.parse(value || ''); } catch { return null; }
+  };
+  const fleet = result => {
+    const occurrence = (result.json?.agents_occurrences || [])[0];
+    return parseJson(occurrence?.value) || {};
+  };
+  const coordinatorSource = path.join(__dirname, '..', 'session-agents', 'c-thru-coordinator.md');
+  const coordinatorText = fs.readFileSync(coordinatorSource, 'utf8');
+  const toolsMatch = coordinatorText.match(/^tools:\s*Agent\(([^)]*)\)\s*$/m);
+  const coordinatorTools = (toolsMatch?.[1] || '').split(',').map(value => value.trim()).filter(Boolean).sort();
+  const reservedAgentFiles = new Set(['AGENTS.md', 'CLAUDE.md']);
+  const routedRoster = fs.readdirSync(path.join(__dirname, '..', 'agents'))
+    .filter(name => name.endsWith('.md') && !reservedAgentFiles.has(name))
+    .map(name => name.replace(/\.md$/, ''))
+    .sort();
+  assert(/^model:\s*inherit\s*$/m.test(coordinatorText) &&
+    toolsMatch && JSON.stringify(coordinatorTools) === JSON.stringify(routedRoster) &&
+    coordinatorTools.length >= 28 && !coordinatorTools.includes('c-thru-coordinator'),
+  `26a coordinator inherits the session model and tools allowlist is exactly the N routed agents (got ${coordinatorTools.length})`);
+  assert(/Mandatory named-brand routing/.test(coordinatorText) &&
+    /`deepseek` means Agent `deepseek`/.test(coordinatorText) &&
+    /`gemini` or `google gemini` means Agent `gemini`/.test(coordinatorText) &&
+    /first and only delegation/.test(coordinatorText) &&
+    /without first searching for inputs, inspecting the workspace, validating whether the referenced artifact exists, or invoking any helper/.test(coordinatorText) &&
+    /Never answer the named-model request inline/.test(coordinatorText),
+  '26a explicit brand requests prohibit helper or generic-agent preflight');
+  assert(/`tester`: run or write tests; check behavior; verify correctness; cover edge cases/.test(coordinatorText) &&
+    /`code-reviewer`: review code, a diff, or a pull request/.test(coordinatorText) &&
+    /`reviewer-plan`: decide whether an existing plan is ready/.test(coordinatorText) &&
+    /`docs`: help text, usage blurbs, reference docs, inline comments, doc blocks/.test(coordinatorText),
+  '26a task-trigger table covers observed tester, review, plan-review, and docs boundaries');
+
+  const defaultOff = runCoordinatorCthru(['-p', 'hello']);
+  assert(defaultOff.code === 0 && defaultOff.json?.c_thru_coordinator_active === null &&
+    defaultOff.json?.physical_settings_content === null &&
+    defaultOff.json?.coordinator_agent_is_symlink === false,
+  '26a coordinator defaults off with no physical settings or session-agent link');
+
+  const envOn = runCoordinatorCthru(['-p', 'hello'], {}, { C_THRU_COORDINATOR: '1' });
+  const envPhysical = parseJson(envOn.json?.physical_settings_content);
+  const envInline = parseJson(envOn.json?.settings_content);
+  const envFleet = fleet(envOn);
+  assert(envOn.code === 0 && envOn.json?.c_thru_coordinator_active === '1',
+    `26b env opt-in activates coordinator (got exit ${envOn.code}, stderr: ${envOn.stderr.slice(0, 200)})`);
+  assert(envPhysical?.agent === 'c-thru-coordinator' &&
+    envPhysical?.permissions?.deny?.includes('Agent(c-thru-coordinator)'),
+  `26b low-priority physical settings selects and self-denies coordinator (got ${JSON.stringify(envPhysical)})`);
+  assert(envInline?.permissions?.deny?.includes('Agent(c-thru-coordinator)'),
+    `26b inline merge reinforces self-deny only while trusted coordinator is active (got ${JSON.stringify(envInline?.permissions)})`);
+  assert(envOn.json?.coordinator_agent_is_symlink === true &&
+    envOn.json?.coordinator_agent_realpath === fs.realpathSync(coordinatorSource),
+  `26b coordinator source is linked into ephemeral agents (got ${JSON.stringify(envOn.json?.coordinator_agent_realpath)})`);
+  assert(Object.keys(envFleet).length >= 28 && !envFleet['c-thru-coordinator'],
+    `26b routed fleet remains fleet agents and excludes coordinator (got ${Object.keys(envFleet).length})`);
+
+  const flagOn = runCoordinatorCthru(['--coordinator', '-p', 'hello']);
+  assert(flagOn.code === 0 && flagOn.json?.c_thru_coordinator_active === '1' &&
+    !(flagOn.json?.args || []).includes('--coordinator'),
+  `26c private --coordinator opts in and is stripped (got ${formatArgs(flagOn.json?.args)})`);
+
+  const forcedOff = runCoordinatorCthru(['--no-coordinator', '-p', 'hello'], {}, { C_THRU_COORDINATOR: '1' });
+  assert(forcedOff.code === 0 && forcedOff.json?.c_thru_coordinator_active === null &&
+    forcedOff.json?.physical_settings_content === null &&
+    !(forcedOff.json?.args || []).includes('--no-coordinator'),
+  '26d --no-coordinator overrides env opt-in and is stripped');
+
+  for (const [label, agentArgs] of [
+    ['spaced', ['--agent', 'coder']],
+    ['equals', ['--agent=coder']],
+  ]) {
+    const result = runCoordinatorCthru([...agentArgs, '-p', 'hello'], {}, { C_THRU_COORDINATOR: '1' });
+    const args = result.json?.args || [];
+    const preserved = label === 'spaced'
+      ? args.includes('--agent') && args.includes('coder')
+      : args.includes('--agent=coder');
+    assert(result.code === 0 && result.json?.c_thru_coordinator_active === '1' && preserved,
+      `26e caller --agent ${label} form is preserved and naturally outranks physical default (got ${formatArgs(args)})`);
+  }
+
+  const userWins = runCoordinatorCthru(['-p', 'hello'], {}, { C_THRU_COORDINATOR: '1' }, {
+    seedSettings: JSON.stringify({
+      agent: 'user-agent',
+      permissions: { deny: ['Bash(dangerous *)'] },
+    }),
+  });
+  const userInline = parseJson(userWins.json?.settings_content);
+  assert(userWins.code === 0 && parseJson(userWins.json?.physical_settings_content)?.agent === 'c-thru-coordinator' &&
+    userInline?.agent === 'user-agent' &&
+    userInline?.permissions?.deny?.includes('Bash(dangerous *)') &&
+    userInline?.permissions?.deny?.includes('Agent(c-thru-coordinator)'),
+  `26f existing user inline layer wins agent key while permission denies merge (got ${JSON.stringify(userInline)})`);
+
+  const callerWins = runCoordinatorCthru(
+    ['--settings', '{"agent":"caller-agent"}', '-p', 'hello'],
+    {},
+    { C_THRU_COORDINATOR: '1' },
+  );
+  assert(callerWins.code === 0 && parseJson(callerWins.json?.settings_content)?.agent === 'caller-agent',
+    `26g caller --settings agent wins physical coordinator default (got ${JSON.stringify(callerWins.json?.settings_content)})`);
+
+  const opaque = runCoordinatorCthru(['--', '--no-coordinator'], {}, { C_THRU_COORDINATOR: '1' });
+  assert(opaque.code === 0 && opaque.json?.c_thru_coordinator_active === '1' &&
+    (opaque.json?.args || []).includes('--no-coordinator'),
+  `26h -- makes later private-looking tokens opaque (got ${formatArgs(opaque.json?.args)})`);
+}
+
+// ── Test 27: coordinator collision and incompatible launch boundaries ──────
+console.log('\n27. coordinator disables cleanly on collisions and incompatible launch modes');
+{
+  const parseJson = value => {
+    try { return JSON.parse(value || ''); } catch { return null; }
+  };
+  const collision = runCoordinatorCthru(
+    ['--agents', '{"c-thru-coordinator":{"description":"caller-owned","prompt":"caller"}}', '-p', 'hello'],
+    {},
+    { C_THRU_COORDINATOR: '1' },
+  );
+  const collisionInline = parseJson(collision.json?.settings_content);
+  const collisionFleet = parseJson(collision.json?.agents_occurrences?.[0]?.value);
+  assert(collision.code === 0 && collision.json?.c_thru_coordinator_active === null &&
+    collision.json?.physical_settings_content === null &&
+    collisionFleet?.['c-thru-coordinator']?.description === 'caller-owned',
+  '27a caller reserved-name collision disables auto coordinator but preserves caller definition');
+  assert(/caller --agents defines reserved name 'c-thru-coordinator'; coordinator disabled/.test(collision.stderr),
+    `27a reserved-name collision emits warning (got ${collision.stderr.slice(0, 240)})`);
+  assert(!collisionInline?.permissions?.deny?.includes('Agent(c-thru-coordinator)'),
+    '27a disabled coordinator does not deny the caller-owned reserved definition');
+
+  const nativeAnthropicConfig = {
+    backends: { anthropic: { kind: 'anthropic', url: 'https://api.anthropic.com' } },
+  };
+  const skipped = [
+    ['no-agents', ['--no-agents', '-p', 'hello'], {}],
+    ['bypass', ['--bypass-proxy', '--model', 'claude-sonnet-5', '-p', 'hello'], nativeAnthropicConfig],
+    ['native subcommand', ['agents', '--coordinator', '--help'], {}],
+    ['resume', ['--resume', 'session-id'], {}],
+    ['continue', ['--continue'], {}],
+    ['from-pr', ['--from-pr', '123'], {}],
+    ['teleport', ['--teleport'], {}],
+    ['system prompt', ['--system-prompt', 'caller prompt', '-p', 'hello'], {}],
+    ['system prompt file', ['--system-prompt-file=prompt.txt', '-p', 'hello'], {}],
+    ['bare', ['--bare', '-p', 'hello'], {}],
+    ['safe mode', ['--safe-mode', '-p', 'hello'], {}],
+  ];
+  for (const [label, args, config] of skipped) {
+    const result = runCoordinatorCthru(args, config, { C_THRU_COORDINATOR: '1' });
+    assert(result.code === 0 && result.json?.c_thru_coordinator_active === null &&
+      result.json?.physical_settings_content === null &&
+      result.json?.coordinator_agent_is_symlink === false,
+    `27b ${label} launch skips coordinator (got exit ${result.code}, stderr: ${result.stderr.slice(0, 160)})`);
+  }
+}
+
+// ── Test 28: caller tool restrictions gate the coordinator ─────────────────
+console.log('\n28. explicit CLI tool restrictions disable coordinator when Agent is unavailable');
+{
+  const cases = [
+    ['tools excludes Agent', ['--tools', 'Bash,Edit', '-p', 'hello'], false, /caller --tools excludes Agent/],
+    ['tools equals excludes Agent', ['--tools=Bash,Edit', '-p', 'hello'], false, /caller --tools excludes Agent/],
+    ['tools default', ['--tools', 'default', '-p', 'hello'], true, null],
+    ['tools includes Agent', ['--tools', 'Bash,Agent', '-p', 'hello'], true, null],
+    ['disallowed Agent', ['--disallowedTools', 'Agent', '-p', 'hello'], false, /disallowed-tools blocks Agent/],
+    ['disallowed Agent equals', ['--disallowed-tools=Bash,Agent', '-p', 'hello'], false, /disallowed-tools blocks Agent/],
+    ['disallowed unrelated tool', ['--disallowedTools', 'Bash', '-p', 'hello'], true, null],
+  ];
+  for (const [label, args, active, warning] of cases) {
+    const result = runCoordinatorCthru(args, {}, { C_THRU_COORDINATOR: '1' });
+    assert(result.code === 0 && (result.json?.c_thru_coordinator_active === '1') === active &&
+      (result.json?.physical_settings_content !== null) === active,
+    `28a ${label} yields coordinator active=${active} while preserving launch (got exit ${result.code})`);
+    if (warning) {
+      assert(warning.test(result.stderr), `28b ${label} emits explicit warning (got ${result.stderr.slice(0, 220)})`);
+    }
+    for (const arg of args) {
+      assert((result.json?.args || []).includes(arg),
+        `28c ${label} preserves caller token ${JSON.stringify(arg)}`);
+    }
+  }
 }
 
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);

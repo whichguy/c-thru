@@ -19,6 +19,7 @@ set +u
 # across edits to tools/c-thru — see test/c-thru-ephemeral-settings.test.sh
 # for the same convention.
 eval "$(awk '/^pid_looks_like_proxy\(\) \{/,/^\}$/' "$REPO/tools/c-thru")"
+eval "$(awk '/^terminate_and_reap_owned_pid\(\) \{/,/^\}$/' "$REPO/tools/c-thru")"
 eval "$(awk '/^proxy_port_referenced_by_peers\(\) \{/,/^\}$/' "$REPO/tools/c-thru")"
 eval "$(awk '/^reap_proxy_port_listener\(\) \{/,/^\}$/' "$REPO/tools/c-thru")"
 eval "$(awk '/^cleanup_proxy_children\(\) \{/,/^\}$/' "$REPO/tools/c-thru")"

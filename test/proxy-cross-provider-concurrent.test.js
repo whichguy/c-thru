@@ -96,6 +96,11 @@ async function main() {
       // never reach the gemini or ollama upstream.
       const INCOMING_BEARER = 'Bearer sk-ant-incoming-leak-canary';
       const GOOGLE_KEY = 'goog-key-canary';
+      const CLAUDE_CORRELATION_HEADERS = {
+        'x-claude-code-session-id': 'session-cross-provider-canary',
+        'x-claude-code-agent-id': 'agent-cross-provider-canary',
+        'x-claude-code-parent-agent-id': 'parent-cross-provider-canary',
+      };
 
       await withProxy({
         configPath, profile: '128gb', mode: 'best-cloud',
@@ -104,7 +109,10 @@ async function main() {
         const mk = (cap) => httpJson(port, 'POST', '/v1/messages', {
           model: cap, stream: false,
           messages: [{ role: 'user', content: `route ${cap}` }], max_tokens: 5,
-        }, { 'Authorization': INCOMING_BEARER }, 8000).then(r => ({ cap, r }));
+        }, {
+          'Authorization': INCOMING_BEARER,
+          ...CLAUDE_CORRELATION_HEADERS,
+        }, 8000).then(r => ({ cap, r }));
 
         // Concurrent fan-out across all three providers.
         const results = await Promise.all([mk('cap-anth'), mk('cap-ollama'), mk('cap-gemini')]);
@@ -166,6 +174,20 @@ async function main() {
           `gemini hit has no Authorization header (got ${gemHdrs['authorization']})`);
         assert(!ollamaHdrs.includes('sk-ant-incoming-leak-canary'),
           'incoming Anthropic Bearer NOT forwarded to ollama');
+
+        // (c) Claude Code correlation IDs are local routing metadata. Custom
+        // Anthropic-compatible, Ollama, and Gemini providers must not receive
+        // stable session/agent identifiers.
+        for (const [provider, headers] of [
+          ['custom-anthropic', anth.requests[0].headers || {}],
+          ['ollama', ollama.requests[0].headers || {}],
+          ['gemini', gemHdrs],
+        ]) {
+          for (const name of Object.keys(CLAUDE_CORRELATION_HEADERS)) {
+            assert(!Object.prototype.hasOwnProperty.call(headers, name),
+              `${provider} hit does not receive ${name}`);
+          }
+        }
       });
     } finally {
       await anth.close().catch(() => {});

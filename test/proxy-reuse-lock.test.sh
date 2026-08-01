@@ -29,6 +29,7 @@ for f in "$CTHRU" "$LIB" "$PROXY"; do
 done
 
 command -v node >/dev/null 2>&1 || { echo "fatal: node required" >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "fatal: jq required" >&2; exit 1; }
 command -v lsof >/dev/null 2>&1 || { echo "SKIP: lsof unavailable (proxy_listener_pid needs it)"; echo "0 tests: 0 passed, 0 failed"; exit 0; }
 
 PASS=0
@@ -39,9 +40,13 @@ assert() { if eval "$1"; then pass "$2"; else fail "$2"; fi; }
 
 BASE="$(mktemp -d "${TMPDIR:-/tmp}/c-thru-reuse-lock.XXXXXX")"
 PROXY_A_PID=""
+STALE_PROXY_PID=""
+FOREIGN_LISTENER_PID=""
 cleanup() {
   set +m 2>/dev/null
   [[ -n "$PROXY_A_PID" ]] && kill "$PROXY_A_PID" 2>/dev/null && wait "$PROXY_A_PID" 2>/dev/null
+  [[ -n "$STALE_PROXY_PID" ]] && kill "$STALE_PROXY_PID" 2>/dev/null && wait "$STALE_PROXY_PID" 2>/dev/null
+  [[ -n "$FOREIGN_LISTENER_PID" ]] && kill "$FOREIGN_LISTENER_PID" 2>/dev/null && wait "$FOREIGN_LISTENER_PID" 2>/dev/null
   rm -rf "$BASE"
 }
 trap cleanup EXIT
@@ -60,7 +65,10 @@ for fn in \
   proxy_listener_pid pid_looks_like_proxy is_local_http_base_url proxy_logging_enabled \
   ensure_proxy_log_parent_dir proxy_log_final_path proxy_log_startup_path \
   proxy_ephemeral_stderr_path describe_proxy_log_target ensure_per_user_secrets \
-  gen_secret_hex ensure_proxy_running; do
+  gen_secret_hex ensure_agent_sentinel_secret agent_sentinel_token_identity_version \
+  agent_sentinel_token_fingerprint require_proxy_agent_token_identity \
+  anthropic_upstream_override_active proxy_upstream_fingerprint_matches \
+  ensure_proxy_running; do
   src="$(extract_fn "$fn")"
   if [[ -z "$src" ]]; then
     echo "  (note: helper '$fn' not found via awk extraction — defining stub)" >&2
@@ -86,6 +94,8 @@ type ensure_proxy_running >/dev/null 2>&1 || { echo "fatal: ensure_proxy_running
 CTHRU_REPO_ROOT="$REPO_DIR"          # so it finds $CTHRU_REPO_ROOT/tools/claude-proxy
 CLAUDE_PROFILE_DIR="$BASE/profile"   # secrets + lockfiles land here
 mkdir -p "$CLAUDE_PROFILE_DIR"
+unset C_THRU_AGENT_SENTINEL_SECRET C_THRU_AGENT_SENTINEL_SECRET_FILE
+ensure_agent_sentinel_secret
 GRAY=""; BOLD=""; NC=""              # color vars used in status prints
 OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}"
 
@@ -143,6 +153,89 @@ assert "[[ -n '$PID_B' && '$PID_B' == '$PID_A' ]]" "reused the same proxy pid ac
 # Exactly one listener on the port (no duplicate proxy bound to it).
 LISTENERS="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u | wc -l | tr -d ' ')"
 assert "[[ '$LISTENERS' == '1' ]]" "exactly one process listening on :$PORT (got $LISTENERS)"
+
+echo
+echo "3. Session C: DIFFERENT profile token → reject reuse, preserve Session A listener"
+export CLAUDE_PROFILE_DIR="$BASE/other-profile"
+unset C_THRU_AGENT_SENTINEL_SECRET C_THRU_AGENT_SENTINEL_SECRET_FILE
+ensure_agent_sentinel_secret
+PROXY_STARTED_PID=""
+PROXY_PORT=""
+MISMATCH_ERR="$BASE/reuse-mismatch.err"
+ensure_proxy_running "$BASE_URL" 2>"$MISMATCH_ERR"
+ec_c=$?
+assert "[[ $ec_c -ne 0 ]]" "Session C different-token reuse returns nonzero (got $ec_c)"
+assert "grep -qF 'agent-token fingerprint mismatch' '$MISMATCH_ERR'" "Session C reports token fingerprint mismatch"
+assert "[[ -z '$PROXY_STARTED_PID' ]]" "Session C spawned NOTHING"
+assert "kill -0 '$PROXY_A_PID' 2>/dev/null" "Session A proxy remains alive after mismatch"
+PING_C="$(curl -sf --max-time 2 "$BASE_URL/ping" 2>/dev/null || true)"
+PID_C="$(printf '%s' "$PING_C" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).pid||""))}catch{process.stdout.write("")}})')"
+assert "[[ '$PID_C' == '$PID_A' ]]" "mismatch did not restart or replace existing proxy (pid=$PID_C)"
+
+echo
+echo "4. Pre-upgrade /ping without token identity → reject reuse, preserve foreign listener"
+STALE_PORT_FILE="$BASE/stale.port"
+node -e '
+  const fs = require("fs");
+  const http = require("http");
+  const configPath = process.argv[2];
+  const server = http.createServer((req, res) => {
+    if (req.url !== "/ping") {
+      res.writeHead(404);
+      return res.end();
+    }
+    res.writeHead(200, {"Content-Type": "application/json"});
+    res.end(JSON.stringify({ok: true, pid: process.pid, config_path: configPath}));
+  });
+  server.listen(0, "127.0.0.1", () => {
+    fs.writeFileSync(process.argv[1], String(server.address().port));
+  });
+' "$STALE_PORT_FILE" "$CONFIG" &
+STALE_PROXY_PID=$!
+for _ in $(seq 1 50); do [[ -s "$STALE_PORT_FILE" ]] && break; sleep 0.1; done
+STALE_PORT="$(cat "$STALE_PORT_FILE" 2>/dev/null)"
+assert "[[ -n '$STALE_PORT' ]]" "pre-upgrade proxy fixture bound a loopback port"
+export CLAUDE_PROXY_PORT="$STALE_PORT"
+STALE_BASE_URL="http://127.0.0.1:$STALE_PORT"
+PROXY_STARTED_PID=""
+PROXY_PORT=""
+STALE_ERR="$BASE/stale-reuse.err"
+ensure_proxy_running "$STALE_BASE_URL" 2>"$STALE_ERR"
+ec_d=$?
+assert "[[ $ec_d -ne 0 ]]" "pre-upgrade proxy reuse returns nonzero (got $ec_d)"
+assert "grep -qF 'stale or foreign proxy' '$STALE_ERR'" "pre-upgrade rejection explains missing token identity"
+assert "[[ -z '$PROXY_STARTED_PID' ]]" "pre-upgrade rejection spawned NOTHING"
+assert "kill -0 '$STALE_PROXY_PID' 2>/dev/null" "pre-upgrade foreign listener remains alive"
+
+echo
+echo "5. Foreign listener without /ping → fail clearly without signaling it"
+FOREIGN_PORT_FILE="$BASE/foreign.port"
+node -e '
+  const fs = require("fs");
+  const http = require("http");
+  const server = http.createServer((_req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  server.listen(0, "127.0.0.1", () => {
+    fs.writeFileSync(process.argv[1], String(server.address().port));
+  });
+' "$FOREIGN_PORT_FILE" &
+FOREIGN_LISTENER_PID=$!
+for _ in $(seq 1 50); do [[ -s "$FOREIGN_PORT_FILE" ]] && break; sleep 0.1; done
+FOREIGN_PORT="$(cat "$FOREIGN_PORT_FILE" 2>/dev/null)"
+assert "[[ -n '$FOREIGN_PORT' ]]" "foreign listener fixture bound a loopback port"
+export CLAUDE_PROXY_PORT="$FOREIGN_PORT"
+FOREIGN_BASE_URL="http://127.0.0.1:$FOREIGN_PORT"
+PROXY_STARTED_PID=""
+PROXY_PORT=""
+FOREIGN_ERR="$BASE/foreign-listener.err"
+ensure_proxy_running "$FOREIGN_BASE_URL" 2>"$FOREIGN_ERR"
+ec_e=$?
+assert "[[ $ec_e -ne 0 ]]" "foreign listener without /ping returns nonzero (got $ec_e)"
+assert "grep -qF 'already has a listener' '$FOREIGN_ERR'" "foreign-listener failure explains occupied non-proxy port"
+assert "[[ -z '$PROXY_STARTED_PID' ]]" "foreign-listener rejection spawned NOTHING"
+assert "kill -0 '$FOREIGN_LISTENER_PID' 2>/dev/null" "foreign listener remains alive"
 
 echo
 echo "$((PASS+FAIL)) tests: $PASS passed, $FAIL failed"

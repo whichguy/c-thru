@@ -36,8 +36,9 @@ const MODE       = 'best-cloud';
 const TIER       = '64gb';
 
 // Agents are the source of truth (one POST per agents/*.md).
+const RESERVED_AGENT_FILES = new Set(['AGENTS.md', 'CLAUDE.md']);
 const AGENTS = fs.readdirSync(path.join(REPO, 'agents'))
-  .filter(f => f.endsWith('.md'))
+  .filter(f => f.endsWith('.md') && !RESERVED_AGENT_FILES.has(f))
   .map(f => f.replace(/\.md$/, ''))
   .sort();
 

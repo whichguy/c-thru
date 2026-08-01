@@ -11,6 +11,7 @@ CTHRU="$SCRIPT_DIR/../tools/c-thru"
 # Extracting it avoids starting a proxy or reading the invoking user's profile.
 eval "$(awk '/^write_ephemeral_settings\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^build_ephemeral_agents\(\) \{/,/^\}$/' "$CTHRU")"
+eval "$(awk '/^setup_ephemeral_coordinator\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^cthru_flag_width\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^strip_cthru_cli_args\(\) \{/,/^\}$/' "$CTHRU")"
 eval "$(awk '/^build_forwarded_args\(\) \{/,/^\}$/' "$CTHRU")"
@@ -25,6 +26,7 @@ TOOLS_DIR="$SCRIPT_DIR/../tools"
 mkdir -p "$PROFILE_DIR" "$SESSION_DIR"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 RUN_PAYLOADS=()
+RUN_COORDINATOR_ACTIVE=0
 
 assert() {
   local label="$1"
@@ -43,6 +45,7 @@ run_builder() {
   ORIGINAL_CLAUDE_PROFILE_DIR="$PROFILE_DIR"
   CTHRU_SELF_DIR="$TOOLS_DIR"
   EPHEMERAL_SETTINGS_JSON=""
+  C_THRU_COORDINATOR_ACTIVE="$RUN_COORDINATOR_ACTIVE"
   CALLER_SETTINGS_PAYLOADS=()
   if [[ ${#RUN_PAYLOADS[@]} -gt 0 ]]; then
     CALLER_SETTINGS_PAYLOADS=("${RUN_PAYLOADS[@]}")
@@ -68,7 +71,11 @@ run_agents_builder() {
 run_forwarder() {
   local desired_model="${1:-}"
   FORWARDED_ARGS=()
-  CLAUDE_PROXY_BYPASS=1
+  # This helper verifies the normal ephemeral-merge path. Bypass deliberately
+  # preserves caller --settings/--agents verbatim because no ephemeral merge
+  # runs there; that separate contract is covered end-to-end in
+  # cli-e2e-flags.test.js.
+  CLAUDE_PROXY_BYPASS=0
   C_THRU_SKIP_INFO_INJECTION=1
   EPHEMERAL_AGENTS_JSON=""
   # The production launcher does not enable nounset; keep the extracted
@@ -151,6 +158,19 @@ const [actual, baseline] = process.argv.slice(2).map(JSON.parse);
 process.exit(actual.tui === 'compact' && JSON.stringify(actual.hooks) === JSON.stringify(baseline.hooks) &&
   JSON.stringify(actual.permissions) === JSON.stringify(baseline.permissions) ? 0 : 1);
 NODE
+
+echo
+echo "2b. Active coordinator self-deny merges with existing permission rules"
+printf '%s\n' '{"permissions":{"deny":["Bash(dangerous *)"]}}' > "$PROFILE_DIR/settings.json"
+RUN_COORDINATOR_ACTIVE=1
+run_builder
+assert "coordinator self-deny builder exits 0" test "$?" -eq 0
+assert "coordinator self-deny is additive and conditional" node - "$BUILT_JSON" <<'NODE'
+const settings = JSON.parse(process.argv[2]);
+const deny = settings.permissions?.deny || [];
+process.exit(deny.includes('Bash(dangerous *)') && deny.includes('Agent(c-thru-coordinator)') ? 0 : 1);
+NODE
+RUN_COORDINATOR_ACTIVE=0
 
 echo
 echo "3. Corrupt settings.json warns but does not block launch"
@@ -405,6 +425,10 @@ AGENT_FLEET_DIR="$FIXTURE_DIR/agent-fleet/agents"
 mkdir -p "$AGENT_FLEET_DIR" "$PROFILE_DIR/agents" "$SESSION_DIR/agents"
 printf '%s\n' $'---\ndescription: fleet collision\nmodel: fleet-model\ntier_budget: 1\n---\nfleet prompt' > "$AGENT_FLEET_DIR/collision.md"
 printf '%s\n' $'---\ndescription: profile collision\nmodel: profile-model\ntier_budget: 2\n---\nprofile prompt' > "$PROFILE_DIR/agents/collision.md"
+printf '%s\n' $'---\ndescription: effort fixture\nmodel: effort-high\ntier_budget: 3\neffort: "high" # native YAML scalar\n---\neffort prompt' > "$AGENT_FLEET_DIR/effort-high.md"
+printf '%s\n' $'---\ndescription: inherited effort fixture\nmodel: effort-inherit\ntier_budget: 4\n---\ninherited prompt' > "$AGENT_FLEET_DIR/effort-inherit.md"
+printf '%s\n' '# Scoped Claude instructions, not an agent definition' > "$AGENT_FLEET_DIR/CLAUDE.md"
+printf '%s\n' '# Scoped Codex instructions, not an agent definition' > "$AGENT_FLEET_DIR/AGENTS.md"
 NO_AGENTS=0
 RUN_PAYLOADS=()
 rm -rf "$SESSION_DIR/agents"
@@ -413,12 +437,32 @@ assert "profile wins fleet basename collision before caller reconciliation" node
 const agents = JSON.parse(process.argv[2]);
 process.exit(agents.collision?.description === 'profile collision' ? 0 : 1);
 NODE
-RUN_PAYLOADS=('{"collision":{"description":"caller collision"}}')
+assert "agent effort frontmatter is emitted into --agents JSON" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+process.exit(agents['effort-high']?.effort === 'high' ? 0 : 1);
+NODE
+assert "agent without effort inherits the session by omitting the field" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+process.exit(agents['effort-inherit'] && !Object.prototype.hasOwnProperty.call(agents['effort-inherit'], 'effort') ? 0 : 1);
+NODE
+assert "reserved instruction files are not injected as agents" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+process.exit(!Object.prototype.hasOwnProperty.call(agents, 'CLAUDE') &&
+  !Object.prototype.hasOwnProperty.call(agents, 'AGENTS') ? 0 : 1);
+NODE
+assert "reserved instruction files are not linked into the ephemeral agent store" test \
+  ! -e "$SESSION_DIR/agents/CLAUDE.md" -a ! -L "$SESSION_DIR/agents/CLAUDE.md" -a \
+  ! -e "$SESSION_DIR/agents/AGENTS.md" -a ! -L "$SESSION_DIR/agents/AGENTS.md"
+RUN_PAYLOADS=('{"collision":{"description":"caller collision"},"caller-effort":{"description":"caller","effort":"max"}}')
 rm -rf "$SESSION_DIR/agents"
 run_agents_builder
 assert "caller --agents wins profile and fleet collisions" node - "$BUILT_AGENTS_JSON" <<'NODE'
 const agents = JSON.parse(process.argv[2]);
 process.exit(agents.collision?.description === 'caller collision' ? 0 : 1);
+NODE
+assert "caller --agents preserves a native effort field verbatim" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+process.exit(agents['caller-effort']?.effort === 'max' ? 0 : 1);
 NODE
 
 PHASE_AGENT_PAYLOADS="$(run_agents_phase1_scan '--agents={"equals":{"description":"e"}}' --agents '{"space":{"description":"s"}}')"
@@ -503,6 +547,23 @@ for (const [name, entry] of Object.entries(a)) {
 }
 process.exit(a['color-strip'] ? 0 : 1);
 NODE
+
+echo
+echo "12. Invalid agent effort fails closed before Claude Code launch"
+{
+  printf '%s\n' "---" "description: invalid effort fixture" \
+    "model: effort-invalid" "tier_budget: 999999" "effort: turbo" "---" "fixture prompt body"
+} > "$AGENT_FLEET_DIR/effort-invalid.md"
+rm -rf "$SESSION_DIR/agents"
+RUN_PAYLOADS=()
+INVALID_EFFORT_LOG="$FIXTURE_DIR/invalid-effort.log"
+(run_agents_builder) >"$FIXTURE_DIR/invalid-effort.out" 2>"$INVALID_EFFORT_LOG"
+INVALID_EFFORT_STATUS=$?
+assert "invalid effort makes the agent builder fail" test "$INVALID_EFFORT_STATUS" -ne 0
+assert "invalid effort names the file and accepted levels" grep -Fqx \
+  "c-thru: invalid effort 'turbo' in effort-invalid.md (expected low, medium, high, xhigh, or max)" \
+  "$INVALID_EFFORT_LOG"
+rm -f "$AGENT_FLEET_DIR/effort-invalid.md"
 
 # §4 c-thru-only: NO_AGENTS=1 baseline invents no agents at all.
 NO_AGENTS=1

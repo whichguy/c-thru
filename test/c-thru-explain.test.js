@@ -60,6 +60,35 @@ console.log('\n3. --agent flag resolves through agent_to_capability');
     `agent coder resolves to capability=coder (got: ${r.stdout.slice(0, 300)})`);
 }
 
+// ── 3b: brand-agent model pin resolves through model_routes ─────────────────
+console.log('\n3b. --agent brand pin resolves model:<id> through model_routes');
+{
+  const r = run(['--agent', 'grok', '--mode', 'best-cloud-oss', '--tier', '64gb']);
+  assert(r.code === 0, `brand pin exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
+  assert(r.stdout.includes('agent=grok') && r.stdout.includes('model=grok-4.5'),
+    `trace names agent and direct model pin (got: ${r.stdout.slice(0, 300)})`);
+  assert(r.stdout.includes('endpoint') && r.stdout.includes('xai'),
+    `grok brand pin resolves to xai endpoint (got: ${r.stdout.slice(0, 400)})`);
+  const servedBy = (r.stdout.match(/served_by\s+(\S+)/) || [])[1];
+  assertEq(servedBy, 'grok-4.5', 'brand pin served_by is grok-4.5');
+}
+
+// ── 3c: brand pins obey mode validation and the proxy's gov backstop ─────────
+console.log('\n3c. brand pins validate modes and obey gov filtering');
+{
+  const invalid = run(['--agent', 'grok', '--mode', 'totally-invalid', '--tier', '64gb']);
+  assert(invalid.code !== 0, `invalid brand mode exits non-zero (got ${invalid.code})`);
+  assert(invalid.stderr.includes('totally-invalid') && invalid.stderr.includes('valid:'),
+    `invalid brand mode names the bad value and valid modes (got: ${invalid.stderr.slice(0, 200)})`);
+
+  const gov = run(['--agent', 'deepseek', '--mode', 'best-cloud-gov', '--tier', '64gb']);
+  assert(gov.code === 0, `gov-blocked brand explain exits 0 with a null route (got ${gov.code})`);
+  assert(gov.stdout.includes('BLOCKED:'),
+    `gov mode reports the direct Chinese-origin pin as blocked (got: ${gov.stdout.slice(0, 400)})`);
+  assert(/served_by\s+\(null\)/.test(gov.stdout),
+    `gov-blocked brand is not reported as served (got: ${gov.stdout.slice(0, 400)})`);
+}
+
 // ── 4: unknown capability errors cleanly ───────────────────────────────────
 console.log('\n4. unknown capability errors cleanly');
 {

@@ -57,10 +57,20 @@ function extractEphemeral(src) {
   }
 
   // 2. Extract the node -e script body and its trailing argv variable list.
-  const scriptMatch = src.match(/EPHEMERAL_SETTINGS_JSON=\$\(node -e '\n([\s\S]*?)\n  ' ((?:"\$\w+" ?)+)\)/);
+  const scriptMatch = src.match(/EPHEMERAL_SETTINGS_JSON=\$\(node -e '\n([\s\S]*?)\n  '([^\n]*)\) \|\| \{/);
   if (!scriptMatch) throw new Error('could not locate the EPHEMERAL_SETTINGS_JSON node -e script in tools/c-thru');
   const jsBody = scriptMatch[1];
-  const argVarNames = [...scriptMatch[2].matchAll(/\$(\w+)/g)].map(m => m[1]);
+  const argSource = scriptMatch[2].trim();
+  const argPattern = /"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\})"(?:\s+|$)/y;
+  const argVarNames = [];
+  let offset = 0;
+  while (offset < argSource.length) {
+    argPattern.lastIndex = offset;
+    const argMatch = argPattern.exec(argSource);
+    if (!argMatch) throw new Error(`unsupported EPHEMERAL_SETTINGS_JSON argv near: ${argSource.slice(offset)}`);
+    argVarNames.push(argMatch[1] || argMatch[2]);
+    offset = argPattern.lastIndex;
+  }
 
   // 3. Build sentinel argv: one visibly-distinct fake path per positional arg,
   //    embedding the shell var name so we can map back to a hook basename via
@@ -99,7 +109,7 @@ function extractEphemeral(src) {
       }
     }
   }
-  return tuples;
+  return { tuples, argVarNames };
 }
 
 // ── Extract from the real-JSON plugin hooks.json ─────────────────────────────
@@ -136,10 +146,13 @@ function byBasename(tuples) {
 function main() {
   console.log('hook-declaration parity (ephemeral c-thru ↔ plugin hooks.json)\n');
 
-  const ephemeral = extractEphemeral(fs.readFileSync(CTHRU_PATH, 'utf8'));
+  const extracted = extractEphemeral(fs.readFileSync(CTHRU_PATH, 'utf8'));
+  const ephemeral = extracted.tuples;
   const hooksJson = extractHooksJson(JSON.parse(fs.readFileSync(HOOKS_JSON_PATH, 'utf8')));
 
   // Guard the guard: a broken regex that extracts nothing must FAIL, not pass.
+  assert(extracted.argVarNames.includes('C_THRU_COORDINATOR_ACTIVE'),
+    'extractor retains the appended defaulted coordinator argv');
   assert(ephemeral.length >= 5, `extracted a non-trivial ephemeral hook set (got ${ephemeral.length})`);
   assert(hooksJson.length >= 4, `extracted a non-trivial hooks.json hook set (got ${hooksJson.length})`);
 
