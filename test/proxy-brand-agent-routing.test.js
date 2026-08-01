@@ -5,7 +5,7 @@
 //
 // Simulates the PreToolUse hook handshake:
 //   body.model = "sonnet"  (Claude Code enum-safe alias)
-//   messages[0] starts with [[c-thru-agent:<agent>]]
+//   messages[0] starts with a session-HMAC-authenticated agent sentinel
 // Proxy must override model with the agent name, resolve the pin, and hit the
 // right stub with the concrete upstream model id (not the agent alias).
 //
@@ -21,10 +21,13 @@ const {
   stubBackend, writeConfig,
   httpJson, withProxy,
 } = require('./helpers');
+const { formatAgentSentinel } = require('../tools/agent-sentinel.js');
 
 console.log('proxy brand-agent routing (agent name → correct API)\n');
 
 const MSG = { max_tokens: 8, stream: false };
+const SENTINEL_SECRET = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+const SUBAGENT_HEADERS = { 'x-claude-code-agent-id': 'brand-agent-test-id' };
 
 function anthropicOk(model) {
   return {
@@ -34,6 +37,20 @@ function anthropicOk(model) {
     content: [{ type: 'text', text: 'ok' }],
     model,
     stop_reason: 'end_turn',
+    usage: { input_tokens: 1, output_tokens: 1 },
+  };
+}
+
+function responsesOk(model) {
+  return {
+    id: 'resp_test',
+    status: 'completed',
+    model,
+    output: [{
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'ok' }],
+    }],
     usage: { input_tokens: 1, output_tokens: 1 },
   };
 }
@@ -88,25 +105,26 @@ function bodyWithAgent(agentName) {
   return Object.assign({}, MSG, {
     // Hook injects a Claude-Code-valid alias; proxy must ignore it when sentinel present.
     model: 'sonnet',
-    messages: [{ role: 'user', content: `[[c-thru-agent:${agentName}]]\nping` }],
+    messages: [{ role: 'user', content: `${formatAgentSentinel(agentName, SENTINEL_SECRET)}\nping` }],
   });
 }
 
 async function main() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-brand-'));
 
-  // ── 1. Anthropic-format brands (xAI, Ollama cloud/local) ────────────────
-  console.log('1. anthropic-format brand agents (sentinel → concrete model + backend)');
+  // ── 1. Mixed-format brands (xAI Responses, Ollama Messages) ─────────────
+  console.log('1. brand agents reach their concrete model and wire translator');
   {
-    const xai = await stubBackend({ response: anthropicOk('grok-4.5') });
+    const xai = await stubBackend({ response: responsesOk('grok-4.5') });
     const ollamaCloud = await stubBackend({ response: anthropicOk('deepseek-v4-pro:cloud') });
     const ollamaLocal = await stubBackend({ response: anthropicOk('qwen3.6:35b') });
+    const anthropic = await stubBackend({ responseBody: anthropicOk('claude-sonnet-5') });
 
     const config = {
       endpoints: {
         xai: {
           url: `http://127.0.0.1:${xai.port}`,
-          format: 'anthropic',
+          format: 'openai',
           auth: { header: 'Authorization', scheme: 'Bearer', env: 'XAI_API_KEY' },
         },
         ollama_cloud: {
@@ -121,8 +139,9 @@ async function main() {
           auth: 'none',
         },
         anthropic: {
-          url: 'http://127.0.0.1:9', // must not be hit
+          url: `http://127.0.0.1:${anthropic.port}`,
           format: 'anthropic',
+          auth: 'none',
         },
       },
       model_routes: {
@@ -130,7 +149,7 @@ async function main() {
         grok: { endpoint: 'xai', name: 'grok-4.5' },
         'grok-4.5': 'xai',
         'deepseek-v4-pro:cloud': 'ollama_cloud',
-        'kimi-k2.7-code:cloud': 'ollama_cloud',
+        'kimi-k3:cloud': 'ollama_cloud',
         'qwen3.6:35b': 'ollama_local',
         // sonnet would go anthropic if sentinel lost
         sonnet: { endpoint: 'anthropic', name: 'claude-sonnet-5' },
@@ -139,7 +158,7 @@ async function main() {
         // Mirror shipped pins: agent name → model:<concrete>
         grok: 'model:grok-4.5',
         deepseek: 'model:deepseek-v4-pro:cloud',
-        kimi: 'model:kimi-k2.7-code:cloud',
+        kimi: 'model:kimi-k3:cloud',
         qwen: 'model:qwen3.6:35b',
       },
       llm_profiles: {},
@@ -148,9 +167,9 @@ async function main() {
     const configPath = writeConfig(tmpDir, config);
 
     const cases = [
-      { agent: 'grok',     stub: xai,         wantModel: 'grok-4.5',               wantPath: '/v1/messages' },
+      { agent: 'grok',     stub: xai,         wantModel: 'grok-4.5',               wantPath: '/v1/responses' },
       { agent: 'deepseek', stub: ollamaCloud, wantModel: 'deepseek-v4-pro:cloud',  wantPath: '/v1/messages' },
-      { agent: 'kimi',     stub: ollamaCloud, wantModel: 'kimi-k2.7-code:cloud',   wantPath: '/v1/messages' },
+      { agent: 'kimi',     stub: ollamaCloud, wantModel: 'kimi-k3:cloud',          wantPath: '/v1/messages' },
       { agent: 'qwen',     stub: ollamaLocal, wantModel: 'qwen3.6:35b',            wantPath: '/v1/messages' },
     ];
 
@@ -159,12 +178,21 @@ async function main() {
         configPath,
         profile: '64gb',
         mode: 'best-cloud-oss',
-        env: { XAI_API_KEY: 'xai-test-key' },
+        env: {
+          XAI_API_KEY: 'xai-test-key',
+          C_THRU_AGENT_SENTINEL_SECRET: SENTINEL_SECRET,
+        },
       },
       async ({ port }) => {
         for (const c of cases) {
           const before = c.stub.requests.length;
-          const res = await httpJson(port, 'POST', '/v1/messages', bodyWithAgent(c.agent));
+          const res = await httpJson(
+            port,
+            'POST',
+            '/v1/messages',
+            bodyWithAgent(c.agent),
+            SUBAGENT_HEADERS,
+          );
           assertEq(res.status, 200, `${c.agent}: proxy 200`);
           assertEq(res.headers['x-c-thru-served-by'], c.wantModel,
             `${c.agent}: x-c-thru-served-by === ${c.wantModel}`);
@@ -184,22 +212,39 @@ async function main() {
             `${c.agent}: sentinel stripped from upstream body`);
         }
 
-        // Negative: if sentinel is missing, sonnet must NOT hit xai/ollama brand stubs
+        // Negative control: without a sentinel, sonnet must route to the
+        // configured Anthropic endpoint and leave every brand stub untouched.
         const xaiBefore = xai.requests.length;
+        const ollamaCloudBefore = ollamaCloud.requests.length;
+        const ollamaLocalBefore = ollamaLocal.requests.length;
+        const anthropicBefore = anthropic.requests.length;
         const r = await httpJson(port, 'POST', '/v1/messages', {
           model: 'sonnet',
           max_tokens: 8,
           messages: [{ role: 'user', content: 'no agent' }],
         });
-        // anthropic stub is dead (port 9) — expect error; brand stubs untouched
-        assert(xai.requests.length === xaiBefore, 'no-sentinel sonnet must not hit xai');
-        assert(r.status !== 200 || true, 'no-sentinel path exercised (status=' + r.status + ')');
+        assertEq(r.status, 200, 'no-sentinel sonnet: Anthropic stub returns 200');
+        assertEq(r.headers['x-c-thru-served-by'], 'claude-sonnet-5',
+          'no-sentinel sonnet: served by concrete Anthropic model');
+        assertEq(r.headers['x-c-thru-agent-identity'], 'none',
+          'no-sentinel sonnet: no agent identity inferred');
+        assertEq(anthropic.requests.length, anthropicBefore + 1,
+          'no-sentinel sonnet: Anthropic stub hit exactly once');
+        const req = anthropic.lastRequest();
+        assertEq(req && req.model_used, 'claude-sonnet-5',
+          'no-sentinel sonnet: concrete model forwarded upstream');
+        assertEq(xai.requests.length, xaiBefore, 'no-sentinel sonnet: xai untouched');
+        assertEq(ollamaCloud.requests.length, ollamaCloudBefore,
+          'no-sentinel sonnet: Ollama cloud untouched');
+        assertEq(ollamaLocal.requests.length, ollamaLocalBefore,
+          'no-sentinel sonnet: Ollama local untouched');
       }
     );
 
     await xai.close();
     await ollamaCloud.close();
     await ollamaLocal.close();
+    await anthropic.close();
   }
 
   // ── 2. Gemini brand agent → generateContent, not Anthropic /v1/messages ─
@@ -236,10 +281,19 @@ async function main() {
         configPath,
         profile: '64gb',
         mode: 'best-cloud',
-        env: { GOOGLE_API_KEY: 'goog-test-key' },
+        env: {
+          GOOGLE_API_KEY: 'goog-test-key',
+          C_THRU_AGENT_SENTINEL_SECRET: SENTINEL_SECRET,
+        },
       },
       async ({ port }) => {
-        const res = await httpJson(port, 'POST', '/v1/messages', bodyWithAgent('gemini'));
+        const res = await httpJson(
+          port,
+          'POST',
+          '/v1/messages',
+          bodyWithAgent('gemini'),
+          SUBAGENT_HEADERS,
+        );
         assertEq(res.status, 200, 'gemini: proxy 200');
         assertEq(res.headers['x-c-thru-served-by'], 'gemini-pro-latest',
           'gemini: served-by gemini-pro-latest');
@@ -261,12 +315,12 @@ async function main() {
   // ── 3. Direct agent-name body.model (frontmatter model: identity) ───────
   console.log('\n3. body.model === agent name (no sentinel) still resolves');
   {
-    const xai = await stubBackend({ response: anthropicOk('grok-4.5') });
+    const xai = await stubBackend({ response: responsesOk('grok-4.5') });
     const config = {
       endpoints: {
         xai: {
           url: `http://127.0.0.1:${xai.port}`,
-          format: 'anthropic',
+          format: 'openai',
           auth: { header: 'Authorization', scheme: 'Bearer', env: 'XAI_API_KEY' },
         },
       },
@@ -291,7 +345,7 @@ async function main() {
         assertEq(res.headers['x-c-thru-served-by'], 'grok-4.5', 'direct grok → grok-4.5');
         const req = xai.lastRequest();
         assertEq(req && req.model_used, 'grok-4.5', 'direct: upstream model');
-        assert(req && String(req.path).startsWith('/v1/messages'), 'direct: /v1/messages');
+        assert(req && String(req.path).startsWith('/v1/responses'), 'direct: /v1/responses');
       }
     );
     await xai.close();

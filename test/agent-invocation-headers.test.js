@@ -28,12 +28,14 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const { assert, assertEq, summary, withProxy, httpJson, stubBackend } = require('./helpers');
+const { computeAgentSentinelTag } = require('../tools/agent-sentinel.js');
 
 const REPO       = path.resolve(__dirname, '..');
 const PROD       = JSON.parse(fs.readFileSync(path.join(REPO, 'config', 'model-map.json'), 'utf8'));
 const EXPLAIN    = path.join(REPO, 'tools', 'c-thru-explain.js');
 const MODE       = 'best-cloud';
 const TIER       = '64gb';
+const SENTINEL_SECRET = '0123456789abcdef0123456789abcdef';
 
 // Agents are the source of truth (one POST per agents/*.md).
 const RESERVED_AGENT_FILES = new Set(['AGENTS.md', 'CLAUDE.md']);
@@ -46,23 +48,24 @@ const AGENTS = fs.readdirSync(path.join(REPO, 'agents'))
 // capability resolves to a unique `served-<cap>` model routed to the stub.
 function buildFixture(stubPort) {
   const a2c = {};
+  const llm_profiles = {};
+  const model_routes = {};
   for (const agent of AGENTS) {
     const cap = PROD.agent_to_capability[agent];
     if (!cap) throw new Error(`fixture: agent '${agent}' missing from production agent_to_capability`);
-    a2c[agent] = cap;
-  }
-  const caps = [...new Set(Object.values(a2c))];
-  const llm_profiles = {};
-  const model_routes = {};
-  for (const cap of caps) {
-    // Brand leaves use agent_to_capability → "model:<concrete>". resolveBackend
-    // pin-branches to the concrete name (capability recorded as the request
-    // model / agent name). Route the concrete pin to the hermetic stub.
     if (typeof cap === 'string' && cap.startsWith('model:')) {
-      const pin = cap.slice('model:'.length);
-      model_routes[pin] = 'stub';
+      // Unique pin target ≠ agent name so preferAgentModelPin works with a
+      // trusted sentinel. Self-named production pins intentionally suppress it.
+      const served = `served-${agent}`;
+      a2c[agent] = `model:${served}`;
+      model_routes[served] = 'stub';
       continue;
     }
+    a2c[agent] = cap;
+  }
+  for (const agent of AGENTS) {
+    const cap = a2c[agent];
+    if (typeof cap === 'string' && cap.startsWith('model:')) continue;
     const model = `served-${cap}`;
     // Same model across all tiers/modes — the agent→capability seam is what's
     // under test here, not tier/mode resolution (covered by other suites).
@@ -71,6 +74,7 @@ function buildFixture(stubPort) {
   }
   return {
     agent_to_capability: a2c,
+    latest_models: {},
     llm_profiles,
     model_routes,
     endpoints: { stub: { kind: 'anthropic', url: `http://127.0.0.1:${stubPort}` } },
@@ -120,7 +124,11 @@ async function main() {
 
     await withProxy({
       configPath: fixturePath, profile: TIER, mode: MODE,
-      env: { CLAUDE_PROXY_JOURNAL: '1', CLAUDE_PROXY_JOURNAL_DIR: journalDir },
+      env: {
+        CLAUDE_PROXY_JOURNAL: '1',
+        CLAUDE_PROXY_JOURNAL_DIR: journalDir,
+        C_THRU_AGENT_SENTINEL_SECRET: SENTINEL_SECRET,
+      },
     }, async ({ port }) => {
       for (const agent of AGENTS) {
         const a2cTarget = PROD.agent_to_capability[agent];
@@ -129,13 +137,17 @@ async function main() {
         const isModelPin = typeof a2cTarget === 'string' && a2cTarget.startsWith('model:');
         const expectedCap = isModelPin ? agent : a2cTarget;
         const expectedModel = isModelPin
-          ? a2cTarget.slice('model:'.length)
+          ? `served-${agent}`
           : expectByCap[expectedCap];
 
         const r = await httpJson(port, 'POST', '/v1/messages', {
           model: agent,
           messages: [{ role: 'user', content: 'hi' }],
           max_tokens: 5,
+        }, {
+          'x-claude-code-agent-id': `agent-invocation-${agent}`,
+          'x-c-thru-agent': agent,
+          'x-c-thru-agent-signature': computeAgentSentinelTag(agent, SENTINEL_SECRET),
         });
         assertEq(r.status, 200, `${agent}: request succeeded`);
 
@@ -153,6 +165,8 @@ async function main() {
         assert(via && typeof via === 'object', `${agent}: x-c-thru-resolved-via is valid JSON`);
         assertEq(via && via.capability, expectedCap,
           `${agent}: resolved-via.capability === '${expectedCap}'`);
+        assertEq(via && via.agent, agent,
+          `${agent}: resolved-via.agent === '${agent}'`);
 
         assertEq(r.headers['x-c-thru-served-by'], expectedModel,
           `${agent}: x-c-thru-served-by === '${expectedModel}'`);
@@ -167,7 +181,7 @@ async function main() {
       const isModelPin = typeof a2cTarget === 'string' && a2cTarget.startsWith('model:');
       const journalCap = isModelPin ? agent : a2cTarget;
       const expectedModel = isModelPin
-        ? a2cTarget.slice('model:'.length)
+        ? `served-${agent}`
         : expectByCap[a2cTarget];
       const entries = readJournal(journalDir, journalCap);
       assert(entries.length >= 1, `journal: '${journalCap}.jsonl' has ≥1 entry (got ${entries.length})`);

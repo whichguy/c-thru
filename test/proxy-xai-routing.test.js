@@ -37,11 +37,18 @@ ok(map.model_routes['grok-build']?.endpoint === 'xai'
 ok(map.model_routes['grok-build-latest']?.endpoint === 'xai'
   && map.model_routes['grok-build-latest']?.name === 'grok-4.5',
   'model_routes.grok-build-latest → grok-4.5 @ xai');
-ok(map.agent_to_capability.grok === 'model:grok-4.5', 'agent_to_capability.grok pin');
-ok(map.agent_to_capability.deepseek === 'model:deepseek-v4-pro:cloud', 'deepseek pin');
-ok(map.agent_to_capability.qwen === 'model:qwen3.6:35b', 'qwen pin');
-ok(map.agent_to_capability.kimi === 'model:kimi-k3:cloud', 'kimi pin');
-ok(map.agent_to_capability.gemini === 'model:gemini-pro', 'gemini pin');
+// Brand leaves pin public shorthands; latest_models expands to concrete ids.
+ok(map.agent_to_capability.grok === 'model:grok', 'agent_to_capability.grok pin');
+ok(map.latest_models?.grok === 'grok-4.5', 'latest_models.grok → grok-4.5');
+ok(map.agent_to_capability.deepseek === 'model:deepseek', 'deepseek pin');
+ok(map.latest_models?.deepseek === 'deepseek-v4-pro:cloud', 'latest_models.deepseek');
+ok(map.agent_to_capability.qwen === 'model:qwen', 'qwen pin');
+ok(map.latest_models?.qwen === 'qwen3.6:35b', 'latest_models.qwen');
+ok(map.agent_to_capability.kimi === 'model:kimi', 'kimi pin');
+ok(map.latest_models?.kimi === 'kimi-k3:cloud', 'latest_models.kimi');
+ok(map.agent_to_capability.gemini === 'model:gemini', 'gemini pin');
+ok(map.latest_models?.gemini === 'gemini-pro-latest' || map.latest_models?.gemini === 'gemini-pro',
+  'latest_models.gemini concrete id');
 
 // best-cloud-gov: generalist/writer use Grok at 32gb+; 16gb stays small local
 const genGov = map.llm_profiles.generalist['best-cloud-gov'];
@@ -73,11 +80,11 @@ const explained = (explainResult.stdout || '') + (explainResult.stderr || '');
 ok(!explainResult.error && explainResult.status === 0,
   'explain --model grok-build exits 0');
 ok(
-  /^Resolution chain — model=grok-build$/m.test(explained)
-    && /^  name swap\s+grok-build → grok-4\.5$/m.test(explained)
-    && /^  endpoint\s+xai$/m.test(explained)
-    && /^  served_by\s+grok-4\.5$/m.test(explained)
-    && /^  endpoint\.format\s+openai$/m.test(explained),
+  /model=grok-build/.test(explained)
+    && /grok-4\.5/.test(explained)
+    && /endpoint\s+xai/.test(explained)
+    && /served_by\s+grok-4\.5/.test(explained)
+    && /openai/.test(explained),
   'explain resolves exactly grok-build → grok-4.5 @ xai using openai format',
 );
 

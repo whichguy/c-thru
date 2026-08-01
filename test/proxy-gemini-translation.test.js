@@ -29,6 +29,8 @@ function assert(condition, message) {
 console.log('proxy-gemini-translation tests\n');
 
 const GEMINI_MODEL = 'gemini-3.1-pro';
+const GEMINI_25_MODEL = 'gemini-2.5-flash';
+const GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
 
 function buildGeminiConfig(stubPort) {
   return {
@@ -39,7 +41,11 @@ function buildGeminiConfig(stubPort) {
         auth: { literal: 'fake-gemini-key' }
       },
     },
-    model_routes: { [GEMINI_MODEL]: 'gemini_stub' },
+    model_routes: {
+      [GEMINI_MODEL]: 'gemini_stub',
+      [GEMINI_25_MODEL]: 'gemini_stub',
+      [GEMINI_IMAGE_MODEL]: 'gemini_stub',
+    },
   };
 }
 
@@ -238,6 +244,199 @@ async function main() {
       assert(captured4?.generationConfig?.thinkingConfig?.includeThoughts === true, 'includeThoughts:true forwarded');
     });
 
+    // ── 4b. Agent effort mapping ───────────────────────────────────────────
+    console.log('\n4b. Agent effort (output_config.effort) maps to Gemini controls');
+    let captured4b = null;
+    let returnThought4b = false;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          captured4b = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: returnThought4b
+              ? [{ text: 'private summary', thought: true, thoughtSignature: 'sig-omitted' }, { text: 'ok' }]
+              : [{ text: 'ok' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      for (const testCase of [
+        {
+          name: 'Gemini 3 medium effort',
+          model: GEMINI_MODEL,
+          effort: 'medium',
+          expectedLevel: 'medium',
+          gap: false,
+        },
+        {
+          name: 'Gemini 3 xhigh effort',
+          model: GEMINI_MODEL,
+          effort: 'xhigh',
+          expectedLevel: 'high',
+          gap: true,
+        },
+        {
+          name: 'Gemini 3.1 Flash-Lite Image low effort',
+          model: GEMINI_IMAGE_MODEL,
+          effort: 'low',
+          expectedLevel: 'minimal',
+          gap: true,
+        },
+        {
+          name: 'Gemini 3.1 Flash-Lite Image medium effort',
+          model: GEMINI_IMAGE_MODEL,
+          effort: 'medium',
+          expectedLevel: 'high',
+          gap: true,
+        },
+        {
+          name: 'Gemini 2.5 low effort',
+          model: GEMINI_25_MODEL,
+          effort: 'low',
+          expectedBudget: 1024,
+          gap: true,
+        },
+        {
+          name: 'Gemini 2.5 max effort',
+          model: GEMINI_25_MODEL,
+          effort: 'max',
+          expectedBudget: 24576,
+          gap: true,
+        },
+      ]) {
+        captured4b = null;
+        const r = await httpJson(port, 'POST', '/v1/messages', {
+          model: testCase.model,
+          thinking: { type: 'adaptive' },
+          output_config: { effort: testCase.effort },
+          messages: [{ role: 'user', content: testCase.name }],
+          max_tokens: 100,
+          stream: false,
+        });
+        assert(r.status === 200, `${testCase.name}: status 200`);
+        if (testCase.expectedLevel) {
+          assert(captured4b?.generationConfig?.thinkingConfig?.thinkingLevel === testCase.expectedLevel,
+            `${testCase.name}: thinkingLevel=${testCase.expectedLevel}`);
+          assert(captured4b?.generationConfig?.thinkingConfig?.thinkingBudget === undefined,
+            `${testCase.name}: legacy thinkingBudget omitted`);
+        } else {
+          assert(captured4b?.generationConfig?.thinkingConfig?.thinkingBudget === testCase.expectedBudget,
+            `${testCase.name}: thinkingBudget=${testCase.expectedBudget}`);
+          assert(captured4b?.generationConfig?.thinkingConfig?.thinkingLevel === undefined,
+            `${testCase.name}: thinkingLevel omitted`);
+        }
+        const gaps = (r.headers?.['x-c-thru-translation-gap'] || '').split(',').filter(Boolean);
+        assert(gaps.includes('output_config.effort') === testCase.gap,
+          `${testCase.name}: effort translation gap ${testCase.gap ? 'reported' : 'absent'}`);
+      }
+
+      captured4b = null;
+      const disabled = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        thinking: { type: 'disabled' },
+        output_config: { effort: 'max' },
+        messages: [{ role: 'user', content: 'disabled wins' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(disabled.status === 200, 'Gemini explicit disabled + effort: status 200');
+      assert(captured4b?.generationConfig?.thinkingConfig?.thinkingLevel === 'low' &&
+        captured4b?.generationConfig?.thinkingConfig?.includeThoughts === false,
+        'Gemini explicit disabled uses the nearest supported low level without summaries');
+      assert(disabled.headers?.['x-c-thru-translation-gap']?.includes('thinking.type:disabled') &&
+        disabled.headers?.['x-c-thru-translation-gap']?.includes('output_config.effort'),
+        'Gemini explicit disabled reports both the unsupported opt-out and ignored effort');
+      assert(captured4b?.generationConfig?.maxOutputTokens === 100,
+        'Gemini effort never raises the caller max_tokens hard ceiling');
+
+      captured4b = null;
+      returnThought4b = true;
+      const omitted = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        thinking: { type: 'adaptive', display: 'omitted' },
+        output_config: { effort: 'high' },
+        messages: [{ role: 'user', content: 'do not return a thought summary' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(omitted.status === 200, 'Gemini effort + display omitted: status 200');
+      assert(captured4b?.generationConfig?.thinkingConfig?.includeThoughts === false,
+        'Gemini preserves thinking.display=omitted');
+      const omittedThinking = (omitted.json?.content || []).find(block => block.type === 'thinking');
+      assert(omittedThinking?.thinking === '' && omittedThinking?.signature === 'sig-omitted',
+        'Gemini omits summary text while preserving the continuity signature');
+      assert(!JSON.stringify(omitted.json).includes('private summary'),
+        'Gemini never exposes unexpected summary text under display omitted');
+
+      captured4b = null;
+      const inheritedOmitted = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_25_MODEL,
+        thinking: { type: 'adaptive', display: 'omitted' },
+        messages: [{ role: 'user', content: 'adaptive default without summaries' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(inheritedOmitted.status === 200,
+        'Gemini inherited adaptive effort + display omitted: status 200');
+      assert(captured4b?.generationConfig?.thinkingConfig?.includeThoughts === false,
+        'Gemini preserves display omitted without explicit effort');
+      assert(!JSON.stringify(inheritedOmitted.json).includes('private summary'),
+        'Gemini suppresses summary text under inherited effort');
+
+      captured4b = null;
+      const effortOnly = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        output_config: { effort: 'medium' },
+        messages: [{ role: 'user', content: 'effort alone does not request summaries' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(effortOnly.status === 200, 'Gemini effort-only request: status 200');
+      assert(captured4b?.generationConfig?.thinkingConfig?.thinkingLevel === 'medium' &&
+        captured4b?.generationConfig?.thinkingConfig?.includeThoughts === false,
+        'Gemini effort-only maps depth without opting into thought summaries');
+      assert(!JSON.stringify(effortOnly.json).includes('private summary'),
+        'Gemini effort-only response does not expose upstream summary text');
+
+      captured4b = null;
+      returnThought4b = false;
+      const mixed = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        thinking: { type: 'enabled', budget_tokens: 4096 },
+        output_config: { effort: 'low' },
+        messages: [{ role: 'user', content: 'fixed budget wins' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(mixed.status === 200, 'Gemini fixed budget + effort: status 200');
+      assert(captured4b?.generationConfig?.thinkingConfig?.thinkingLevel === 'medium',
+        'Gemini fixed budget takes precedence over effort');
+      assert(mixed.headers?.['x-c-thru-translation-gap']?.includes('output_config.effort'),
+        'Gemini reports effort lost beside a fixed budget');
+
+      captured4b = null;
+      const disabled25 = await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_25_MODEL,
+        thinking: { type: 'disabled' },
+        messages: [{ role: 'user', content: 'disable 2.5 Flash thinking' }],
+        max_tokens: 100,
+        stream: false,
+      });
+      assert(disabled25.status === 200, 'Gemini 2.5 Flash disabled: status 200');
+      assert(captured4b?.generationConfig?.thinkingConfig?.thinkingBudget === 0 &&
+        captured4b?.generationConfig?.thinkingConfig?.includeThoughts === false,
+        'Gemini 2.5 Flash maps disabled to exact thinkingBudget=0');
+      assert(!disabled25.headers?.['x-c-thru-translation-gap']?.includes('thinking.type:disabled'),
+        'Gemini 2.5 Flash exact disable has no false translation gap');
+    });
+
     // ── 5. Thinking history echo ────────────────────────────────────────────
     console.log('\n5. Thinking history echo (assistant thinking block -> Gemini thought part)');
     let captured5 = null;
@@ -422,6 +621,79 @@ async function main() {
       });
     });
 
+    console.log('\n7b. Streaming display omitted preserves signature without summary deltas');
+    let captured7b = null;
+    stub.setHandler((req, res) => {
+      if (!req.url.includes(':streamGenerateContent')) return false;
+      let body = '';
+      req.on('data', d => body += d);
+      req.on('end', () => {
+        captured7b = JSON.parse(body);
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write('data: ' + JSON.stringify({
+          candidates: [{ content: { parts: [
+            { text: 'private', thought: true },
+          ] } }]
+        }) + '\n\n');
+        res.write('data: ' + JSON.stringify({
+          candidates: [{ content: { parts: [
+            { text: 'answer', thoughtSignature: 'sig-stream' },
+          ] }, finishReason: 'STOP' }],
+          usageMetadata: { candidatesTokenCount: 3 }
+        }) + '\n\n');
+        res.end();
+      });
+      return true;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      return new Promise((resolve) => {
+        const req = http.request({
+          port, method: 'POST', path: '/v1/messages',
+          headers: { 'Content-Type': 'application/json' }
+        }, (res) => {
+          const events = [];
+          let buffer = '';
+          res.on('data', d => {
+            buffer += d.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+              if (line.startsWith('event: ')) {
+                events.push({ event: line.slice(7).trim() });
+              } else if (line.startsWith('data: ')) {
+                try {
+                  const last = events[events.length - 1];
+                  if (last) last.data = JSON.parse(line.slice(6));
+                } catch {}
+              }
+            }
+          });
+          res.on('end', () => {
+            const thinkingStart = events.find(e =>
+              e.event === 'content_block_start' && e.data?.content_block?.type === 'thinking');
+            const thinkingDeltas = events.filter(e =>
+              e.event === 'content_block_delta' && e.data?.delta?.type === 'thinking_delta');
+            const sigDelta = events.find(e =>
+              e.event === 'content_block_delta' && e.data?.delta?.type === 'signature_delta');
+            assert(thinkingStart != null, 'omitted stream retains an empty thinking block');
+            assert(thinkingDeltas.length === 0, 'omitted stream exposes no thinking summary deltas');
+            assert(sigDelta?.data?.delta?.signature === 'sig-stream',
+              'omitted stream preserves the continuity signature');
+            assert(captured7b?.generationConfig?.thinkingConfig?.includeThoughts === false,
+              'omitted stream sends includeThoughts=false upstream');
+            resolve();
+          });
+        });
+        req.write(JSON.stringify({
+          model: GEMINI_MODEL,
+          messages: [{ role: 'user', content: 'go' }],
+          thinking: { type: 'enabled', budget_tokens: 256, display: 'omitted' },
+          stream: true,
+        }));
+        req.end();
+      });
+    });
+
     // ── G5. tool_result.is_error -> functionResponse.response.error ─────────
     console.log('\nG5. tool_result.is_error=true -> Gemini functionResponse.response.error');
     let capturedG5 = null;
@@ -456,6 +728,43 @@ async function main() {
       assert(fr?.name === 'calc', 'functionResponse.name resolved');
       assert(fr?.response?.error != null, `is_error=true wraps response under .error (got ${JSON.stringify(fr?.response)})`);
       assert(fr?.response?.error?.content === 'division by zero', `error payload preserved (got ${JSON.stringify(fr?.response?.error)})`);
+    });
+
+    // ── G5b. JSON primitive tool_result -> Struct-compatible output ────────
+    console.log('\nG5b. JSON primitive tool_result -> Gemini functionResponse.response.output');
+    let capturedG5b = null;
+    stub.setHandler((req, res) => {
+      if (req.url.includes(':generateContent')) {
+        let body = '';
+        req.on('data', d => body += d);
+        req.on('end', () => {
+          capturedG5b = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            candidates: [{ content: { parts: [{ text: '18' }] }, finishReason: 'STOP' }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+          }));
+        });
+        return true;
+      }
+      return false;
+    });
+    await withProxy({ configPath, profile: '16gb', env }, async ({ port }) => {
+      await httpJson(port, 'POST', '/v1/messages', {
+        model: GEMINI_MODEL,
+        tools: [{ name: 'add', description: 'd', input_schema: { type: 'object' } }],
+        messages: [
+          { role: 'user', content: 'compute' },
+          { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_add', name: 'add', input: { a: 7, b: 11 } }] },
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_add', content: '18' }] },
+        ],
+        stream: false,
+      });
+      const response = capturedG5b?.contents?.[2]?.parts?.[0]?.functionResponse?.response;
+      assert(response && typeof response === 'object' && !Array.isArray(response),
+        `primitive result is wrapped in a Struct-compatible object (got ${JSON.stringify(response)})`);
+      assert(response?.output === 18,
+        `primitive JSON type is preserved under response.output (got ${JSON.stringify(response)})`);
     });
 
     // ── 8. Image content blocks (Anthropic image -> Gemini inlineData) ──────
@@ -1104,8 +1413,8 @@ async function main() {
         `x-c-thru-thinking-tokens=42 (got '${r.headers?.['x-c-thru-thinking-tokens']}')`);
     });
 
-    // ── 18. Budget arithmetic: max_tokens + thinkingBudget ────────────────
-    console.log('\n18. Budget arithmetic — maxOutputTokens = max_tokens + thinkingBudget');
+    // ── 18. Hard output cap parity ─────────────────────────────────────────
+    console.log('\n18. max_tokens remains the hard total-output ceiling with thinking');
     let captured18 = null;
     stub.setHandler((req, res) => {
       if (req.url.includes(':generateContent')) {
@@ -1132,16 +1441,15 @@ async function main() {
         stream: false,
       });
       assert(r.status === 200, `18 status 200 (got ${r.status})`);
-      // Gemini 3 family: budget_tokens=500 → thinkingLevel='low' (≤2048).
-      // approx budget for 'low' = 2048; maxOutputTokens=200+2048=2248.
-      assert(captured18?.generationConfig?.maxOutputTokens === 2248,
-        `maxOutputTokens=2248 (200+approxLow) (got ${captured18?.generationConfig?.maxOutputTokens})`);
+      // Anthropic and Gemini both count thinking inside their total output cap.
+      assert(captured18?.generationConfig?.maxOutputTokens === 200,
+        `maxOutputTokens preserves caller max_tokens=200 (got ${captured18?.generationConfig?.maxOutputTokens})`);
       assert(captured18?.generationConfig?.thinkingConfig?.thinkingLevel === 'low',
         `thinkingLevel='low' for budget 500 (got ${captured18?.generationConfig?.thinkingConfig?.thinkingLevel})`);
       assert(captured18?.generationConfig?.thinkingConfig?.thinkingBudget === undefined,
         `thinkingBudget NOT sent (would 400 if mixed with thinkingLevel) (got ${captured18?.generationConfig?.thinkingConfig?.thinkingBudget})`);
-      assert(r.headers?.['x-c-thru-thinking-budget-added'] === '2048',
-        `x-c-thru-thinking-budget-added=2048 (approxLow) (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
+      assert(r.headers?.['x-c-thru-thinking-budget-added'] === undefined,
+        `deprecated budget-added header stays absent (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
       assert(r.headers?.['x-c-thru-thinking-level'] === 'low',
         `x-c-thru-thinking-level=low (got '${r.headers?.['x-c-thru-thinking-level']}')`);
     });
@@ -1256,8 +1564,12 @@ async function main() {
           stream: false,
         });
         assert(r.status === 200, `19b status 200 (got ${r.status})`);
-        assert(captured?.generationConfig?.thinkingConfig === undefined,
-          `opt-out: no thinkingConfig (got ${JSON.stringify(captured?.generationConfig?.thinkingConfig)})`);
+        assert(captured?.generationConfig?.thinkingConfig?.thinkingLevel === 'low',
+          `opt-out: nearest supported level is low (got ${JSON.stringify(captured?.generationConfig?.thinkingConfig)})`);
+        assert(captured?.generationConfig?.thinkingConfig?.includeThoughts === false,
+          'opt-out: thought summaries remain omitted');
+        assert(r.headers?.['x-c-thru-translation-gap']?.includes('thinking.type:disabled'),
+          `opt-out: unsupported full disable is reported (got '${r.headers?.['x-c-thru-translation-gap']}')`);
         assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === undefined,
           `opt-out: x-c-thru-thinking-auto-enabled absent (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
       });
@@ -1430,8 +1742,8 @@ async function main() {
         `c-thru-thinking-tokens precedes message_delta (cthru=${cthruIdx}, delta=${deltaIdx})`);
     });
 
-    // ── 20b. Streaming: auto-enable + budget-added headers at writeHead ───
-    console.log('\n20b. Streaming — auto-enable + budget-added headers flushed at writeHead');
+    // ── 20b. Streaming: auto-enable header at writeHead, no cap inflation ─
+    console.log('\n20b. Streaming — auto-enable is observable without raising the caller cap');
     {
       const proConfigPath = writeConfigFresh(tmpDir, 'streamhead', {
         backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
@@ -1470,8 +1782,8 @@ async function main() {
         assert(headers.status === 200, `20b status 200 (got ${headers.status})`);
         assert(headers.headers['x-c-thru-thinking-auto-enabled'] === '1',
           `streaming x-c-thru-thinking-auto-enabled=1 (got '${headers.headers['x-c-thru-thinking-auto-enabled']}')`);
-        assert(headers.headers['x-c-thru-thinking-budget-added'] === '2048',
-          `streaming x-c-thru-thinking-budget-added=2048 (approxLow) (got '${headers.headers['x-c-thru-thinking-budget-added']}')`);
+        assert(headers.headers['x-c-thru-thinking-budget-added'] === undefined,
+          `streaming preserves the caller cap without a budget-added header (got '${headers.headers['x-c-thru-thinking-budget-added']}')`);
       });
     }
 
@@ -1504,7 +1816,7 @@ async function main() {
     });
 
     // ── 20d. Auto-enable without max_tokens → maxOutputTokens stays unset ─
-    console.log('\n20d. Auto-enable but no max_tokens — maxOutputTokens absent, no budget-added header');
+    console.log('\n20d. Auto-enable but no max_tokens — maxOutputTokens remains absent');
     {
       const proConfigPath = writeConfigFresh(tmpDir, 'nomax', {
         backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
@@ -1547,7 +1859,7 @@ async function main() {
     }
 
     // ── 20e. count_tokens path — auto-enable telemetry NOT leaked ─────────
-    console.log('\n20e. count_tokens — auto-enable / budget-added headers must NOT leak (no model invocation)');
+    console.log('\n20e. count_tokens — model-invocation thinking headers must NOT leak');
     {
       const proConfigPath = writeConfigFresh(tmpDir, 'counttok', {
         backends: { gemini_stub: { format: 'gemini', url: `http://127.0.0.1:${stub.port}`, auth: { literal: 'fake-gemini-key' } } },
@@ -1574,6 +1886,7 @@ async function main() {
           model: 'gemini-pro-latest',
           messages: [{ role: 'user', content: 'count me' }],
           max_tokens: 100,
+          output_config: { effort: 'high' },
         });
         assert(r.status === 200, `20e status 200 (got ${r.status})`);
         assert(r.json?.input_tokens === 7, `input_tokens passed through (got ${r.json?.input_tokens})`);
@@ -1585,6 +1898,8 @@ async function main() {
           `count_tokens: auto-enable header absent (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
         assert(r.headers?.['x-c-thru-thinking-budget-added'] === undefined,
           `count_tokens: budget-added header absent (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
+        assert(r.headers?.['x-c-thru-thinking-level'] === undefined,
+          `count_tokens: thinking-level header absent (got '${r.headers?.['x-c-thru-thinking-level']}')`);
       });
     }
 
@@ -1689,6 +2004,8 @@ async function main() {
         assert(r.status === 200, `21c status 200 (got ${r.status})`);
         assert(captured?.generationConfig?.thinkingConfig?.thinkingLevel === 'high',
           `gemini-3-pro doesn't support 'medium' → falls to 'high' (got ${captured?.generationConfig?.thinkingConfig?.thinkingLevel})`);
+        assert(r.headers?.['x-c-thru-translation-gap']?.includes('thinking.budget_tokens'),
+          `gemini-3-pro reports the inexact budget mapping (got '${r.headers?.['x-c-thru-translation-gap']}')`);
       });
     }
 
@@ -1767,15 +2084,29 @@ async function main() {
           `gemini-2.5-pro: legacy thinkingBudget=4096 (got ${captured?.generationConfig?.thinkingConfig?.thinkingBudget})`);
         assert(captured?.generationConfig?.thinkingConfig?.thinkingLevel === undefined,
           `gemini-2.5-pro: NO thinkingLevel (got ${captured?.generationConfig?.thinkingConfig?.thinkingLevel})`);
-        assert(captured?.generationConfig?.maxOutputTokens === 4296,
-          `2.5 budget arithmetic: max_tokens(200)+budget(4096)=4296 (got ${captured?.generationConfig?.maxOutputTokens})`);
+        assert(captured?.generationConfig?.maxOutputTokens === 200,
+          `2.5 preserves caller max_tokens=200 as the total cap (got ${captured?.generationConfig?.maxOutputTokens})`);
         assert(r.headers?.['x-c-thru-thinking-level'] === undefined,
           `gemini-2.5: no thinking-level header (got '${r.headers?.['x-c-thru-thinking-level']}')`);
+
+        captured = null;
+        const disabled = await httpJson(port, 'POST', '/v1/messages', {
+          model: 'gemini-2.5-pro',
+          thinking: { type: 'disabled' },
+          messages: [{ role: 'user', content: 'nearest supported opt-out' }],
+          max_tokens: 200,
+          stream: false,
+        });
+        assert(disabled.status === 200, `21e disabled status 200 (got ${disabled.status})`);
+        assert(captured?.generationConfig?.thinkingConfig?.thinkingBudget === 128,
+          `gemini-2.5-pro cannot disable; nearest budget is 128 (got ${captured?.generationConfig?.thinkingConfig?.thinkingBudget})`);
+        assert(disabled.headers?.['x-c-thru-translation-gap']?.includes('thinking.type:disabled'),
+          `gemini-2.5-pro unsupported disable is reported (got '${disabled.headers?.['x-c-thru-translation-gap']}')`);
       });
     }
 
     // ── 22. Vertex AI thinking parity ──────────────────────────────────────
-    // All thinking-related observability (auto-enable, budget arithmetic,
+    // All thinking-related observability (auto-enable, hard-cap preservation,
     // thoughtsTokenCount surfacing, output_tokens parity, streaming
     // thinking_output_tokens) is also exercised on AI Studio (gemini_ai). The
     // Vertex endpoint has a different URL prefix, different auth (Bearer
@@ -1867,10 +2198,10 @@ async function main() {
           `22b Vertex auto-enabled thinkingLevel='low' (got ${captured22b?.generationConfig?.thinkingConfig?.thinkingLevel})`);
         assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === '1',
           `22b Vertex x-c-thru-thinking-auto-enabled=1 (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
-        assert(r.headers?.['x-c-thru-thinking-budget-added'] === '2048',
-          `22b Vertex x-c-thru-thinking-budget-added=2048 (low approx) (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
-        assert(captured22b?.generationConfig?.maxOutputTokens === 2148,
-          `22b Vertex maxOutputTokens = 100 + 2048 (got ${captured22b?.generationConfig?.maxOutputTokens})`);
+        assert(r.headers?.['x-c-thru-thinking-budget-added'] === undefined,
+          `22b Vertex emits no budget-added header (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
+        assert(captured22b?.generationConfig?.maxOutputTokens === 100,
+          `22b Vertex preserves caller max_tokens=100 (got ${captured22b?.generationConfig?.maxOutputTokens})`);
       });
 
       // 22c. Streaming on Vertex — auto-enable headers + thinking_output_tokens.

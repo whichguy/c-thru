@@ -35,9 +35,11 @@ cthru_upstream_fingerprints_equal "deadbeef" "deadbeef" && pass "equal match" ||
 # ── Extract resolve helpers from tools/c-thru (not full-sourceable) ──────────
 # Brace-counting fails on embedded node -e strings; use line markers.
 TMP_EXTRACT="$(mktemp "${TMPDIR:-/tmp}/c-thru-up-extract.XXXXXX")"
-START_LINE="$(rg -n '^upstream_override_eligible\(\)' "$C_THRU" | head -1 | cut -d: -f1)"
+START_LINE="$(rg -n '^_cthru_upstream_url_js\(\)' "$C_THRU" | head -1 | cut -d: -f1)"
 END_LINE="$(rg -n '^anthropic_upstream_override_active\(\)' "$C_THRU" | head -1 | cut -d: -f1)"
 if [[ -n "$START_LINE" && -n "$END_LINE" && "$END_LINE" -gt "$START_LINE" ]]; then
+  # The extracted helper normally inherits this from the launched c-thru script.
+  export CTHRU_SELF_DIR="$(dirname "$C_THRU")"
   sed -n "${START_LINE},$((END_LINE - 1))p" "$C_THRU" > "$TMP_EXTRACT"
   # shellcheck source=/dev/null
   source "$TMP_EXTRACT" || {
@@ -150,13 +152,17 @@ s.listen(0, '127.0.0.1', () => {
 });
 setTimeout(() => process.exit(0), 20000);
 JS
-  node "$STUBDIR/stub.js" "$INFO" "$PIDF" &
+  node "$STUBDIR/stub.js" "$INFO" "$PIDF" 2>"$STUBDIR/stub.err" &
   STUB_PID=$!
   for _ in $(seq 1 50); do [[ -s "$INFO" ]] && break; sleep 0.05; done
   PORT="$(cat "$INFO" 2>/dev/null || true)"
   LIVE_PID="$(cat "$PIDF" 2>/dev/null || true)"
   if [[ -z "$PORT" || -z "$LIVE_PID" ]]; then
-    fail "T5 stub failed to start"
+    if grep -q 'listen EPERM' "$STUBDIR/stub.err" 2>/dev/null; then
+      echo "  SKIP  T5 sandbox denied loopback bind; needs native verification"
+    else
+      fail "T5 stub failed to start"
+    fi
   else
     # desired empty, live has fingerprint → should return 1 without killing
     unset CLAUDE_PROXY_ANTHROPIC_UPSTREAM C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT

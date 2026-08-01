@@ -107,17 +107,63 @@ cthru_ensure_handle_fingerprint_mismatch() {
   return 0
 }
 
+# PIDs currently listening on 127.0.0.1:$1 (best-effort via lsof).
+cthru_ensure_listen_pids_on_port() {
+  local port="${1:-}"
+  [[ -n "$port" ]] || return 0
+  if command -v lsof >/dev/null 2>&1; then
+    # -t: PIDs only; TCP listen on this port
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | tr '\n' ',' | sed 's/,$//'
+    return 0
+  fi
+  return 0
+}
+
+# Expected agent-token fingerprint for this profile (non-secret hash).
+cthru_ensure_expected_agent_token_fp() {
+  local token="" token_file js
+  token="${C_THRU_AGENT_SENTINEL_SECRET:-}"
+  token_file="${C_THRU_AGENT_SENTINEL_SECRET_FILE:-${CLAUDE_PROFILE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/proxy.agent-token}"
+  if [[ -z "$token" && -s "$token_file" ]]; then
+    token="$(cat "$token_file" 2>/dev/null || true)"
+  fi
+  [[ ${#token} -ge 32 ]] || return 1
+  command -v node >/dev/null 2>&1 || return 1
+  js="${_CTHRU_ENSURE_TOOLS_DIR}/c-thru-upstream-url.js"
+  [[ -f "$js" ]] || return 1
+  printf '%s' "$token" | node "$js" agent-token-fp 2>/dev/null
+}
+
 # Best-effort kill of a live mismatched proxy so we can respawn with the
 # correct CLAUDE_PROXY_ANTHROPIC_UPSTREAM (port must be free).
+#
+# Safety (plan D1 / F2): never trust /ping.pid alone.
+#   1. Require agent_token_identity match (same as launcher reuse gate).
+#   2. Require reported PID owns the listen port (lsof when available).
+# Pre-upgrade proxies without identity are refused (no kill) — use c-thru restart.
 cthru_ensure_kill_proxy_on_port() {
   local port="${1:-}"
-  local body pid=""
+  local body pid="" expected_fp listen_pids js reason
   body="$(curl -sf --max-time 1 "http://127.0.0.1:${port}/ping" 2>/dev/null)" || return 1
-  if command -v node >/dev/null 2>&1; then
-    pid="$(node -e 'try{const j=JSON.parse(process.argv[1]||"{}");if(j.pid)process.stdout.write(String(j.pid))}catch{}' "$body" 2>/dev/null || true)"
-  elif command -v jq >/dev/null 2>&1; then
-    pid="$(printf '%s' "$body" | jq -r '.pid // empty' 2>/dev/null || true)"
+  command -v node >/dev/null 2>&1 || return 1
+  js="${_CTHRU_ENSURE_TOOLS_DIR}/c-thru-upstream-url.js"
+  [[ -f "$js" ]] || return 1
+  expected_fp="$(cthru_ensure_expected_agent_token_fp 2>/dev/null || true)"
+  if [[ -z "$expected_fp" ]]; then
+    echo "c-thru: ensure-kill :${port} refused — launcher agent token missing/invalid" >&2
+    return 1
   fi
+  listen_pids="$(cthru_ensure_listen_pids_on_port "$port" 2>/dev/null || true)"
+  # kill-allowed prints pid on stdout; reason on stderr if refused
+  local reason_file
+  reason_file="$(mktemp "${TMPDIR:-/tmp}/c-thru-ensure-kill.XXXXXX")" || return 1
+  if ! pid="$(printf '%s' "$body" | node "$js" kill-allowed "$expected_fp" "$listen_pids" 2>"$reason_file")"; then
+    reason="$(tr -d '\n' <"$reason_file" 2>/dev/null || true)"
+    rm -f "$reason_file" 2>/dev/null || true
+    echo "c-thru: ensure-kill :${port} refused — ${reason:-identity_or_pid_check_failed} (not signaling)" >&2
+    return 1
+  fi
+  rm -f "$reason_file" 2>/dev/null || true
   if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]]; then
     kill "$pid" 2>/dev/null || true
     local i

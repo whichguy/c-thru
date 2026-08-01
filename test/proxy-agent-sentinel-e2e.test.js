@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
-// P0 — agent-sentinel end-to-end through a LIVE proxy (loopback trust, no HMAC).
+// P0 — agent-sentinel end-to-end through a LIVE proxy (loopback + HMAC trust).
 //
-// Trust is loopback-only (default bind 127.0.0.1); HMAC is intentionally not used.
+// Trust requires loopback (default bind 127.0.0.1), an HMAC, and a spawned-agent id.
 // capability in resolved-via is the logical profile key; agent is separate.
 //
 // Run: node test/proxy-agent-sentinel-e2e.test.js
@@ -10,6 +10,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { assert, assertEq, summary, withProxy, httpJson, stubBackend, collectStderr } = require('./helpers');
+const { computeAgentSentinelTag, formatAgentSentinel } = require('../tools/agent-sentinel.js');
 
 console.log('proxy agent-sentinel e2e (live proxy, loopback trust)\n');
 
@@ -19,6 +20,7 @@ const AGENT_MODEL   = 'agent-model';
 const DEFAULT_MODEL = 'default-model';
 const MODE          = 'best-cloud';
 const TIER          = '16gb';
+const SENTINEL_SECRET = '0123456789abcdef0123456789abcdef';
 
 function mkConfig(agentStubPort, defaultStubPort) {
   return {
@@ -45,8 +47,16 @@ function bodyWith(markerContent, extraMessages = []) {
   };
 }
 
-function marker(name, tag) {
-  return tag ? `[[c-thru-agent:${name}:${tag}]]` : `[[c-thru-agent:${name}]]`;
+function marker(name) {
+  return formatAgentSentinel(name, SENTINEL_SECRET);
+}
+
+function legacyMarker(name) {
+  return `[[c-thru-agent:${name}:deadbeefdeadbeef]]`;
+}
+
+function agentHeaders() {
+  return { 'x-claude-code-agent-id': 'agent-e2e-1' };
 }
 
 async function withSentinelProxy({ logFile }, fn) {
@@ -55,7 +65,7 @@ async function withSentinelProxy({ logFile }, fn) {
   const configRoot  = fs.mkdtempSync(path.join(require('os').tmpdir(), 'c-thru-sentinel-cfg-'));
   const configPath  = path.join(configRoot, 'model-map.json');
   fs.writeFileSync(configPath, JSON.stringify(mkConfig(agentStub.port, defaultStub.port)));
-  const env = { CLAUDE_LLM_MODE: MODE };
+  const env = { CLAUDE_LLM_MODE: MODE, C_THRU_AGENT_SENTINEL_SECRET: SENTINEL_SECRET };
   if (logFile) env.CLAUDE_PROXY_LOG_FILE = logFile;
   try {
     await withProxy({ configPath, profile: TIER, mode: MODE, env }, async (ctx) => {
@@ -70,45 +80,40 @@ async function withSentinelProxy({ logFile }, fn) {
 }
 
 async function main() {
-  console.log('1. unsigned marker (loopback) → agent model wins; capability stays logical role');
+  console.log('1. unsigned marker fails closed to the request model');
   await withSentinelProxy({}, async ({ port, agentStub, defaultStub }) => {
-    const r = await httpJson(port, 'POST', '/v1/messages', bodyWith(`${marker(AGENT)}\nreview this plan`));
+    const r = await httpJson(port, 'POST', '/v1/messages', bodyWith(`[[c-thru-agent:${AGENT}]]\nreview this plan`));
     assertEq(r.status, 200, 'unsigned marker: request succeeds (200)');
-    assertEq(r.headers['x-c-thru-served-by'], AGENT_MODEL,
-      `unsigned marker: x-c-thru-served-by === '${AGENT_MODEL}'`);
-    let via = null;
-    try { via = JSON.parse(r.headers['x-c-thru-resolved-via'] || 'null'); } catch {}
-    assert(via && typeof via === 'object', 'unsigned marker: x-c-thru-resolved-via present');
-    assertEq(via && via.capability, CAPABILITY,
-      `unsigned marker: resolved-via.capability === '${CAPABILITY}' (logical role)`);
-    assertEq(via && via.agent, AGENT, `unsigned marker: resolved-via.agent === '${AGENT}'`);
-    assertEq(via && via.served_by, AGENT_MODEL, `unsigned marker: resolved-via.served_by`);
-    assert(agentStub.requests.length === 1, `unsigned marker: agent stub hit once`);
-    assert(defaultStub.requests.length === 0, `unsigned marker: default stub NOT hit`);
-    const fwd = agentStub.requests[0] && agentStub.requests[0].body;
+    assertEq(r.headers['x-c-thru-served-by'], DEFAULT_MODEL,
+      `unsigned marker: x-c-thru-served-by remains '${DEFAULT_MODEL}'`);
+    assert(r.headers['x-c-thru-resolved-via'] === undefined,
+      'unsigned marker: no capability resolved-via (bare model route)');
+    assert(defaultStub.requests.length === 1, `unsigned marker: default stub hit once`);
+    assert(agentStub.requests.length === 0, `unsigned marker: agent stub NOT hit`);
+    const fwd = defaultStub.requests[0] && defaultStub.requests[0].body;
     assert(fwd && !JSON.stringify(fwd).includes('[[c-thru-agent:'),
       'unsigned marker: upstream body stripped');
-    assertEq(r.headers['x-c-thru-agent-identity'], 'sentinel', 'agent-identity header');
+    assertEq(r.headers['x-c-thru-agent-identity'], 'none', 'agent-identity header');
     const status = await httpJson(port, 'GET', '/c-thru/status');
     assertEq(status.status, 200, '/c-thru/status 200');
     const byAgent = status.json?.usage?.by_agent || {};
-    assert(Object.prototype.hasOwnProperty.call(byAgent, AGENT), `by_agent has ${AGENT}`);
+    assert(!Object.prototype.hasOwnProperty.call(byAgent, AGENT), `by_agent excludes rejected ${AGENT}`);
   });
 
-  console.log('\n2. legacy :16hex suffix peeled → routes by name');
+  console.log('\n2. legacy :16hex suffix fails closed');
   await withSentinelProxy({}, async ({ port, agentStub, defaultStub }) => {
     const r = await httpJson(port, 'POST', '/v1/messages',
-      bodyWith(`${marker(AGENT, 'deadbeefdeadbeef')}\nreview`));
+      bodyWith(`${legacyMarker(AGENT)}\nreview`), agentHeaders());
     assertEq(r.status, 200, 'legacy peel: 200');
-    assertEq(r.headers['x-c-thru-served-by'], AGENT_MODEL, 'legacy peel: served-by agent model');
-    assert(agentStub.requests.length === 1, 'legacy peel: agent stub hit');
+    assertEq(r.headers['x-c-thru-served-by'], DEFAULT_MODEL, 'legacy peel: served-by default model');
+    assert(agentStub.requests.length === 0, 'legacy peel: agent stub not hit');
   });
 
-  console.log('\n3. x-c-thru-agent header → routes without body marker');
+  console.log('\n3. signed x-c-thru-agent header → routes without body marker');
   await withSentinelProxy({}, async ({ port, agentStub }) => {
     const r = await httpJson(port, 'POST', '/v1/messages',
       { model: DEFAULT_MODEL, max_tokens: 5, messages: [{ role: 'user', content: 'hi' }] },
-      { 'x-c-thru-agent': AGENT });
+      { ...agentHeaders(), 'x-c-thru-agent': AGENT, 'x-c-thru-agent-signature': computeAgentSentinelTag(AGENT, SENTINEL_SECRET) });
     assertEq(r.status, 200, 'header: 200');
     assertEq(r.headers['x-c-thru-served-by'], AGENT_MODEL, 'header: served-by');
     assertEq(r.headers['x-c-thru-agent-identity'], 'header', 'header identity');
@@ -126,7 +131,7 @@ async function main() {
         { role: 'user', content: `${marker(AGENT)}\nnew task` },
       ],
     };
-    const r = await httpJson(port, 'POST', '/v1/messages', body);
+    const r = await httpJson(port, 'POST', '/v1/messages', body, agentHeaders());
     assertEq(r.status, 200, 'last-match: 200');
     assertEq(r.headers['x-c-thru-served-by'], AGENT_MODEL, 'last-match: agent model');
     const fwd = agentStub.requests[0] && agentStub.requests[0].body;
@@ -135,7 +140,7 @@ async function main() {
 
   console.log('\n5. concrete model id sentinel');
   await withSentinelProxy({}, async ({ port, agentStub, defaultStub }) => {
-    const r = await httpJson(port, 'POST', '/v1/messages', bodyWith(`${marker(AGENT_MODEL)}\npin`));
+    const r = await httpJson(port, 'POST', '/v1/messages', bodyWith(`${marker(AGENT_MODEL)}\npin`), agentHeaders());
     assertEq(r.status, 200, 'model-id: 200');
     assertEq(r.headers['x-c-thru-served-by'], AGENT_MODEL, 'model-id: served-by');
     assert(agentStub.requests.length === 1, 'model-id: agent stub');
@@ -157,7 +162,7 @@ async function main() {
   console.log('\n7. unroutable sentinel → keep default model (no override)');
   await withSentinelProxy({}, async ({ port, agentStub, defaultStub }) => {
     const r = await httpJson(port, 'POST', '/v1/messages',
-      bodyWith(`${marker('totally-unknown-agent-xyz')}\nhi`));
+      bodyWith(`${marker('totally-unknown-agent-xyz')}\nhi`), agentHeaders());
     assertEq(r.status, 200, 'unroutable: 200');
     assertEq(r.headers['x-c-thru-served-by'], DEFAULT_MODEL, 'unroutable: default model');
     assert(defaultStub.requests.length === 1, 'unroutable: default stub hit');

@@ -61,6 +61,11 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { extractDelegations } = require('../tools/agent-offload-lib.js');
+const {
+  ensureModelTestSupervisor,
+  modelTestTimeoutMs,
+} = require('./helpers');
+if (require.main === module) ensureModelTestSupervisor();
 
 const REPO = path.resolve(__dirname, '..');
 const C_THRU = path.join(REPO, 'tools', 'c-thru');
@@ -85,11 +90,40 @@ const GATED = process.env.CI === 'true' || process.env.CI === '1' || process.env
 // Real sessions are noisy and LLM selection is non-deterministic; keep the bar permissive.
 const THRESHOLD = parseFloat(process.env.C_THRU_OFFLOAD_THRESHOLD || '0.70');
 
-function skip(msg) { console.log(`SKIP  agent-offload-coverage: ${msg}`); process.exit(0); }
+const { emitLiveOutcome } = require('./provider-live-prerequisites');
+const LIVE_PROVIDER = 'agent';
+// Same entrypoint serves coverage (default) and the generated-artifacts lane.
+// C_THRU_OFFLOAD_SUITE lets hermetic wiring force the suite id without enabling.
+const LIVE_SUITE = process.env.C_THRU_OFFLOAD_SUITE
+  || (process.env.C_THRU_OFFLOAD_ARTIFACTS === '1'
+    ? 'agent-offload-artifacts'
+    : 'agent-offload-coverage');
+let outcomeEmitted = false;
+function finish(status, reason, exitCode = status === 'failed' ? 1 : 0) {
+  if (!outcomeEmitted) {
+    outcomeEmitted = true;
+    emitLiveOutcome(LIVE_PROVIDER, LIVE_SUITE, status, reason);
+  }
+  process.exit(exitCode);
+}
+process.once('exit', (code) => {
+  if (outcomeEmitted) return;
+  outcomeEmitted = true;
+  emitLiveOutcome(LIVE_PROVIDER, LIVE_SUITE, 'failed', `missing_terminal_outcome_exit_${code}`);
+});
+
+function skip(msg) {
+  console.log(`SKIP  ${LIVE_SUITE}: ${msg}`);
+  finish('skipped', 'gate_not_enabled', 0);
+}
 
 // ── Gates ─────────────────────────────────────────────────────────────────────
-if (process.env.C_THRU_OFFLOAD !== '1') {
-  skip('set C_THRU_OFFLOAD=1 to enable (advisory; drives real `claude -p` sessions, costs tokens)');
+// Coverage lane: C_THRU_OFFLOAD=1. Artifacts lane: C_THRU_OFFLOAD_ARTIFACTS=1
+// (run-all mutually exclusive). Explicit 0 disables the respective lane.
+const artifactsLane = process.env.C_THRU_OFFLOAD_ARTIFACTS === '1';
+const coverageLane = process.env.C_THRU_OFFLOAD === '1';
+if (!(artifactsLane || coverageLane)) {
+  skip('set C_THRU_OFFLOAD=1 (or C_THRU_OFFLOAD_ARTIFACTS=1) to enable real claude sessions');
 }
 let claudeBin = process.env.CLAUDE_BIN;
 if (!claudeBin) {
@@ -99,7 +133,24 @@ if (!claudeBin) {
 if (!claudeBin) skip('no usable `claude` binary (set CLAUDE_BIN=...)');
 if (!fs.existsSync(C_THRU)) skip('tools/c-thru not found');
 
-const TIMEOUT_S = parseInt(process.env.C_THRU_OFFLOAD_TIMEOUT || '180', 10);
+// Fatal prerequisite: invalid model-test timeout must fail closed with a failed marker.
+let TIMEOUT_S;
+try {
+  // Prefer C_THRU_MODEL_TEST_TIMEOUT_MS (shared live protocol); fall back to OFFLOAD_TIMEOUT secs.
+  if (process.env.C_THRU_MODEL_TEST_TIMEOUT_MS !== undefined
+      && String(process.env.C_THRU_MODEL_TEST_TIMEOUT_MS).trim() !== '') {
+    TIMEOUT_S = Math.max(1, Math.ceil(modelTestTimeoutMs() / 1000));
+  } else {
+    const raw = process.env.C_THRU_OFFLOAD_TIMEOUT || '180';
+    if (!/^[1-9]\d*$/.test(String(raw).trim())) {
+      throw new Error('C_THRU_OFFLOAD_TIMEOUT must be a positive integer');
+    }
+    TIMEOUT_S = parseInt(raw, 10);
+  }
+} catch (err) {
+  console.error(`FAIL  ${LIVE_SUITE}: ${err.message || err}`);
+  finish('failed', err?.message || 'invalid_model_test_timeout', 1);
+}
 const roster = fs.readdirSync(AGENTS_DIR).filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, '')).sort();
 let fixtures = JSON.parse(fs.readFileSync(FIXTURES, 'utf8')).prompts;
 const skippedIds = fixtures.filter((f) => SKIP_IDS.has(f.id)).map((f) => f.id);
@@ -142,6 +193,19 @@ fs.writeFileSync(PLAN, [
   '2. Ship it.',
   '',
 ].join('\n'));
+
+// Evidence-backed debugger fixtures reference this small reload incident
+// habitat. Keep the real-session harness aligned with the shared corpus so
+// those prompts point at files that actually exist in its scratch directory.
+const EVIDENCE_HABITAT = {
+  'reload-watcher.js': 'watch(configPath, () => queueReload());\n',
+  'reload-queue.js': 'exports.queueReload = () => Promise.resolve();\n',
+  'config-loader.js': 'exports.loadConfig = () => ({ enabled: true });\n',
+  'reload.log': 'reload started\nreload stalled\n',
+};
+for (const [file, contents] of Object.entries(EVIDENCE_HABITAT)) {
+  fs.writeFileSync(path.join(scratch, file), contents);
+}
 
 function subst(s) { return s.split('{{PY}}').join(PY).split('{{PLAN}}').join(PLAN).split('{{DIR}}').join(scratch); }
 

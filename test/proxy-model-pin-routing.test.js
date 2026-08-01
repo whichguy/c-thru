@@ -16,8 +16,10 @@ const {
   stubBackend, writeConfig,
   httpJson, withProxy,
 } = require('./helpers');
+const { formatAgentSentinel } = require('../tools/agent-sentinel.js');
 
 console.log('proxy-model-pin-routing integration tests\n');
+const SENTINEL_SECRET = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
 // Minimal Anthropic-format request body (non-streaming).
 const MSG_BODY = {
@@ -124,14 +126,25 @@ async function main() {
       const configPath = writeConfig(tmpDir, config);
 
       await withProxy(
-        { configPath, profile: '128gb' },
+        {
+          configPath,
+          profile: '128gb',
+          env: { C_THRU_AGENT_SENTINEL_SECRET: SENTINEL_SECRET },
+        },
         async ({ port }) => {
           const body = Object.assign(
             { model: 'sonnet' },
             MSG_BODY,
-            { messages: [{ role: 'user', content: '[[c-thru-agent:advisor:deepseek-v4-pro:cloud]]\nhi' }] }
+            {
+              messages: [{
+                role: 'user',
+                content: `${formatAgentSentinel('advisor:deepseek-v4-pro:cloud', SENTINEL_SECRET)}\nhi`,
+              }],
+            }
           );
-          const res = await httpJson(port, 'POST', '/v1/messages', body);
+          const res = await httpJson(port, 'POST', '/v1/messages', body, {
+            'x-claude-code-agent-id': 'advisor-agent-test-id',
+          });
           assertEq(res.status, 200, 'advisor runtime pin request returns 200');
           const req = stub.lastRequest();
           assert(
@@ -289,6 +302,270 @@ async function main() {
           const r2 = await httpJson(port, 'POST', '/v1/messages',
             Object.assign({ model: 'agent-x' }, MSG_BODY));
           assertEq(r2.status, 200, 'second identical request also resolves (fresh seen set)');
+        }
+      );
+
+      stub.close();
+    }
+
+    // ── 8. Trusted sentinel model pin wins a colliding model route ─────────
+    console.log('\n8. Trusted sentinel model pin preserves agent role across route-key collision');
+    {
+      const pinStub = await stubBackend();
+      const routeStub = await stubBackend();
+      const config = {
+        endpoints: {
+          pin_stub: {
+            url: `http://127.0.0.1:${pinStub.port}`,
+            format: 'anthropic',
+            auth: 'none',
+          },
+          route_stub: {
+            url: `http://127.0.0.1:${routeStub.port}`,
+            format: 'anthropic',
+            auth: 'none',
+          },
+        },
+        model_routes: {
+          grok: { endpoint: 'route_stub', name: 'grok-route-alias' },
+          'grok-4.5': 'pin_stub',
+        },
+        agent_to_capability: {
+          grok: 'model:grok-4.5',
+        },
+      };
+
+      const configPath = writeConfig(tmpDir, config);
+      const logPath = path.join(tmpDir, 'model-pin-collision-proxy.log');
+      const signedGrokBody = model => Object.assign(
+        { model },
+        MSG_BODY,
+        {
+          messages: [{
+            role: 'user',
+            content: `${formatAgentSentinel('grok', SENTINEL_SECRET)}\nhi`,
+          }],
+        }
+      );
+
+      await withProxy(
+        {
+          configPath,
+          profile: '128gb',
+          env: {
+            C_THRU_AGENT_SENTINEL_SECRET: SENTINEL_SECRET,
+            CLAUDE_PROXY_LOG_FILE: logPath,
+          },
+        },
+        async ({ port }) => {
+          const trusted = await httpJson(
+            port,
+            'POST',
+            '/v1/messages',
+            signedGrokBody('session-default'),
+            { 'x-claude-code-agent-id': 'grok-agent-test-id' },
+          );
+          assertEq(trusted.status, 200, 'trusted grok sentinel request returns 200');
+          assertEq(
+            pinStub.lastRequest()?.model_used,
+            'grok-4.5',
+            'trusted sentinel follows grok model pin to concrete model/backend',
+          );
+          assertEq(
+            routeStub.requests.length,
+            0,
+            'trusted sentinel does not take colliding plain model route',
+          );
+          let trustedVia = null;
+          try {
+            trustedVia = JSON.parse(trusted.headers['x-c-thru-resolved-via'] || 'null');
+          } catch {}
+          assertEq(
+            trustedVia?.capability,
+            'grok',
+            'trusted sentinel preserves grok as logical role',
+          );
+          assertEq(
+            trustedVia?.agent,
+            'grok',
+            'trusted sentinel keeps agent identity separate from logical role',
+          );
+          const dispatchMarker = 'c-thru [dispatch] ';
+          const dispatchLine = fs.readFileSync(logPath, 'utf8')
+            .split('\n')
+            .find(line => line.includes(dispatchMarker));
+          let trustedDispatch = null;
+          try {
+            trustedDispatch = JSON.parse(
+              dispatchLine.slice(dispatchLine.indexOf(dispatchMarker) + dispatchMarker.length)
+            );
+          } catch {}
+          assertEq(
+            trustedDispatch?.incoming_model,
+            'grok',
+            'trusted dispatch keeps incoming model as named agent',
+          );
+          assertEq(
+            trustedDispatch?.logical_role,
+            'grok',
+            'trusted dispatch logs named agent logical_role',
+          );
+          assertEq(
+            trustedDispatch?.backend_id,
+            'pin_stub',
+            'trusted dispatch logs concrete pinned backend',
+          );
+
+          const untrusted = await httpJson(
+            port,
+            'POST',
+            '/v1/messages',
+            signedGrokBody('grok'),
+          );
+          assertEq(untrusted.status, 200, 'untrusted sentinel request keeps normal route behavior');
+          assertEq(
+            routeStub.lastRequest()?.model_used,
+            'grok-route-alias',
+            'untrusted sentinel still follows model_routes.grok alias',
+          );
+          assert(
+            untrusted.headers['x-c-thru-resolved-via'] === undefined,
+            'untrusted sentinel does not gain logical-role attribution',
+          );
+
+          const plain = await httpJson(
+            port,
+            'POST',
+            '/v1/messages',
+            Object.assign({ model: 'grok' }, MSG_BODY),
+          );
+          assertEq(plain.status, 200, 'plain grok model-route request returns 200');
+          assertEq(
+            routeStub.lastRequest()?.model_used,
+            'grok-route-alias',
+            'plain grok request still follows model_routes.grok alias',
+          );
+          assertEq(routeStub.requests.length, 2, 'only untrusted/plain requests use route alias');
+          assertEq(pinStub.requests.length, 1, 'only trusted sentinel request uses model pin');
+        }
+      );
+
+      pinStub.close();
+      routeStub.close();
+    }
+
+    // ── 9. Trusted sentinel self-pin uses the same-name model route ─────────
+    console.log('\n9. Trusted sentinel self-pin resolves without a false cycle');
+    {
+      const stub = await stubBackend();
+      const config = {
+        endpoints: {
+          anthropic: {
+            url: `http://127.0.0.1:${stub.port}`,
+            format: 'anthropic',
+            auth: 'none',
+          },
+        },
+        model_routes: {
+          'claude-sonnet-5': 'anthropic',
+        },
+        agent_to_capability: {
+          'claude-sonnet-5': 'model:claude-sonnet-5',
+        },
+      };
+      const configPath = writeConfig(tmpDir, config);
+
+      await withProxy(
+        {
+          configPath,
+          profile: '128gb',
+          env: { C_THRU_AGENT_SENTINEL_SECRET: SENTINEL_SECRET },
+        },
+        async ({ port }) => {
+          const body = Object.assign({}, MSG_BODY, {
+            model: 'session-default',
+            messages: [{
+              role: 'user',
+              content: `${formatAgentSentinel('claude-sonnet-5', SENTINEL_SECRET)}\nhi`,
+            }],
+          });
+          const res = await httpJson(
+            port,
+            'POST',
+            '/v1/messages',
+            body,
+            { 'x-claude-code-agent-id': 'self-pin-agent-test-id' },
+          );
+          assertEq(res.status, 200, 'trusted exact-name self-pin request returns 200');
+          assertEq(
+            res.headers['x-c-thru-served-by'],
+            'claude-sonnet-5',
+            'trusted exact-name self-pin reaches its concrete model route',
+          );
+          assertEq(stub.lastRequest()?.model_used, 'claude-sonnet-5',
+            'trusted exact-name self-pin forwards the exact model ID');
+        }
+      );
+
+      stub.close();
+    }
+
+    // ── 10. Trusted family self-pin uses its mode-conditional route ─────────
+    console.log('\n10. Trusted family self-pin resolves its active-mode target');
+    {
+      const stub = await stubBackend();
+      const config = {
+        endpoints: {
+          ollama_cloud: {
+            url: `http://127.0.0.1:${stub.port}`,
+            format: 'anthropic',
+            auth: 'none',
+          },
+        },
+        model_routes: {
+          sonnet: {
+            'best-cloud': 'claude-sonnet-5',
+            'best-cloud-oss': 'kimi-k3:cloud',
+          },
+          'kimi-k3:cloud': 'ollama_cloud',
+        },
+        agent_to_capability: {
+          sonnet: 'model:sonnet',
+        },
+        llm_mode: 'best-cloud-oss',
+      };
+      const configPath = writeConfig(tmpDir, config);
+
+      await withProxy(
+        {
+          configPath,
+          profile: '128gb',
+          mode: 'best-cloud-oss',
+          env: { C_THRU_AGENT_SENTINEL_SECRET: SENTINEL_SECRET },
+        },
+        async ({ port }) => {
+          const body = Object.assign({}, MSG_BODY, {
+            model: 'claude-sonnet-5',
+            messages: [{
+              role: 'user',
+              content: `${formatAgentSentinel('sonnet', SENTINEL_SECRET)}\nhi`,
+            }],
+          });
+          const res = await httpJson(
+            port,
+            'POST',
+            '/v1/messages',
+            body,
+            { 'x-claude-code-agent-id': 'family-self-pin-test-id' },
+          );
+          assertEq(res.status, 200, 'trusted family self-pin request returns 200');
+          assertEq(
+            res.headers['x-c-thru-served-by'],
+            'kimi-k3:cloud',
+            'trusted family self-pin follows the active best-cloud-oss target',
+          );
+          assertEq(stub.lastRequest()?.model_used, 'kimi-k3:cloud',
+            'trusted family self-pin forwards the active-mode model ID');
         }
       );
 

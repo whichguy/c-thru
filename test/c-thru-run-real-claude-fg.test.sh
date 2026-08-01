@@ -38,10 +38,11 @@ else
   pass "does not background Claude with cmd &"
 fi
 
-if printf '%s\n' "$body" | grep -q 'wait "\$CLAUDE_CHILD_PID"'; then
-  fail_ "still uses wait on CLAUDE_CHILD_PID (background pattern)"
+if printf '%s\n' "$body" | grep -q 'if \[\[ -t 0 \]\]' &&
+   printf '%s\n' "$body" | grep -q 'wait "\$CLAUDE_CHILD_PID"'; then
+  pass "keeps foreground TTY launch while using interruptible wait only headlessly"
 else
-  pass "does not wait on a background CLAUDE_CHILD_PID"
+  fail_ "missing TTY foreground/headless interruptible-wait split"
 fi
 
 # Must still run via env so ANTHROPIC_* are set without eval.

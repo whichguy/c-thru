@@ -74,7 +74,8 @@ const liveChildren = [
     'agent-offload-artifacts',
     'test/agent-offload-coverage.js',
     process.execPath,
-    { C_THRU_OFFLOAD_ARTIFACTS: '1' },
+    // Suite id for gate-off markers without enabling the lane (ARTIFACTS stays 0).
+    { C_THRU_OFFLOAD_SUITE: 'agent-offload-artifacts' },
   ],
   ['gemini', 'proxy-gemini-live-shapes', 'test/proxy-gemini-live-shapes.test.js', process.execPath],
   ['gemini', 'proxy-gemini-live-thinking', 'test/proxy-gemini-live-thinking.test.js', process.execPath],
@@ -244,6 +245,7 @@ const gateOffEnv = {
   C_THRU_LIVE_AGENT_TESTS: '0',
   C_THRU_LIVE_CLAUDE_AGENT_ROUTE: '0',
   C_THRU_OFFLOAD: '0',
+  C_THRU_OFFLOAD_ARTIFACTS: '0',
   C_THRU_LIVE_GEMINI: '0',
   C_THRU_LIVE_OPENAI: '0',
   C_THRU_LIVE_XAI: '0',
