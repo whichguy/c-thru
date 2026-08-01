@@ -819,7 +819,14 @@ function validateConfig(config, _errors, options) {
           if (!reachable || reachable.reachableEndpoints.has(id)) {
             const derivedAuth = deriveAuthProfile(entry);
             if (derivedAuth && derivedAuth.profile !== 'none') {
-              note(`endpoint '${id}' auth auto-derived from host (${derivedAuth.profile}); ensure $${derivedAuth.env} is set`);
+              // bearer_priority (Anthropic): dual-mode by design (subscription Bearer preferred,
+              // API key optional). Do NOT spam every c-thru launch with a note — docs cover it
+              // (docs/subscription-auth.md). header_env / other profiles still note the env var.
+              if (derivedAuth.profile === 'bearer_priority') {
+                // silent — expected for api.anthropic.com; not a misconfiguration
+              } else {
+                note(`endpoint '${id}' auth auto-derived from host (${derivedAuth.profile}); ensure $${derivedAuth.env} is set`);
+              }
             } else if (!derivedAuth) {
               // With the C12 hardening the proxy STRIPS incoming Anthropic auth for an
               // unknown, non-Anthropic host that has no auth config (unless kind:"anthropic"
@@ -1022,6 +1029,33 @@ function validateConfig(config, _errors, options) {
           report(`'model_overrides.${from}' must be a non-empty string`);
         } else if (from === to) {
           report(`'model_overrides.${from}' maps to itself — remove or change`);
+        }
+      }
+    }
+  }
+
+  // latest_models: public shorthand → current concrete model id (proxy expand).
+  if (config.latest_models != null) {
+    if (!isObject(config.latest_models)) {
+      report("'latest_models' must be an object");
+    } else {
+      const routes = config.model_routes || {};
+      for (const [from, to] of Object.entries(config.latest_models)) {
+        if (typeof from !== 'string' || !from.trim()) {
+          report("'latest_models' keys must be non-empty strings");
+          continue;
+        }
+        if (typeof to !== 'string' || !to.trim()) {
+          report(`'latest_models.${from}' must be a non-empty string`);
+          continue;
+        }
+        if (from === to) {
+          report(`'latest_models.${from}' maps to itself — remove or change`);
+          continue;
+        }
+        // Concrete target should be routable (direct key or later regex — require direct for pinability).
+        if (!Object.prototype.hasOwnProperty.call(routes, to) && !endpointsOrBackends[to]) {
+          report(`'latest_models.${from}' target '${to}' is not a model_routes key or endpoint id`);
         }
       }
     }

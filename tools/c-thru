@@ -320,7 +320,7 @@ build_ephemeral_agents() {
   if ! agents_result="$(node -e '
     const fs = require("fs");
     const path = require("path");
-    const [agentsDir, noAgents, callerPayloadsJson] = process.argv.slice(1);
+    const [agentsDir, noAgents, callerPayloadsJson, toolsDir] = process.argv.slice(1);
     const agents = Object.create(null);
     const callerParseable = [];
     const callerNames = new Set();
@@ -396,6 +396,14 @@ build_ephemeral_agents() {
           // left in an agent file is ignored.
           prompt = content.slice(m[0].length).trim();
         }
+        // Brand / model-pin leaves: compact prompt for --agents argv size.
+        // Pipeline agents (coder, planner, …) keep full bodies.
+        try {
+          const compact = require(path.join(toolsDir || __dirname, "brand-agent-compact.js"));
+          if (compact.isGeneratedBrandBody(prompt) || compact.isGeneratedBrandBody(content)) {
+            prompt = compact.compactPromptForAgentName(name, prompt);
+          }
+        } catch (_) { /* keep full prompt if helper missing */ }
         const entry = { description, prompt, model, tier_budget };
         if (effort) entry.effort = effort;
         if (Array.isArray(disallowedTools) && disallowedTools.length) {
@@ -449,7 +457,7 @@ build_ephemeral_agents() {
       callerParseable,
       coordinatorCollision: callerNames.has("c-thru-coordinator"),
     }));
-  ' "$EPHEMERAL_SESSION_DIR/agents" "${NO_AGENTS:-0}" "$caller_agents_payloads_json")"; then
+  ' "$EPHEMERAL_SESSION_DIR/agents" "${NO_AGENTS:-0}" "$caller_agents_payloads_json" "$CTHRU_SELF_DIR")"; then
     echo "c-thru: failed to build ephemeral agents JSON" >&2
     exit 1
   fi
@@ -3019,53 +3027,37 @@ is_local_http_base_url() {
 #   C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM=1  allow plain http:// non-loopback
 #   C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM=1  allow loopback (hermetic tests only)
 #   C_THRU_UPSTREAM_FORCE_ANTHROPIC_COM=1       keep *.anthropic.com (CLI/env force)
+# Eligibility + fingerprint: shared tools/c-thru-upstream-url.js (tests + ensure).
+_cthru_upstream_url_js() {
+  if [[ -n "${CTHRU_SELF_DIR:-}" && -f "${CTHRU_SELF_DIR}/c-thru-upstream-url.js" ]]; then
+    printf '%s' "${CTHRU_SELF_DIR}/c-thru-upstream-url.js"
+    return 0
+  fi
+  if [[ -f "${CTHRU_REPO_ROOT:-}/tools/c-thru-upstream-url.js" ]]; then
+    printf '%s' "${CTHRU_REPO_ROOT}/tools/c-thru-upstream-url.js"
+    return 0
+  fi
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  [[ -f "$here/c-thru-upstream-url.js" ]] && { printf '%s' "$here/c-thru-upstream-url.js"; return 0; }
+  return 1
+}
+
 upstream_override_eligible() {
-  local raw="${1:-}"
+  local raw="${1:-}" js
   [[ -n "$raw" ]] || return 1
-  # Structural parse via node (python3/jq not guaranteed for URL host rules).
   command -v node >/dev/null 2>&1 || return 1
-  node -e '
-const raw = process.argv[1] || "";
-const allowInsecure = process.env.C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM === "1";
-const allowLoopback = process.env.C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM === "1";
-const forceAnthropic = process.env.C_THRU_UPSTREAM_FORCE_ANTHROPIC_COM === "1";
-function isLoopback(host) {
-  const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
-  if (!h) return false;
-  if (h === "localhost" || h === "0.0.0.0" || h === "::" || h === "::1") return true;
-  if (h.endsWith(".localhost")) return true;
-  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
-  if (h.startsWith("::ffff:127.")) return true;
-  return false;
-}
-function isAnthropic(host) {
-  const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
-  return h === "anthropic.com" || h.endsWith(".anthropic.com");
-}
-let u;
-try { u = new URL(raw); } catch { process.exit(1); }
-if (u.protocol !== "http:" && u.protocol !== "https:") process.exit(1);
-if (isLoopback(u.hostname) && !allowLoopback) process.exit(1);
-if (!forceAnthropic && isAnthropic(u.hostname)
-    && (u.pathname === "/" || u.pathname === "") && !u.search && !u.hash) {
-  process.exit(1); // no-op ambient default
-}
-if (u.protocol === "http:" && !allowInsecure && !isLoopback(u.hostname)) process.exit(1);
-process.exit(0);
-' "$raw" 2>/dev/null
+  js="$(_cthru_upstream_url_js)" || return 1
+  node "$js" eligible "$raw" 2>/dev/null
 }
 
 fingerprint_anthropic_upstream() {
-  local raw="${1:-}"
+  local raw="${1:-}" js
   [[ -n "$raw" ]] || return 1
   command -v node >/dev/null 2>&1 || return 1
+  js="$(_cthru_upstream_url_js)" || return 1
   # Hash URL.toString() after parse — must match tools/claude-proxy fingerprintUpstreamUrl.
-  node -e '
-const crypto = require("crypto");
-let s = process.argv[1] || "";
-try { s = new URL(s).toString(); } catch {}
-process.stdout.write(crypto.createHash("sha256").update(s).digest("hex").slice(0, 16));
-' "$raw" 2>/dev/null
+  node "$js" fingerprint "$raw" 2>/dev/null
 }
 
 # Resolve {url, source, fingerprint} into exports for proxy + hooks.
@@ -5122,7 +5114,7 @@ get_system_info_summary() {
   fi
 
   printf '%s\n%s\n%s\n\n%s' \
-    "IDENTITY QUESTIONS: c-thru may route many different backends. When asked \"what model are you\", \"what model version\", or \"who made you\", answer only from your direct knowledge of yourself as the model actually generating this response — do not invent a default from training data or from transport aliases. If you are unsure, say so. Never assume what model a subagent is. If identity of an agent or backend matters, ask that model/agent directly and report its answer; do not postulate from agent names, fleet tables, or tool aliases." \
+    "IDENTITY QUESTIONS: c-thru may route many different backends. When asked \"what model are you\", \"what model version\", or \"who made you\", answer only from your direct knowledge of yourself as the model actually generating this response — do not invent a default from training data or from transport aliases. If you are unsure, say so. Never assume what model a subagent is. If identity of an agent or backend matters, ask that model/agent directly and report its answer; do not postulate from agent names, fleet tables, or tool aliases. When relaying a brand-leaf answer, paste the leaf text verbatim — never replace it with your own identity or with Claude/Anthropic self-description. Never invent a LEAF-style or brand-identity answer for a named leaf you did not actually spawn; if spawn fails or the Agent tool returns an error (including brand pin hard_fail / cascade suppressed / 401–403 billing), report that failure honestly — do not role-play that brand or substitute another model's voice as that brand. Ops proof of which backend ran: proxy x-c-thru-served-by / GET /c-thru/recent (agent + served_by + fallback_suppressed), not prose." \
     "c-thru routing active. Profile: ${profile:-unknown}. Mode: ${llm_mode:-unknown}." \
     "Available models by capability: ${caps_str}." \
     "Use specialized agents as the default execution path.
@@ -5131,7 +5123,7 @@ Before non-trivial work, inspect Agent descriptions. If one matches, your first 
 
 Choose by description, not model alias. Never substitute generic built-in agent types for a matching named c-thru fleet agent. Short names such as opus/sonnet/haiku/fable are fleet brand leaves. Answer inline only for trivial conversation or when no specialist fits.
 
-Named-brand requests: for opus, sonnet, haiku, fable, grok, deepseek, qwen, kimi, gemini, sol, terra, luna, codex, devstral, glm, gemma, phi, gpt-oss, nemotron, minimax, hermes, mistral, or a full-name catalog alias, spawn that exact fleet leaf once and report its answer. Do not impersonate it or chain another leaf. Codex leaves use the OpenAI API, not the Codex subscription CLI. Multi-model panel → advisors. Grok multi-file work → grok-cc or coder.
+Named-brand requests: for opus, sonnet, haiku, fable, grok, deepseek, qwen, kimi, gemini, sol, terra, luna, codex, devstral, glm, gemma, phi, gpt-oss, nemotron, minimax, hermes, mistral, or a full-name catalog alias, spawn that exact fleet leaf once and report its answer verbatim. Do not impersonate it, rewrite its identity, or chain another leaf. Codex leaves use the OpenAI API, not the Codex subscription CLI. Multi-model panel → advisors. Grok multi-file work → grok-cc or coder.
 
 Keep each delegated task explicit and self-contained. Do not rely on shared context.
 
@@ -5306,18 +5298,32 @@ run_real_claude() {
           "${cmd[@]}"
     fi
   else
+    # Headless path: background + wait so TERM traps stay interruptible.
+    # Bash (without job control) redirects async jobs' stdin to /dev/null,
+    # which drops piped -p prompts. Dup fd 0 onto a fixed fd (bash 3.2 /
+    # macOS-safe — no `{var}<&0` named redirects) and re-attach in a
+    # subshell so `printf prompt | c-thru -p` reaches Claude.
+    # fd 9 is reserved only for this launch hop; closed after spawn.
+    exec 9<&0
     if [[ -n "$url" && -n "$tok" ]]; then
-      env ANTHROPIC_BASE_URL="$url" \
-          ANTHROPIC_AUTH_TOKEN="$tok" \
-          CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
-          CLAUDE_CODE_COLOR="$quiet_env_color" \
-          "${cmd[@]}" &
+      (
+        exec 0<&9 9<&-
+        exec env ANTHROPIC_BASE_URL="$url" \
+            ANTHROPIC_AUTH_TOKEN="$tok" \
+            CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
+            CLAUDE_CODE_COLOR="$quiet_env_color" \
+            "${cmd[@]}"
+      ) &
     else
-      env CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
-          CLAUDE_CODE_COLOR="$quiet_env_color" \
-          "${cmd[@]}" &
+      (
+        exec 0<&9 9<&-
+        exec env CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="$quiet_env_survey" \
+            CLAUDE_CODE_COLOR="$quiet_env_color" \
+            "${cmd[@]}"
+      ) &
     fi
     CLAUDE_CHILD_PID="$!"
+    exec 9<&- 2>/dev/null || true
     if wait "$CLAUDE_CHILD_PID"; then
       ec=0
     else

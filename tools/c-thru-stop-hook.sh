@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
-# c-thru Stop hook: emits a one-shot systemMessage when a NEW fallback event
+# c-thru Stop hook: emits a one-shot systemMessage when a NEW routing event
 # is observed via the proxy's GET /c-thru/recent (session-scoped through the
 # /s/<id> path prefix — see cthru_hook_base_url in c-thru-lib.sh, so this
-# only ever reports THIS session's own fallbacks, not another session's on a
+# only ever reports THIS session's own events, not another session's on a
 # shared proxy).
 #
-# Round-5 B3: rewritten. The prior version grepped ~/.claude/proxy.log for
-# [fallback.candidate_success]/[fallback.chain_start] — event names the
-# fallback engine stopped emitting when it moved to req-correlated
-# dispatch-time logging; this hook was a silent permanent no-op watching
-# dead strings. The proxy already tracks per-request fallback attribution
-# in its in-memory recent-requests ring (fallback_from/served_by fields),
-# exposed at GET /c-thru/recent — this hook now reads that instead of
-# re-deriving anything from raw logs.
+# Events reported (priority: brand hard-fail > successful cascade):
+#   1. fallback_suppressed / on_failure=hard_fail with !ok — brand/model pin
+#      failed without substitute (e.g. xAI 403 credits). Message names the
+#      agent and status class (billing/auth vs error), never "primary unreachable".
+#   2. fallback_from set with ok — cascade substitution; does not claim
+#      "unreachable" for every case (primary may have been 403/429).
 #
 # Always exits 0 — this hook must never interrupt Claude's normal flow.
 set +e
@@ -52,12 +50,29 @@ tracker_file="$HOME/.claude/.c-thru-stop-hook-last-ts"
 recent_json=$(curl -sf --max-time 2 "${BASE_URL}/c-thru/recent?n=20" 2>/dev/null || true)
 [ -n "$recent_json" ] || exit 0
 
-# Ring is newest-first; the first entry with fallback_from set is the most
-# recent fallback for this session.
-fallback_entry=$(printf '%s' "$recent_json" | jq -c '.requests[]? | select(.fallback_from != null)' 2>/dev/null | head -1)
-[ -n "$fallback_entry" ] || exit 0
+# Prefer newest brand hard-fail; else newest successful cascade.
+# Ring is newest-first in API responses (proxy reverses before send).
+event_entry=$(printf '%s' "$recent_json" | jq -c '
+  (.requests // [])
+  | map(select(
+      (.fallback_suppressed == true or .on_failure == "hard_fail")
+      and (.ok == false)
+      and ((.status // 0) >= 400)
+    ))
+  | .[0]
+' 2>/dev/null)
+event_kind="hard_fail"
+if [ -z "$event_entry" ] || [ "$event_entry" = "null" ]; then
+  event_entry=$(printf '%s' "$recent_json" | jq -c '
+    (.requests // [])
+    | map(select(.fallback_from != null and .fallback_from != ""))
+    | .[0]
+  ' 2>/dev/null)
+  event_kind="fallback"
+fi
+[ -n "$event_entry" ] && [ "$event_entry" != "null" ] || exit 0
 
-ts_iso=$(printf '%s' "$fallback_entry" | jq -r '.ts // empty' 2>/dev/null)
+ts_iso=$(printf '%s' "$event_entry" | jq -r '.ts // empty' 2>/dev/null)
 [ -n "$ts_iso" ] || exit 0
 # Portable ISO-8601 → epoch-ms via node (avoids BSD-vs-GNU `date` divergence).
 last_ms=$(node -e 'const t=Date.parse(process.argv[1]);if(Number.isFinite(t))process.stdout.write(String(t))' "$ts_iso" 2>/dev/null)
@@ -80,13 +95,27 @@ if ! printf '%s' "$last_ms" > "$tmp" 2>/dev/null; then
 fi
 mv -f "$tmp" "$tracker_file" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 
-# `model` is the client's originally-requested capability/model name
-# (captured before rewriting); `served_by` is what actually served the
-# response after the fallback.
-primary=$(printf '%s' "$fallback_entry" | jq -r '.model // "primary"' 2>/dev/null)
-served_by=$(printf '%s' "$fallback_entry" | jq -r '.served_by // empty' 2>/dev/null)
-[ -n "$served_by" ] || exit 0
+primary=$(printf '%s' "$event_entry" | jq -r '.model // "primary"' 2>/dev/null)
+served_by=$(printf '%s' "$event_entry" | jq -r '.served_by // empty' 2>/dev/null)
+agent=$(printf '%s' "$event_entry" | jq -r '.agent // empty' 2>/dev/null)
+status=$(printf '%s' "$event_entry" | jq -r '.status // empty' 2>/dev/null)
+who="${agent:-$primary}"
 
-msg="c-thru: a fallback just fired — ${primary} → ${served_by} (primary unreachable)."
+if [ "$event_kind" = "hard_fail" ]; then
+  # Permanent-class statuses (auth/billing/ACL) vs generic failure.
+  case "$status" in
+    401) class="auth failed (401) — check API key / subscription token" ;;
+    403) class="permission denied (403) — often billing/spend limit or model ACL; key set ≠ usable" ;;
+    404) class="not found (404) — model/endpoint entitlement" ;;
+    *)   class="HTTP ${status:-error} — cascade suppressed (brand/model pin hard_fail)" ;;
+  esac
+  msg="c-thru: brand/model pin '${who}' failed (${class}). No substitute was used. Fix the primary backend; do not invent that brand's answer."
+else
+  [ -n "$served_by" ] || exit 0
+  agent_note=""
+  [ -n "$agent" ] && agent_note=" [agent=${agent}]"
+  msg="c-thru: a fallback just fired — ${primary} → ${served_by}${agent_note} (primary did not serve; check /c-thru/recent for status)."
+fi
+
 jq -cn --arg m "$msg" '{systemMessage: $m}' 2>/dev/null || true
 exit 0

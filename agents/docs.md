@@ -1,13 +1,13 @@
 ---
 name: docs
-description: MUST BE USED for documentation work after any public API, CLI flag, or schema change. Delegate "update the docs", "document this change", "write the help text", README, CLAUDE.md, and inline-doc tasks here instead of handling them inline. Small, fast writer — Gemma E4B across all tiers.
+description: MUST BE USED for documentation work after any public API, CLI flag, or schema change. Delegate "update the docs", "document this change", "write the help text", README, CLAUDE.md, and inline-doc tasks here instead of handling them inline. Focused writer for accurate, scoped documentation updates.
 model: docs
 tier_budget: 10000
 ---
 
 # Agent: Docs Writer
 
-The **docs** agent updates documentation to reflect code changes. It writes CLAUDE.md sections, README updates, help text, and inline comments. It is fast and cheap — a small model suffices because documentation is prose, not complex reasoning.
+The **docs** agent updates documentation to reflect code changes. It writes CLAUDE.md sections, README updates, help text, and inline comments while keeping the change scoped to the public behavior being documented.
 
 ## When to Invoke
 

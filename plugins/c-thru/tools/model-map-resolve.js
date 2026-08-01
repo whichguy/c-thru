@@ -411,18 +411,41 @@ function resolveRouteTarget(target, model, { routes, endpoints, mode, maxDepth =
   return walk(target, model, maxDepth);
 }
 
-function resolveModelRoute(model, { routes, endpoints, mode } = {}) {
+/**
+ * Expand a public shorthand (opus, fable, grok, …) to the current concrete
+ * model id via config.latest_models. Returns null if no expansion applies.
+ * Does not expand capability names unless they appear in latest_models.
+ */
+function expandLatestModel(model, latestModels) {
+  if (typeof model !== 'string' || !model || !latestModels || typeof latestModels !== 'object') {
+    return null;
+  }
+  const to = latestModels[model];
+  if (typeof to !== 'string' || !to.trim() || to === model) return null;
+  return to;
+}
+
+function resolveModelRoute(model, { routes, endpoints, mode, latest_models, latestModels } = {}) {
   const steps = [];
-  const match = matchModelRoute(routes, model);
+  const latestMap = latest_models || latestModels || null;
+  let working = model;
+  const latestTo = expandLatestModel(working, latestMap);
+  if (latestTo) {
+    steps.push({ kind: 'latest', from: working, to: latestTo });
+    working = latestTo;
+  }
+  const match = matchModelRoute(routes, working);
   if (!match) return null;
-  steps.push({ kind: 'route', from: model, to: routeTargetRepr(match.target) });
-  const resolved = resolveRouteTarget(match.target, model, { routes, endpoints, mode, steps });
+  steps.push({ kind: 'route', from: working, to: routeTargetRepr(match.target) });
+  const resolved = resolveRouteTarget(match.target, working, { routes, endpoints, mode, steps });
   return resolved ? {
     endpointId: resolved.endpointId,
     servedBy: resolved.servedBy,
     matchedKey: match.key,
     matchType: match.matchType,
     steps,
+    requestedModel: model,
+    expandedFromLatest: latestTo || null,
   } : null;
 }
 
@@ -677,6 +700,7 @@ module.exports = {
   parseBackendSigil,
   resolveRouteTarget,
   resolveModelRoute,
+  expandLatestModel,
   LLM_MODE_ENUM,
   DEFAULT_MODE,
   // Auth profile derivation

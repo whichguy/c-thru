@@ -29,6 +29,7 @@ const {
   matchModelRoute,
   pickModeTarget,
   parseBackendSigil,
+  expandLatestModel,
   LLM_MODE_ENUM,
   applyModeFilter,
   filterFor,
@@ -1128,6 +1129,13 @@ function pushRecentRequest(ctx, req, res, aborted) {
     model: m.originalModel || null,
     served_by: m.servedBy || null,
     capability: m.capability || null,
+    // Brand / signed Agent leaf name (sentinel), when present — needed to
+    // answer "was grok dispatched?" without timestamp races under concurrency.
+    agent: m.agent || null,
+    // cascade | hard_fail (from llm_profiles or defaultOnFailureForResolved)
+    on_failure: m.onFailure || null,
+    // true when hard_fail blocked tryFallbackOrFail (no routes.default substitute)
+    fallback_suppressed: !!m._fallbackSuppressed,
     backend: m.backendId || null,
     status: res.statusCode || 0,
     ok: !aborted && res.statusCode >= 200 && res.statusCode < 300,
@@ -1625,6 +1633,39 @@ function isSentinelRoutable(name, cfg) {
   return false;
 }
 
+/**
+ * Default on_failure when llm_profiles has no explicit policy for this request.
+ *
+ * Capability roles keep cascade (availability-first). Agent `model:` pins (and
+ * signed brand agents that resolve through agent_to_capability model:*) hard-fail
+ * so a primary 403/5xx cannot silently land on routes.default with the brand
+ * Identity prompt still attached (Grok→GLM false attribution class).
+ *
+ * Request-scoped only — never a process-global keep-alive toggle.
+ */
+function defaultOnFailureForResolved(resolved, cfg, sentinelAgent) {
+  const chain = (resolved && resolved.chain) || [];
+  if (chain.some((h) => typeof h === 'string' && h.startsWith('pin('))) {
+    return 'hard_fail';
+  }
+  if (sentinelAgent) {
+    const pin = ((cfg && cfg.agent_to_capability) || {})[sentinelAgent];
+    if (typeof pin === 'string' && pin.startsWith(MODEL_PIN_PREFIX)) {
+      return 'hard_fail';
+    }
+  }
+  return 'cascade';
+}
+
+// Logical model resolution (body.model / --model / Agent pin target):
+//   1. cycle guard
+//   2. prefer agent model:* pin when sentinel opts in (preferAgentModelPin)
+//   3. else latest_models expand (brand shorthands: fable, deepseek, …)
+//   4. else capability / a2c / llm_profiles (role names: coder, tester, …)
+//   5. else model_routes
+//   6. else Ollama fallthrough
+// Role names and brand shorthands are first-class model strings; they always
+// expand to a final concrete model + endpoint (never left as the logical id).
 function resolveBackend(model, cfg, tier, mode, _seen, _chain, _preferAgentModelPin = false) {
   const endpointsOrBackends = cfg.endpoints || cfg.backends || {};
   const modelRoutes = cfg.model_routes || {};
@@ -1651,6 +1692,16 @@ function resolveBackend(model, cfg, tier, mode, _seen, _chain, _preferAgentModel
     // route would recurse back into the already-seen agent key and report a
     // false cycle. Route-first is already the desired behavior for a self-pin.
     && capAlias.slice(MODEL_PIN_PREFIX.length) !== model;
+  // Public shorthands (opus/fable/grok/…) → current concrete id. After agent
+  // pin preference so model:fable pins still record pin(...) then expand.
+  // Bare --model fable also expands here when no prefer-pin.
+  if (!preferAgentModelPin) {
+    const latestTo = expandLatestModel(model, cfg.latest_models);
+    if (latestTo) {
+      chain.push(`latest(${model}->${latestTo})`);
+      return resolveBackend(latestTo, cfg, tier, mode, seen, chain, false);
+    }
+  }
 
   // Resolve a route target. Targets can be:
   //   string  — either a backend id (terminal) or another model name (recurse).
@@ -1784,13 +1835,17 @@ function loadBenchmark() {
 let BENCHMARK = loadBenchmark();
 
 // ── Request handling ───────────────────────────────────────────────
-function send(res, code, obj) {
+function send(res, code, obj, optionalExtraHeaders) {
   if (res.headersSent) return;
   const body = JSON.stringify(obj);
   if (code >= 400) {
     proxyLog('error_response', { statusCode: code, payload: obj });
   }
-  res.writeHead(code, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+  const headers = Object.assign({
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body),
+  }, optionalExtraHeaders && typeof optionalExtraHeaders === 'object' ? optionalExtraHeaders : {});
+  res.writeHead(code, headers);
   res.end(body);
 }
 
@@ -1935,7 +1990,8 @@ function anthropicErrorType(statusCode, errBody) {
 // Claude TUI (they render as mojibake and look like "garbled keystrokes").
 // Optional errBodyForType is the *decoded* upstream text used only for
 // anthropicErrorType's Gemini gRPC status mapping.
-function sendAnthropicError(res, code, message, errBodyForType) {
+// optionalExtraHeaders: hard-fail attribution (x-c-thru-fallback-suppressed, …).
+function sendAnthropicError(res, code, message, errBodyForType, optionalExtraHeaders) {
   const safe = sanitizeErrorMessage(message);
   send(res, code, {
     type: 'error',
@@ -1943,7 +1999,26 @@ function sendAnthropicError(res, code, message, errBodyForType) {
       type: anthropicErrorType(code, errBodyForType != null ? errBodyForType : safe),
       message: safe || `upstream returned ${code}`,
     },
-  });
+  }, optionalExtraHeaders);
+}
+
+/** Headers for brand/model: pin hard_fail errors (request-scoped observability). */
+function hardFailErrorHeaders(requestMeta, attemptedModel) {
+  if (!requestMeta || requestMeta.onFailure !== 'hard_fail') return null;
+  const h = {
+    'x-c-thru-fallback-suppressed': 'true',
+    'x-c-thru-on-failure': 'hard_fail',
+  };
+  if (requestMeta.agent) h['x-c-thru-agent'] = String(requestMeta.agent).slice(0, 128);
+  if (requestMeta.originalModel) {
+    h['x-c-thru-requested-model'] = String(requestMeta.originalModel).slice(0, 128);
+  }
+  if (attemptedModel) {
+    const m = String(attemptedModel).slice(0, 128);
+    h['x-c-thru-served-by'] = m;
+    h['x-claude-proxy-served-by'] = m;
+  }
+  return h;
 }
 
 // Rough proxy-side token estimate for /v1/messages/count_tokens against
@@ -2375,9 +2450,18 @@ function tryLocalTerminalFallback(ctx, req, res, body, requestMeta) {
 async function tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, failure) {
   if (res.headersSent) return false;
 
-  // hard_fail: profile entry has on_failure:'hard_fail' — skip cascade entirely.
+  // hard_fail: profile on_failure:'hard_fail' OR default for agent model: pins —
+  // skip cascade entirely (no routes.default / cross-family substitute).
   if (requestMeta.onFailure === 'hard_fail') {
-    ctxLog(ctx, 'fallback.hard_fail_gate', { backend: backend.id, capability: requestMeta.capability });
+    requestMeta._fallbackSuppressed = true;
+    ctxLog(ctx, 'fallback.hard_fail_gate', {
+      backend: backend.id,
+      capability: requestMeta.capability || null,
+      agent: requestMeta.agent || null,
+      original_model: requestMeta.originalModel || null,
+      fallback_suppressed: true,
+      reason: (failure && failure.reason) || null,
+    });
     return false;
   }
 
@@ -2847,7 +2931,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
               res,
               upRes.statusCode,
               `backend ${backend.id} returned ${upRes.statusCode}: ${safeMsg}`,
-              decoded
+              decoded,
+              hardFailErrorHeaders(requestMeta, effectiveModel)
             );
           }
           return;
@@ -2863,6 +2948,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
           }
           errHeaders['x-c-thru-served-by'] = effectiveModel || '';
           errHeaders['x-claude-proxy-served-by'] = effectiveModel || '';
+          const hf = hardFailErrorHeaders(requestMeta, effectiveModel);
+          if (hf) Object.assign(errHeaders, hf);
           res.writeHead(upRes.statusCode, errHeaders);
           res.end(rawBuf);
         }
@@ -3079,7 +3166,13 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       error: e.message,
     });
     if (!handled && !res.headersSent) {
-      sendAnthropicError(res, 502, `backend anthropic at ${targetUrl.origin} error: ${e.message}`);
+      sendAnthropicError(
+        res,
+        502,
+        `backend anthropic at ${targetUrl.origin} error: ${e.message}`,
+        null,
+        hardFailErrorHeaders(requestMeta, body && body.model)
+      );
     }
   });
   // Client-disconnect cancellation, mirroring forwardGemini's cancelUpstream
@@ -3155,12 +3248,23 @@ function handleOllamaError(ctx, req, res, body, backend, requestMeta, upRes) {
       if (handled) return;
     }
     if (!res.headersSent) {
-      sendAnthropicError(res, upRes.statusCode, safeMsg || `upstream returned ${upRes.statusCode}`, decoded);
+      sendAnthropicError(
+        res,
+        upRes.statusCode,
+        safeMsg || `upstream returned ${upRes.statusCode}`,
+        decoded,
+        hardFailErrorHeaders(requestMeta, body && body.model)
+      );
     }
   }).catch((e) => {
     if (!res.headersSent) {
-      sendAnthropicError(res, upRes.statusCode || 502,
-        `upstream returned ${upRes.statusCode}: failed to read error body (${e.message})`);
+      sendAnthropicError(
+        res,
+        upRes.statusCode || 502,
+        `upstream returned ${upRes.statusCode}: failed to read error body (${e.message})`,
+        null,
+        hardFailErrorHeaders(requestMeta, body && body.model)
+      );
     }
   });
 }
@@ -3921,8 +4025,12 @@ function logDeprecationOnce(modelName, advice) {
 // header family. See docs/headers.md for the full reference (which headers
 // fire when, streaming vs non-streaming constraints, where to add new ones).
 function buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta) {
+  // Shared by Gemini + OpenAI/xAI (and any path that routes through this helper).
+  // Must stay at parity with forwardAnthropic / setupOllamaStream for routing
+  // headers: served-by, resolved-via, resolution-chain, fallback-from.
   const h = {
     'x-c-thru-served-by': effectiveModel || '',
+    'x-claude-proxy-served-by': effectiveModel || '',
   };
   const advice = getDeprecatedModelAdvice(effectiveModel, GLOBAL_CONFIG);
   if (advice) {
@@ -3931,6 +4039,14 @@ function buildCthruResponseHeaders(req, geminiBody, effectiveModel, requestMeta)
   }
   if (requestMeta && Array.isArray(requestMeta.resolutionChain) && requestMeta.resolutionChain.length) {
     h['x-c-thru-resolution-chain'] = requestMeta.resolutionChain.join(' -> ');
+  }
+  // Capability-driven (incl. brand pin logicalRole) — same gate as forwardAnthropic.
+  if (requestMeta && requestMeta.capability) {
+    h['x-c-thru-resolved-via'] = buildResolvedViaJson(requestMeta, effectiveModel);
+  }
+  if (requestMeta && requestMeta._fallbackFrom) {
+    h['x-c-thru-fallback-from'] = requestMeta._fallbackFrom;
+    h['x-claude-proxy-fallback-from'] = requestMeta._fallbackFrom;
   }
   // G13: schema-scrubbed (set when mapAnthropicToGemini stripped any fields).
   if (geminiBody && geminiBody._schemaRemoved && geminiBody._schemaRemoved.length) {
@@ -5970,7 +6086,15 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
       });
       if (handled || res.headersSent) return;
     } catch {}
-    if (!res.headersSent) sendAnthropicError(res, statusCode, `${responsesEndpointLabel} error: ${message}`, raw);
+    if (!res.headersSent) {
+      sendAnthropicError(
+        res,
+        statusCode,
+        `${responsesEndpointLabel} error: ${message}`,
+        raw,
+        hardFailErrorHeaders(requestMeta, body && body.model)
+      );
+    }
   };
 
   const up = lib.request({
@@ -7029,6 +7153,11 @@ const server = http.createServer((req, res) => {
             input_tokens: lastReq.input_tokens != null ? lastReq.input_tokens : null,
             output_tokens: lastReq.output_tokens != null ? lastReq.output_tokens : null,
             fallback_from: lastReq.fallback_from != null ? lastReq.fallback_from : null,
+            fallback_suppressed: !!lastReq.fallback_suppressed,
+            on_failure: lastReq.on_failure || null,
+            agent: lastReq.agent || null,
+            ok: lastReq.ok !== false,
+            status: lastReq.status != null ? lastReq.status : null,
             ts: lastReq.ts || null,
             capability: lastReq.capability || null,
           } : null,
@@ -7627,7 +7756,10 @@ const server = http.createServer((req, res) => {
         const capChain = capKey && CONFIG.fallback_chains?.[hwTier]?.[capKey];
         // New schema: llm_profiles[capability] (capability-outer, not tier-outer)
         const profileEntry = capKey ? (CONFIG.llm_profiles || {})[capKey] : null;
-        const onFailure = profileEntry?.on_failure || 'cascade';
+        // Explicit profile policy wins. Otherwise brand/model: pins hard-fail;
+        // ordinary capabilities cascade (see defaultOnFailureForResolved).
+        const onFailure = profileEntry?.on_failure
+          || defaultOnFailureForResolved(resolved, CONFIG, sentinelAgent);
 
         if (capChain) {
           const chainModels = capChain.map(c => (typeof c === 'string' ? c : c.model)).filter(Boolean);

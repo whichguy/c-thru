@@ -768,6 +768,12 @@ run_suite "session-start-seeding (first-run seed + settings registration)" \
   bash "$REPO_DIR/test/session-start-seeding.test.sh"
 run_suite "c-thru-ensure-proxy-on-port (resurrect dead loopback proxy port)" \
   bash "$REPO_DIR/test/c-thru-ensure-proxy-on-port.test.sh"
+run_suite "c-thru-upstream-url (eligibility + kill-allowed unit)" \
+  node "$REPO_DIR/test/c-thru-upstream-url.test.js"
+run_suite "brand-identity-unit (binding identity + pin matcher + score)" \
+  node "$REPO_DIR/test/brand-identity-unit.test.js"
+run_suite "latest-models-expand (shorthand always-latest + compact brand prompts)" \
+  node "$REPO_DIR/test/latest-models-expand.test.js"
 run_suite "c-thru-revive-agent-sessions (rehydrate jobs onto new gateway)" \
   bash "$REPO_DIR/test/c-thru-revive-agent-sessions.test.sh"
 run_suite "c-thru-stop-failure-hook (same-port ensure after API refuse)" \
@@ -1083,6 +1089,10 @@ run_suite "proxy-log-write-warn (unwritable ops log → stderr warn, proxy stays
   node "$REPO_DIR/test/proxy-log-write-warn.test.js"
 run_suite "proxy-brand-agent-routing (agent name → concrete model + correct API path)" \
   node "$REPO_DIR/test/proxy-brand-agent-routing.test.js"
+run_suite "proxy-brand-pin-failclosed (model: pin hard_fail; no cross-family cascade)" \
+  node "$REPO_DIR/test/proxy-brand-pin-failclosed.test.js"
+run_suite "proxy-routing-headers-parity (resolved-via + fallback-from on Gemini/xAI)" \
+  node "$REPO_DIR/test/proxy-routing-headers-parity.test.js"
 run_suite "proxy-ollama-fallback-url (OLLAMA_URL honored in not-in-routes fallback)" \
   node "$REPO_DIR/test/proxy-ollama-fallback-url.test.js"
 
@@ -1156,6 +1166,24 @@ if [[ "${C_THRU_LIVE_CLAUDE_AGENT_ROUTE:-0}" == "1" ]]; then
     node "$REPO_DIR/test/claude-agent-route-live.test.js"
 else
   skip_suite "claude-agent-route-live (set C_THRU_LIVE_CLAUDE_AGENT_ROUTE=1 to enable)"
+fi
+# OSS brand leaf identity + proxy lifecycle (opt-in; needs Ollama/cloud + Claude for print).
+if [[ "${C_THRU_LIVE_OSS_BRAND:-0}" == "1" ]]; then
+  run_live_suite "agent" "brand-identity-direct" \
+    "brand-identity-direct (OSS pins via proxy POST; stats/identity)" \
+    env MODE=direct STATS=1 STRICT_HOST=0 \
+      AGENTS="${C_THRU_BRAND_AGENTS:-deepseek qwen kimi glm}" \
+      CLAUDE_LLM_MODE="${CLAUDE_LLM_MODE:-best-cloud-oss}" \
+      bash "$REPO_DIR/test/c-thru-brand-identity-live.sh"
+  run_live_suite "agent" "brand-identity-print" \
+    "brand-identity-print (fleet c-thru -p stdin; journal + proxy_dead + identity)" \
+    env MODE=print STRICT_HOST=1 STATS=1 \
+      AGENTS="${C_THRU_BRAND_AGENTS:-deepseek qwen kimi glm}" \
+      CLAUDE_LLM_MODE="${CLAUDE_LLM_MODE:-best-cloud-oss}" \
+      bash "$REPO_DIR/test/c-thru-brand-identity-live.sh"
+else
+  skip_suite "brand-identity-direct (set C_THRU_LIVE_OSS_BRAND=1 + Ollama/cloud to enable)"
+  skip_suite "brand-identity-print (set C_THRU_LIVE_OSS_BRAND=1 + Claude + Ollama/cloud to enable)"
 fi
 # Drives real `claude -p` sessions on NATURAL prompts and scores whether the
 # injected descriptions make Claude delegate to the right subagent. The

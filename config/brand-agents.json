@@ -1,9 +1,9 @@
 {
-  "_comment": "Fleet brand-leaf catalog. Primary ids + Claude-safe aliases. Pins are model:<id> resolved by the proxy. Explicit Claude brand leaves pin concrete current IDs; generic transport keys in model_routes remain mode-conditional. Ollama full-name aliases pin concrete tags. Generated agents: node tools/gen-brand-agents.js",
+  "_comment": "Fleet brand-leaf catalog. Primary ids + Claude-safe aliases. Pins are model:<shorthand> expanded via model-map latest_models in the proxy. Generated agents: node tools/gen-brand-agents.js",
   "agents": [
     {
       "id": "opus",
-      "pin": "model:claude-opus-5",
+      "pin": "model:opus",
       "family": "anthropic-claude",
       "label": "Claude Opus",
       "triggers": [
@@ -21,7 +21,7 @@
     },
     {
       "id": "sonnet",
-      "pin": "model:claude-sonnet-5",
+      "pin": "model:sonnet",
       "family": "anthropic-claude",
       "label": "Claude Sonnet",
       "triggers": [
@@ -39,7 +39,7 @@
     },
     {
       "id": "haiku",
-      "pin": "model:claude-haiku-4-5-20251001",
+      "pin": "model:haiku",
       "family": "anthropic-claude",
       "label": "Claude Haiku",
       "triggers": [
@@ -57,7 +57,7 @@
     },
     {
       "id": "fable",
-      "pin": "model:claude-fable-5",
+      "pin": "model:fable",
       "family": "anthropic-claude",
       "label": "Claude Fable",
       "triggers": [
@@ -66,11 +66,16 @@
         "use fable",
         "claude fable"
       ],
-      "aliases": []
+      "aliases": [
+        {
+          "id": "claude-fable-5",
+          "pin": "model:claude-fable-5"
+        }
+      ]
     },
     {
       "id": "grok",
-      "pin": "model:grok-4.5",
+      "pin": "model:grok",
       "family": "xai",
       "label": "Grok (xAI)",
       "triggers": [
@@ -89,7 +94,7 @@
     },
     {
       "id": "deepseek",
-      "pin": "model:deepseek-v4-pro:cloud",
+      "pin": "model:deepseek",
       "family": "deepseek",
       "label": "DeepSeek Pro",
       "triggers": [
@@ -106,7 +111,7 @@
     },
     {
       "id": "deepseek-flash",
-      "pin": "model:deepseek-v4-flash:cloud",
+      "pin": "model:deepseek-flash",
       "family": "deepseek",
       "label": "DeepSeek Flash",
       "triggers": [
@@ -123,7 +128,7 @@
     },
     {
       "id": "qwen",
-      "pin": "model:qwen3.6:35b",
+      "pin": "model:qwen",
       "family": "qwen",
       "label": "Qwen",
       "triggers": [
@@ -139,65 +144,65 @@
         },
         {
           "id": "qwen3-6-35b-a3b-coding-nvfp4",
-          "pin": "model:qwen3.6:35b-a3b-coding-nvfp4"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-6-35b-a3b-q8-0",
-          "pin": "model:qwen3.6:35b-a3b-q8_0"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-6-35b-a3b-coding-mxfp8",
-          "pin": "model:qwen3.6:35b-a3b-coding-mxfp8"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-6-35b-a3b-nvfp4",
-          "pin": "model:qwen3.6:35b-a3b-nvfp4"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-6-27b",
-          "pin": "model:qwen3.6:27b"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-6-27b-nvfp4",
-          "pin": "model:qwen3.6:27b-nvfp4"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-6-27b-coding-nvfp4",
-          "pin": "model:qwen3.6:27b-coding-nvfp4"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-6-27b-coding-mxfp8",
-          "pin": "model:qwen3.6:27b-coding-mxfp8"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-1-7b",
-          "pin": "model:qwen3:1.7b"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-4b",
-          "pin": "model:qwen3:4b"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-coder-next-q8-0",
-          "pin": "model:qwen3-coder-next:q8_0"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-coder-next-q4-k-m",
-          "pin": "model:qwen3-coder-next:q4_K_M"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-coder-480b-cloud",
-          "pin": "model:qwen3-coder:480b-cloud"
+          "pin": "model:qwen3.6:35b"
         },
         {
           "id": "qwen3-vl-8b",
-          "pin": "model:qwen3-vl:8b"
+          "pin": "model:qwen3.6:35b"
         }
       ]
     },
     {
       "id": "kimi",
-      "pin": "model:kimi-k3:cloud",
+      "pin": "model:kimi",
       "family": "kimi",
       "label": "Kimi",
       "triggers": [
@@ -210,16 +215,12 @@
         {
           "id": "kimi-k3-cloud",
           "pin": "model:kimi-k3:cloud"
-        },
-        {
-          "id": "kimi-k2-7-code-cloud",
-          "pin": "model:kimi-k2.7-code:cloud"
         }
       ]
     },
     {
       "id": "gemini",
-      "pin": "model:gemini-pro",
+      "pin": "model:gemini",
       "family": "gemini",
       "label": "Gemini Pro",
       "triggers": [
@@ -259,7 +260,7 @@
     },
     {
       "id": "devstral",
-      "pin": "model:devstral-2:latest",
+      "pin": "model:devstral",
       "family": "devstral",
       "label": "Devstral",
       "triggers": [
@@ -279,17 +280,17 @@
         },
         {
           "id": "devstral-small-2-24b",
-          "pin": "model:devstral-small-2:24b"
+          "pin": "model:devstral-2:latest"
         },
         {
           "id": "devstral-small-2-24b-cloud",
-          "pin": "model:devstral-small-2:24b-cloud"
+          "pin": "model:devstral-2:latest"
         }
       ]
     },
     {
       "id": "glm",
-      "pin": "model:glm-5.2:cloud",
+      "pin": "model:glm",
       "family": "glm",
       "label": "GLM",
       "triggers": [
@@ -307,7 +308,7 @@
     },
     {
       "id": "gemma",
-      "pin": "model:gemma4:26b",
+      "pin": "model:gemma",
       "family": "gemma",
       "label": "Gemma",
       "triggers": [
@@ -319,15 +320,15 @@
       "aliases": [
         {
           "id": "gemma4-26b",
-          "pin": "model:gemma4:26b"
+          "pin": "model:gemma4:31b"
         },
         {
           "id": "gemma4-e4b",
-          "pin": "model:gemma4:e4b"
+          "pin": "model:gemma4:31b"
         },
         {
           "id": "gemma4-26b-mxfp8",
-          "pin": "model:gemma4:26b-mxfp8"
+          "pin": "model:gemma4:31b"
         },
         {
           "id": "gemma4-31b",
@@ -335,13 +336,13 @@
         },
         {
           "id": "gemma4-31b-mxfp8",
-          "pin": "model:gemma4:31b-mxfp8"
+          "pin": "model:gemma4:31b"
         }
       ]
     },
     {
       "id": "phi",
-      "pin": "model:phi4-reasoning:plus",
+      "pin": "model:phi",
       "family": "phi",
       "label": "Phi",
       "triggers": [
@@ -353,7 +354,7 @@
       "aliases": [
         {
           "id": "phi4-reasoning-plus",
-          "pin": "model:phi4-reasoning:plus"
+          "pin": "model:phi4-mini:3.8b"
         },
         {
           "id": "phi4-mini-3-8b",
@@ -363,7 +364,7 @@
     },
     {
       "id": "gpt-oss",
-      "pin": "model:gpt-oss:20b",
+      "pin": "model:gpt-oss",
       "family": "gpt-oss",
       "label": "GPT-OSS",
       "triggers": [
@@ -375,7 +376,7 @@
       "aliases": [
         {
           "id": "gpt-oss-20b",
-          "pin": "model:gpt-oss:20b"
+          "pin": "model:gpt-oss:120b"
         },
         {
           "id": "gpt-oss-120b",
@@ -383,13 +384,13 @@
         },
         {
           "id": "gpt-oss-120b-cloud",
-          "pin": "model:gpt-oss:120b-cloud"
+          "pin": "model:gpt-oss:120b"
         }
       ]
     },
     {
       "id": "nemotron",
-      "pin": "model:nemotron-3-super:cloud",
+      "pin": "model:nemotron",
       "family": "nemotron",
       "label": "Nemotron",
       "triggers": [
@@ -406,7 +407,7 @@
     },
     {
       "id": "minimax",
-      "pin": "model:minimax-m3:cloud",
+      "pin": "model:minimax",
       "family": "minimax",
       "label": "MiniMax",
       "triggers": [
@@ -423,7 +424,7 @@
     },
     {
       "id": "hermes",
-      "pin": "model:hermes3:70b",
+      "pin": "model:hermes",
       "family": "hermes",
       "label": "Hermes",
       "triggers": [
@@ -441,7 +442,7 @@
     },
     {
       "id": "mistral",
-      "pin": "model:mistral-small3.2:24b",
+      "pin": "model:mistral",
       "family": "mistral",
       "label": "Mistral Small",
       "triggers": [
@@ -459,7 +460,7 @@
     },
     {
       "id": "terra",
-      "pin": "model:gpt-5.6-terra",
+      "pin": "model:terra",
       "family": "codex-openai",
       "label": "Codex Terra",
       "triggers": [
@@ -481,7 +482,7 @@
     },
     {
       "id": "sol",
-      "pin": "model:gpt-5.6-sol",
+      "pin": "model:sol",
       "family": "codex-openai",
       "label": "Codex SOL",
       "triggers": [
@@ -504,7 +505,7 @@
     },
     {
       "id": "luna",
-      "pin": "model:gpt-5.6-luna",
+      "pin": "model:luna",
       "family": "codex-openai",
       "label": "Codex Luna",
       "triggers": [
@@ -526,7 +527,7 @@
     },
     {
       "id": "codex",
-      "pin": "model:gpt-5.6-terra",
+      "pin": "model:codex",
       "family": "codex-openai",
       "label": "Codex",
       "triggers": [

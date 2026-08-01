@@ -23,6 +23,7 @@ const {
   applyModeFilter,
   pickBenchmarkBest,
   isClaude, isCloud, isOpenSource, isChineseOrigin, isGovMode,
+  MODEL_PIN_PREFIX,
   LLM_MODE_ENUM,
 } = require('./model-map-resolve.js');
 
@@ -257,7 +258,8 @@ if (!capability && !agent && !modelName) {
   process.exit(1);
 }
 
-// --model branch: walk model_routes only, then exit. No capability/profile lookup.
+// --model branch: full logical resolve (mirror proxy resolveBackend order):
+//   overrides → latest_models → a2c/capability profile → model_routes → fallthrough
 if (modelName && !capability && !agent) {
   const cyan   = process.stdout.isTTY ? '\x1b[36m' : '';
   const gray   = process.stdout.isTTY ? '\x1b[90m' : '';
@@ -266,11 +268,52 @@ if (modelName && !capability && !agent) {
   const routes = config.model_routes || {};
   const endpointsMap = config.endpoints || config.backends || {};
   const overrides = config.model_overrides || {};
+  const modeForModel = args.mode || process.env.CLAUDE_LLM_MODE || 'best-cloud';
+  let tierForModel = args.tier;
+  if (!tierForModel) {
+    if (process.env.CLAUDE_LLM_PROFILE) tierForModel = process.env.CLAUDE_LLM_PROFILE;
+    else {
+      try {
+        const { tierForGb } = require('./hw-profile.js');
+        const gb = process.env.CLAUDE_LLM_MEMORY_GB
+          ? Number(process.env.CLAUDE_LLM_MEMORY_GB)
+          : Math.ceil(os.totalmem() / (1024 ** 3));
+        tierForModel = tierForGb(gb);
+      } catch { tierForModel = '64gb'; }
+    }
+  }
 
   let working = overrides[modelName] || modelName;
-  console.log(`${bold}Resolution chain — model=${modelName}${reset}\n`);
+  console.log(`${bold}Resolution chain — model=${modelName} mode=${modeForModel} tier=${tierForModel}${reset}\n`);
   if (overrides[modelName]) {
     console.log(`  model_overrides   ${cyan}${modelName}${reset} → ${cyan}${working}${reset}`);
+  }
+
+  let step = 1;
+  // Logical name → a2c: brand model: pin OR pipeline capability (coder/tester/…).
+  // Use the original name (before latest) so role agents and brand shorthands both hit.
+  const capAlias = resolveCapabilityAlias(working, config);
+  if (capAlias && typeof capAlias === 'string' && capAlias.startsWith(MODEL_PIN_PREFIX)) {
+    const pinned = capAlias.slice(MODEL_PIN_PREFIX.length);
+    console.log(`  ${String(step++).padEnd(2)} model pin         ${cyan}${working}${reset} → ${cyan}${pinned}${reset}  ${gray}(${capAlias})${reset}`);
+    working = pinned;
+  } else if (capAlias && (config.llm_profiles || {})[capAlias]) {
+    const entry = config.llm_profiles[capAlias];
+    const baseMode = baseModeFor(modeForModel, config);
+    const profileModel = resolveProfileModel(entry, tierForModel, modeForModel, baseMode);
+    if (profileModel) {
+      console.log(`  ${String(step++).padEnd(2)} capability        ${cyan}${working}${reset} → ${cyan}${capAlias}${reset} → ${cyan}${profileModel}${reset}  ${gray}(llm_profiles ${modeForModel}/${tierForModel})${reset}`);
+      working = profileModel;
+    } else {
+      console.log(`  ${String(step++).padEnd(2)} capability        ${cyan}${capAlias}${reset}  ${gray}(no model for ${modeForModel}/${tierForModel})${reset}`);
+    }
+  }
+
+  // latest_models: brand/family shorthands → current concrete id
+  const latestTo = (config.latest_models || {})[working];
+  if (typeof latestTo === 'string' && latestTo && latestTo !== working) {
+    console.log(`  ${String(step++).padEnd(2)} latest_models     ${cyan}${working}${reset} → ${cyan}${latestTo}${reset}`);
+    working = latestTo;
   }
 
   let endpoint = null;
@@ -281,21 +324,26 @@ if (modelName && !capability && !agent) {
   const routeResolution = resolveModelRoute(working, {
     routes,
     endpoints: endpointsMap,
-    mode: args.mode || process.env.CLAUDE_LLM_MODE || 'best-cloud',
+    mode: modeForModel,
+    latest_models: config.latest_models,
   });
   if (routeResolution) {
     endpoint = routeResolution.endpointId;
     nameSwap = routeResolution.servedBy || working;
     matchedKey = routeResolution.matchedKey;
     matchType = routeResolution.matchType;
+    if (routeResolution.expandedFromLatest && routeResolution.expandedFromLatest !== working) {
+      // already printed if we expanded earlier; only show if resolve did an extra hop
+      console.log(`  ${String(step++).padEnd(2)} latest_models     ${cyan}${working}${reset} → ${cyan}${routeResolution.expandedFromLatest}${reset}`);
+    }
   }
 
   if (!matchedKey) {
-    console.log(`  model_routes      ${gray}(no match — model passed through verbatim)${reset}`);
+    console.log(`  ${String(step++).padEnd(2)} model_routes      ${gray}(no match — model passed through verbatim)${reset}`);
   } else {
-    console.log(`  model_routes      matched ${cyan}${matchedKey}${reset} ${gray}(${matchType})${reset}`);
+    console.log(`  ${String(step++).padEnd(2)} model_routes      matched ${cyan}${matchedKey}${reset} ${gray}(${matchType})${reset}`);
     if (nameSwap !== working) {
-      console.log(`  name swap         ${cyan}${working}${reset} → ${cyan}${nameSwap}${reset}`);
+      console.log(`     name swap         ${cyan}${working}${reset} → ${cyan}${nameSwap}${reset}`);
     }
   }
 
@@ -309,6 +357,8 @@ if (modelName && !capability && !agent) {
     if (ep.format) console.log(`  endpoint.format   ${cyan}${ep.format}${reset}`);
     if (ep.vertex) console.log(`  endpoint.vertex   ${cyan}true${reset}`);
   }
+  console.log('');
+  console.log(`${gray}Tip: logical names (coder, deepseek, fable, …) map to a final concrete model in the proxy the same way.${reset}`);
   process.exit(0);
 }
 
@@ -341,6 +391,67 @@ if (!tier) {
       tier = tierForGb(gb);
     } catch { tier = '64gb'; }
   }
+}
+
+// Brand agents bypass llm_profiles via agent_to_capability model:<id> pins.
+// Explain that direct path explicitly, including the same gov backstop the
+// proxy applies, instead of treating "model:<id>" as a capability name.
+if (agent && typeof capability === 'string' && capability.startsWith(MODEL_PIN_PREFIX)) {
+  const pinnedModel = capability.slice(MODEL_PIN_PREFIX.length);
+  if (!pinnedModel.trim()) {
+    console.error(`explain: agent '${agent}' resolves to an empty model pin`);
+    process.exit(1);
+  }
+
+  const cyan   = process.stdout.isTTY ? '\x1b[36m' : '';
+  const gray   = process.stdout.isTTY ? '\x1b[90m' : '';
+  const bold   = process.stdout.isTTY ? '\x1b[1m'  : '';
+  const reset  = process.stdout.isTTY ? '\x1b[0m'  : '';
+  const endpointsMap = config.endpoints || config.backends || {};
+
+  console.log(`${bold}Resolution chain — agent=${agent} model=${pinnedModel} mode=${mode} tier=${tier}${reset}\n`);
+  console.log(`  ${'1. Model pin'.padEnd(20)} ${cyan}${pinnedModel}${reset}  ${gray}(agent_to_capability['${agent}'])${reset}`);
+
+  let final = pinnedModel;
+  if (isGovMode(mode, config) && isChineseOrigin(pinnedModel)) {
+    const filtered = applyModeFilter(
+      mode,
+      pinnedModel,
+      [],
+      config.model_routes || {},
+      endpointsMap,
+      config,
+    );
+    if (filtered === null) {
+      console.log(`  ${'2. Gov filter'.padEnd(20)} ${cyan}BLOCKED: ${pinnedModel}${reset}  ${gray}(direct Chinese-origin model pin; no substitute)${reset}`);
+      final = null;
+    } else {
+      final = filtered;
+    }
+  }
+
+  const routeResolution = final ? resolveModelRoute(final, {
+    routes: config.model_routes || {},
+    endpoints: endpointsMap,
+    mode,
+    latest_models: config.latest_models,
+  }) : null;
+  if (routeResolution?.expandedFromLatest) {
+    console.log(`  ${'2. latest_models'.padEnd(20)} ${cyan}${final}${reset} → ${cyan}${routeResolution.expandedFromLatest}${reset}`);
+  }
+  const servedBy = final ? (routeResolution?.servedBy || final) : null;
+  const endpointId = routeResolution?.endpointId || null;
+  const backend = endpointId ? endpointsMap[endpointId] : null;
+
+  console.log('');
+  console.log(`${bold}Final routing${reset}`);
+  console.log(`  ${'served_by'.padEnd(20)} ${cyan}${servedBy || '(null)'}${reset}`);
+  if (endpointId) console.log(`  ${'endpoint'.padEnd(20)} ${cyan}${endpointId}${reset}`);
+  if (backend?.url) console.log(`  ${'endpoint.url'.padEnd(20)} ${cyan}${backend.url}${reset}`);
+  if (backend?.format) console.log(`  ${'endpoint.format'.padEnd(20)} ${cyan}${backend.format}${reset}`);
+  console.log('');
+  console.log(`${gray}Tip: x-c-thru-served-by and x-c-thru-resolved-via confirm this route at request time.${reset}`);
+  process.exit(0);
 }
 
 // New schema: llm_profiles[capability] (capability-outer, not tier-outer)

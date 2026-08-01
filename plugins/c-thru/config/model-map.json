@@ -35,7 +35,7 @@
     },
     "xai": {
       "url": "https://api.x.ai",
-      "format": "anthropic",
+      "format": "openai",
       "auth": {
         "header": "Authorization",
         "scheme": "Bearer",
@@ -103,7 +103,7 @@
         "64gb": "deepseek-v4-pro:cloud",
         "128gb": "deepseek-v4-pro:cloud"
       },
-      "deepseek-hybrid": "claude-opus-4-8",
+      "deepseek-hybrid": "claude-opus-5",
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "qwen3.6:27b",
@@ -128,13 +128,13 @@
       "on_failure": "cascade"
     },
     "explore": {
-      "best-cloud": "gemini-pro-latest",
+      "best-cloud": "claude-sonnet-5",
       "best-cloud-oss": {
         "16gb": "gemma4:e4b",
         "32gb": "devstral-small-2:24b",
         "48gb": "devstral-small-2:24b",
         "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
-        "128gb": "kimi-k2.7-code:cloud"
+        "128gb": "kimi-k3:cloud"
       },
       "best-local-oss": {
         "16gb": "gemma4:e4b",
@@ -149,18 +149,18 @@
     },
     "coder": {
       "best-cloud": {
-        "16gb": "gemini-pro",
-        "32gb": "gemini-pro",
-        "48gb": "gemini-pro",
-        "64gb": "gemini-pro",
-        "128gb": "gemini-pro"
+        "16gb": "claude-sonnet-5",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
-        "16gb": "kimi-k2.7-code:cloud",
-        "32gb": "kimi-k2.7-code:cloud",
-        "48gb": "kimi-k2.7-code:cloud",
-        "64gb": "kimi-k2.7-code:cloud",
-        "128gb": "kimi-k2.7-code:cloud"
+        "16gb": "kimi-k3:cloud",
+        "32gb": "kimi-k3:cloud",
+        "48gb": "kimi-k3:cloud",
+        "64gb": "kimi-k3:cloud",
+        "128gb": "kimi-k3:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -187,20 +187,20 @@
       "fallback_to": "coder-fallback"
     },
     "coder-fallback": {
-      "best-cloud": "gemini-pro-latest",
+      "best-cloud": "claude-opus-5",
       "best-cloud-oss": {
-        "16gb": "kimi-k2.7-code:cloud",
-        "32gb": "kimi-k2.7-code:cloud",
-        "48gb": "kimi-k2.7-code:cloud",
-        "64gb": "kimi-k2.7-code:cloud",
-        "128gb": "kimi-k2.7-code:cloud"
+        "16gb": "deepseek-v4-flash:cloud",
+        "32gb": "deepseek-v4-flash:cloud",
+        "48gb": "deepseek-v4-flash:cloud",
+        "64gb": "deepseek-v4-flash:cloud",
+        "128gb": "deepseek-v4-flash:cloud"
       },
       "best-local-oss": {
-        "16gb": "qwen3.6:35b",
-        "32gb": "qwen3.6:35b",
-        "48gb": "qwen3.6:35b",
-        "64gb": "qwen3.6:35b",
-        "128gb": "qwen3.6:35b"
+        "16gb": "gemma4:e4b",
+        "32gb": "devstral-small-2:24b",
+        "48gb": "devstral-small-2:24b",
+        "64gb": "devstral-small-2:24b",
+        "128gb": "devstral-2:latest"
       },
       "best-cloud-gov": {
         "16gb": "claude-haiku-4-5-20251001",
@@ -220,18 +220,18 @@
     },
     "tester": {
       "best-cloud": {
-        "16gb": "gemma4:e4b",
-        "32gb": "qwen3-coder:30b",
-        "48gb": "qwen3-coder:30b",
-        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
-        "128gb": "qwen3.6:35b-a3b-coding-nvfp4"
+        "16gb": "claude-sonnet-5",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
-        "16gb": "gemma4:e4b",
-        "32gb": "qwen3-coder:30b",
-        "48gb": "qwen3-coder:30b",
-        "64gb": "qwen3.6:35b-a3b-coding-nvfp4",
-        "128gb": "kimi-k2.7-code:cloud"
+        "16gb": "kimi-k3:cloud",
+        "32gb": "kimi-k3:cloud",
+        "48gb": "kimi-k3:cloud",
+        "64gb": "kimi-k3:cloud",
+        "128gb": "kimi-k3:cloud"
       },
       "best-local-oss": {
         "16gb": "gemma4:e4b",
@@ -279,11 +279,11 @@
         "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
-        "16gb": "kimi-k2.7-code:cloud",
-        "32gb": "kimi-k2.7-code:cloud",
-        "48gb": "kimi-k2.7-code:cloud",
-        "64gb": "kimi-k2.7-code:cloud",
-        "128gb": "kimi-k2.7-code:cloud"
+        "16gb": "kimi-k3:cloud",
+        "32gb": "kimi-k3:cloud",
+        "48gb": "kimi-k3:cloud",
+        "64gb": "kimi-k3:cloud",
+        "128gb": "kimi-k3:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -309,7 +309,7 @@
       "on_failure": "cascade"
     },
     "reviewer-security": {
-      "best-cloud": "claude-opus-4-8",
+      "best-cloud": "claude-opus-5",
       "best-cloud-oss": {
         "16gb": "deepseek-v4-pro:cloud",
         "32gb": "deepseek-v4-pro:cloud",
@@ -317,7 +317,7 @@
         "64gb": "deepseek-v4-pro:cloud",
         "128gb": "deepseek-v4-pro:cloud"
       },
-      "deepseek-hybrid": "claude-opus-4-8",
+      "deepseek-hybrid": "claude-opus-5",
       "best-local-oss": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "qwen3.6:27b",
@@ -325,7 +325,7 @@
         "64gb": "qwen3.6:35b",
         "128gb": "qwen3.6:35b-a3b-q8_0"
       },
-      "best-cloud-gov": "claude-opus-4-8",
+      "best-cloud-gov": "claude-opus-5",
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
@@ -337,18 +337,18 @@
     },
     "debugger-hypothesis": {
       "best-cloud": {
-        "16gb": "gemini-pro",
-        "32gb": "gemini-pro",
-        "48gb": "gemini-pro",
-        "64gb": "gemini-pro",
-        "128gb": "gemini-pro"
+        "16gb": "claude-sonnet-5",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
-        "16gb": "kimi-k2.7-code:cloud",
-        "32gb": "kimi-k2.7-code:cloud",
-        "48gb": "kimi-k2.7-code:cloud",
-        "64gb": "kimi-k2.7-code:cloud",
-        "128gb": "kimi-k2.7-code:cloud"
+        "16gb": "kimi-k3:cloud",
+        "32gb": "kimi-k3:cloud",
+        "48gb": "kimi-k3:cloud",
+        "64gb": "kimi-k3:cloud",
+        "128gb": "kimi-k3:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -375,18 +375,18 @@
     },
     "debugger-investigate": {
       "best-cloud": {
-        "16gb": "gemini-pro",
-        "32gb": "gemini-pro",
-        "48gb": "gemini-pro",
-        "64gb": "gemini-pro",
-        "128gb": "gemini-pro"
+        "16gb": "claude-sonnet-5",
+        "32gb": "claude-sonnet-5",
+        "48gb": "claude-sonnet-5",
+        "64gb": "claude-sonnet-5",
+        "128gb": "claude-sonnet-5"
       },
       "best-cloud-oss": {
-        "16gb": "kimi-k2.7-code:cloud",
-        "32gb": "kimi-k2.7-code:cloud",
-        "48gb": "kimi-k2.7-code:cloud",
-        "64gb": "kimi-k2.7-code:cloud",
-        "128gb": "kimi-k2.7-code:cloud"
+        "16gb": "kimi-k3:cloud",
+        "32gb": "kimi-k3:cloud",
+        "48gb": "kimi-k3:cloud",
+        "64gb": "kimi-k3:cloud",
+        "128gb": "kimi-k3:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -412,13 +412,13 @@
       "on_failure": "cascade"
     },
     "debugger-hard": {
-      "best-cloud": "claude-opus-4-8",
+      "best-cloud": "claude-opus-5",
       "best-cloud-oss": {
-        "16gb": "kimi-k2.7-code:cloud",
-        "32gb": "kimi-k2.7-code:cloud",
-        "48gb": "kimi-k2.7-code:cloud",
-        "64gb": "kimi-k2.7-code:cloud",
-        "128gb": "kimi-k2.7-code:cloud"
+        "16gb": "kimi-k3:cloud",
+        "32gb": "kimi-k3:cloud",
+        "48gb": "kimi-k3:cloud",
+        "64gb": "kimi-k3:cloud",
+        "128gb": "kimi-k3:cloud"
       },
       "best-local-oss": {
         "16gb": "qwen3.6:35b",
@@ -427,7 +427,7 @@
         "64gb": "qwen3.6:35b",
         "128gb": "qwen3.6:35b"
       },
-      "best-cloud-gov": "claude-opus-4-8",
+      "best-cloud-gov": "claude-opus-5",
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
         "32gb": "phi4-reasoning:plus",
@@ -519,7 +519,7 @@
         "32gb": "claude-sonnet-5",
         "48gb": "claude-sonnet-5",
         "64gb": "claude-sonnet-5",
-        "128gb": "claude-opus-4-8"
+        "128gb": "claude-opus-5"
       },
       "best-cloud-oss": {
         "16gb": "glm-5.2:cloud",
@@ -708,82 +708,82 @@
     "WebSearch": "fast-scout",
     "WebFetch": "fast-scout",
     "Monitor": "fast-scout",
-    "grok": "model:grok-4.5",
-    "deepseek": "model:deepseek-v4-pro:cloud",
-    "qwen": "model:qwen3.6:35b",
-    "kimi": "model:kimi-k3:cloud",
-    "gemini": "model:gemini-pro",
+    "grok": "model:grok",
+    "deepseek": "model:deepseek",
+    "qwen": "model:qwen",
+    "kimi": "model:kimi",
+    "gemini": "model:gemini",
     "advisors": "planner-hard",
-    "opus": "model:claude-opus-5",
+    "opus": "model:opus",
     "claude-opus-5": "model:claude-opus-5",
-    "sonnet": "model:claude-sonnet-5",
+    "sonnet": "model:sonnet",
     "claude-sonnet-5": "model:claude-sonnet-5",
-    "haiku": "model:claude-haiku-4-5-20251001",
+    "haiku": "model:haiku",
     "claude-haiku-4-5-20251001": "model:claude-haiku-4-5-20251001",
-    "fable": "model:claude-fable-5",
+    "fable": "model:fable",
     "grok-4-5": "model:grok-4.5",
     "deepseek-v4-pro-cloud": "model:deepseek-v4-pro:cloud",
-    "deepseek-flash": "model:deepseek-v4-flash:cloud",
+    "deepseek-flash": "model:deepseek-flash",
     "deepseek-v4-flash-cloud": "model:deepseek-v4-flash:cloud",
     "qwen3-6-35b": "model:qwen3.6:35b",
-    "qwen3-6-35b-a3b-coding-nvfp4": "model:qwen3.6:35b-a3b-coding-nvfp4",
-    "qwen3-6-35b-a3b-q8-0": "model:qwen3.6:35b-a3b-q8_0",
-    "qwen3-6-35b-a3b-coding-mxfp8": "model:qwen3.6:35b-a3b-coding-mxfp8",
-    "qwen3-6-35b-a3b-nvfp4": "model:qwen3.6:35b-a3b-nvfp4",
-    "qwen3-6-27b": "model:qwen3.6:27b",
-    "qwen3-6-27b-nvfp4": "model:qwen3.6:27b-nvfp4",
-    "qwen3-6-27b-coding-nvfp4": "model:qwen3.6:27b-coding-nvfp4",
-    "qwen3-6-27b-coding-mxfp8": "model:qwen3.6:27b-coding-mxfp8",
-    "qwen3-1-7b": "model:qwen3:1.7b",
-    "qwen3-4b": "model:qwen3:4b",
-    "qwen3-coder-next-q8-0": "model:qwen3-coder-next:q8_0",
-    "qwen3-coder-next-q4-k-m": "model:qwen3-coder-next:q4_K_M",
-    "qwen3-coder-480b-cloud": "model:qwen3-coder:480b-cloud",
-    "qwen3-vl-8b": "model:qwen3-vl:8b",
+    "qwen3-6-35b-a3b-coding-nvfp4": "model:qwen3.6:35b",
+    "qwen3-6-35b-a3b-q8-0": "model:qwen3.6:35b",
+    "qwen3-6-35b-a3b-coding-mxfp8": "model:qwen3.6:35b",
+    "qwen3-6-35b-a3b-nvfp4": "model:qwen3.6:35b",
+    "qwen3-6-27b": "model:qwen3.6:35b",
+    "qwen3-6-27b-nvfp4": "model:qwen3.6:35b",
+    "qwen3-6-27b-coding-nvfp4": "model:qwen3.6:35b",
+    "qwen3-6-27b-coding-mxfp8": "model:qwen3.6:35b",
+    "qwen3-1-7b": "model:qwen3.6:35b",
+    "qwen3-4b": "model:qwen3.6:35b",
+    "qwen3-coder-next-q8-0": "model:qwen3.6:35b",
+    "qwen3-coder-next-q4-k-m": "model:qwen3.6:35b",
+    "qwen3-coder-480b-cloud": "model:qwen3.6:35b",
+    "qwen3-vl-8b": "model:qwen3.6:35b",
     "kimi-k3-cloud": "model:kimi-k3:cloud",
-    "kimi-k2-7-code-cloud": "model:kimi-k2.7-code:cloud",
     "gemini-pro": "model:gemini-pro",
     "gemini-pro-latest": "model:gemini-pro-latest",
     "gemini-flash": "model:gemini-3-flash-preview:cloud",
     "gemini-3-flash-preview-cloud": "model:gemini-3-flash-preview:cloud",
-    "devstral": "model:devstral-2:latest",
+    "devstral": "model:devstral",
     "devstral-2-latest": "model:devstral-2:latest",
     "devstral-2": "model:devstral-2",
-    "devstral-small-2-24b": "model:devstral-small-2:24b",
-    "devstral-small-2-24b-cloud": "model:devstral-small-2:24b-cloud",
-    "glm": "model:glm-5.2:cloud",
+    "devstral-small-2-24b": "model:devstral-2:latest",
+    "devstral-small-2-24b-cloud": "model:devstral-2:latest",
+    "glm": "model:glm",
     "glm-5-2-cloud": "model:glm-5.2:cloud",
-    "gemma": "model:gemma4:26b",
-    "gemma4-26b": "model:gemma4:26b",
-    "gemma4-e4b": "model:gemma4:e4b",
-    "gemma4-26b-mxfp8": "model:gemma4:26b-mxfp8",
+    "gemma": "model:gemma",
+    "gemma4-26b": "model:gemma4:31b",
+    "gemma4-e4b": "model:gemma4:31b",
+    "gemma4-26b-mxfp8": "model:gemma4:31b",
     "gemma4-31b": "model:gemma4:31b",
-    "gemma4-31b-mxfp8": "model:gemma4:31b-mxfp8",
-    "phi": "model:phi4-reasoning:plus",
-    "phi4-reasoning-plus": "model:phi4-reasoning:plus",
+    "gemma4-31b-mxfp8": "model:gemma4:31b",
+    "phi": "model:phi",
+    "phi4-reasoning-plus": "model:phi4-mini:3.8b",
     "phi4-mini-3-8b": "model:phi4-mini:3.8b",
-    "gpt-oss": "model:gpt-oss:20b",
-    "gpt-oss-20b": "model:gpt-oss:20b",
+    "gpt-oss": "model:gpt-oss",
+    "gpt-oss-20b": "model:gpt-oss:120b",
     "gpt-oss-120b": "model:gpt-oss:120b",
-    "gpt-oss-120b-cloud": "model:gpt-oss:120b-cloud",
-    "nemotron": "model:nemotron-3-super:cloud",
+    "gpt-oss-120b-cloud": "model:gpt-oss:120b",
+    "nemotron": "model:nemotron",
     "nemotron-3-super-cloud": "model:nemotron-3-super:cloud",
-    "minimax": "model:minimax-m3:cloud",
+    "minimax": "model:minimax",
     "minimax-m3-cloud": "model:minimax-m3:cloud",
-    "hermes": "model:hermes3:70b",
+    "hermes": "model:hermes",
     "hermes3-70b": "model:hermes3:70b",
-    "mistral": "model:mistral-small3.2:24b",
+    "mistral": "model:mistral",
     "mistral-small3-2-24b": "model:mistral-small3.2:24b",
-    "terra": "model:gpt-5.6-terra",
+    "terra": "model:terra",
     "gpt-5-6-terra": "model:gpt-5.6-terra",
     "codex-terra": "model:gpt-5.6-terra",
-    "sol": "model:gpt-5.6-sol",
+    "sol": "model:sol",
     "gpt-5-6-sol": "model:gpt-5.6-sol",
     "codex-sol": "model:gpt-5.6-sol",
-    "luna": "model:gpt-5.6-luna",
+    "luna": "model:luna",
     "gpt-5-6-luna": "model:gpt-5.6-luna",
     "codex-luna": "model:gpt-5.6-luna",
-    "codex": "model:gpt-5.6-terra"
+    "codex": "model:codex",
+    "claude-fable-5": "model:claude-fable-5"
   },
   "model_routes": {
     "grok": {
@@ -792,6 +792,14 @@
     },
     "grok-4.5": "xai",
     "grok-4.5-latest": {
+      "endpoint": "xai",
+      "name": "grok-4.5"
+    },
+    "grok-build": {
+      "endpoint": "xai",
+      "name": "grok-4.5"
+    },
+    "grok-build-latest": {
       "endpoint": "xai",
       "name": "grok-4.5"
     },
@@ -888,50 +896,15 @@
       "endpoint": "openrouter",
       "name": "thudm/glm-4-plus"
     },
-    "claude-opus-4-8": {
-      "endpoint": "anthropic",
-      "name": "claude-opus-4-8"
-    },
+    "claude-opus-4-8": "claude-opus-5",
     "claude-haiku-4-5-20251001": {
       "endpoint": "anthropic",
       "name": "claude-haiku-4-5-20251001"
     },
-    "opus": {
-      "best-cloud": "claude-opus-4-8",
-      "best-cloud-oss": "deepseek-v4-pro:cloud",
-      "best-local-oss": "qwen3.6:35b",
-      "best-cloud-gov": "claude-opus-4-8",
-      "best-local-gov": "qwen3.6:35b",
-      "connected": "claude-opus-4-8",
-      "offline": "qwen3.6:35b"
-    },
-    "sonnet": {
-      "best-cloud": "claude-sonnet-5",
-      "best-cloud-oss": "kimi-k2.7-code:cloud",
-      "best-local-oss": "qwen3.6:35b",
-      "best-cloud-gov": "claude-sonnet-5",
-      "best-local-gov": "qwen3.6:35b",
-      "connected": "claude-sonnet-5",
-      "offline": "qwen3.6:35b"
-    },
-    "haiku": {
-      "best-cloud": "claude-haiku-4-5-20251001",
-      "best-cloud-oss": "glm-5.2:cloud",
-      "best-local-oss": "phi4-mini:3.8b",
-      "best-cloud-gov": "claude-haiku-4-5-20251001",
-      "best-local-gov": "phi4-mini:3.8b",
-      "connected": "claude-haiku-4-5-20251001",
-      "offline": "phi4-mini:3.8b"
-    },
-    "fable": {
-      "best-cloud": "claude-sonnet-5",
-      "best-cloud-oss": "deepseek-v4-pro:cloud",
-      "best-local-oss": "qwen3.6:35b",
-      "best-cloud-gov": "claude-sonnet-5",
-      "best-local-gov": "qwen3.6:35b",
-      "connected": "claude-sonnet-5",
-      "offline": "qwen3.6:35b"
-    },
+    "opus": "claude-opus-5",
+    "sonnet": "claude-sonnet-5",
+    "haiku": "claude-haiku-4-5-20251001",
+    "fable": "claude-fable-5",
     "qwen3:8b": {
       "endpoint": "ollama_local",
       "name": "qwen3:8b"
@@ -959,7 +932,6 @@
     "qwen3.6:27b-nvfp4": "ollama_local",
     "qwen3.6:35b-a3b-q8_0": "ollama_local",
     "glm-5.2:cloud": "ollama_cloud",
-    "kimi-k2.7-code:cloud": "ollama_cloud",
     "nemotron-3-super:cloud": "ollama_cloud",
     "qwen3-coder:480b-cloud": "ollama_cloud",
     "claude-sonnet-4-6": "claude-sonnet-5",
@@ -1143,10 +1115,10 @@
       "best-cloud": {
         "seats": [
           "planner-hard",
-          "gemini",
+          "sol",
           "grok"
         ],
-        "description": "Max-quality cloud mix: hard planner + Gemini + Grok leaf"
+        "description": "Max-quality cloud mix: hard planner + Codex SOL + Grok leaf"
       },
       "best-cloud-oss": {
         "seats": [
@@ -1167,7 +1139,7 @@
       "best-cloud-gov": {
         "seats": [
           "planner-hard",
-          "gemini",
+          "sol",
           "grok"
         ],
         "description": "Gov-safe cloud (no Chinese-origin brand leaves)"
@@ -1181,5 +1153,107 @@
         "description": "Gov-safe local capabilities"
       }
     }
+  },
+  "_generated_brand_agents": [
+    "claude-fable-5",
+    "claude-haiku-4-5-20251001",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "codex",
+    "codex-luna",
+    "codex-sol",
+    "codex-terra",
+    "deepseek",
+    "deepseek-flash",
+    "deepseek-v4-flash-cloud",
+    "deepseek-v4-pro-cloud",
+    "devstral",
+    "devstral-2",
+    "devstral-2-latest",
+    "devstral-small-2-24b",
+    "devstral-small-2-24b-cloud",
+    "fable",
+    "gemini",
+    "gemini-3-flash-preview-cloud",
+    "gemini-flash",
+    "gemini-pro",
+    "gemini-pro-latest",
+    "gemma",
+    "gemma4-26b",
+    "gemma4-26b-mxfp8",
+    "gemma4-31b",
+    "gemma4-31b-mxfp8",
+    "gemma4-e4b",
+    "glm",
+    "glm-5-2-cloud",
+    "gpt-5-6-luna",
+    "gpt-5-6-sol",
+    "gpt-5-6-terra",
+    "gpt-oss",
+    "gpt-oss-120b",
+    "gpt-oss-120b-cloud",
+    "gpt-oss-20b",
+    "grok",
+    "grok-4-5",
+    "haiku",
+    "hermes",
+    "hermes3-70b",
+    "kimi",
+    "kimi-k3-cloud",
+    "luna",
+    "minimax",
+    "minimax-m3-cloud",
+    "mistral",
+    "mistral-small3-2-24b",
+    "nemotron",
+    "nemotron-3-super-cloud",
+    "opus",
+    "phi",
+    "phi4-mini-3-8b",
+    "phi4-reasoning-plus",
+    "qwen",
+    "qwen3-1-7b",
+    "qwen3-4b",
+    "qwen3-6-27b",
+    "qwen3-6-27b-coding-mxfp8",
+    "qwen3-6-27b-coding-nvfp4",
+    "qwen3-6-27b-nvfp4",
+    "qwen3-6-35b",
+    "qwen3-6-35b-a3b-coding-mxfp8",
+    "qwen3-6-35b-a3b-coding-nvfp4",
+    "qwen3-6-35b-a3b-nvfp4",
+    "qwen3-6-35b-a3b-q8-0",
+    "qwen3-coder-480b-cloud",
+    "qwen3-coder-next-q4-k-m",
+    "qwen3-coder-next-q8-0",
+    "qwen3-vl-8b",
+    "sol",
+    "sonnet",
+    "terra"
+  ],
+  "latest_models": {
+    "opus": "claude-opus-5",
+    "sonnet": "claude-sonnet-5",
+    "haiku": "claude-haiku-4-5-20251001",
+    "fable": "claude-fable-5",
+    "grok": "grok-4.5",
+    "deepseek": "deepseek-v4-pro:cloud",
+    "deepseek-flash": "deepseek-v4-flash:cloud",
+    "qwen": "qwen3.6:35b",
+    "kimi": "kimi-k3:cloud",
+    "gemini": "gemini-pro-latest",
+    "glm": "glm-5.2:cloud",
+    "gemma": "gemma4:31b",
+    "phi": "phi4-mini:3.8b",
+    "gpt-oss": "gpt-oss:120b",
+    "devstral": "devstral-2:latest",
+    "nemotron": "nemotron-3-super:cloud",
+    "minimax": "minimax-m3:cloud",
+    "hermes": "hermes3:70b",
+    "mistral": "mistral-small3.2:24b",
+    "sol": "gpt-5.6-sol",
+    "terra": "gpt-5.6-terra",
+    "luna": "gpt-5.6-luna",
+    "codex": "gpt-5.6-terra"
   }
 }

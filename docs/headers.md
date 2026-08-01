@@ -33,9 +33,10 @@ the actual hardware or an explicit override.
 | Header | Set when | Value | Streaming? |
 |---|---|---|---|
 | `x-c-thru-served-by` | Always (when route resolves) | Concrete model name the proxy forwarded to (after alias / capability / sigil resolution) | Yes |
+| `x-c-thru-agent-identity` | Every routed Messages request | How agent identity was obtained: `sentinel` (signed prompt marker), `header` (signed c-thru agent headers), or `none` | Yes |
 | `x-c-thru-resolution-chain` | Route resolved through ≥1 hop | ` -> `-joined chain like `req:claude-sonnet-5 -> route(claude-sonnet-5->anthropic)` | Yes |
-| `x-c-thru-resolved-via` | Capability-driven request (e.g. agent uses `model: planner`) | JSON: `{"capability":"planner","profile":"planner","served_by":"...","tier":"64gb","mode":"connected","local_terminal_appended":false}` | Yes |
-| `x-c-thru-fallback-from` | Primary route failed and fallback chain matched | Original requested model name (e.g. `gemini-pro-latest` when fallback resolved to a local model) | Yes |
+| `x-c-thru-resolved-via` | Capability-driven request (e.g. agent uses `model: planner`) | JSON with `capability`, `served_by`, `tier`, `mode`, `latency_ms`, and `local_terminal_appended`; trusted agent requests also include `agent` | Yes |
+| `x-c-thru-fallback-from` | Primary route failed and fallback chain matched | Backend ID that failed before the successful fallback dispatch | Yes |
 | `x-c-thru-deprecated-model` | Resolved model is in built-in deprecation list or `deprecated_models` config | Migration advice string (e.g. `use gemini-pro-latest (gemini-1.5-* deprecated 2025-09)`) | Yes |
 | `x-c-thru-count-tokens` | `/v1/messages/count_tokens` short-circuited by proxy (Ollama backends) | `estimate` — proxy-side heuristic, not an exact count | No |
 
@@ -62,13 +63,13 @@ the actual hardware or an explicit override.
 | Header | Set when | Value | Streaming? |
 |---|---|---|---|
 | `x-c-thru-thinking-auto-enabled` | Proxy auto-enabled thinking on Gemini 3 Pro family | `1`. Suppressed on `/v1/messages/count_tokens` (no model invocation) | Yes |
-| `x-c-thru-thinking-level` | Gemini 3+ used `thinkingLevel` enum | `minimal` \| `low` \| `medium` \| `high`. Per-model variance: gemini-3-pro lacks `medium` (falls back to `high`), only flash supports `minimal` (falls back to `low`) | Yes |
-| `x-c-thru-thinking-budget-added` | Proxy expanded `maxOutputTokens` to fit thinking | `<N>` (added budget). On Gemini 3 N is the level's approx budget (minimal=256, low=2048, medium=8192, high=16384); on Gemini 2.5 N equals the explicit `thinkingBudget`. Suppressed on count_tokens. | Yes |
+| `x-c-thru-thinking-level` | Gemini 3+ used `thinkingLevel`, including mapped Anthropic `output_config.effort` | `minimal` \| `low` \| `medium` \| `high`. Per-model variance is coerced to a supported level: legacy Gemini 3 Pro lacks `medium`; Gemini 3.1 Flash-Lite Image accepts only `minimal`/`high`. Inexact mappings set `x-c-thru-translation-gap`. | Yes |
 | `x-c-thru-thinking-tokens` | Upstream returned `usageMetadata.thoughtsTokenCount` | `<N>`. **Non-streaming only** — headers can't be set after SSE `writeHead`. Streaming surfaces this via a custom `c-thru-thinking-tokens` SSE event (see below). | No |
 
 `output_tokens` includes thinking tokens (Anthropic parity):
 `candidatesTokenCount + thoughtsTokenCount`. Streaming and non-streaming
-both follow this convention.
+both follow this convention. `max_tokens` remains the caller's hard total-output
+ceiling; c-thru does not raise `maxOutputTokens` to make room for thinking.
 
 ### Streaming-only: `c-thru-thinking-tokens` SSE event
 
@@ -93,11 +94,11 @@ breakdown read the custom event; everyone else sees normal Anthropic SSE.
 
 ## Trigger expressions in code
 
-The headers are stamped from two locations:
+The headers are stamped from three implementation surfaces:
 
-1. **`buildCthruResponseHeaders`** (`tools/claude-proxy:~2090`) — Gemini path. Reads non-enumerable `_*` stashes on the response body (e.g. `_thinkingAutoEnabled`, `_cacheStatus`) plus `requestMeta` for resolution-derived fields. Streaming and non-streaming Gemini both call this.
-2. **Inline header writes** (`tools/claude-proxy:~1217, ~1417, ~1815`) — Anthropic / OpenRouter / passthrough paths. Stamp `x-c-thru-served-by` / `-resolved-via` / `-resolution-chain` / `-fallback-from` directly when forming `outHeaders`.
-3. **Handler-top `res.setHeader`** — `x-c-thru-dashboard` only. Set once at the top of the request handler (before any routing) so every response carries it; `setHeader` values merge with later `writeHead` header objects, which is why this works for both control endpoints and streaming responses.
+1. **`buildCthruResponseHeaders`** — shared by **Gemini and OpenAI/xAI** success paths. Reads non-enumerable `_*` stashes on the body (e.g. `_thinkingAutoEnabled`, `_cacheStatus` for Gemini; OpenAI passes the mapped body) plus `requestMeta` for resolution-derived routing headers (`served-by`, `resolved-via`, `resolution-chain`, `fallback-from`). Streaming and non-streaming both call this before `writeHead`.
+2. **Forwarding functions** (`forwardAnthropic`, Ollama stream/non-stream) — stamp the same routing headers inline when forming upstream response headers (Anthropic does not go through `buildCthruResponseHeaders`).
+3. **Request handler `res.setHeader` calls** — `x-c-thru-dashboard` is set before routing, and `x-c-thru-agent-identity` is set after the trust/routing decision but before provider dispatch. `setHeader` values merge with later `writeHead` header objects.
 
 When adding a new header:
 - Pick the function/site that owns the data (don't duplicate logic).
@@ -120,20 +121,19 @@ When absent, `call_style` is inferred from `format`.
 |---|---|---|
 | `anthropic` (default) | `forwardAnthropic` | Verbatim passthrough — body forwarded as-is, headers rewritten |
 | `gemini` | `dispatchGeminiBackend` | Full Anthropic→Gemini translation: URL construction, body mapping, streaming state machine, context caching, thinking blocks |
-| `openai` | 501 stub | Anthropic→OpenAI translation — not yet implemented; returns 501 with an informative message |
+| `openai` | `dispatchOpenAIBackend` → `forwardOpenAI` | Anthropic Messages→OpenAI Responses translation, including streaming and tool-use conversion |
 
 **Why separate from `format`?**
 `format` is used for wire-level concerns (auth header selection: `x-goog-api-key` vs `Authorization`).
 `call_style` is used for translation-layer routing. Decoupling them allows:
-- Documenting future `call_style:"openai"` intent on an endpoint without changing current dispatch
+- Selecting the implemented OpenAI Responses translator independently of auth/wire-format metadata
 - Overriding translation independently of auth/wire format (e.g. passthrough to a Gemini-URL endpoint)
 
-**Supported translation styles today:** `anthropic` (passthrough) and `gemini`. `call_style:"openai"`
-returns 501 until an OpenAI translator is built — do not ship endpoints that only 501 in the default
-`config/model-map.json`.
+**Supported translation styles today:** `anthropic` (passthrough), `gemini`, and `openai`
+(Anthropic Messages→OpenAI Responses translation).
 
 **Backward compatibility:** `format:"gemini"` infers `call_style:"gemini"`, `format:"anthropic"`
-infers `call_style:"anthropic"`, `format:"openai"` infers `call_style:"openai"` (still 501).
+infers `call_style:"anthropic"`, and `format:"openai"` infers `call_style:"openai"`.
 
 ## See also
 

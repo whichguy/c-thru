@@ -22,7 +22,7 @@ Requests resolve by **capability**, **hardware tier**, and **connectivity mode**
 - Mix providers in a single session
 - Fall back and reload without restarting Claude
 - Observe every decision (`x-c-thru-*`, optional journal)
-- Optional 98-agent fleet and `/cplan` waves (CLI install)
+- Optional 97-agent fleet and `/cplan` waves (CLI install)
 
 ### In practice
 
@@ -183,17 +183,16 @@ flowchart LR
 
     subgraph MODELS["c-thru decides what actually serves it"]
         M1["claude-fable-5"]
-        M2["gemini-pro"]
-        M3["qwen3.6<br/>on your machine"]
-        M4["claude-opus-4-8"]
-        M5["grok-4.5"]
+        M2["claude-sonnet-5"]
+        M3["claude-opus-5"]
+        M4["grok-4.5"]
     end
 
     R <--> A1 --> M1
     R <--> A2 --> M2
-    R <--> A3 --> M3
-    R <--> A4 --> M4
-    R <--> A5 --> M5
+    R <--> A3 --> M2
+    R <--> A4 --> M3
+    R <--> A5 --> M4
 
     classDef harness  fill:#E8F0FE,stroke:#4285F4,stroke-width:1.5px,color:#111
     classDef provider fill:#E6F4EA,stroke:#137333,stroke-width:1.5px,color:#111
@@ -212,9 +211,10 @@ security reviewer can run on Opus — **without you leaving the session or re-ex
 three times.** Each agent sees the accumulated context, and its answer becomes part of the same
 thread the next one reads.
 
-`grok` is the deliberate exception, and it is in the picture on purpose: five agents name a model
-instead of a job, for when *which vendor answers* is the entire point of asking. Everything below is
-the machinery that makes both kinds work.
+`grok` is the deliberate exception, and it is in the picture on purpose: generated brand agents name
+a model instead of a job, for when *which vendor answers* is the entire point of asking. Primary
+shorthands include `grok`, `deepseek`, `qwen`, `kimi`, and `gemini`; the catalog also generates
+family and exact-model aliases. Everything below is the machinery that makes both kinds work.
 
 **How this differs from a model gateway.** OpenRouter and friends solve *reach*: one key, hundreds of
 models. But you still name a concrete model on every call — `deepseek/deepseek-r2` is a fixed choice,
@@ -291,8 +291,8 @@ the single place a model is ever chosen.
 "MUST BE USED for all code implementation tasks" — and the injected system prompt tells the main
 loop to read those descriptions and delegate before doing non-trivial work inline. You type
 "implement the JWT middleware"; the main loop picks `coder`. You can also ask directly ("use the
-tester agent on this"), and for the five model-pinned agents that is the normal path: "ask agent
-grok to critique this plan".
+tester agent on this"), and for model-pinned brand leaves that is the normal path: "ask agent grok
+to critique this plan".
 
 Where the values live — the four keys the proxy walks, in order:
 
@@ -300,14 +300,14 @@ Where the values live — the four keys the proxy walks, in order:
 {
   "agent_to_capability": { "coder": "coder", "reviewer-plan": "code-reviewer",
                            "grok": "model:grok-4.5" },
-  "llm_profiles":        { "coder": { "best-cloud":     { "64gb": "gemini-pro" },
-                                      "best-cloud-oss": { "64gb": "kimi-k2.7-code:cloud" },
+  "llm_profiles":        { "coder": { "best-cloud":     { "64gb": "claude-sonnet-5" },
+                                      "best-cloud-oss": { "64gb": "kimi-k3:cloud" },
                                       "on_failure": "cascade",
                                       "fallback_to": "coder-fallback" } },
-  "model_routes":        { "gemini-pro": { "endpoint": "gemini_ai" } },
-  "endpoints":           { "gemini_ai": { "url": "https://generativelanguage.googleapis.com",
-                                          "format": "gemini",
-                                          "fallback_to": "claude-sonnet-5" } }
+  "model_routes":        { "kimi-k3:cloud": "ollama_cloud" },
+  "endpoints":           { "ollama_cloud": { "url": "http://localhost:11434",
+                                               "format": "anthropic",
+                                               "prep_policy": "skip" } }
 }
 ```
 
@@ -380,9 +380,9 @@ model actually serves it is a runtime decision made by the proxy from three inpu
 the [routing mode](#routing-modes), and the detected hardware tier. Swapping a model is a one-value
 edit in `config/model-map.json`; **agent files are never touched.**
 
-The five named agents (`grok`, `deepseek`, `qwen`, `kimi`, `gemini`) are the deliberate exception:
-they map to a `model:` pin and bypass capability resolution entirely, so "ask agent grok" always
-reaches Grok.
+Generated brand leaves are the deliberate exception: primary shorthands such as `grok`, `deepseek`,
+`qwen`, `kimi`, and `gemini`, plus their catalog aliases, map to a `model:` pin and bypass capability
+resolution entirely. Thus "ask agent grok" always reaches Grok.
 
 **How the agent name survives the trip.** Claude Code validates the Agent tool's `model` field
 against a fixed enum (`sonnet` / `opus` / `haiku` / `fable`), and c-thru's own rule forbids hooks from
@@ -455,7 +455,7 @@ below expands in place, and the payload is shown exactly as it looks at that mom
 
 <!-- BEGIN request-flow-steps (generated by tools/gen-request-flow-doc.js from docs/request-flow.html — run it, don't hand-edit) -->
 <details>
-<summary><b>Happy path — coder, best-cloud, 64gb</b> &mdash; 10 steps</summary>
+<summary><b>Happy path — coder, best-cloud-oss, 64gb</b> &mdash; 10 steps</summary>
 
 <details>
 <summary>1 &middot; A prompt arrives &mdash; <i>You</i></summary>
@@ -540,10 +540,10 @@ Three inputs decide it: the capability, the routing mode, and the detected hardw
   # llm_profiles.coder
   "coder": {
     "best-cloud": {
-+     "64gb": "gemini-pro"
+      "64gb": "claude-sonnet-5"
     },
     "best-cloud-oss": {
-      "64gb": "kimi-k2.7-code:cloud"
++     "64gb": "kimi-k3:cloud"
     }
   }
 ```
@@ -553,31 +553,29 @@ Three inputs decide it: the capability, the routing mode, and the detected hardw
 <details>
 <summary>7 &middot; Model → endpoint &mdash; <i>claude-proxy</i></summary>
 
-The concrete model resolves to an endpoint entry carrying the URL, the auth scheme, and the wire format. Format picks the translator.
+The concrete model resolves to an endpoint entry carrying the URL, auth policy, and wire format. Kimi K3 is an Ollama Cloud tag served through the local Ollama endpoint.
 
 ```diff
-  # endpoints.gemini_ai — verbatim from the shipped config
+  # endpoints.ollama_cloud — verbatim from the shipped config
   {
-    "url": "https://generativelanguage.googleapis.com",
-    "format": "gemini",
-+   "fallback_to": "claude-sonnet-5"
+    "url": "http://localhost:11434",
+    "format": "anthropic",
++   "prep_policy": "skip"
   }
 ```
-
-> Auth is not in this entry — it is derived from the hostname. Note the fallback_to line: it does nothing today, and everything in the failover scenario.
 
 </details>
 
 <details>
-<summary>8 &middot; Translate and send &mdash; <i>Upstream API</i></summary>
+<summary>8 &middot; Forward and send &mdash; <i>Upstream API</i></summary>
 
-The request arrived in Anthropic wire format. forwardGemini rewrites it into a Gemini generateContent call: system prompt, tool schemas, and content blocks all get remapped.
+The request arrived in Anthropic wire format and the selected endpoint speaks Anthropic Messages too, so forwardAnthropic sends it near-verbatim with only the resolved model field changed.
 
 ```diff
   # Outbound
-  POST  generativelanguage.googleapis.com
-        /v1beta/models/gemini-pro:streamGenerateContent
-+ via   forwardGemini()
+  POST  localhost:11434/v1/messages
+       model: kimi-k3:cloud
++ via  forwardAnthropic()
 ```
 
 </details>
@@ -585,14 +583,13 @@ The request arrived in Anthropic wire format. forwardGemini rewrites it into a G
 <details>
 <summary>9 &middot; Normalize the response &mdash; <i>claude-proxy</i></summary>
 
-Coming back, the proxy does the inverse: Gemini SSE is translated into Anthropic SSE, so the harness never learns it was talking to anything else. Because headers cannot be set once streaming has begun, Gemini thinking-token counts ride along as a custom SSE event instead.
+The upstream already returns Anthropic SSE. The proxy tees the stream for usage accounting and adds routing observability without translating the content blocks.
 
 ```diff
   # Response headers
 + x-c-thru-resolved-via: {"capability":"coder",
-+   "served_by":"gemini-pro","tier":"64gb",
-+   "mode":"best-cloud"}
-  event: c-thru-thinking-tokens
++   "served_by":"kimi-k3:cloud","tier":"64gb",
++   "mode":"best-cloud-oss"}
 ```
 
 </details>
@@ -600,11 +597,11 @@ Coming back, the proxy does the inverse: Gemini SSE is translated into Anthropic
 <details>
 <summary>10 &middot; The answer lands &mdash; <i>You</i></summary>
 
-The subagent got a normal Anthropic-shaped response. It never knew it was served by Gemini — and it did not have to.
+The subagent got a normal Anthropic-shaped response. It did not need to know that Kimi K3 served the role; the resolved-via header keeps that fact observable.
 
 ```text
 # How to check after the fact
-x-c-thru-resolved-via  →  served_by: gemini-pro
+x-c-thru-resolved-via  →  served_by: kimi-k3:cloud
 ```
 
 </details>
@@ -612,12 +609,12 @@ x-c-thru-resolved-via  →  served_by: gemini-pro
 </details>
 
 <details>
-<summary><b>Backend failure — the cascade in payloads</b> &mdash; 8 steps</summary>
+<summary><b>Explicit Gemini failure — the cascade in payloads</b> &mdash; 8 steps</summary>
 
 <details>
-<summary>1 &middot; Same request, up to the send &mdash; <i>claude-proxy</i></summary>
+<summary>1 &middot; An explicit Gemini request reaches its endpoint &mdash; <i>claude-proxy</i></summary>
 
-Steps 1 through 7 are identical to the happy path: coder → capability coder → gemini-pro → the gemini_ai endpoint. We rejoin the story at the moment of the outbound call.
+This is a separate request from the Kimi happy path. The user explicitly chose the gemini brand leaf, which pins gemini-pro and resolves directly to the gemini_ai endpoint.
 
 ```diff
   # endpoints.gemini_ai — verbatim from the shipped config
@@ -655,14 +652,14 @@ res.headersSent  →  false   (safe to reroute)
 </details>
 
 <details>
-<summary>4 &middot; Guard two — is this capability allowed to degrade? &mdash; <i>Upstream API</i></summary>
+<summary>4 &middot; Guard two — is substitution allowed? &mdash; <i>Upstream API</i></summary>
 
-reviewer-security and debugger-hard ship with on_failure: hard_fail. For a security review, a quietly-substituted weaker model is a worse outcome than a visible failure, so those skip the cascade entirely. coder is cascade, the default.
+Agent `model:` pins (brand leaves via `agent_to_capability`) default to **hard_fail** — a primary 403/5xx must not cascade to `routes.default` under the brand Identity prompt (false attribution). Role capabilities cascade by default; reviewer-security and debugger-hard ship with on_failure: hard_fail because a quietly substituted weaker model would be worse than a visible failure. Explicit `llm_profiles.<cap>.on_failure` always wins when set.
 
 ```diff
-  # llm_profiles.coder
-+ "on_failure": "cascade"
-  "fallback_to": "coder-fallback"
+  # Resolved request policy
+  model pin   gemini-pro
++ on_failure  cascade (default)
 ```
 
 > A 400 would not reach this point at all — a malformed request fails the same way on every backend, so retrying would only multiply the error.
@@ -700,15 +697,14 @@ The same original request — sentinel already stripped, content untouched — i
 <details>
 <summary>7 &middot; Later stages, if that had failed too &mdash; <i>claude-proxy</i></summary>
 
-Stage 1 answered, so the cascade stops. Had it not, the proxy would keep walking: capability fallback_to, then the tier's fallback chain ordered by quality tolerance, then local modes stepping out to cloud, then the global default route.
+Stage 1 answered, so the cascade stops. For a logical-role request whose endpoint chain were exhausted, the proxy could next walk its configured fallback chain, try a mode-appropriate local terminal, and finally try the global default route.
 
 ```text
 # The full cascade order
 1  endpoint fallback_to        ← answered here
-2  capability fallback_to      coder → coder-fallback
-3  capability fallback chain   by quality_tolerance_pct
-4  local terminal fallback     best-local → best-cloud
-5  global default route
+2  capability fallback chain   role requests only
+3  local terminal fallback     role requests only
+4  global default route
 ```
 
 </details>
@@ -716,13 +712,13 @@ Stage 1 answered, so the cascade stops. Had it not, the proxy would keep walking
 <details>
 <summary>8 &middot; The subagent never saw the failure &mdash; <i>You</i></summary>
 
-It asked for coder. It never asked for Gemini. The only trace that anything went sideways is the resolved-via header naming a different model than the happy path.
+The user asked for Gemini explicitly, but the endpoint failed before streaming and its declared fallback answered. The resolved-via header preserves that distinction instead of pretending Gemini served the response.
 
 ```diff
   # Response header
-  x-c-thru-resolved-via: {"capability":"coder",
+  x-c-thru-resolved-via: {
 +   "served_by":"claude-sonnet-5",
-    "mode":"best-cloud"}
+    "mode":"best-cloud-oss"}
 ```
 
 </details>
@@ -735,7 +731,7 @@ It asked for coder. It never asked for Gemini. The only trace that anything went
 <details>
 <summary>1 &middot; You name a model, not a job &mdash; <i>Claude Code harness</i></summary>
 
-Five agents are the deliberate exception to the whole capability scheme: grok, deepseek, qwen, kimi and gemini. Asking for grok means you want Grok specifically — a second opinion from a different vendor is the entire point.
+Generated brand leaves are the deliberate exception to the role-capability scheme. They include grok, deepseek, qwen, kimi, gemini, opus, and concrete-model aliases. Asking for grok means you want Grok specifically — a second opinion from a different vendor is the entire point.
 
 ```text
 # What you typed
@@ -769,7 +765,8 @@ This is where the two kinds of agent diverge. A model: prefix in agent_to_capabi
     "coder": "coder",
 +   "grok": "model:grok-4.5",
 +   "gemini": "model:gemini-pro",
-+   "kimi": "model:kimi-k2.7-code:cloud"
++   "kimi": "model:kimi-k3:cloud",
++   "opus": "model:claude-opus-5"
   }
 ```
 
@@ -778,12 +775,12 @@ This is where the two kinds of agent diverge. A model: prefix in agent_to_capabi
 <details>
 <summary>4 &middot; Straight to the endpoint &mdash; <i>claude-proxy</i></summary>
 
-No llm_profiles lookup, no mode, no hardware tier. Those three inputs are exactly what a pin opts out of — which is why grok reaches Grok no matter how the rest of the fleet is configured.
+No llm_profiles lookup and no hardware-tier selection. A pin opts out of role routing, so grok reaches Grok directly; a gov mode may still block an origin-incompatible direct pin rather than silently substitute another model.
 
 ```diff
   # Resolution, short-circuited
   grok-4.5  →  endpoints.xai
-+ mode and tier are not consulted
++ role profile and tier are not consulted
 ```
 
 </details>
@@ -1023,7 +1020,7 @@ Set with `CLAUDE_LLM_MODE` (or `--mode <name>` on the CLI):
 
 | Mode | Description |
 |---|---|
-| `best-cloud` | Anthropic + Gemini cloud; local fallback at 64 GB+ |
+| `best-cloud` | Anthropic-led cloud; local small-model routing for selected roles/tiers |
 | `best-cloud-oss` | **Default.** Cloud OSS (DeepSeek, Kimi, GLM via `*:cloud` / OpenRouter) |
 | `best-local-oss` | Fully local (Phi, Qwen, Devstral) |
 | `best-cloud-gov` | US-Gov compliant cloud (non-Chinese-origin) |
@@ -1043,11 +1040,11 @@ What c-thru is *for* — the scenarios the router/proxy/fleet exist to serve. Ea
 |---|---|---|---|
 | 1 | **Fully-local / air-gapped dev** — no cloud egress; everything on local Ollama | [`best-local-oss`](#routing-modes) | `planner`, `coder`, `tester`, `docs` |
 | 2 | **Cost-optimized mixed cloud** — OSS cloud for bulk work, Anthropic only for the hard tiers | [`best-cloud-oss`](#routing-modes) | `coder`, `debugger-hard`, `planner-hard` |
-| 3 | **Max-quality cloud** — Opus / Sonnet / Gemini per role | [`best-cloud`](#routing-modes) | `planner-hard`, `reviewer-security`, `coder` |
+| 3 | **Max-quality cloud** — Fable / Opus / Sonnet per role | [`best-cloud`](#routing-modes) | `planner-hard`, `reviewer-security`, `coder` |
 | 4 | **Compliance / data-sovereignty** — Chinese-origin models filtered out | [`best-cloud-gov`](#routing-modes) / [`best-local-gov`](#routing-modes) | `planner`, `code-reviewer`, `tester` |
 | 5 | **Hardware-tiered auto-scaling** — same config; `16gb`→`128gb` resolves to different concrete models | any (varies by `--profile`) | whole fleet |
 | 6 | **Agentic wave planning** — `/cplan` drives a planner→coder→reviewer→tester→docs pipeline with state | any | `plan-scheduler`, `planner`, `coder`, `code-reviewer`, `tester`, `docs` |
-| 7 | **Role-based model mixing in one session** — Claude plans, local Qwen codes, Gemini debugs | [`best-cloud`](#routing-modes) | `planner` (Anthropic), `coder`/`tester` (Ollama), `debugger-investigate` (Gemini) |
+| 7 | **Role-based model mixing in one session** — Fable plans, Sonnet codes/debugs, Opus audits hard cases | [`best-cloud`](#routing-modes) | `planner`, `coder`/`debugger-investigate`, `reviewer-security` |
 | 8 | **Fallback-chain resilience** — primary backend down → cascade to the next; `hard_fail` tiers opt out | any | `coder`→`coder-fallback`, `reviewer-security` (`hard_fail`) |
 | 9 | **Runtime remap without restart** — edit the model-map + SIGHUP reload | any | whole fleet |
 | 10 | **Observability / audit** — journaling + `x-c-thru-*` headers + usage-stats for routing forensics | any | whole fleet — see [Verifying which agent ran](#verifying-which-agent-ran) |
@@ -1074,7 +1071,7 @@ Schema reference, route/endpoint/profile structure, and the full `model_override
 
 ## Agents
 
-98 agents declare `model: <agent-name>` in frontmatter — including brand leaves from `config/brand-agents.json`, whose frontmatter names themselves like every other agent. Their pin to a concrete model lives one layer down, in `agent_to_capability` (e.g. `"grok": "model:grok-4.5"`, `"opus": "model:opus"`), not in the agent file. The proxy resolves
+97 agents declare `model: <agent-name>` in frontmatter — including brand leaves from `config/brand-agents.json`, whose frontmatter names themselves like every other agent. Their pin to a concrete model lives one layer down, in `agent_to_capability` (e.g. `"grok": "model:grok-4.5"`, `"opus": "model:claude-opus-5"`), not in the agent file. The proxy resolves
 `agent-name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model`
 at request time. Agent files are never edited when you remap models.
 
@@ -1100,111 +1097,112 @@ The full mapping, all the way through the implementation: **agent → capability
 | Agent | Capability | `best-cloud` | `best-cloud-oss` | `best-local-oss` | Endpoint (`best-cloud`) |
 |---|---|---|---|---|---|
 | `advisors` &nbsp;⚠ | `planner-hard` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
-| `claude-haiku-4-5-20251001` &nbsp;⚠ | `model:claude-haiku-4-5-20251001` | `—` | `—` | `—` | `—` |
-| `claude-opus-5` &nbsp;⚠ | `model:claude-opus-5` | `—` | `—` | `—` | `—` |
-| `claude-sonnet-5` &nbsp;⚠ | `model:claude-sonnet-5` | `—` | `—` | `—` | `—` |
-| `code-reviewer` | `code-reviewer` | `claude-sonnet-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
-| `coder` | `coder` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
-| `coder-fallback` | `coder-fallback` | `gemini-pro-latest` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
-| `codex` &nbsp;⚠ | `model:gpt-5.6-terra` | `—` | `—` | `—` | `—` |
-| `codex-luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `—` | `—` | `—` | `—` |
-| `codex-sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `—` | `—` | `—` | `—` |
-| `codex-terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `—` | `—` | `—` | `—` |
-| `debugger-hard` | `debugger-hard` | `claude-opus-4-8` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
-| `debugger-hypothesis` | `debugger-hypothesis` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
-| `debugger-investigate` | `debugger-investigate` | `gemini-pro` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `gemini_ai` |
-| `deepseek` &nbsp;⚠ | `model:deepseek-v4-pro:cloud` | `—` | `—` | `—` | `—` |
-| `deepseek-flash` &nbsp;⚠ | `model:deepseek-v4-flash:cloud` | `—` | `—` | `—` | `—` |
-| `deepseek-v4-flash-cloud` &nbsp;⚠ | `model:deepseek-v4-flash:cloud` | `—` | `—` | `—` | `—` |
-| `deepseek-v4-pro-cloud` &nbsp;⚠ | `model:deepseek-v4-pro:cloud` | `—` | `—` | `—` | `—` |
-| `devstral` &nbsp;⚠ | `model:devstral-2:latest` | `—` | `—` | `—` | `—` |
-| `devstral-2` &nbsp;⚠ | `model:devstral-2` | `—` | `—` | `—` | `—` |
-| `devstral-2-latest` &nbsp;⚠ | `model:devstral-2:latest` | `—` | `—` | `—` | `—` |
-| `devstral-small-2-24b` &nbsp;⚠ | `model:devstral-small-2:24b` | `—` | `—` | `—` | `—` |
-| `devstral-small-2-24b-cloud` &nbsp;⚠ | `model:devstral-small-2:24b-cloud` | `—` | `—` | `—` | `—` |
+| `claude-haiku-4-5-20251001` &nbsp;⚠ | `model:claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `anthropic` |
+| `claude-opus-5` &nbsp;⚠ | `model:claude-opus-5` | `claude-opus-5` | `claude-opus-5` | `claude-opus-5` | `anthropic` |
+| `claude-sonnet-5` &nbsp;⚠ | `model:claude-sonnet-5` | `claude-sonnet-5` | `claude-sonnet-5` | `claude-sonnet-5` | `anthropic` |
+| `code-reviewer` | `code-reviewer` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
+| `coder` | `coder` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
+| `coder-fallback` | `coder-fallback` | `claude-opus-5` | `deepseek-v4-flash:cloud` | `devstral-small-2:24b` | `anthropic` |
+| `codex` &nbsp;⚠ | `model:gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
+| `codex-luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `openai` |
+| `codex-sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `openai` |
+| `codex-terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
+| `debugger-hard` | `debugger-hard` | `claude-opus-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
+| `debugger-hypothesis` | `debugger-hypothesis` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
+| `debugger-investigate` | `debugger-investigate` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
+| `deepseek` &nbsp;⚠ | `model:deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `ollama_cloud` |
+| `deepseek-flash` &nbsp;⚠ | `model:deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `ollama_cloud` |
+| `deepseek-v4-flash-cloud` &nbsp;⚠ | `model:deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `ollama_cloud` |
+| `deepseek-v4-pro-cloud` &nbsp;⚠ | `model:deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `ollama_cloud` |
+| `devstral` &nbsp;⚠ | `model:devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `ollama_local` |
+| `devstral-2` &nbsp;⚠ | `model:devstral-2` | `devstral-2` | `devstral-2` | `devstral-2` | `ollama_local` |
+| `devstral-2-latest` &nbsp;⚠ | `model:devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `ollama_local` |
+| `devstral-small-2-24b` &nbsp;⚠ | `model:devstral-small-2:24b` | `devstral-small-2:24b` | `devstral-small-2:24b` | `devstral-small-2:24b` | `ollama_local` |
+| `devstral-small-2-24b-cloud` &nbsp;⚠ | `model:devstral-small-2:24b-cloud` | `devstral-small-2:24b-cloud` | `devstral-small-2:24b-cloud` | `devstral-small-2:24b-cloud` | `ollama_cloud` |
 | `docs` | `docs` | `gemma4:26b` | `gemma4:26b` | `qwen3.6:35b` | `ollama_local` |
 | `edge` | `edge` | `gemma4:e4b` | `gemma4:e4b` | `gemma4:e4b` | `ollama_local` |
-| `explore` | `explore` | `gemini-pro-latest` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `gemini_ai` |
-| `fable` &nbsp;⚠ | `model:claude-fable-5` | `—` | `—` | `—` | `—` |
+| `explore` | `explore` | `claude-sonnet-5` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `anthropic` |
+| `fable` &nbsp;⚠ | `model:claude-fable-5` | `claude-fable-5` | `claude-fable-5` | `claude-fable-5` | `anthropic` |
 | `fast-generalist` | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
 | `fast-scout` | `fast-scout` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `ollama_local` |
-| `gemini` &nbsp;⚠ | `model:gemini-pro` | `—` | `—` | `—` | `—` |
-| `gemini-3-flash-preview-cloud` &nbsp;⚠ | `model:gemini-3-flash-preview:cloud` | `—` | `—` | `—` | `—` |
-| `gemini-flash` &nbsp;⚠ | `model:gemini-3-flash-preview:cloud` | `—` | `—` | `—` | `—` |
-| `gemini-pro` &nbsp;⚠ | `model:gemini-pro` | `—` | `—` | `—` | `—` |
-| `gemini-pro-latest` &nbsp;⚠ | `model:gemini-pro-latest` | `—` | `—` | `—` | `—` |
-| `gemma` &nbsp;⚠ | `model:gemma4:26b` | `—` | `—` | `—` | `—` |
-| `gemma4-26b` &nbsp;⚠ | `model:gemma4:26b` | `—` | `—` | `—` | `—` |
-| `gemma4-26b-mxfp8` &nbsp;⚠ | `model:gemma4:26b-mxfp8` | `—` | `—` | `—` | `—` |
-| `gemma4-31b` &nbsp;⚠ | `model:gemma4:31b` | `—` | `—` | `—` | `—` |
-| `gemma4-31b-mxfp8` &nbsp;⚠ | `model:gemma4:31b-mxfp8` | `—` | `—` | `—` | `—` |
-| `gemma4-e4b` &nbsp;⚠ | `model:gemma4:e4b` | `—` | `—` | `—` | `—` |
+| `gemini` &nbsp;⚠ | `model:gemini-pro` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini_ai` |
+| `gemini-3-flash-preview-cloud` &nbsp;⚠ | `model:gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `ollama_cloud` |
+| `gemini-flash` &nbsp;⚠ | `model:gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `ollama_cloud` |
+| `gemini-pro` &nbsp;⚠ | `model:gemini-pro` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini_ai` |
+| `gemini-pro-latest` &nbsp;⚠ | `model:gemini-pro-latest` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini_ai` |
+| `gemma` &nbsp;⚠ | `model:gemma4:26b` | `gemma4:26b` | `gemma4:26b` | `gemma4:26b` | `ollama_local` |
+| `gemma4-26b` &nbsp;⚠ | `model:gemma4:26b` | `gemma4:26b` | `gemma4:26b` | `gemma4:26b` | `ollama_local` |
+| `gemma4-26b-mxfp8` &nbsp;⚠ | `model:gemma4:26b-mxfp8` | `gemma4:26b-mxfp8` | `gemma4:26b-mxfp8` | `gemma4:26b-mxfp8` | `ollama_local` |
+| `gemma4-31b` &nbsp;⚠ | `model:gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `ollama_local` |
+| `gemma4-31b-mxfp8` &nbsp;⚠ | `model:gemma4:31b-mxfp8` | `gemma4:31b-mxfp8` | `gemma4:31b-mxfp8` | `gemma4:31b-mxfp8` | `ollama_local` |
+| `gemma4-e4b` &nbsp;⚠ | `model:gemma4:e4b` | `gemma4:e4b` | `gemma4:e4b` | `gemma4:e4b` | `ollama_local` |
 | `generalist` | `generalist` | `claude-sonnet-5` | `glm-5.2:cloud` | `qwen3.6:35b` | `anthropic` |
-| `glm` &nbsp;⚠ | `model:glm-5.2:cloud` | `—` | `—` | `—` | `—` |
-| `glm-5-2-cloud` &nbsp;⚠ | `model:glm-5.2:cloud` | `—` | `—` | `—` | `—` |
-| `gpt-5-6-luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `—` | `—` | `—` | `—` |
-| `gpt-5-6-sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `—` | `—` | `—` | `—` |
-| `gpt-5-6-terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `—` | `—` | `—` | `—` |
-| `gpt-oss` &nbsp;⚠ | `model:gpt-oss:20b` | `—` | `—` | `—` | `—` |
-| `gpt-oss-120b` &nbsp;⚠ | `model:gpt-oss:120b` | `—` | `—` | `—` | `—` |
-| `gpt-oss-120b-cloud` &nbsp;⚠ | `model:gpt-oss:120b-cloud` | `—` | `—` | `—` | `—` |
-| `gpt-oss-20b` &nbsp;⚠ | `model:gpt-oss:20b` | `—` | `—` | `—` | `—` |
-| `grok` &nbsp;⚠ | `model:grok-4.5` | `—` | `—` | `—` | `—` |
-| `grok-4-5` &nbsp;⚠ | `model:grok-4.5` | `—` | `—` | `—` | `—` |
-| `haiku` &nbsp;⚠ | `model:claude-haiku-4-5-20251001` | `—` | `—` | `—` | `—` |
-| `hermes` &nbsp;⚠ | `model:hermes3:70b` | `—` | `—` | `—` | `—` |
-| `hermes3-70b` &nbsp;⚠ | `model:hermes3:70b` | `—` | `—` | `—` | `—` |
-| `kimi` &nbsp;⚠ | `model:kimi-k3:cloud` | `—` | `—` | `—` | `—` |
-| `kimi-k2-7-code-cloud` &nbsp;⚠ | `model:kimi-k2.7-code:cloud` | `—` | `—` | `—` | `—` |
-| `kimi-k3-cloud` &nbsp;⚠ | `model:kimi-k3:cloud` | `—` | `—` | `—` | `—` |
+| `glm` &nbsp;⚠ | `model:glm-5.2:cloud` | `glm-5.2:cloud` | `glm-5.2:cloud` | `glm-5.2:cloud` | `ollama_cloud` |
+| `glm-5-2-cloud` &nbsp;⚠ | `model:glm-5.2:cloud` | `glm-5.2:cloud` | `glm-5.2:cloud` | `glm-5.2:cloud` | `ollama_cloud` |
+| `gpt-5-6-luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `openai` |
+| `gpt-5-6-sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `openai` |
+| `gpt-5-6-terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
+| `gpt-oss` &nbsp;⚠ | `model:gpt-oss:20b` | `gpt-oss:20b` | `gpt-oss:20b` | `gpt-oss:20b` | `ollama_local` |
+| `gpt-oss-120b` &nbsp;⚠ | `model:gpt-oss:120b` | `gpt-oss:120b` | `gpt-oss:120b` | `gpt-oss:120b` | `ollama_local` |
+| `gpt-oss-120b-cloud` &nbsp;⚠ | `model:gpt-oss:120b-cloud` | `gpt-oss:120b-cloud` | `gpt-oss:120b-cloud` | `gpt-oss:120b-cloud` | `ollama_cloud` |
+| `gpt-oss-20b` &nbsp;⚠ | `model:gpt-oss:20b` | `gpt-oss:20b` | `gpt-oss:20b` | `gpt-oss:20b` | `ollama_local` |
+| `grok` &nbsp;⚠ | `model:grok-4.5` | `grok-4.5` | `grok-4.5` | `grok-4.5` | `xai` |
+| `grok-4-5` &nbsp;⚠ | `model:grok-4.5` | `grok-4.5` | `grok-4.5` | `grok-4.5` | `xai` |
+| `haiku` &nbsp;⚠ | `model:claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `anthropic` |
+| `hermes` &nbsp;⚠ | `model:hermes3:70b` | `hermes3:70b` | `hermes3:70b` | `hermes3:70b` | `ollama_local` |
+| `hermes3-70b` &nbsp;⚠ | `model:hermes3:70b` | `hermes3:70b` | `hermes3:70b` | `hermes3:70b` | `ollama_local` |
+| `kimi` &nbsp;⚠ | `model:kimi-k3:cloud` | `kimi-k3:cloud` | `kimi-k3:cloud` | `kimi-k3:cloud` | `ollama_cloud` |
+| `kimi-k3-cloud` &nbsp;⚠ | `model:kimi-k3:cloud` | `kimi-k3:cloud` | `kimi-k3:cloud` | `kimi-k3:cloud` | `ollama_cloud` |
 | `long-context` | `long-context` | `claude-sonnet-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
-| `luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `—` | `—` | `—` | `—` |
-| `minimax` &nbsp;⚠ | `model:minimax-m3:cloud` | `—` | `—` | `—` | `—` |
-| `minimax-m3-cloud` &nbsp;⚠ | `model:minimax-m3:cloud` | `—` | `—` | `—` | `—` |
-| `mistral` &nbsp;⚠ | `model:mistral-small3.2:24b` | `—` | `—` | `—` | `—` |
-| `mistral-small3-2-24b` &nbsp;⚠ | `model:mistral-small3.2:24b` | `—` | `—` | `—` | `—` |
-| `nemotron` &nbsp;⚠ | `model:nemotron-3-super:cloud` | `—` | `—` | `—` | `—` |
-| `nemotron-3-super-cloud` &nbsp;⚠ | `model:nemotron-3-super:cloud` | `—` | `—` | `—` | `—` |
-| `opus` &nbsp;⚠ | `model:claude-opus-5` | `—` | `—` | `—` | `—` |
+| `luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `openai` |
+| `minimax` &nbsp;⚠ | `model:minimax-m3:cloud` | `minimax-m3:cloud` | `minimax-m3:cloud` | `minimax-m3:cloud` | `ollama_cloud` |
+| `minimax-m3-cloud` &nbsp;⚠ | `model:minimax-m3:cloud` | `minimax-m3:cloud` | `minimax-m3:cloud` | `minimax-m3:cloud` | `ollama_cloud` |
+| `mistral` &nbsp;⚠ | `model:mistral-small3.2:24b` | `mistral-small3.2:24b` | `mistral-small3.2:24b` | `mistral-small3.2:24b` | `ollama_local` |
+| `mistral-small3-2-24b` &nbsp;⚠ | `model:mistral-small3.2:24b` | `mistral-small3.2:24b` | `mistral-small3.2:24b` | `mistral-small3.2:24b` | `ollama_local` |
+| `nemotron` &nbsp;⚠ | `model:nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `ollama_cloud` |
+| `nemotron-3-super-cloud` &nbsp;⚠ | `model:nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `ollama_cloud` |
+| `opus` &nbsp;⚠ | `model:claude-opus-5` | `claude-opus-5` | `claude-opus-5` | `claude-opus-5` | `anthropic` |
 | `pdf` | `pdf` | `claude-sonnet-5` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |
-| `phi` &nbsp;⚠ | `model:phi4-reasoning:plus` | `—` | `—` | `—` | `—` |
-| `phi4-mini-3-8b` &nbsp;⚠ | `model:phi4-mini:3.8b` | `—` | `—` | `—` | `—` |
-| `phi4-reasoning-plus` &nbsp;⚠ | `model:phi4-reasoning:plus` | `—` | `—` | `—` | `—` |
+| `phi` &nbsp;⚠ | `model:phi4-reasoning:plus` | `phi4-reasoning:plus` | `phi4-reasoning:plus` | `phi4-reasoning:plus` | `ollama_local` |
+| `phi4-mini-3-8b` &nbsp;⚠ | `model:phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `ollama_local` |
+| `phi4-reasoning-plus` &nbsp;⚠ | `model:phi4-reasoning:plus` | `phi4-reasoning:plus` | `phi4-reasoning:plus` | `phi4-reasoning:plus` | `ollama_local` |
 | `plan-scheduler` &nbsp;⚠ | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
 | `planner` | `planner` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `planner-hard` | `planner-hard` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
-| `qwen` &nbsp;⚠ | `model:qwen3.6:35b` | `—` | `—` | `—` | `—` |
-| `qwen3-1-7b` &nbsp;⚠ | `model:qwen3:1.7b` | `—` | `—` | `—` | `—` |
-| `qwen3-4b` &nbsp;⚠ | `model:qwen3:4b` | `—` | `—` | `—` | `—` |
-| `qwen3-6-27b` &nbsp;⚠ | `model:qwen3.6:27b` | `—` | `—` | `—` | `—` |
-| `qwen3-6-27b-coding-mxfp8` &nbsp;⚠ | `model:qwen3.6:27b-coding-mxfp8` | `—` | `—` | `—` | `—` |
-| `qwen3-6-27b-coding-nvfp4` &nbsp;⚠ | `model:qwen3.6:27b-coding-nvfp4` | `—` | `—` | `—` | `—` |
-| `qwen3-6-27b-nvfp4` &nbsp;⚠ | `model:qwen3.6:27b-nvfp4` | `—` | `—` | `—` | `—` |
-| `qwen3-6-35b` &nbsp;⚠ | `model:qwen3.6:35b` | `—` | `—` | `—` | `—` |
-| `qwen3-6-35b-a3b-coding-mxfp8` &nbsp;⚠ | `model:qwen3.6:35b-a3b-coding-mxfp8` | `—` | `—` | `—` | `—` |
-| `qwen3-6-35b-a3b-coding-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b-a3b-coding-nvfp4` | `—` | `—` | `—` | `—` |
-| `qwen3-6-35b-a3b-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b-a3b-nvfp4` | `—` | `—` | `—` | `—` |
-| `qwen3-6-35b-a3b-q8-0` &nbsp;⚠ | `model:qwen3.6:35b-a3b-q8_0` | `—` | `—` | `—` | `—` |
-| `qwen3-coder-480b-cloud` &nbsp;⚠ | `model:qwen3-coder:480b-cloud` | `—` | `—` | `—` | `—` |
-| `qwen3-coder-next-q4-k-m` &nbsp;⚠ | `model:qwen3-coder-next:q4_K_M` | `—` | `—` | `—` | `—` |
-| `qwen3-coder-next-q8-0` &nbsp;⚠ | `model:qwen3-coder-next:q8_0` | `—` | `—` | `—` | `—` |
-| `qwen3-vl-8b` &nbsp;⚠ | `model:qwen3-vl:8b` | `—` | `—` | `—` | `—` |
-| `reviewer-plan` &nbsp;⚠ | `code-reviewer` | `claude-sonnet-5` | `kimi-k2.7-code:cloud` | `qwen3.6:35b` | `anthropic` |
-| `reviewer-security` | `reviewer-security` | `claude-opus-4-8` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
-| `sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `—` | `—` | `—` | `—` |
-| `sonnet` &nbsp;⚠ | `model:claude-sonnet-5` | `—` | `—` | `—` | `—` |
-| `terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `—` | `—` | `—` | `—` |
-| `tester` | `tester` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `ollama_local` |
+| `qwen` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-1-7b` &nbsp;⚠ | `model:qwen3:1.7b` | `qwen3:1.7b` | `qwen3:1.7b` | `qwen3:1.7b` | `ollama_local` |
+| `qwen3-4b` &nbsp;⚠ | `model:qwen3:4b` | `qwen3:4b` | `qwen3:4b` | `qwen3:4b` | `ollama_local` |
+| `qwen3-6-27b` &nbsp;⚠ | `model:qwen3.6:27b` | `qwen3.6:27b` | `qwen3.6:27b` | `qwen3.6:27b` | `ollama_local` |
+| `qwen3-6-27b-coding-mxfp8` &nbsp;⚠ | `model:qwen3.6:27b-coding-mxfp8` | `qwen3.6:27b-coding-mxfp8` | `qwen3.6:27b-coding-mxfp8` | `qwen3.6:27b-coding-mxfp8` | `ollama_local` |
+| `qwen3-6-27b-coding-nvfp4` &nbsp;⚠ | `model:qwen3.6:27b-coding-nvfp4` | `qwen3.6:27b-coding-nvfp4` | `qwen3.6:27b-coding-nvfp4` | `qwen3.6:27b-coding-nvfp4` | `ollama_local` |
+| `qwen3-6-27b-nvfp4` &nbsp;⚠ | `model:qwen3.6:27b-nvfp4` | `qwen3.6:27b-nvfp4` | `qwen3.6:27b-nvfp4` | `qwen3.6:27b-nvfp4` | `ollama_local` |
+| `qwen3-6-35b` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-6-35b-a3b-coding-mxfp8` &nbsp;⚠ | `model:qwen3.6:35b-a3b-coding-mxfp8` | `qwen3.6:35b-a3b-coding-mxfp8` | `qwen3.6:35b-a3b-coding-mxfp8` | `qwen3.6:35b-a3b-coding-mxfp8` | `ollama_local` |
+| `qwen3-6-35b-a3b-coding-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `ollama_local` |
+| `qwen3-6-35b-a3b-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b-a3b-nvfp4` | `qwen3.6:35b-a3b-nvfp4` | `qwen3.6:35b-a3b-nvfp4` | `qwen3.6:35b-a3b-nvfp4` | `ollama_local` |
+| `qwen3-6-35b-a3b-q8-0` &nbsp;⚠ | `model:qwen3.6:35b-a3b-q8_0` | `qwen3.6:35b-a3b-q8_0` | `qwen3.6:35b-a3b-q8_0` | `qwen3.6:35b-a3b-q8_0` | `ollama_local` |
+| `qwen3-coder-480b-cloud` &nbsp;⚠ | `model:qwen3-coder:480b-cloud` | `qwen3-coder:480b-cloud` | `qwen3-coder:480b-cloud` | `qwen3-coder:480b-cloud` | `ollama_cloud` |
+| `qwen3-coder-next-q4-k-m` &nbsp;⚠ | `model:qwen3-coder-next:q4_K_M` | `qwen3-coder-next:q4_K_M` | `qwen3-coder-next:q4_K_M` | `qwen3-coder-next:q4_K_M` | `ollama_local` |
+| `qwen3-coder-next-q8-0` &nbsp;⚠ | `model:qwen3-coder-next:q8_0` | `qwen3-coder-next:q8_0` | `qwen3-coder-next:q8_0` | `qwen3-coder-next:q8_0` | `ollama_local` |
+| `qwen3-vl-8b` &nbsp;⚠ | `model:qwen3-vl:8b` | `qwen3-vl:8b` | `qwen3-vl:8b` | `qwen3-vl:8b` | `ollama_local` |
+| `reviewer-plan` &nbsp;⚠ | `code-reviewer` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
+| `reviewer-security` | `reviewer-security` | `claude-opus-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
+| `sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `openai` |
+| `sonnet` &nbsp;⚠ | `model:claude-sonnet-5` | `claude-sonnet-5` | `claude-sonnet-5` | `claude-sonnet-5` | `anthropic` |
+| `terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
+| `tester` | `tester` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b-a3b-coding-nvfp4` | `anthropic` |
 | `vision` | `vision` | `claude-sonnet-5` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |
 | `writer` | `writer` | `claude-sonnet-5` | `glm-5.2:cloud` | `qwen3.6:35b` | `anthropic` |
 <!-- END routing-table -->
 
-**⚠ Non-1:1 rows.** Two agents intentionally route to a *different* capability than their own name:
-`reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`, and `advisors` → `planner-hard`. Every other agent maps 1:1.
+**⚠ Non-role rows.** Three role agents intentionally route to a *different* capability than their own
+name: `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`, and `advisors` →
+`planner-hard`. Generated brand rows also carry ⚠ because they pin a concrete model rather than a
+role capability. Every remaining role agent maps 1:1.
 
 **Utility passthroughs.** `WebSearch`, `WebFetch`, and `Monitor` are not agent files — they're tool calls mapped to `fast-scout` in `agent_to_capability` for observability only; the [router hook](#verifying-which-agent-ran) logs their capability but does **not** override their model (doing so would corrupt the tool's input).
 
-**Gov modes.** `best-cloud-gov` / `best-local-gov` resolve through the same generic lookup as every other mode. There is **no runtime origin filter** — their `llm_profiles` cells are hand-curated to avoid Chinese-origin models (`qwen*`, `deepseek*`, `glm*`, …), so the guarantee is a config-authoring convention rather than an enforced mechanism; editing a gov cell to point at a blocked model would simply work. The one gov-aware runtime behavior is a safety net: if a config reload removes an active gov mode, the proxy degrades routing to `best-cloud` and logs `mode.orphaned_gov_degrade`, warning that gov egress restrictions are no longer enforced.
+**Gov modes.** `best-cloud-gov` / `best-local-gov` apply a runtime origin filter to the primary model and every fallback hop. Chinese-origin models (`qwen*`, `deepseek*`, `glm*`, …) are skipped; if no permitted route remains, the request fails with 502 instead of leaking to a blocked provider. If a config reload removes an active gov mode, the proxy degrades routing to `best-cloud` and logs `mode.orphaned_gov_degrade`, explicitly warning that gov egress restrictions are no longer enforced.
 
 ### Verifying which agent ran
 
@@ -1341,14 +1339,14 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | Model-map seeding (`model-map.system.json`, overrides preserved) | ✓ | ✓ |
 | `ANTHROPIC_BASE_URL` auto-registration in settings | ✓ | (set per launch) |
 | Slash command `/c-thru-status` | ✓ | ✓ |
-| Slash command `/cplan` (needs `planning-suite`; full 98-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
+| Slash command `/cplan` (needs `planning-suite`; full 97-agent fleet is CLI inject only — see row below) | ✓ | ✓ |
 | Skills `c-thru-plan`, `c-thru-config`, `c-thru-control`, `advisors` | — | ✓ |
 | User-wide hooks — fire in every Claude Code session (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) | ✓ | — |
 | Ephemeral hooks — injected per `c-thru` launch only (no static project `.claude` hooks) | — | ✓ |
 | `c-thru` binary on PATH | — | ✓ |
 | Control subcommands (`list`, `reload`, `restart`, `explain`, `stats`, `check-deps`) | — | ✓ |
 | Flags (`--mode`, `--profile`, `--bypass-proxy`, `--journal`, `--router-debug`) | (use env vars) | ✓ |
-| Agent fleet (98 agents) injected via `--agents` | — | ✓ |
+| Agent fleet (97 agents) injected via `--agents` | — | ✓ |
 | `llm-capabilities` MCP server injected via `--settings` | — | ✓ |
 | Contributor checks (`c-thru-contract-check`, `c-thru-hygiene-check`) | — | ✓ |
 
@@ -1380,8 +1378,8 @@ Hooks and agent scripts live **in the git repo** (`tools/c-thru-*.sh`, mirrored 
 
 ### Brand agents and Grok surfaces
 
-Brand-name agents (`grok`, `deepseek`, `qwen`, `kimi`, `gemini`) ship with the
-**CLI install** only: say "ask agent grok …" inside a `cthru` session. Definitions
+Primary brand shorthands (`grok`, `deepseek`, `qwen`, `kimi`, `gemini`) and their generated aliases
+ship with the **CLI install** only: say "ask agent grok …" inside a `cthru` session. Definitions
 are runtime-injected via ephemeral `--agents` JSON — not installed into
 `~/.claude/agents/`. Chinese-origin brands are filtered under `best-cloud-gov` /
 `best-local-gov`.
