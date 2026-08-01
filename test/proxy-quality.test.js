@@ -133,12 +133,15 @@ async function runMappingTests() {
       const bodyThinking = { 
         model: 'ollama-model', 
         messages: [{ role: 'user', content: 'think about it' }],
-        thinking: { type: 'enabled', budget_tokens: 1024 }
+        thinking: { type: 'enabled', budget_tokens: 1024 },
+        output_config: { effort: 'high' },
       };
       await httpJson(port, 'POST', '/v1/messages', bodyThinking);
       const reqThinking = ollamaStub.lastRequest();
       assert(reqThinking.body.thinking !== undefined, 'Thinking block preserved in body');
       assertEq(reqThinking.body.thinking.budget_tokens, 1024, 'Thinking budget preserved');
+      assertEq(reqThinking.body.output_config?.effort, 'high',
+        'Agent effort preserved on Anthropic-compatible Ollama transport');
 
       // 1.6 Bearer wins when both incoming on Anthropic backend — x-api-key must be stripped
       console.log('1.6 Bearer-priority strips incoming x-api-key on Anthropic backend');
@@ -176,13 +179,19 @@ async function runFallbackTests() {
 
       // 2.1 Cascade from primary -> secondary -> tertiary
       console.log('2.1 Cascade primary -> secondary -> tertiary');
-      const body = { model: 'workhorse', messages: [{ role: 'user', content: 'test cascade' }] };
+      const body = {
+        model: 'workhorse',
+        messages: [{ role: 'user', content: 'test cascade' }],
+        output_config: { effort: 'medium' },
+      };
       const r = await httpJson(port, 'POST', '/v1/messages', body);
       
       assertEq(r.status, 200, 'Request eventually succeeded');
       assertEq(s1.requests.length, 1, 'S1 tried once');
       assertEq(s2.requests.length, 1, 'S2 tried once');
       assertEq(s3.requests.length, 1, 'S3 tried once');
+      assert([s1, s2, s3].every(stub => stub.requests[0]?.body?.output_config?.effort === 'medium'),
+        'Agent effort survives every Anthropic-compatible fallback attempt');
       assertEq(r.headers['x-c-thru-fallback-from'], 'primary', 'Fallback header indicates origin');
 
       // 2.2 Cooldown: Subsequent request should skip S1 and S2 immediately

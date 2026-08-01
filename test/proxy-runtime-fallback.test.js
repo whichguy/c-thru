@@ -513,6 +513,79 @@ async function main() {
       }
     }
 
+    // ── Test 12b: C_THRU_LAUNCH_DEFAULT_MODEL overrides routes.default ───────
+    console.log('\n12b. launch --model (C_THRU_LAUNCH_DEFAULT_MODEL) overrides routes.default fallback');
+    {
+      const primary = await stubBackend({ failWith: 500 });
+      const mapDefault = await ollamaStubBackend(HEALTHY_OLLAMA_NDJSON);
+      const launchDefault = await ollamaStubBackend([
+        { message: { content: 'launch-default-served' } },
+        { done: true, done_reason: 'stop', prompt_eval_count: 2, eval_count: 1 },
+      ]);
+      try {
+        const cfg = {
+          backends: {
+            primary_be: { kind: 'anthropic', url: `http://127.0.0.1:${primary.port}` },
+            map_be: { kind: 'ollama', url: `http://127.0.0.1:${mapDefault.port}`, legacy_ollama_chat: true },
+            launch_be: { kind: 'ollama', url: `http://127.0.0.1:${launchDefault.port}`, legacy_ollama_chat: true },
+          },
+          routes: { default: 'map-target' },
+          model_routes: {
+            'primary-model': 'primary_be',
+            'map-target': 'map_be',
+            'launch-target': 'launch_be',
+          },
+          llm_profiles: {
+            generalist: { 'best-cloud': 'map-target' },
+          },
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        // Seed via env (cold spawn). Live updates use POST /c-thru/launch-default only.
+        await withProxy({
+          configPath,
+          profile: '128gb',
+          mode: 'best-cloud',
+          env: { C_THRU_LAUNCH_DEFAULT_MODEL: 'launch-target' },
+        }, async ({ port }) => {
+          const r = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'primary-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r.status, 200, '12b launch default fired');
+          assertEq(primary.requests.length, 1, '12b primary tried');
+          assertEq(mapDefault.requests.length, 0, '12b map routes.default NOT used');
+          assertEq(launchDefault.requests.length, 1, '12b launch --model target served');
+          assert(r.json.content && r.json.content.some(b => b.text === 'launch-default-served'),
+            `12b served by launch default (got: ${JSON.stringify(r.json.content)})`);
+
+          // generalist capability also follows launch default
+          const g = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'generalist', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(g.status, 200, '12b generalist via launch default');
+          assertEq(launchDefault.requests.length, 2, '12b generalist hit launch backend');
+          assertEq(mapDefault.requests.length, 0, '12b generalist did not use map generalist cell');
+
+          // Control channel updates in-memory value (no disk); clear → map default
+          const clr = await httpJson(port, 'POST', '/c-thru/launch-default', { model: null });
+          assertEq(clr.status, 200, '12b clear launch default via control POST');
+          assertEq(clr.json.launch_default_model, null, '12b cleared in-memory launch default');
+
+          const r2 = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'primary-model', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(r2.status, 200, '12b after clear falls through to map routes.default');
+          assertEq(mapDefault.requests.length, 1, '12b map default used after clear');
+        });
+      } finally {
+        await primary.close().catch(() => {});
+        await mapDefault.close().catch(() => {});
+        await launchDefault.close().catch(() => {});
+      }
+    }
+
     // ── Test 13: /c-thru/status surfaces cooldown_backends + default_route ──
     console.log('\n13. /c-thru/status reports cooldown state and default_route');
     {

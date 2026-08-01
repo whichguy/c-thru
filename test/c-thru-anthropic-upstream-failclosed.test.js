@@ -213,6 +213,50 @@ function main() {
     }
   }
 
+  // L2: ambient API_KEY + override → inject skips (metered path); Claude keeps API_KEY
+  console.log('\nL2. override + ambient ANTHROPIC_API_KEY → inject skips (keep API key)');
+  {
+    const sb = makeSandbox({ brokenProxy: false });
+    try {
+      // Dump extra auth fields from stub
+      const stubPath = path.join(sb.fakeBin, 'claude');
+      fs.writeFileSync(stubPath, `#!/bin/sh
+printf 'INVOKED\\n' > "${sb.marker.replace(/'/g, "'\\''")}"
+node -e 'console.log(JSON.stringify({
+  args: process.argv.slice(1),
+  anthropic_base_url: process.env.ANTHROPIC_BASE_URL || null,
+  anthropic_api_key: process.env.ANTHROPIC_API_KEY || null,
+  anthropic_auth_token: process.env.ANTHROPIC_AUTH_TOKEN || null,
+  claude_proxy_anthropic_upstream: process.env.CLAUDE_PROXY_ANTHROPIC_UPSTREAM || null,
+}))' -- "$@"
+`, 'utf8');
+      fs.chmodSync(stubPath, 0o755);
+
+      const r = runCthru(sb, [
+        '--anthropic-upstream', 'https://llm-gateway.example.com/anthropic',
+        '--model', 'claude-sonnet-5',
+      ], {
+        ANTHROPIC_API_KEY: 'sk-ant-api-ambient-test',
+        // Allow inject path to run so we prove API_KEY causes early return
+        C_THRU_NO_OAUTH_INJECT: '0',
+      });
+      assert(r.code === 0, `exit 0 (got ${r.code}; ${(r.stderr || '').slice(0, 200)})`);
+      assert(r.invoked, 'Claude invoked');
+      assert(r.json?.anthropic_api_key === 'sk-ant-api-ambient-test',
+        `API_KEY preserved (got ${r.json?.anthropic_api_key})`);
+      // Inject must not invent AUTH_TOKEN when API_KEY present (skip before keychain)
+      assert(!r.json?.anthropic_auth_token,
+        `AUTH_TOKEN not injected when API_KEY set (got ${r.json?.anthropic_auth_token})`);
+      assert(/llm-gateway\.example\.com/.test(String(r.json?.claude_proxy_anthropic_upstream || '')),
+        'override still exported with API_KEY path');
+      const base = r.json?.anthropic_base_url || '';
+      assert(/^https?:\/\/(127\.0\.0\.1|localhost)/.test(base),
+        `Claude BASE_URL loopback (got ${base})`);
+    } finally {
+      cleanup(sb);
+    }
+  }
+
   console.log(`\n${passed}/${passed + failed} passed${failed ? ` — ${failed} FAILED` : ''}`);
   process.exit(failed ? 1 : 0);
 }

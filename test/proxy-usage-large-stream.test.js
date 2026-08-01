@@ -92,7 +92,7 @@ async function main() {
       configPath, tmpHome,
       env: { CLAUDE_PROXY_USAGE_STATS_FILE: statsFile },
     });
-    await waitForPing(port, 5000);
+    await waitForPing(port);
     state = { child, tmpHome, stub };
 
     console.log(`1. Streaming response with ${(PADDING_BYTES / 1024).toFixed(0)}KB of content before message_delta`);

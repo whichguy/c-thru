@@ -53,7 +53,7 @@ async function main() {
     await withProxy({ configPath }, async ({ port }) => {
       // ── A (reaffirm): the REAL proxy owns the canonical control-plane block ──
       console.log('A. real proxy POST /hooks/context owns the canonical block');
-      const hk = await httpJson(port, 'POST', '/hooks/context', null, {}, 3000);
+      const hk = await httpJson(port, 'POST', '/hooks/context', null, {});
       assertEq(hk.status, 200, '/hooks/context returns 200');
       const addl = (hk.json && hk.json.hookSpecificOutput && hk.json.hookSpecificOutput.additionalContext) || '';
       assert(addl.includes(`http://127.0.0.1:${port}`), `block carries the real live port base URL (http://127.0.0.1:${port})`);

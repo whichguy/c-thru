@@ -247,7 +247,7 @@ async function main() {
           // Trigger cooldown.
           await httpJson(port, 'POST', '/v1/messages', reqBody);
 
-          const status = await httpJson(port, 'GET', '/c-thru/status', null, {}, 3000);
+          const status = await httpJson(port, 'GET', '/c-thru/status', null, {});
           assertEq(status.status, 200, '/c-thru/status OK');
           assert(Array.isArray(status.json.cooldown_backends), 'cooldown_backends is array');
           const entry = status.json.cooldown_backends.find(c => c.backend === 'A_be');
@@ -299,7 +299,7 @@ async function main() {
           assertEq(B.requests.length, 1, 'req1: B served');
 
           // Cooldown is observable in /c-thru/status while still within TTL.
-          const st1 = await httpJson(port, 'GET', '/c-thru/status', null, {}, 3000);
+          const st1 = await httpJson(port, 'GET', '/c-thru/status', null, {});
           assert(st1.json.cooldown_backends.some(c => c.backend === 'A_be'),
             'A_be is in cooldown_backends after req1 failure');
 
@@ -323,7 +323,7 @@ async function main() {
           assertEq(r3.headers['x-c-thru-served-by'], 'A-model', 'req3: served-by reports A-model');
 
           // The success must have CLEARED A's cooldown entry entirely.
-          const st2 = await httpJson(port, 'GET', '/c-thru/status', null, {}, 3000);
+          const st2 = await httpJson(port, 'GET', '/c-thru/status', null, {});
           assert(!st2.json.cooldown_backends.some(c => c.backend === 'A_be'),
             'A_be cooldown CLEARED on success (absent from cooldown_backends)');
 

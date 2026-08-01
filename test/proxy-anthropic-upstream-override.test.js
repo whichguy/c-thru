@@ -338,53 +338,28 @@ async function main() {
     try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
   }
 
-  // Launcher eligibility: ambient loopback ignored; https gateway accepted
-  console.log('7. Launcher eligibility unit via sourced functions');
+  // Launcher eligibility: shared tools/c-thru-upstream-url.js (no drifted copy)
+  console.log('7. Launcher eligibility via shipped c-thru-upstream-url.js');
   {
-    const script = `
-      set -euo pipefail
-      source "${C_THRU}" 2>/dev/null || true
-    `;
-    // c-thru is not safely sourceable end-to-end; exercise node eligibility
-    // by shelling a tiny extract of the same rules the bash helper uses.
-    const elig = (url, env = {}) => {
-      const code = `
-const allowInsecure = process.env.C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM === "1";
-const allowLoopback = process.env.C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM === "1";
-const forceAnthropic = process.env.C_THRU_UPSTREAM_FORCE_ANTHROPIC_COM === "1";
-function isLoopback(host) {
-  const h = String(host || "").toLowerCase().replace(/^\\[|\\]$/g, "");
-  if (!h) return false;
-  if (h === "localhost" || h === "0.0.0.0" || h === "::" || h === "::1") return true;
-  if (h.endsWith(".localhost")) return true;
-  if (/^127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(h)) return true;
-  return false;
-}
-function isAnthropic(host) {
-  const h = String(host || "").toLowerCase().replace(/^\\[|\\]$/g, "");
-  return h === "anthropic.com" || h.endsWith(".anthropic.com");
-}
-let u; try { u = new URL(process.argv[1]); } catch { process.exit(1); }
-if (u.protocol !== "http:" && u.protocol !== "https:") process.exit(1);
-if (isLoopback(u.hostname) && !allowLoopback) process.exit(1);
-if (!forceAnthropic && isAnthropic(u.hostname)
-    && (u.pathname === "/" || u.pathname === "") && !u.search && !u.hash) process.exit(1);
-if (u.protocol === "http:" && !allowInsecure && !isLoopback(u.hostname)) process.exit(1);
-process.exit(0);
-`;
-      return spawnSync(process.execPath, ['-e', code, url], {
-        env: Object.assign({}, process.env, env),
-        encoding: 'utf8',
-      }).status === 0;
-    };
+    const shared = path.join(REPO, 'tools', 'c-thru-upstream-url.js');
+    const { isEligible } = require(shared);
+    const elig = (url, env = {}) => isEligible(url, Object.assign({}, process.env, env));
     assert(!elig('https://localhost:8443'), 'reject https://localhost:8443');
     assert(!elig('http://127.0.0.1/gw'), 'reject http://127.0.0.1/gw');
     assert(!elig('http://[::1]:1'), 'reject http://[::1]:1');
+    assert(!elig('http://[::ffff:127.0.0.1]/'), 'reject IPv4-mapped loopback without opt-in');
+    assert(!elig('https://SUB.LOCALHOST'), 'reject .localhost without opt-in');
+    assert(!elig('https://127.1'), 'reject short 127.1 form (not dotted quad)');
     assert(!elig('http://gw.example'), 'reject plain http without opt-in');
     assert(elig('https://gw.example'), 'accept https gateway');
     assert(elig('http://gw.example', { C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM: '1' }),
       'accept http with insecure opt-in');
     assert(!elig('https://api.anthropic.com'), 'ignore ambient api.anthropic.com');
+    assert(elig('https://api.anthropic.com/gw'), 'accept anthropic host with path (gateway)');
+    assert(elig('http://[::ffff:127.0.0.1]/', {
+      C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM: '1',
+      C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM: '1',
+    }), 'accept IPv4-mapped loopback with opts');
   }
 
   // L5 anthropic_subscription + Bearer

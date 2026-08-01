@@ -25,11 +25,37 @@ function assert(cond, msg) {
 }
 
 const HELPERS = path.join(__dirname, '..', 'tools', 'c-thru-config-helpers.js');
+const ownedTmpDirs = new Set();
+
+function cleanupOwnedTmpDirs() {
+  for (const dir of [...ownedTmpDirs]) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    if (!fs.existsSync(dir)) ownedTmpDirs.delete(dir);
+  }
+}
+
+process.once('exit', cleanupOwnedTmpDirs);
+for (const [signal, exitCode] of [
+  ['SIGINT', 130],
+  ['SIGTERM', 143],
+  ['SIGHUP', 129],
+]) {
+  process.once(signal, () => {
+    cleanupOwnedTmpDirs();
+    process.exit(exitCode);
+  });
+}
 
 function run(args, env = {}, opts = {}) {
+  const childEnv = { ...process.env, ...env };
+  if (!env.TMPDIR && childEnv.CLAUDE_PROFILE_DIR) {
+    const isolatedTmp = path.join(childEnv.CLAUDE_PROFILE_DIR, 'tmp');
+    fs.mkdirSync(isolatedTmp, { recursive: true });
+    childEnv.TMPDIR = isolatedTmp;
+  }
   const result = spawnSync(process.execPath, [HELPERS, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: childEnv,
     cwd: opts.cwd,
   });
   return { code: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
@@ -37,6 +63,7 @@ function run(args, env = {}, opts = {}) {
 
 function tmpClaudeDir(extraFiles = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfg-test-'));
+  ownedTmpDirs.add(dir);
   const toolsDir = path.join(dir, 'tools');
   fs.mkdirSync(toolsDir, { recursive: true });
 
@@ -338,6 +365,13 @@ console.log('\n9. error paths — missing required args');
 }
 
 // ── Summary ────────────────────────────────────────────────────────────────────
+
+const createdTmpDirs = [...ownedTmpDirs];
+cleanupOwnedTmpDirs();
+assert(
+  createdTmpDirs.every((dir) => !fs.existsSync(dir)),
+  'all owned cfg-test temporary directories are removed before exit',
+);
 
 console.log(`\nc-thru-config-helpers tests\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

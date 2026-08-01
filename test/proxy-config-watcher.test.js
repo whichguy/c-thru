@@ -21,7 +21,6 @@
 
 const fs   = require('fs');
 const http = require('http');
-const os   = require('os');
 const path = require('path');
 
 const {
@@ -34,6 +33,7 @@ const {
   spawnProxy,
   waitForPing,
   collectStderr,
+  makeIsolatedTmpDir,
 } = require('./helpers');
 
 console.log('proxy-config-watcher tests\n');
@@ -49,7 +49,7 @@ function minimalConfig(label) {
 }
 
 async function main() {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-cw-'));
+  const tmpRoot = makeIsolatedTmpDir('c-thru-cw-');
 
   // ── Test 1: proxy survives CONFIG_PATH change (watcher re-arm) ──────────────
   //

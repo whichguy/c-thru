@@ -190,6 +190,31 @@ run_native --route foo --profile 64gb --memory-gb 32 --bypass-proxy --journal \
 expect_forward "all private flags gone" agents --json
 
 echo ""
+echo "10. N10: --anthropic-upstream stripped (space and equals forms)"
+run_main "" --anthropic-upstream https://gw.example/anthropic -p hi
+set +u
+has_upstream=0 has_p=0 has_hi=0
+for a in "${FORWARDED_ARGS[@]-}"; do
+  [[ "$a" == --anthropic-upstream* ]] && has_upstream=1
+  [[ "$a" == "https://gw.example/anthropic" ]] && has_upstream=1
+  [[ "$a" == "-p" ]] && has_p=1
+  [[ "$a" == "hi" ]] && has_hi=1
+done
+set -u
+assert "strips --anthropic-upstream space form" test "$has_upstream" -eq 0
+assert "keeps -p after strip" test "$has_p" -eq 1 -a "$has_hi" -eq 1
+
+run_main "" --anthropic-upstream=https://gw.example/v1 agents --json
+set +u
+has_upstream=0
+for a in "${FORWARDED_ARGS[@]-}"; do
+  [[ "$a" == --anthropic-upstream* ]] && has_upstream=1
+  [[ "$a" == *gw.example* ]] && has_upstream=1
+done
+set -u
+assert "strips --anthropic-upstream= form" test "$has_upstream" -eq 0
+
+echo ""
 if [[ "$FAIL" -eq 0 ]]; then
   echo "$PASS/$PASS passed"
   exit 0

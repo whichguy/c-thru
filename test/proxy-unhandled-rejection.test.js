@@ -12,6 +12,10 @@ const { assert, summary, writeConfig, spawnProxy, waitForPing, httpJson, getFree
 
 console.log('proxy-unhandled-rejection tests\n');
 
+// This assertion is specifically a not-a-hang contract, so keep its budget
+// narrow instead of inheriting the wider loaded-host infrastructure default.
+const EXPECTED_ERROR_REQUEST_TIMEOUT_MS = 3_000;
+
 // Collect log lines written to the proxy log file.
 // The proxy writes to $HOME/.claude/proxy.log (fixed name, no suffix).
 function readProxyLog(tmpHome) {
@@ -47,7 +51,7 @@ async function main() {
       // Send a valid-but-unconfigured message request
       const r2 = await httpJson(port, 'POST', '/v1/messages', {
         model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1,
-      });
+      }, {}, EXPECTED_ERROR_REQUEST_TIMEOUT_MS);
       // 400/404/502/503 expected (no real upstream or backend configured); NOT a crash
       assert([400, 404, 502, 503, 500].includes(r2.status), `got a defined error status (${r2.status}), not a hang/crash`);
 

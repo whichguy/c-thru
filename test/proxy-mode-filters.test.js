@@ -95,7 +95,7 @@ async function main() {
       model,
       messages: [{ role: 'user', content: 'hi' }],
       max_tokens: 5,
-    }, {}, 5000);
+    }, {});
     const via = r => JSON.parse(r.headers['x-c-thru-resolved-via'] || '{}');
 
     // ── Test 1: best-cloud-gov with Chinese primary → filter swaps to non-Chinese ─

@@ -1,4 +1,4 @@
-.PHONY: test test-all test-fast test-live test-live-shard test-live-artifacts test-live-all check lint docs regen
+.PHONY: test test-all test-fast test-live test-live-shard test-live-artifacts test-live-all test-live-oss-brand check lint docs regen
 
 # Default hermetic suite (CI / pre-push / everyday): skips slow smoke & long e2e.
 # Concurrent-safe (proxy unit tests use random free ports).
@@ -63,6 +63,17 @@ test-live-artifacts:
 	C_THRU_OFFLOAD_ARTIFACTS=1 \
 	CLAUDE_LLM_MODE=best-cloud \
 	CLAUDE_LLM_PROFILE=32gb \
+	bash test/run-all.sh
+
+# OSS brand-leaf identity + proxy lifecycle (local/manual). Direct hits backends
+# via proxy; print runs independent c-thru -p per agent (KEEP_PROXY=0).
+# Requires reachable Ollama/cloud pins; print also needs Claude Code auth.
+test-live-oss-brand:
+	C_THRU_TEST_TIMEOUT_SECONDS=3300 \
+	C_THRU_LIVE_SHARD=agent \
+	C_THRU_STRICT_LIVE_PROVIDERS=1 \
+	C_THRU_LIVE_OSS_BRAND=1 \
+	CLAUDE_LLM_MODE=best-cloud-oss \
 	bash test/run-all.sh
 
 # Compatibility entrypoint for a human who wants one local aggregate. Scheduled

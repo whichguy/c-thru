@@ -112,9 +112,9 @@ async function main() {
     const configPath = writeConfig(home, buildConfig(stub.port));
     let port;
     ({ child, port } = await spawnProxy({ configPath, tmpHome: home, env: { C_THRU_PLAN_SPOOL: spool } }));
-    await waitForPing(port, 5000);
+    await waitForPing(port);
 
-    const page = await httpJson(port, 'GET', '/c-thru/plan/dashboard', null, {}, 3000);
+    const page = await httpJson(port, 'GET', '/c-thru/plan/dashboard', null, {});
     assertEq(page.status, 200, 'plan dashboard returns 200');
     assert((page.headers['content-type'] || '').startsWith('text/html'), 'plan dashboard is HTML');
     assertEq(page.headers['cache-control'], 'no-store', 'plan dashboard is not cached');
@@ -122,13 +122,13 @@ async function main() {
     assert(page.bodyText.includes('setInterval(poll, 2000)'), 'dashboard uses a two-second poll');
     assert(!/src\s*=\s*["']https?:/i.test(page.bodyText), 'dashboard has no external resources');
 
-    const pageSlash = await httpJson(port, 'GET', '/c-thru/plan/dashboard/', null, {}, 3000);
+    const pageSlash = await httpJson(port, 'GET', '/c-thru/plan/dashboard/', null, {});
     assertEq(pageSlash.status, 200, 'trailing dashboard slash returns 200');
-    const state = await httpJson(port, 'GET', '/c-thru/plan', null, {}, 3000);
+    const state = await httpJson(port, 'GET', '/c-thru/plan', null, {});
     assertEq(state.status, 200, 'plan state endpoint returns 200');
     assert(state.json && state.json.ok === true && Array.isArray(state.json.plans), 'plan state has the documented JSON shape');
     assertEq(state.json.plans[0].native.title, 'Fixture plan', 'fixture event reaches the state endpoint');
-    const ping = await httpJson(port, 'GET', '/ping', null, {}, 3000);
+    const ping = await httpJson(port, 'GET', '/ping', null, {});
     assertEq(ping.json.plan_dashboard, `http://127.0.0.1:${port}/c-thru/plan/dashboard`, 'ping discovers the plan dashboard');
     await stop(child); child = null;
 
@@ -139,8 +139,8 @@ async function main() {
     const secondConfig = writeConfig(secondHome, buildConfig(stub.port));
     let secondPort;
     ({ child, port: secondPort } = await spawnProxy({ configPath: secondConfig, tmpHome: secondHome, env: { C_THRU_PLAN_SPOOL: garbage } }));
-    await waitForPing(secondPort, 5000);
-    const degraded = await httpJson(secondPort, 'GET', '/c-thru/plan', null, {}, 3000);
+    await waitForPing(secondPort);
+    const degraded = await httpJson(secondPort, 'GET', '/c-thru/plan', null, {});
     assert(degraded.status === 503 || (degraded.status === 200 && degraded.json && degraded.json.ok === true && Array.isArray(degraded.json.plans) && degraded.json.plans.length === 0),
       'garbage/unreadable spool never crashes the proxy');
   } finally {

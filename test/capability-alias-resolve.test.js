@@ -179,9 +179,9 @@ console.log('\n8. Agent on tier where alias has no profile entry → resolveProf
 // ── 9. advisor:<model-id> runtime pins ────────────────────────────────────────
 console.log('\n9. advisor:<model-id> runtime pins');
 {
-  const advisor = 'advisor:kimi-k2.7-code:cloud';
+  const advisor = 'advisor:kimi-k3:cloud';
   assert(
-    resolveCapabilityAlias(advisor, {}) === 'model:kimi-k2.7-code:cloud',
+    resolveCapabilityAlias(advisor, {}) === 'model:kimi-k3:cloud',
     `advisor prefix pins with empty config (got ${resolveCapabilityAlias(advisor, {})})`
   );
   assert(
@@ -194,7 +194,7 @@ console.log('\n9. advisor:<model-id> runtime pins');
     },
   };
   assert(
-    resolveCapabilityAlias(advisor, cfg) === 'model:kimi-k2.7-code:cloud',
+    resolveCapabilityAlias(advisor, cfg) === 'model:kimi-k3:cloud',
     `advisor prefix wins over literal agent_to_capability entry (got ${resolveCapabilityAlias(advisor, cfg)})`
   );
 }

@@ -15,6 +15,7 @@
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
+const { makeIsolatedTmpDir } = require('./helpers');
 
 // Import the module under test WITHOUT running its main() (it checks require.main).
 const {
@@ -59,7 +60,7 @@ console.log('model-map-config project-overlay tests\n');
 // All temp dirs cleaned up at the end.
 const roots = [];
 function tmpDir() {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-overlay-test-'));
+  const d = makeIsolatedTmpDir('c-thru-overlay-test-');
   roots.push(d);
   return d;
 }

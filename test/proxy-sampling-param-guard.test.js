@@ -27,6 +27,16 @@ function buildConfig(stubPort, overrides = {}) {
     },
     model_routes: {
       'claude-fable-5': 'stub',
+      'claude-opus-5': 'stub',
+      'claude-opus-5-20260731': 'stub',
+      'claude-opus-5evil': 'stub',
+      'claude-opus-5-': 'stub',
+      'claude-opus-50': 'stub',
+      'claude-opus-5.1': 'stub',
+      'claude-sonnet-5': 'stub',
+      'claude-sonnet-5-20260731': 'stub',
+      'claude-sonnet-5evil': 'stub',
+      'claude-sonnet-5-evil!': 'stub',
       // Pre-Claude-5 family tag: NOT matched by sampling_unsupported_models
       // (claude-sonnet-5* is guarded). Used as "legacy Anthropic still gets defaults".
       'claude-sonnet-4-6': 'stub',
@@ -35,6 +45,36 @@ function buildConfig(stubPort, overrides = {}) {
     llm_profiles: {
       planner: {
         'best-cloud': { '16gb': 'claude-fable-5' },
+      },
+      opus5_planner: {
+        'best-cloud': { '16gb': 'claude-opus-5' },
+      },
+      opus5_suffix_planner: {
+        'best-cloud': { '16gb': 'claude-opus-5-20260731' },
+      },
+      opus5alpha_planner: {
+        'best-cloud': { '16gb': 'claude-opus-5evil' },
+      },
+      opus5empty_suffix_planner: {
+        'best-cloud': { '16gb': 'claude-opus-5-' },
+      },
+      opus50_planner: {
+        'best-cloud': { '16gb': 'claude-opus-50' },
+      },
+      opus51_planner: {
+        'best-cloud': { '16gb': 'claude-opus-5.1' },
+      },
+      sonnet5_planner: {
+        'best-cloud': { '16gb': 'claude-sonnet-5' },
+      },
+      sonnet5_suffix_planner: {
+        'best-cloud': { '16gb': 'claude-sonnet-5-20260731' },
+      },
+      sonnet5alpha_planner: {
+        'best-cloud': { '16gb': 'claude-sonnet-5evil' },
+      },
+      sonnet5invalid_suffix_planner: {
+        'best-cloud': { '16gb': 'claude-sonnet-5-evil!' },
       },
       legacy_planner: {
         'best-cloud': { '16gb': 'claude-sonnet-4-6' },
@@ -45,6 +85,16 @@ function buildConfig(stubPort, overrides = {}) {
     },
     capability_sampling_defaults: {
       planner: { temperature: 1, top_p: 0.95, top_k: 40 },
+      opus5_planner: { temperature: 1, top_p: 0.95, top_k: 40 },
+      opus5_suffix_planner: { temperature: 1, top_p: 0.95, top_k: 40 },
+      opus5alpha_planner: { temperature: 0.5, top_p: 0.7, top_k: 30 },
+      opus5empty_suffix_planner: { temperature: 0.5, top_p: 0.7, top_k: 30 },
+      opus50_planner: { temperature: 0.5, top_p: 0.7, top_k: 30 },
+      opus51_planner: { temperature: 0.5, top_p: 0.7, top_k: 30 },
+      sonnet5_planner: { temperature: 1, top_p: 0.95, top_k: 40 },
+      sonnet5_suffix_planner: { temperature: 1, top_p: 0.95, top_k: 40 },
+      sonnet5alpha_planner: { temperature: 0.5, top_p: 0.7, top_k: 30 },
+      sonnet5invalid_suffix_planner: { temperature: 0.5, top_p: 0.7, top_k: 30 },
       legacy_planner: { temperature: 0.4, top_p: 0.8, top_k: 20 },
       custom_guard: { temperature: 0.6, top_p: 0.75, top_k: 10 },
     },
@@ -79,7 +129,7 @@ async function withSamplingProxy(configOverrides, fn) {
   try {
     const spawned = await spawnProxy({ configPath, tmpHome });
     child = spawned.child;
-    await waitForPing(spawned.port, 5000);
+    await waitForPing(spawned.port);
     await fn({ port: spawned.port, stub });
   } finally {
     if (child) await killAndWait(child);
@@ -122,6 +172,63 @@ async function testOlderAnthropicStillGetsDefaults() {
   });
 }
 
+async function testOpus5RejectsInjectedDefaults() {
+  console.log('\nTest B2: claude-opus-5 skips proxy-injected sampling defaults');
+  await withSamplingProxy({}, async ({ port, stub }) => {
+    const { status } = await postMessage(port, msgBody('opus5_planner'));
+    assertEq(status, 200, 'Test B2: /v1/messages returned 200');
+
+    const req = stub.lastRequest();
+    assertEq(req.model_used, 'claude-opus-5', 'Test B2: resolved model reached stub');
+    assert(!hasOwn(req.body, 'temperature'), 'Test B2: temperature not injected');
+    assert(!hasOwn(req.body, 'top_p'), 'Test B2: top_p not injected');
+    assert(!hasOwn(req.body, 'top_k'), 'Test B2: top_k not injected');
+  });
+}
+
+async function testOpus5SupportedSuffixRejectsInjectedDefaults() {
+  console.log('\nTest B3: exact and hyphen-suffixed Claude 5 models skip proxy-injected defaults');
+  await withSamplingProxy({}, async ({ port, stub }) => {
+    for (const [capability, model] of [
+      ['opus5_suffix_planner', 'claude-opus-5-20260731'],
+      ['sonnet5_planner', 'claude-sonnet-5'],
+      ['sonnet5_suffix_planner', 'claude-sonnet-5-20260731'],
+    ]) {
+      const { status } = await postMessage(port, msgBody(capability));
+      assertEq(status, 200, `Test B3 ${model}: /v1/messages returned 200`);
+
+      const req = stub.lastRequest();
+      assertEq(req.model_used, model, `Test B3 ${model}: model reached stub`);
+      assert(!hasOwn(req.body, 'temperature'), `Test B3 ${model}: temperature not injected`);
+      assert(!hasOwn(req.body, 'top_p'), `Test B3 ${model}: top_p not injected`);
+      assert(!hasOwn(req.body, 'top_k'), `Test B3 ${model}: top_k not injected`);
+    }
+  });
+}
+
+async function testOpus5LookalikesStillGetDefaults() {
+  console.log('\nTest B4: numeric, dotted, and alphabetic lookalikes do not match Claude 5 guards');
+  await withSamplingProxy({}, async ({ port, stub }) => {
+    for (const [capability, model] of [
+      ['opus50_planner', 'claude-opus-50'],
+      ['opus51_planner', 'claude-opus-5.1'],
+      ['opus5alpha_planner', 'claude-opus-5evil'],
+      ['opus5empty_suffix_planner', 'claude-opus-5-'],
+      ['sonnet5alpha_planner', 'claude-sonnet-5evil'],
+      ['sonnet5invalid_suffix_planner', 'claude-sonnet-5-evil!'],
+    ]) {
+      const { status } = await postMessage(port, msgBody(capability));
+      assertEq(status, 200, `Test B4 ${model}: /v1/messages returned 200`);
+
+      const req = stub.lastRequest();
+      assertEq(req.model_used, model, `Test B4 ${model}: requested model reached stub`);
+      assertEq(req.body.temperature, 0.5, `Test B4 ${model}: temperature injected`);
+      assertEq(req.body.top_p, 0.7, `Test B4 ${model}: top_p injected`);
+      assertEq(req.body.top_k, 30, `Test B4 ${model}: top_k injected`);
+    }
+  });
+}
+
 async function testCallerSuppliedSamplingIsNotStripped() {
   console.log('\nTest C: caller-supplied temperature survives on rejecting model');
   await withSamplingProxy({}, async ({ port, stub }) => {
@@ -154,6 +261,9 @@ async function testConfigExtendsGuardList() {
   try {
     await testBuiltInRejectsInjectedDefaults();
     await testOlderAnthropicStillGetsDefaults();
+    await testOpus5RejectsInjectedDefaults();
+    await testOpus5SupportedSuffixRejectsInjectedDefaults();
+    await testOpus5LookalikesStillGetDefaults();
     await testCallerSuppliedSamplingIsNotStripped();
     await testConfigExtendsGuardList();
   } catch (e) {

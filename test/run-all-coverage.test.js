@@ -11,10 +11,10 @@
 // makes the registry fail-closed: you cannot add a test file without either
 // wiring it in or writing down, next to the registry itself, why not.
 //
-// "Referenced" = the bare filename appears in run-all.sh as a delimited token.
-// Exclusions therefore live IN run-all.sh as the existing comment convention —
-// one source of truth, impossible to exclude without writing a reason next to
-// the filename.
+// "Registered" means an uncommented command line contains the canonical
+// "$REPO_DIR/test/<filename>" path. A structured
+// "# EXCLUDED: <filename> — <reason>" line is the only alternative. A filename
+// in an unrelated comment is deliberately insufficient.
 //
 // Run: node test/run-all-coverage.test.js
 
@@ -37,6 +37,7 @@ const INFRA_ALLOWLIST = new Set([
   'helpers.js',           // shared Node test helpers, required by suites
   'helpers.sh',           // shared shell test helpers, sourced by suites
   'agent-prompt-unit.js', // manual CLI driver (invoked by a human or by run-hierarchy-e2e.sh)
+  'offload-artifact-fixtures.js', // deterministic generated-artifact helper
 ]);
 
 // Non-recursive on purpose: subdirs (e.g. stubs/) are fixtures/tooling, not suites.
@@ -45,20 +46,54 @@ const files = fs.readdirSync(TEST_DIR, { withFileTypes: true })
   .map(e => e.name)
   .sort();
 
-// Delimited-token match so model-map-validate.test.js isn't credited by
-// model-map-validate-dedupe.test.js appearing in the registry.
-function isReferenced(file) {
+function isRegistered(file, source = RUN_ALL) {
   const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[^\\w.-])${escaped}([^\\w.-]|$)`, 'm').test(RUN_ALL);
+  const invocation = new RegExp(
+    String.raw`^\s*(?:node|bash)\s+["']?\$REPO_DIR/test/${escaped}["']?(?:\s|$)`,
+  );
+  return source.split(/\r?\n/).some(line =>
+    !line.trimStart().startsWith('#') && invocation.test(line));
+}
+
+function isStructuredExclusion(file, source = RUN_ALL) {
+  const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const exclusion = new RegExp(
+    String.raw`^# EXCLUDED:\s*${escaped}\s+(?:—|--|-|:)\s+\S`,
+  );
+  return source.split(/\r?\n/).some(line => exclusion.test(line));
 }
 
 console.log(`run-all-coverage: ${files.length} runnable files in test/ (${INFRA_ALLOWLIST.size} infra-allowlisted)\n`);
 
 for (const file of files) {
   if (INFRA_ALLOWLIST.has(file)) continue;
-  assert(isReferenced(file),
-    `${file}: referenced in run-all.sh — register with run_suite (env-gated if it needs creds/proxy) or add an EXCLUDED comment naming the file with a reason`);
+  assert(isRegistered(file) || isStructuredExclusion(file),
+    `${file}: registered by canonical test path or named in a structured EXCLUDED line with a reason`);
 }
+
+const invented = 'invented-never-run.test.js';
+assert(
+  !isRegistered(invented, `# TODO mention ${invented} someday\n`),
+  'self-test: an unrelated comment cannot satisfy registration',
+);
+assert(
+  !isStructuredExclusion(invented, `# TODO mention ${invented} someday\n`),
+  'self-test: an unrelated comment cannot satisfy exclusion',
+);
+assert(
+  isRegistered(
+    invented,
+    `run_suite "invented" \\\n  node "$REPO_DIR/test/${invented}"\n`,
+  ),
+  'self-test: a canonical command path satisfies registration',
+);
+assert(
+  isStructuredExclusion(
+    invented,
+    `# EXCLUDED: ${invented} — generated manually by an external conformance tool\n`,
+  ),
+  'self-test: a structured exclusion with a reason satisfies exclusion',
+);
 
 // Allowlist hygiene: an allowlisted file that no longer exists is a stale entry.
 for (const file of INFRA_ALLOWLIST) {

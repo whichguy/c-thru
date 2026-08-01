@@ -4,7 +4,6 @@
 // Run with: node test/proxy-config-reload.test.js
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
 const {
@@ -15,6 +14,7 @@ const {
   assertLogContains,
   collectStderr,
   stubBackend,
+  makeIsolatedTmpDir,
 } = require('./helpers');
 
 console.log('proxy-config-reload integration tests\n');
@@ -38,14 +38,14 @@ function mkConfig(stubPort, model) {
 }
 
 async function assertResolvedModel(port, stub, expected, message) {
-  const r = await httpJson(port, 'POST', '/v1/messages', MSG, {}, 5000);
+  const r = await httpJson(port, 'POST', '/v1/messages', MSG, {});
   assert(r.status === 200, `${message}: /v1/messages returns 200 (got ${r.status})`);
   assert(stub.lastRequest()?.model_used === expected,
     `${message}: forwarded model ${expected} (got ${JSON.stringify(stub.lastRequest()?.model_used)})`);
 }
 
 async function main() {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-reload-'));
+  const tmpRoot = makeIsolatedTmpDir('c-thru-reload-');
   let stub;
 
   try {

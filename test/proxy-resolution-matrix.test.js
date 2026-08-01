@@ -263,7 +263,7 @@ async function main() {
       { configPath: fallbackConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } },
       async ({ port }) => {
         const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
-        const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 5000);
+        const resp = await httpJson(port, 'POST', '/v1/messages', body, {});
         assert(
           resp.status === 200,
           `active-path 429 on wh-primary → fallback_chains → 200 (got status=${resp.status})`
@@ -373,7 +373,7 @@ async function main() {
         { configPath: tbConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } },
         async ({ port }) => {
           const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
-          const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 5000);
+          const resp = await httpJson(port, 'POST', '/v1/messages', body, {});
           assert(resp.status === 200,
             `chain ordering test: request succeeds after primary fails (got status=${resp.status})`);
           // Without speed-sort tiebreaker (best-cloud mode), chain is walked in raw declaration order.
@@ -421,7 +421,7 @@ async function main() {
         { configPath: seConfigPath, profile: '64gb', env: { CLAUDE_LLM_MODE: 'best-cloud' } },
         async ({ port }) => {
           const body = Object.assign({ model: 'workhorse' }, MSG_BODY);
-          const resp = await httpJson(port, 'POST', '/v1/messages', body, {}, 5000);
+          const resp = await httpJson(port, 'POST', '/v1/messages', body, {});
           assert(resp.status === 200,
             `single-entry chain → local terminal → 200 (got status=${resp.status})`);
           const reqs = singleEntryStub.requests;

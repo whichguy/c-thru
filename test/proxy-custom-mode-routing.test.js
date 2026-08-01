@@ -37,7 +37,7 @@ async function main() {
     model,
     messages: [{ role: 'user', content: 'hi' }],
     max_tokens: 5,
-  }, {}, 5000);
+  }, {});
   const via = r => JSON.parse(r.headers['x-c-thru-resolved-via'] || '{}');
 
   // ── Part A: non-gov custom mode — override vs. base-mode routing ───────────

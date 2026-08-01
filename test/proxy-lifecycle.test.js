@@ -9,6 +9,47 @@ const path = require('path');
 
 const { assert, summary, writeConfig, spawnProxy, waitForPing, httpJson, withProxy, getFreePort } = require('./helpers');
 
+// Manual lifecycle phases intentionally own their proxy process instead of
+// using withProxy(). READY means the listener was created, but a loaded machine
+// can still need several seconds before /ping is stable. Keep this local to the
+// hermetic lifecycle suite; it is not a model-generation timeout.
+const MANUAL_READY_TIMEOUT_MS = 15_000;
+const CHILD_EXIT_TIMEOUT_MS = 3_000;
+const SIGNAL_ASSERT_TIMEOUT_MS = 2_000;
+
+function waitForChildExit(child, label, timeoutMs = CHILD_EXIT_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve({ code: child.exitCode, signal: child.signalCode });
+      return;
+    }
+    let timer;
+    const onExit = (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    };
+    child.once('exit', onExit);
+    timer = setTimeout(() => {
+      child.removeListener('exit', onExit);
+      reject(new Error(`${label}: child did not exit within ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+}
+
+async function ensureChildStopped(child, label) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    const exit = waitForChildExit(child, `${label} SIGTERM cleanup`);
+    child.kill('SIGTERM');
+    await exit;
+  } catch {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exit = waitForChildExit(child, `${label} SIGKILL cleanup`).catch(() => null);
+    child.kill('SIGKILL');
+    await exit;
+  }
+}
+
 console.log('proxy-lifecycle integration tests\n');
 
 async function main() {
@@ -49,17 +90,18 @@ async function main() {
   {
     const hooksPort = await getFreePort();
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-home-'));
+    let child = null;
     try {
-      const { child, port } = await spawnProxy({ configPath, hooksPort, tmpHome });
-      await waitForPing(port);
-      const exitPromise = new Promise(r => child.on('exit', r));
+      let port;
+      ({ child, port } = await spawnProxy({ configPath, hooksPort, tmpHome }));
+      await waitForPing(port, MANUAL_READY_TIMEOUT_MS);
+      const exitPromise = waitForChildExit(child, 'SIGTERM', SIGNAL_ASSERT_TIMEOUT_MS);
       child.kill('SIGTERM');
-      const code = await Promise.race([
-        exitPromise,
-        new Promise((_, rej) => setTimeout(() => rej(new Error('SIGTERM timeout')), 2000)),
-      ]);
-      assert(code === 0, 'proxy exits with code 0 on SIGTERM');
+      const exited = await exitPromise;
+      assert(exited.code === 0 && exited.signal === null,
+        'proxy exits with code 0 and no signal on SIGTERM');
     } finally {
+      await ensureChildStopped(child, 'SIGTERM phase proxy');
       try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
     }
   }
@@ -97,17 +139,37 @@ async function main() {
     const hooksPort2 = await getFreePort();
     const tmpHome1 = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-home-'));
     const tmpHome2 = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-home-'));
+    let p1 = null;
+    let p2 = null;
     try {
-      const [p1, p2] = await Promise.all([
+      const spawnResults = await Promise.allSettled([
         spawnProxy({ configPath, hooksPort: hooksPort1, tmpHome: tmpHome1 }),
         spawnProxy({ configPath, hooksPort: hooksPort2, tmpHome: tmpHome2 }),
       ]);
+      if (spawnResults[0].status === 'fulfilled') p1 = spawnResults[0].value;
+      if (spawnResults[1].status === 'fulfilled') p2 = spawnResults[1].value;
+      const rejectedSpawn = spawnResults.find(result => result.status === 'rejected');
+      if (rejectedSpawn) throw rejectedSpawn.reason;
       assert(p1.port !== p2.port, `two concurrent proxies get distinct ports (${p1.port} vs ${p2.port})`);
       assert(p1.port > 0, 'first proxy port is non-zero');
       assert(p2.port > 0, 'second proxy port is non-zero');
+      const exits = [
+        waitForChildExit(p1.child, 'concurrent proxy 1 SIGTERM'),
+        waitForChildExit(p2.child, 'concurrent proxy 2 SIGTERM'),
+      ];
       p1.child.kill('SIGTERM');
       p2.child.kill('SIGTERM');
+      const [exit1, exit2] = await Promise.all(exits);
+      assert(
+        exit1.code === 0 && exit1.signal === null &&
+          exit2.code === 0 && exit2.signal === null,
+        'both concurrent proxies finish cleanly before the next lifecycle phase',
+      );
     } finally {
+      await Promise.all([
+        ensureChildStopped(p1 && p1.child, 'concurrent proxy 1'),
+        ensureChildStopped(p2 && p2.child, 'concurrent proxy 2'),
+      ]);
       try { fs.rmSync(tmpHome1, { recursive: true, force: true }); } catch {}
       try { fs.rmSync(tmpHome2, { recursive: true, force: true }); } catch {}
     }
@@ -118,17 +180,18 @@ async function main() {
   {
     const hooksPort = await getFreePort();
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-home-'));
+    let child = null;
     try {
-      const { child, port } = await spawnProxy({ configPath, hooksPort, tmpHome });
-      await waitForPing(port);
-      const exitPromise = new Promise(resolve => child.on('exit', resolve));
+      let port;
+      ({ child, port } = await spawnProxy({ configPath, hooksPort, tmpHome }));
+      await waitForPing(port, MANUAL_READY_TIMEOUT_MS);
+      const exitPromise = waitForChildExit(child, 'SIGKILL', SIGNAL_ASSERT_TIMEOUT_MS);
       child.kill('SIGKILL');
-      const code = await Promise.race([
-        exitPromise,
-        new Promise((_, rej) => setTimeout(() => rej(new Error('SIGKILL: proxy did not exit within 2s')), 2000)),
-      ]);
-      assert(code !== undefined, 'proxy exits after SIGKILL (not daemonized)');
+      const exited = await exitPromise;
+      assert(exited.code === null && exited.signal === 'SIGKILL',
+        'proxy exits by SIGKILL with no exit code (not daemonized)');
     } finally {
+      await ensureChildStopped(child, 'SIGKILL phase proxy');
       try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
     }
   }

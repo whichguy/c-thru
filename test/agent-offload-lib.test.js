@@ -9,7 +9,16 @@
 //
 // Run: node test/agent-offload-lib.test.js
 
-const { extractDelegations, aggregateByAgent } = require('../tools/agent-offload-lib.js');
+const {
+  extractDelegations,
+  aggregateByAgent,
+  offloadTimeoutMs,
+  claudeRunFailure,
+  claudeResultDiagnostic,
+  claudePermissionDenialTools,
+  MAX_OFFLOAD_TIMEOUT_MS,
+  MAX_CLAUDE_DIAGNOSTIC_CHARS,
+} = require('../tools/agent-offload-lib.js');
 
 let passed = 0;
 let failed = 0;
@@ -174,6 +183,229 @@ console.log('\n9. aggregateByAgent rollup');
   assert(c && c.completed === 2, `coder completed=2 (got ${c && c.completed})`);
   assert(c && c.tokens === 300, `coder tokens=300 (got ${c && c.tokens})`);
   assert(c && c.lastSeen === '2026-06-15T02:00:00.000Z', `coder lastSeen=latest (got ${c && c.lastSeen})`);
+}
+
+// ── 10. offload timeout parsing has a hard one-hour ceiling ──────────────────
+console.log('\n10. C_THRU_OFFLOAD_TIMEOUT parsing');
+{
+  assert(offloadTimeoutMs(undefined, 3_600_000) === 3_600_000,
+    'missing override uses the one-hour fallback');
+  assert(offloadTimeoutMs('3600', 1) === 3_600_000,
+    'one-hour override is accepted');
+
+  for (const bad of ['0', '-1', '1.5', '12seconds', '3601', '604800', '9007199254740992']) {
+    let rejected = false;
+    try { offloadTimeoutMs(bad, 1); } catch (e) {
+      rejected = e instanceof RangeError && String(e.message).includes('C_THRU_OFFLOAD_TIMEOUT');
+    }
+    assert(rejected, `invalid timeout ${JSON.stringify(bad)} is rejected`);
+  }
+
+  let badFallbackRejected = false;
+  try { offloadTimeoutMs('', MAX_OFFLOAD_TIMEOUT_MS + 1); } catch (e) {
+    badFallbackRejected = e instanceof RangeError;
+  }
+  assert(badFallbackRejected, 'fallback above one hour is rejected');
+}
+
+// ── 11. process health is required before selection scoring ──────────────────
+console.log('\n11. Claude run failure classification');
+{
+  const ok = { status: 0, signal: null, error: null, resultEvent: { is_error: false } };
+  assert(claudeRunFailure(ok) === null, 'exit 0 plus successful result is scoreable');
+  assert(claudeRunFailure({ ...ok, timedOut: true })?.includes('timed out'),
+    'timeout is a run failure even if a delegation was parsed');
+  assert(claudeRunFailure({ ...ok, error: { code: 'ENOENT' } })?.includes('ENOENT'),
+    'spawn error is a run failure');
+  assert(claudeRunFailure({ ...ok, signal: 'SIGTERM' })?.includes('SIGTERM'),
+    'terminating signal is a run failure');
+  assert(claudeRunFailure({ ...ok, status: 37 })?.includes('37'),
+    'non-zero exit is a run failure');
+  assert(claudeRunFailure({ ...ok, resultEvent: null })?.includes('without a result'),
+    'missing result event is a run failure');
+  assert(claudeRunFailure({ ...ok, resultEvent: { is_error: true } })?.includes('reported an error'),
+    'Claude-declared result error is a run failure');
+  assert(claudeRunFailure({ ...ok, resultEvent: {} })?.includes('explicitly report success'),
+    'ambiguous result event is not accepted as success');
+}
+
+// ── 12. result diagnostics are useful, bounded, and safe to share ─────────────
+console.log('\n12. Claude result diagnostic redaction');
+{
+  const secret = 'sk-live-abcdefghijklmnopqrstuvwxyz0123456789';
+  const prompt = 'PRINT_THIS_PRIVATE_PROMPT_VERBATIM';
+  const command = '/bin/sh -lc "curl https://private.invalid"';
+  const privateMessage = 'ordinary private customer retry note';
+  const privateResult = 'ordinary private assistant result prose';
+  const privateTypeAttempt = 'private type prose';
+  const privateCodeAttempt = 'AUTH_401 private code prose';
+  const privateStatusAttempt = 'failed with private status prose';
+  const nestedPrivateMessage = 'ordinary private nested cause note';
+  const resultEvent = {
+    type: 'result',
+    subtype: 'error_during_execution',
+    is_error: true,
+    errors: [
+      {
+        type: privateTypeAttempt,
+        code: privateCodeAttempt,
+        status: privateStatusAttempt,
+        message: privateMessage,
+      },
+      {
+        type: 'authentication_error',
+        code: 'AUTH_401',
+        status: 401,
+        message:
+          `${privateMessage}; api_key=${secret}; ` +
+          `prompt: ${prompt}; command: ${command}`,
+        cause: {
+          type: 'transport_error',
+          code: 'UPSTREAM_401',
+          status: 'failed',
+          message: nestedPrivateMessage,
+        },
+        prompt,
+        argv: ['/bin/sh', '-lc', command],
+      },
+    ],
+    result: privateResult,
+    arbitrary_private_field: secret,
+  };
+  const diagnostic = claudeResultDiagnostic(resultEvent);
+  const failure = claudeRunFailure({
+    status: 1,
+    signal: null,
+    error: null,
+    resultEvent,
+  });
+
+  assert(failure.includes('Claude process exited with status 1'),
+    'status failure remains the primary classification');
+  assert(failure.includes('subtype=error_during_execution'),
+    'status failure includes the parsed result subtype');
+  assert(failure.includes('authentication_error') && failure.includes('AUTH_401'),
+    'allow-listed parsed error type and code identify the Claude cause');
+  assert(failure.includes('errors.status=401'),
+    'numeric parsed error status identifies the Claude cause');
+  for (const [privateLabel, privateValue] of [
+    ['credential', secret],
+    ['prompt', prompt],
+    ['command', command],
+    ['command_target', 'private.invalid'],
+    ['message_prose', privateMessage],
+    ['result_prose', privateResult],
+    ['type_prose', privateTypeAttempt],
+    ['code_prose', privateCodeAttempt],
+    ['status_prose', privateStatusAttempt],
+    ['nested_message_prose', nestedPrivateMessage],
+  ]) {
+    assert(!failure.includes(privateValue),
+      `status diagnostic does not expose ${privateLabel}`);
+  }
+  assert(diagnostic.length <= MAX_CLAUDE_DIAGNOSTIC_CHARS,
+    'shared result diagnostic obeys its total character bound');
+
+  const resultOnlyDiagnostic = claudeResultDiagnostic({
+    type: 'result',
+    subtype: 'error_during_execution',
+    is_error: true,
+    result: privateResult,
+  });
+  assert(resultOnlyDiagnostic === 'subtype=error_during_execution',
+    'error result prose is omitted even when it is short and unlabeled');
+
+  const nestedDiagnostic = claudeResultDiagnostic({
+    type: 'result',
+    subtype: 'error_during_execution',
+    is_error: true,
+    error: {
+      type: privateTypeAttempt,
+      code: 'AUTH_401\nPRIVATE_CONTROL_TEXT',
+      status: privateStatusAttempt,
+      message: privateMessage,
+      cause: {
+        type: 'network_error',
+        code: 'ECONNRESET',
+        status: 'timeout',
+        message: nestedPrivateMessage,
+      },
+    },
+  });
+  assert(
+    nestedDiagnostic.includes('error.cause.type=network_error') &&
+      nestedDiagnostic.includes('error.cause.code=ECONNRESET') &&
+      nestedDiagnostic.includes('error.cause.status=timeout'),
+    'nested error cause exposes only validated category identifiers and status',
+  );
+  for (const [privateLabel, privateValue] of [
+    ['type_prose', privateTypeAttempt],
+    ['code_control', 'AUTH_401\nPRIVATE_CONTROL_TEXT'],
+    ['status_prose', privateStatusAttempt],
+    ['message_prose', privateMessage],
+    ['nested_message_prose', nestedPrivateMessage],
+  ]) {
+    assert(!nestedDiagnostic.includes(privateValue),
+      `identifier validation suppresses ${privateLabel}`);
+  }
+
+  assert(
+    claudeResultDiagnostic({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: prompt,
+    }) === 'subtype=success',
+    'successful assistant result text is never copied into diagnostics',
+  );
+
+  const spawnPrivateMessage = 'ordinary private spawn detail';
+  const spawnFailure = claudeRunFailure({
+    status: null,
+    error: { message: spawnPrivateMessage },
+    resultEvent: null,
+  });
+  assert(
+    spawnFailure === 'Claude process spawn error' &&
+      !spawnFailure.includes(spawnPrivateMessage),
+    'spawn diagnostics omit arbitrary error messages',
+  );
+  const spawnCodeFailure = claudeRunFailure({
+    status: null,
+    error: { code: 'ENOENT', message: spawnPrivateMessage },
+    resultEvent: null,
+  });
+  assert(
+    spawnCodeFailure === 'Claude process spawn error: ENOENT' &&
+      !spawnCodeFailure.includes(spawnPrivateMessage),
+    'spawn diagnostics retain only a validated bounded OS error code',
+  );
+  const invalidSpawnCode = claudeRunFailure({
+    status: null,
+    error: {
+      code: 'ENOENT private spawn code prose',
+      message: spawnPrivateMessage,
+    },
+    resultEvent: null,
+  });
+  assert(
+    invalidSpawnCode === 'Claude process spawn error' &&
+      !invalidSpawnCode.includes('private spawn'),
+    'invalid spawn codes fall back to the generic spawn error',
+  );
+
+
+  assert(
+    claudePermissionDenialTools({
+      permission_denials: [
+        { tool_name: 'Edit', tool_input: { command, prompt, secret } },
+        { tool_name: 'Edit', tool_input: { command: 'duplicate' } },
+        { tool_name: 'Agent', tool_input: { prompt } },
+        { tool_name: `invalid-${'x'.repeat(100)}`, tool_input: { secret } },
+      ],
+    }).join(',') === 'Edit,Agent',
+    'permission diagnostics expose only bounded unique tool names, never tool inputs',
+  );
 }
 
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);

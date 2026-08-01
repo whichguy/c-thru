@@ -68,7 +68,7 @@ async function main() {
       model,
       messages: [{ role: 'user', content: 'hi' }],
       max_tokens: 5,
-    }, {}, 5000);
+    }, {});
 
     const parseVia = r => {
       try { return JSON.parse(r.headers['x-c-thru-resolved-via'] || '{}'); } catch { return {}; }

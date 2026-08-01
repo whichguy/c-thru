@@ -59,8 +59,8 @@ const ANTHROPIC_ONLY_PROBES = [
 // Issues a request without Content-Type for null bodies (so GET/DELETE do not
 // look like JSON requests). httpJson always sends Content-Type: application/json
 // which is fine for a 501 short-circuit.
-async function probe(port, method, urlPath, body) {
-  return httpJson(port, method, urlPath, body, {}, 5000);
+async function probe(port, method, urlPath, body, headers = {}) {
+  return httpJson(port, method, urlPath, body, headers);
 }
 
 async function runUnauthedGating() {
@@ -96,6 +96,7 @@ async function runAuthedPassthrough() {
           url: `http://127.0.0.1:${stub.port}`,
           format: 'anthropic',
           auth_env: 'ANTHROPIC_API_KEY',
+          preserve_claude_code_correlation: false,
         },
       },
     };
@@ -120,8 +121,23 @@ async function runAuthedPassthrough() {
         `stub saw DELETE batches/abc (saw: ${seen.join(', ')})`);
 
       // Admin-style endpoint also forwards (no special-casing of admin keys).
-      const r3 = await probe(port, 'GET', '/v1/organizations/me', null);
+      // Explicit false must also apply on this catch-all path; an endpoint id
+      // of "anthropic" does not itself grant correlation-header trust.
+      const correlationHeaders = {
+        'x-claude-code-session-id': 'session-catch-all-canary',
+        'x-claude-code-agent-id': 'agent-catch-all-canary',
+        'x-claude-code-parent-agent-id': 'parent-catch-all-canary',
+      };
+      const r3 = await probe(
+        port, 'GET', '/v1/organizations/me', null, correlationHeaders);
       assertEq(r3.status, 200, 'GET /v1/organizations/me forwarded');
+      const organizationRequest = stub.requests.find(
+        request => request.path === '/v1/organizations/me');
+      assert(organizationRequest, 'stub saw GET /v1/organizations/me');
+      for (const name of Object.keys(correlationHeaders)) {
+        assert(!Object.prototype.hasOwnProperty.call(organizationRequest.headers || {}, name),
+          `catch-all explicit false strips ${name}`);
+      }
 
       // OAuth bootstrap: not in ANTHROPIC_ONLY_PATHS at all — falls through
       // to the late /v1/* catch-all and forwards. Critical for Claude Code
@@ -248,7 +264,7 @@ async function runTranslationGapHeader() {
           },
         ],
       };
-      const r = await httpJson(port, 'POST', '/v1/messages', reqBody, {}, 5000);
+      const r = await httpJson(port, 'POST', '/v1/messages', reqBody, {});
       assertEq(r.status, 200, 'POST /v1/messages → 200 via Gemini stub');
       const gap = r.headers['x-c-thru-translation-gap'];
       assert(typeof gap === 'string' && gap.length > 0,
@@ -323,7 +339,7 @@ async function runOpenAITranslationProbe() {
       const r = await httpJson(port, 'POST', '/v1/messages', {
         model: 'openai-test-model', max_tokens: 16,
         messages: [{ role: 'user', content: 'hello' }],
-      }, {}, 5000);
+      }, {});
       assertEq(r.status, 200, 'POST /v1/messages → 200 via OpenAI Responses stub (not 501)');
       assertEq(r.json?.content?.[0]?.text, 'openai translated ok',
         'OpenAI Responses output is translated to Anthropic message content');

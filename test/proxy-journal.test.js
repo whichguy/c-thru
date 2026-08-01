@@ -50,7 +50,7 @@ async function main() {
       model,
       messages: [{ role: 'user', content: 'hello' }],
       max_tokens: 5,
-    }, { 'x-api-key': 'sk-secret-must-not-leak' }, 5000);
+    }, { 'x-api-key': 'sk-secret-must-not-leak' });
 
     // ── Test 1: journaling disabled by default — no files written ──────────
     console.log('1. default off — no journal directory created');
@@ -214,7 +214,7 @@ async function main() {
             model: 'workhorse',
             messages: [{ role: 'user', content: 'hi' }],
             max_tokens: 5,
-          }, {}, 5000);
+          });
           await new Promise(r => setTimeout(r, 300));
           const entries = readJournal(journalDir7, 'workhorse');
           assert(entries.length >= 1, `Ollama non-stream: at least 1 journal entry written (got ${entries.length})`);

@@ -9,7 +9,8 @@
  *
  *   1. Streaming is not fully buffered before first client bytes
  *   2. Non-fallback 400 bodies keep upstream wording (CC auto-recovery)
- *   3. anthropic-beta / anthropic-version are open-list forwarded
+ *   3. Anthropic + Claude Code attribution headers are forwarded while
+ *      client-supplied x-c-thru-* headers are scrubbed
  *   4. tool_reference content blocks pass through body rewrite-free
  *   5. HEAD / and GET /v1/models are present (startup / discovery)
  *   6. picker_alias_endpoints default includes xai → claude-via-* for discovery
@@ -37,6 +38,7 @@ function anthropicConfig(stubPort, extra = {}) {
         url: `http://127.0.0.1:${stubPort}`,
         format: 'anthropic',
         auth: 'none',
+        preserve_claude_code_correlation: true,
       },
       xai: {
         kind: 'anthropic',
@@ -245,7 +247,7 @@ async function main() {
             max_tokens: 16,
             thinking: { type: 'adaptive' },
             messages: [{ role: 'user', content: '.' }],
-          }, {}, 5000);
+          }, {});
           assertEq(r.status, 400, 'status 400');
           // Claude Code recovery matches on upstream wording — must not wrap.
           assert(r.bodyText && r.bodyText.includes(EXACT_MSG),
@@ -297,7 +299,7 @@ async function main() {
             model: 'gw-model',
             max_tokens: 16,
             messages: [{ role: 'user', content: '.' }],
-          }, {}, 5000);
+          }, {});
           assertEq(r.status, 400, 'chunked-stub status 400');
           assert(r.bodyText && r.bodyText.includes(EXACT_MSG),
             `chunked path keeps exact message (got: ${(r.bodyText || '').slice(0, 200)})`);
@@ -315,10 +317,15 @@ async function main() {
       }
     }
 
-    // ── 3. anthropic-beta open-list forward ───────────────────────────────
-    console.log('\n3. novel anthropic-beta + anthropic-version forwarded to upstream');
+    // ── 3. gateway header forwarding / proxy-header scrub ─────────────────
+    console.log('\n3. Anthropic + Claude Code attribution headers forward; x-c-thru-* scrubs');
     {
       const NOVEL_BETA = 'future-capability-2099-01-01,another-beta-2099-02-02';
+      const CLAUDE_CODE_HEADERS = {
+        'x-claude-code-session-id': 'session-gateway-protocol-test',
+        'x-claude-code-agent-id': 'agent-gateway-protocol-test',
+        'x-claude-code-parent-agent-id': 'parent-gateway-protocol-test',
+      };
       const stub = await stubBackend();
       try {
         const configPath = writeConfig(tmpDir, anthropicConfig(stub.port));
@@ -335,7 +342,9 @@ async function main() {
           }, {
             'anthropic-version': '2023-06-01',
             'anthropic-beta': NOVEL_BETA,
-          }, 5000);
+            ...CLAUDE_CODE_HEADERS,
+            'x-c-thru-client-spoof': 'must-not-reach-upstream',
+          });
           assertEq(r.status, 200, 'POST /v1/messages 200');
           const last = stub.requests[stub.requests.length - 1];
           assert(last, 'stub saw a request');
@@ -344,7 +353,86 @@ async function main() {
             `anthropic-beta forwarded open-list (got ${JSON.stringify(betaHdr)})`);
           const ver = last.headers['anthropic-version'] || last.headers['Anthropic-Version'];
           assertEq(ver, '2023-06-01', 'anthropic-version forwarded');
+          for (const [name, value] of Object.entries(CLAUDE_CODE_HEADERS)) {
+            assertEq(last.headers[name], value, `${name} forwarded`);
+          }
+          const leakedCthruHeaders = Object.keys(last.headers)
+            .filter((name) => name.toLowerCase().startsWith('x-c-thru-'));
+          assertEq(leakedCthruHeaders.length, 0,
+            `client x-c-thru-* headers scrubbed (got ${JSON.stringify(leakedCthruHeaders)})`);
         });
+
+        const policyCases = [
+          {
+            label: 'custom gateway explicit true',
+            endpointId: 'custom_gateway',
+            preserve: true,
+            expectForwarded: true,
+          },
+          {
+            label: 'anthropic endpoint explicit false',
+            endpointId: 'anthropic',
+            preserve: false,
+            expectForwarded: false,
+          },
+          {
+            label: 'anthropic endpoint absent policy on non-Anthropic host',
+            endpointId: 'anthropic',
+            expectForwarded: false,
+          },
+          {
+            label: 'custom endpoint absent policy',
+            endpointId: 'custom_gateway',
+            expectForwarded: false,
+          },
+        ];
+        for (const policyCase of policyCases) {
+          const endpoint = {
+            kind: 'anthropic',
+            url: `http://127.0.0.1:${stub.port}`,
+            format: 'anthropic',
+            auth: 'none',
+          };
+          if (Object.prototype.hasOwnProperty.call(policyCase, 'preserve')) {
+            endpoint.preserve_claude_code_correlation = policyCase.preserve;
+          }
+          const policyConfigPath = writeConfig(tmpDir, {
+            endpoints: { [policyCase.endpointId]: endpoint },
+            model_routes: { 'gw-model': policyCase.endpointId },
+            llm_profiles: {
+              workhorse: {
+                'best-cloud': { '128gb': 'gw-model' },
+                on_failure: 'hard_fail',
+              },
+            },
+          });
+          const requestsBefore = stub.requests.length;
+          await withProxy({
+            configPath: policyConfigPath,
+            profile: '128gb',
+            mode: 'best-cloud',
+            env: { CLAUDE_PROXY_SKIP_VALIDATOR: '1' },
+          }, async ({ port }) => {
+            const r = await httpJson(port, 'POST', '/v1/messages', {
+              model: 'gw-model',
+              max_tokens: 8,
+              messages: [{ role: 'user', content: policyCase.label }],
+            }, CLAUDE_CODE_HEADERS);
+            assertEq(r.status, 200, `${policyCase.label}: POST /v1/messages 200`);
+            const last = stub.requests[stub.requests.length - 1];
+            assertEq(stub.requests.length, requestsBefore + 1,
+              `${policyCase.label}: stub saw exactly one request`);
+            for (const [name, value] of Object.entries(CLAUDE_CODE_HEADERS)) {
+              if (policyCase.expectForwarded) {
+                assertEq(last.headers[name], value,
+                  `${policyCase.label}: ${name} forwarded`);
+              } else {
+                assert(!Object.prototype.hasOwnProperty.call(last.headers, name),
+                  `${policyCase.label}: ${name} stripped`);
+              }
+            }
+          });
+        }
       } finally {
         await stub.close().catch(() => {});
       }
@@ -381,7 +469,7 @@ async function main() {
               // shape intentionally loose — pin that the proxy does not strip it
               name: 'mcp__example__search',
             }],
-          }, {}, 5000);
+          }, {});
           assertEq(r.status, 200, 'POST with tool_reference → 200');
           const last = stub.requests[stub.requests.length - 1];
           assert(last && last.body, 'stub recorded body');
@@ -424,7 +512,7 @@ async function main() {
           });
           assertEq(head.status, 200, 'HEAD / → 200');
 
-          const models = await httpJson(port, 'GET', '/v1/models', null, {}, 5000);
+          const models = await httpJson(port, 'GET', '/v1/models', null, {});
           assertEq(models.status, 200, 'GET /v1/models → 200');
           assert(Array.isArray(models.json && models.json.data), 'models.data is array');
           const ids = models.json.data.map((m) => m.id);
@@ -455,7 +543,7 @@ async function main() {
             model: 'claude-via-grok-4.5',
             max_tokens: 8,
             messages: [{ role: 'user', content: 'via' }],
-          }, {}, 5000);
+          }, {});
           assertEq(r.status, 200, 'claude-via-grok-4.5 → 200');
           assert(stub.requests.length >= 1, 'stub received request');
           const served = r.headers['x-c-thru-served-by'] || '';
