@@ -86,9 +86,24 @@ cthru_src_path() {
 cthru_chmod_tree_bins() {
   local root="${1:-$REPO_DIR}"
   [[ -d "$root/tools" ]] || return 0
+  # Launchers + shell helpers only. Do not chmod all *.js — many are
+  # require()-only libraries tracked as 100644; a blanket +x dirties
+  # the worktree during install-smoke and breaks hermetic evidence identity.
   chmod +x "$root/tools/c-thru" "$root/tools/claude-proxy" 2>/dev/null || true
   chmod +x "$root/tools/"*.sh "$root/tools/c-thru-resolve" 2>/dev/null || true
-  chmod +x "$root/tools/"*.js 2>/dev/null || true
+  # Node CLIs already tracked 100755 (shebang entrypoints); re-assert those only.
+  local f
+  for f in "$root/tools/"*.js; do
+    [[ -f "$f" ]] || continue
+    # Skip if git (when available) tracks this path as non-executable.
+    if command -v git >/dev/null 2>&1 && git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      local mode
+      mode=$(git -C "$root" ls-files -s -- "${f#"$root"/}" 2>/dev/null | awk '{print $1}')
+      if [[ "$mode" == "100755" ]]; then
+        chmod +x "$f" 2>/dev/null || true
+      fi
+    fi
+  done
 }
 
 # Full tree check for CTHRU_REPO_ROOT (file presence; chmod separately).
