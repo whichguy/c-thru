@@ -41,7 +41,7 @@ this fleet.
 | Agent | Capability | Role | Dispatches → |
 |---|---|---|---|
 | `planner` | `planner` | Implementation/architecture plans before any code | `coder`, `planner-hard` ↑ |
-| `planner-hard` | `planner-hard` | High-stakes/ambiguous/cross-system planning (Opus) | `coder` |
+| `planner-hard` | `planner-hard` | High-stakes/ambiguous/cross-system planning | `coder` |
 | `explore` | `explore` | Read-only context-gathering before planning/coding | `coder`, `planner` |
 | `coder` | `coder` | Writes/edits/refactors code to a plan | `coder` (continue), `tester`, `debugger-hypothesis` |
 | `coder-fallback` | `coder-fallback` | Second attempt when `coder` stalls (different model) | `tester`, `debugger-hypothesis` |
@@ -52,7 +52,7 @@ this fleet.
 | `plan-scheduler` ⚠ | `fast-generalist` | Standalone helper: dispatches a wave's READY_ITEMS via `/schedule-plan-tasks` when invoked directly (e.g. "schedule these tasks"). **Not** part of `/c-thru-plan`'s own Phase 4 loop — that loop dispatches straight to `coder` | (leaf) |
 | `debugger-hypothesis` | `debugger-hypothesis` | Generates/ranks hypotheses for an unknown bug | `debugger-investigate`, `debugger-hard` ↑ |
 | `debugger-investigate` | `debugger-investigate` | Deep investigation of a hypothesis (logs, traces) | `debugger-investigate` (continue), `tester`, `debugger-hard` ↑ |
-| `debugger-hard` | `debugger-hard` | Bugs resisting normal debugging (Opus); hard-fail | `coder` (fix), `tester` |
+| `debugger-hard` | `debugger-hard` | Bugs resisting normal debugging; hard-fail | `coder` (fix), `tester` |
 | `docs` | `docs` | Updates CLAUDE.md/README/help after API changes | `docs` (continue) |
 | `generalist` | `generalist` | Best all-rounder when no specialist fits | (leaf) |
 | `fast-generalist` | `fast-generalist` | Fastest generalist for quick one-shot answers | (leaf) |
@@ -65,7 +65,7 @@ this fleet.
 | `grok` 📌 | `model:grok-4.5` | Brand: xAI Grok commercial cloud | (leaf) |
 | `deepseek` 📌 | `model:deepseek-v4-pro:cloud` | Brand: DeepSeek cloud OSS | (leaf) |
 | `qwen` 📌 | `model:qwen3.6:35b` | Brand: local Qwen | (leaf) |
-| `kimi` 📌 | `model:kimi-k2.7-code:cloud` | Brand: Kimi cloud OSS | (leaf) |
+| `kimi` 📌 | `model:kimi-k3:cloud` | Brand: Kimi cloud OSS | (leaf) |
 | `gemini` 📌 | `model:gemini-pro` | Brand: Google Gemini | (leaf) |
 
 **Brand catalog (expanded).** Codex family leaves: `sol`, `terra`, `luna`, `codex` (default terra) pin to `gpt-5.6-*` via OpenAI API (`OPENAI_API_KEY`), not the Codex CLI subscription path. Additional brand leaves (`opus`, `sonnet`, `haiku`, `fable`,
@@ -126,7 +126,7 @@ Claude Code sends  subagent_type: coder
                    per-mode × per-tier model string
                           │
                           ▼  model_routes → endpoints
-                   gemini-pro @ best-cloud/64gb  (or tier/mode-appropriate equivalent)
+                   kimi-k3:cloud @ best-cloud-oss/64gb  (or tier/mode-appropriate equivalent)
 ```
 
 See `docs/hardware-profile-matrix.md` for the full hardware-profile table, and the README

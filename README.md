@@ -1071,7 +1071,7 @@ Schema reference, route/endpoint/profile structure, and the full `model_override
 
 ## Agents
 
-97 agents declare `model: <agent-name>` in frontmatter — including brand leaves from `config/brand-agents.json`, whose frontmatter names themselves like every other agent. Their pin to a concrete model lives one layer down, in `agent_to_capability` (e.g. `"grok": "model:grok-4.5"`, `"opus": "model:claude-opus-5"`), not in the agent file. The proxy resolves
+98 agents declare `model: <agent-name>` in frontmatter — including brand leaves from `config/brand-agents.json`, whose frontmatter names themselves like every other agent. Their pin to a concrete model lives one layer down, in `agent_to_capability` (e.g. `"grok": "model:grok-4.5"`, `"opus": "model:claude-opus-5"`), not in the agent file. The proxy resolves
 `agent-name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model`
 at request time. Agent files are never edited when you remap models.
 
@@ -1346,7 +1346,7 @@ The marketplace plugin is the right starting point for most users. The CLI insta
 | `c-thru` binary on PATH | — | ✓ |
 | Control subcommands (`list`, `reload`, `restart`, `explain`, `stats`, `check-deps`) | — | ✓ |
 | Flags (`--mode`, `--profile`, `--bypass-proxy`, `--journal`, `--router-debug`) | (use env vars) | ✓ |
-| Agent fleet (97 agents) injected via `--agents` | — | ✓ |
+| Agent fleet (98 agents) injected via `--agents` | — | ✓ |
 | `llm-capabilities` MCP server injected via `--settings` | — | ✓ |
 | Contributor checks (`c-thru-contract-check`, `c-thru-hygiene-check`) | — | ✓ |
 

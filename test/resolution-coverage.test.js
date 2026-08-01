@@ -113,14 +113,17 @@ let missingCaps = 0;
 for (const target of targetCaps) {
   if (typeof target === 'string' && target.startsWith('model:')) {
     const pin = target.slice('model:'.length);
+    const latest = (config.latest_models && config.latest_models[pin]) || null;
+    // Brand shorthands pin model:<name> and expand via latest_models → concrete
+    // model_routes key (proxy resolveBackend). Either the pin or its latest
+    // expansion must be a model_routes key.
     const routable = Object.prototype.hasOwnProperty.call(routes, pin)
-      || Object.keys(routes).some((k) => k.startsWith('re:'));
-    // Direct key is enough for brand pins; regex routes are rare for pins.
-    if (!Object.prototype.hasOwnProperty.call(routes, pin)) {
+      || (typeof latest === 'string' && Object.prototype.hasOwnProperty.call(routes, latest));
+    if (!routable) {
       missingCaps++;
       if (missingCaps <= 5) {
         const orphanAgents = Object.entries(a2c).filter(([, c]) => c === target).map(([a]) => a);
-        assert(false, `model: pin '${pin}' for agents [${orphanAgents.join(', ')}] missing from model_routes`);
+        assert(false, `model: pin '${pin}' for agents [${orphanAgents.join(', ')}] missing from model_routes/latest_models`);
       }
     }
     continue;
@@ -155,8 +158,9 @@ assert(true, 'model_overrides has no cycles');
 // ── Test 7: every agent file model: name is in agent_to_capability ─────────
 console.log('\n7. every agent file model: name is in agent_to_capability');
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+const RESERVED_AGENT_FILES = new Set(['AGENTS.md', 'CLAUDE.md']);
 const agentFiles = fs.readdirSync(AGENTS_DIR)
-  .filter(f => f.endsWith('.md'))
+  .filter(f => f.endsWith('.md') && !RESERVED_AGENT_FILES.has(f))
   .sort();
 
 let agentIssues = 0;
