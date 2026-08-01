@@ -19,7 +19,27 @@ fi
 # Ports used by this test — free any leftover processes from prior runs.
 ALT_PORT=11435
 CUSTOM_PORT=11500
-_free_ports() { lsof -ti ":$ALT_PORT" -ti ":$CUSTOM_PORT" | xargs kill -9 2>/dev/null || true; }
+# Prefer lsof; fall back to /usr/sbin/lsof (macOS) so PATH-minimal CI shells work.
+LSOF_BIN=$(command -v lsof 2>/dev/null || true)
+[[ -z "$LSOF_BIN" && -x /usr/sbin/lsof ]] && LSOF_BIN=/usr/sbin/lsof
+port_in_use() {
+  local p="$1"
+  if [[ -n "$LSOF_BIN" ]]; then
+    "$LSOF_BIN" -ti ":$p" >/dev/null 2>&1
+  else
+    # No lsof: treat well-known Ollama default as in-use if curl answers.
+    if [[ "$p" == "11434" ]]; then
+      curl -sf --max-time 1 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1
+    else
+      return 1
+    fi
+  fi
+}
+_free_ports() {
+  if [[ -n "$LSOF_BIN" ]]; then
+    "$LSOF_BIN" -ti ":$ALT_PORT" -ti ":$CUSTOM_PORT" | xargs kill -9 2>/dev/null || true
+  fi
+}
 _free_ports
 trap '_free_ports' EXIT
 
@@ -36,7 +56,7 @@ run_probe() {
 # ---------------------------------------------------------------------------
 DEFAULT_PORT=11434
 echo "Scenario 1: default host, down..."
-if lsof -ti ":$DEFAULT_PORT" >/dev/null 2>&1; then
+if port_in_use "$DEFAULT_PORT"; then
     echo "  SKIP  Scenario 1: Ollama already running on $DEFAULT_PORT"
     PASS=$((PASS+2))  # count as passed — "always exits 0" and "DOWN" would pass if port were free
 else
@@ -50,7 +70,7 @@ fi
 # Scenarios 2-3: Default host, up (stub server on alternate port via OLLAMA_HOST)
 # ---------------------------------------------------------------------------
 echo "Scenario 2: up (0 models via OLLAMA_HOST)..."
-if lsof -ti ":$ALT_PORT" >/dev/null 2>&1; then
+if port_in_use "$ALT_PORT"; then
     echo "  SKIP  Scenarios 2-3: port $ALT_PORT in use"
 else
     export OLLAMA_HOST="127.0.0.1:$ALT_PORT"
@@ -73,7 +93,7 @@ fi
 # Scenario 4: Custom host, up — regression for bug #3
 # ---------------------------------------------------------------------------
 echo "Scenario 4: custom host, up (bug #3 regression)..."
-if lsof -ti ":$CUSTOM_PORT" >/dev/null 2>&1; then
+if port_in_use "$CUSTOM_PORT"; then
     echo "  SKIP  Scenario 4: port $CUSTOM_PORT in use"
 else
     export OLLAMA_HOST="127.0.0.1:$CUSTOM_PORT"
