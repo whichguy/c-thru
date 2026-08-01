@@ -789,7 +789,11 @@ function validateConfig(config, _errors, options) {
       if (entry.format != null && !VALID_FORMATS.has(entry.format)) {
         report(`'${endpointsKey}.${id}.format' must be one of: ${[...VALID_FORMATS].join(', ')}`);
       }
-      if (entry.call_style != null) {
+      
+      if (entry.preserve_claude_code_correlation != null && typeof entry.preserve_claude_code_correlation !== 'boolean') {
+        report(`'endpoints.${id}.preserve_claude_code_correlation' must be a boolean when present`);
+      }
+if (entry.call_style != null) {
         if (!VALID_CALL_STYLES.has(entry.call_style)) {
           report(`'${endpointsKey}.${id}.call_style' must be one of: ${[...VALID_CALL_STYLES].join(', ')}`);
         } else {
