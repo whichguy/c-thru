@@ -164,6 +164,15 @@ cthru_desired_anthropic_upstream_fingerprint() {
   local url="${CLAUDE_PROXY_ANTHROPIC_UPSTREAM:-}"
   [[ -n "$url" ]] || return 0
   command -v node >/dev/null 2>&1 || return 0
+  local js=""
+  # Prefer shared module next to this lib (tools/c-thru-upstream-url.js).
+  if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    js="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/c-thru-upstream-url.js"
+  fi
+  if [[ -n "$js" && -f "$js" ]]; then
+    node "$js" fingerprint "$url" 2>/dev/null || true
+    return 0
+  fi
   node -e '
 const crypto = require("crypto");
 let s = process.argv[1] || "";

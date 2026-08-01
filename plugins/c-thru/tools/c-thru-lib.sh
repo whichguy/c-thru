@@ -153,6 +153,34 @@ cthru_upstream_fingerprint_from_ping_json() {
   return 0
 }
 
+# Desired fingerprint for keep-alive / ensure: explicit export wins; else hash
+# CLAUDE_PROXY_ANTHROPIC_UPSTREAM (hooks may inherit URL without fingerprint).
+# Matches tools/claude-proxy fingerprintUpstreamUrl (URL.toString() then sha256[:16]).
+cthru_desired_anthropic_upstream_fingerprint() {
+  if [[ -n "${C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT:-}" ]]; then
+    printf '%s' "$C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT"
+    return 0
+  fi
+  local url="${CLAUDE_PROXY_ANTHROPIC_UPSTREAM:-}"
+  [[ -n "$url" ]] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  local js=""
+  # Prefer shared module next to this lib (tools/c-thru-upstream-url.js).
+  if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    js="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/c-thru-upstream-url.js"
+  fi
+  if [[ -n "$js" && -f "$js" ]]; then
+    node "$js" fingerprint "$url" 2>/dev/null || true
+    return 0
+  fi
+  node -e '
+const crypto = require("crypto");
+let s = process.argv[1] || "";
+try { s = new URL(s).toString(); } catch {}
+process.stdout.write(crypto.createHash("sha256").update(s).digest("hex").slice(0, 16));
+' "$url" 2>/dev/null || true
+}
+
 # Opt-in: C_THRU_STATS_RESET=launch clears the lifetime usage ledger once after
 # the proxy is known ready for this process tree. Default is never (forensics).
 # Uses POST /c-thru/stats/clear so multi-proxy clear-wins applies. Once per shell.

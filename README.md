@@ -654,7 +654,7 @@ res.headersSent  →  false   (safe to reroute)
 <details>
 <summary>4 &middot; Guard two — is substitution allowed? &mdash; <i>Upstream API</i></summary>
 
-Agent `model:` pins (brand leaves via `agent_to_capability`) default to **hard_fail** — a primary 403/5xx must not cascade to `routes.default` under the brand Identity prompt (false attribution). Role capabilities cascade by default; reviewer-security and debugger-hard ship with on_failure: hard_fail because a quietly substituted weaker model would be worse than a visible failure. Explicit `llm_profiles.<cap>.on_failure` always wins when set.
+Direct model pins use the default cascade policy. Role requests can opt out: reviewer-security and debugger-hard ship with on_failure: hard_fail because a quietly substituted weaker model would be worse than a visible failure.
 
 ```diff
   # Resolved request policy
@@ -1097,99 +1097,100 @@ The full mapping, all the way through the implementation: **agent → capability
 | Agent | Capability | `best-cloud` | `best-cloud-oss` | `best-local-oss` | Endpoint (`best-cloud`) |
 |---|---|---|---|---|---|
 | `advisors` &nbsp;⚠ | `planner-hard` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
+| `claude-fable-5` &nbsp;⚠ | `model:claude-fable-5` | `claude-fable-5` | `claude-fable-5` | `claude-fable-5` | `anthropic` |
 | `claude-haiku-4-5-20251001` &nbsp;⚠ | `model:claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `anthropic` |
 | `claude-opus-5` &nbsp;⚠ | `model:claude-opus-5` | `claude-opus-5` | `claude-opus-5` | `claude-opus-5` | `anthropic` |
 | `claude-sonnet-5` &nbsp;⚠ | `model:claude-sonnet-5` | `claude-sonnet-5` | `claude-sonnet-5` | `claude-sonnet-5` | `anthropic` |
 | `code-reviewer` | `code-reviewer` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
 | `coder` | `coder` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
 | `coder-fallback` | `coder-fallback` | `claude-opus-5` | `deepseek-v4-flash:cloud` | `devstral-small-2:24b` | `anthropic` |
-| `codex` &nbsp;⚠ | `model:gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
+| `codex` &nbsp;⚠ | `model:codex` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
 | `codex-luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `openai` |
 | `codex-sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `openai` |
 | `codex-terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
 | `debugger-hard` | `debugger-hard` | `claude-opus-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
 | `debugger-hypothesis` | `debugger-hypothesis` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
 | `debugger-investigate` | `debugger-investigate` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
-| `deepseek` &nbsp;⚠ | `model:deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `ollama_cloud` |
-| `deepseek-flash` &nbsp;⚠ | `model:deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `ollama_cloud` |
+| `deepseek` &nbsp;⚠ | `model:deepseek` | `—` | `—` | `—` | `—` |
+| `deepseek-flash` &nbsp;⚠ | `model:deepseek-flash` | `—` | `—` | `—` | `—` |
 | `deepseek-v4-flash-cloud` &nbsp;⚠ | `model:deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `deepseek-v4-flash:cloud` | `ollama_cloud` |
 | `deepseek-v4-pro-cloud` &nbsp;⚠ | `model:deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `deepseek-v4-pro:cloud` | `ollama_cloud` |
-| `devstral` &nbsp;⚠ | `model:devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `ollama_local` |
+| `devstral` &nbsp;⚠ | `model:devstral` | `—` | `—` | `—` | `—` |
 | `devstral-2` &nbsp;⚠ | `model:devstral-2` | `devstral-2` | `devstral-2` | `devstral-2` | `ollama_local` |
 | `devstral-2-latest` &nbsp;⚠ | `model:devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `ollama_local` |
-| `devstral-small-2-24b` &nbsp;⚠ | `model:devstral-small-2:24b` | `devstral-small-2:24b` | `devstral-small-2:24b` | `devstral-small-2:24b` | `ollama_local` |
-| `devstral-small-2-24b-cloud` &nbsp;⚠ | `model:devstral-small-2:24b-cloud` | `devstral-small-2:24b-cloud` | `devstral-small-2:24b-cloud` | `devstral-small-2:24b-cloud` | `ollama_cloud` |
+| `devstral-small-2-24b` &nbsp;⚠ | `model:devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `ollama_local` |
+| `devstral-small-2-24b-cloud` &nbsp;⚠ | `model:devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `devstral-2:latest` | `ollama_local` |
 | `docs` | `docs` | `gemma4:26b` | `gemma4:26b` | `qwen3.6:35b` | `ollama_local` |
 | `edge` | `edge` | `gemma4:e4b` | `gemma4:e4b` | `gemma4:e4b` | `ollama_local` |
 | `explore` | `explore` | `claude-sonnet-5` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `anthropic` |
-| `fable` &nbsp;⚠ | `model:claude-fable-5` | `claude-fable-5` | `claude-fable-5` | `claude-fable-5` | `anthropic` |
+| `fable` &nbsp;⚠ | `model:fable` | `claude-fable-5` | `claude-fable-5` | `claude-fable-5` | `anthropic` |
 | `fast-generalist` | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
 | `fast-scout` | `fast-scout` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `ollama_local` |
-| `gemini` &nbsp;⚠ | `model:gemini-pro` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini_ai` |
+| `gemini` &nbsp;⚠ | `model:gemini` | `—` | `—` | `—` | `—` |
 | `gemini-3-flash-preview-cloud` &nbsp;⚠ | `model:gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `ollama_cloud` |
 | `gemini-flash` &nbsp;⚠ | `model:gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `gemini-3-flash-preview:cloud` | `ollama_cloud` |
 | `gemini-pro` &nbsp;⚠ | `model:gemini-pro` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini_ai` |
 | `gemini-pro-latest` &nbsp;⚠ | `model:gemini-pro-latest` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini-pro-latest` | `gemini_ai` |
-| `gemma` &nbsp;⚠ | `model:gemma4:26b` | `gemma4:26b` | `gemma4:26b` | `gemma4:26b` | `ollama_local` |
-| `gemma4-26b` &nbsp;⚠ | `model:gemma4:26b` | `gemma4:26b` | `gemma4:26b` | `gemma4:26b` | `ollama_local` |
-| `gemma4-26b-mxfp8` &nbsp;⚠ | `model:gemma4:26b-mxfp8` | `gemma4:26b-mxfp8` | `gemma4:26b-mxfp8` | `gemma4:26b-mxfp8` | `ollama_local` |
+| `gemma` &nbsp;⚠ | `model:gemma` | `—` | `—` | `—` | `—` |
+| `gemma4-26b` &nbsp;⚠ | `model:gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `ollama_local` |
+| `gemma4-26b-mxfp8` &nbsp;⚠ | `model:gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `ollama_local` |
 | `gemma4-31b` &nbsp;⚠ | `model:gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `ollama_local` |
-| `gemma4-31b-mxfp8` &nbsp;⚠ | `model:gemma4:31b-mxfp8` | `gemma4:31b-mxfp8` | `gemma4:31b-mxfp8` | `gemma4:31b-mxfp8` | `ollama_local` |
-| `gemma4-e4b` &nbsp;⚠ | `model:gemma4:e4b` | `gemma4:e4b` | `gemma4:e4b` | `gemma4:e4b` | `ollama_local` |
+| `gemma4-31b-mxfp8` &nbsp;⚠ | `model:gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `ollama_local` |
+| `gemma4-e4b` &nbsp;⚠ | `model:gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `ollama_local` |
 | `generalist` | `generalist` | `claude-sonnet-5` | `glm-5.2:cloud` | `qwen3.6:35b` | `anthropic` |
-| `glm` &nbsp;⚠ | `model:glm-5.2:cloud` | `glm-5.2:cloud` | `glm-5.2:cloud` | `glm-5.2:cloud` | `ollama_cloud` |
+| `glm` &nbsp;⚠ | `model:glm` | `—` | `—` | `—` | `—` |
 | `glm-5-2-cloud` &nbsp;⚠ | `model:glm-5.2:cloud` | `glm-5.2:cloud` | `glm-5.2:cloud` | `glm-5.2:cloud` | `ollama_cloud` |
 | `gpt-5-6-luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `openai` |
 | `gpt-5-6-sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `openai` |
 | `gpt-5-6-terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
-| `gpt-oss` &nbsp;⚠ | `model:gpt-oss:20b` | `gpt-oss:20b` | `gpt-oss:20b` | `gpt-oss:20b` | `ollama_local` |
+| `gpt-oss` &nbsp;⚠ | `model:gpt-oss` | `—` | `—` | `—` | `—` |
 | `gpt-oss-120b` &nbsp;⚠ | `model:gpt-oss:120b` | `gpt-oss:120b` | `gpt-oss:120b` | `gpt-oss:120b` | `ollama_local` |
-| `gpt-oss-120b-cloud` &nbsp;⚠ | `model:gpt-oss:120b-cloud` | `gpt-oss:120b-cloud` | `gpt-oss:120b-cloud` | `gpt-oss:120b-cloud` | `ollama_cloud` |
-| `gpt-oss-20b` &nbsp;⚠ | `model:gpt-oss:20b` | `gpt-oss:20b` | `gpt-oss:20b` | `gpt-oss:20b` | `ollama_local` |
-| `grok` &nbsp;⚠ | `model:grok-4.5` | `grok-4.5` | `grok-4.5` | `grok-4.5` | `xai` |
+| `gpt-oss-120b-cloud` &nbsp;⚠ | `model:gpt-oss:120b` | `gpt-oss:120b` | `gpt-oss:120b` | `gpt-oss:120b` | `ollama_local` |
+| `gpt-oss-20b` &nbsp;⚠ | `model:gpt-oss:120b` | `gpt-oss:120b` | `gpt-oss:120b` | `gpt-oss:120b` | `ollama_local` |
+| `grok` &nbsp;⚠ | `model:grok` | `grok-4.5` | `grok-4.5` | `grok-4.5` | `xai` |
 | `grok-4-5` &nbsp;⚠ | `model:grok-4.5` | `grok-4.5` | `grok-4.5` | `grok-4.5` | `xai` |
-| `haiku` &nbsp;⚠ | `model:claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `anthropic` |
-| `hermes` &nbsp;⚠ | `model:hermes3:70b` | `hermes3:70b` | `hermes3:70b` | `hermes3:70b` | `ollama_local` |
+| `haiku` &nbsp;⚠ | `model:haiku` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `anthropic` |
+| `hermes` &nbsp;⚠ | `model:hermes` | `—` | `—` | `—` | `—` |
 | `hermes3-70b` &nbsp;⚠ | `model:hermes3:70b` | `hermes3:70b` | `hermes3:70b` | `hermes3:70b` | `ollama_local` |
-| `kimi` &nbsp;⚠ | `model:kimi-k3:cloud` | `kimi-k3:cloud` | `kimi-k3:cloud` | `kimi-k3:cloud` | `ollama_cloud` |
+| `kimi` &nbsp;⚠ | `model:kimi` | `—` | `—` | `—` | `—` |
 | `kimi-k3-cloud` &nbsp;⚠ | `model:kimi-k3:cloud` | `kimi-k3:cloud` | `kimi-k3:cloud` | `kimi-k3:cloud` | `ollama_cloud` |
 | `long-context` | `long-context` | `claude-sonnet-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
-| `luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `openai` |
-| `minimax` &nbsp;⚠ | `model:minimax-m3:cloud` | `minimax-m3:cloud` | `minimax-m3:cloud` | `minimax-m3:cloud` | `ollama_cloud` |
+| `luna` &nbsp;⚠ | `model:luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `openai` |
+| `minimax` &nbsp;⚠ | `model:minimax` | `—` | `—` | `—` | `—` |
 | `minimax-m3-cloud` &nbsp;⚠ | `model:minimax-m3:cloud` | `minimax-m3:cloud` | `minimax-m3:cloud` | `minimax-m3:cloud` | `ollama_cloud` |
-| `mistral` &nbsp;⚠ | `model:mistral-small3.2:24b` | `mistral-small3.2:24b` | `mistral-small3.2:24b` | `mistral-small3.2:24b` | `ollama_local` |
+| `mistral` &nbsp;⚠ | `model:mistral` | `—` | `—` | `—` | `—` |
 | `mistral-small3-2-24b` &nbsp;⚠ | `model:mistral-small3.2:24b` | `mistral-small3.2:24b` | `mistral-small3.2:24b` | `mistral-small3.2:24b` | `ollama_local` |
-| `nemotron` &nbsp;⚠ | `model:nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `ollama_cloud` |
+| `nemotron` &nbsp;⚠ | `model:nemotron` | `—` | `—` | `—` | `—` |
 | `nemotron-3-super-cloud` &nbsp;⚠ | `model:nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `nemotron-3-super:cloud` | `ollama_cloud` |
-| `opus` &nbsp;⚠ | `model:claude-opus-5` | `claude-opus-5` | `claude-opus-5` | `claude-opus-5` | `anthropic` |
+| `opus` &nbsp;⚠ | `model:opus` | `claude-opus-5` | `claude-opus-5` | `claude-opus-5` | `anthropic` |
 | `pdf` | `pdf` | `claude-sonnet-5` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |
-| `phi` &nbsp;⚠ | `model:phi4-reasoning:plus` | `phi4-reasoning:plus` | `phi4-reasoning:plus` | `phi4-reasoning:plus` | `ollama_local` |
+| `phi` &nbsp;⚠ | `model:phi` | `—` | `—` | `—` | `—` |
 | `phi4-mini-3-8b` &nbsp;⚠ | `model:phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `ollama_local` |
-| `phi4-reasoning-plus` &nbsp;⚠ | `model:phi4-reasoning:plus` | `phi4-reasoning:plus` | `phi4-reasoning:plus` | `phi4-reasoning:plus` | `ollama_local` |
+| `phi4-reasoning-plus` &nbsp;⚠ | `model:phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `phi4-mini:3.8b` | `ollama_local` |
 | `plan-scheduler` &nbsp;⚠ | `fast-generalist` | `gemma4:e4b` | `qwen3.6:35b` | `gemma4:e4b` | `ollama_local` |
 | `planner` | `planner` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
 | `planner-hard` | `planner-hard` | `claude-fable-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
-| `qwen` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
-| `qwen3-1-7b` &nbsp;⚠ | `model:qwen3:1.7b` | `qwen3:1.7b` | `qwen3:1.7b` | `qwen3:1.7b` | `ollama_local` |
-| `qwen3-4b` &nbsp;⚠ | `model:qwen3:4b` | `qwen3:4b` | `qwen3:4b` | `qwen3:4b` | `ollama_local` |
-| `qwen3-6-27b` &nbsp;⚠ | `model:qwen3.6:27b` | `qwen3.6:27b` | `qwen3.6:27b` | `qwen3.6:27b` | `ollama_local` |
-| `qwen3-6-27b-coding-mxfp8` &nbsp;⚠ | `model:qwen3.6:27b-coding-mxfp8` | `qwen3.6:27b-coding-mxfp8` | `qwen3.6:27b-coding-mxfp8` | `qwen3.6:27b-coding-mxfp8` | `ollama_local` |
-| `qwen3-6-27b-coding-nvfp4` &nbsp;⚠ | `model:qwen3.6:27b-coding-nvfp4` | `qwen3.6:27b-coding-nvfp4` | `qwen3.6:27b-coding-nvfp4` | `qwen3.6:27b-coding-nvfp4` | `ollama_local` |
-| `qwen3-6-27b-nvfp4` &nbsp;⚠ | `model:qwen3.6:27b-nvfp4` | `qwen3.6:27b-nvfp4` | `qwen3.6:27b-nvfp4` | `qwen3.6:27b-nvfp4` | `ollama_local` |
+| `qwen` &nbsp;⚠ | `model:qwen` | `—` | `—` | `—` | `—` |
+| `qwen3-1-7b` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-4b` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-6-27b` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-6-27b-coding-mxfp8` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-6-27b-coding-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-6-27b-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
 | `qwen3-6-35b` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
-| `qwen3-6-35b-a3b-coding-mxfp8` &nbsp;⚠ | `model:qwen3.6:35b-a3b-coding-mxfp8` | `qwen3.6:35b-a3b-coding-mxfp8` | `qwen3.6:35b-a3b-coding-mxfp8` | `qwen3.6:35b-a3b-coding-mxfp8` | `ollama_local` |
-| `qwen3-6-35b-a3b-coding-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `qwen3.6:35b-a3b-coding-nvfp4` | `ollama_local` |
-| `qwen3-6-35b-a3b-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b-a3b-nvfp4` | `qwen3.6:35b-a3b-nvfp4` | `qwen3.6:35b-a3b-nvfp4` | `qwen3.6:35b-a3b-nvfp4` | `ollama_local` |
-| `qwen3-6-35b-a3b-q8-0` &nbsp;⚠ | `model:qwen3.6:35b-a3b-q8_0` | `qwen3.6:35b-a3b-q8_0` | `qwen3.6:35b-a3b-q8_0` | `qwen3.6:35b-a3b-q8_0` | `ollama_local` |
-| `qwen3-coder-480b-cloud` &nbsp;⚠ | `model:qwen3-coder:480b-cloud` | `qwen3-coder:480b-cloud` | `qwen3-coder:480b-cloud` | `qwen3-coder:480b-cloud` | `ollama_cloud` |
-| `qwen3-coder-next-q4-k-m` &nbsp;⚠ | `model:qwen3-coder-next:q4_K_M` | `qwen3-coder-next:q4_K_M` | `qwen3-coder-next:q4_K_M` | `qwen3-coder-next:q4_K_M` | `ollama_local` |
-| `qwen3-coder-next-q8-0` &nbsp;⚠ | `model:qwen3-coder-next:q8_0` | `qwen3-coder-next:q8_0` | `qwen3-coder-next:q8_0` | `qwen3-coder-next:q8_0` | `ollama_local` |
-| `qwen3-vl-8b` &nbsp;⚠ | `model:qwen3-vl:8b` | `qwen3-vl:8b` | `qwen3-vl:8b` | `qwen3-vl:8b` | `ollama_local` |
+| `qwen3-6-35b-a3b-coding-mxfp8` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-6-35b-a3b-coding-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-6-35b-a3b-nvfp4` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-6-35b-a3b-q8-0` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-coder-480b-cloud` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-coder-next-q4-k-m` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-coder-next-q8-0` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
+| `qwen3-vl-8b` &nbsp;⚠ | `model:qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `qwen3.6:35b` | `ollama_local` |
 | `reviewer-plan` &nbsp;⚠ | `code-reviewer` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b` | `anthropic` |
 | `reviewer-security` | `reviewer-security` | `claude-opus-5` | `deepseek-v4-pro:cloud` | `qwen3.6:35b` | `anthropic` |
-| `sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `openai` |
-| `sonnet` &nbsp;⚠ | `model:claude-sonnet-5` | `claude-sonnet-5` | `claude-sonnet-5` | `claude-sonnet-5` | `anthropic` |
-| `terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
+| `sol` &nbsp;⚠ | `model:sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `openai` |
+| `sonnet` &nbsp;⚠ | `model:sonnet` | `claude-sonnet-5` | `claude-sonnet-5` | `claude-sonnet-5` | `anthropic` |
+| `terra` &nbsp;⚠ | `model:terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
 | `tester` | `tester` | `claude-sonnet-5` | `kimi-k3:cloud` | `qwen3.6:35b-a3b-coding-nvfp4` | `anthropic` |
 | `vision` | `vision` | `claude-sonnet-5` | `qwen3.6:35b` | `qwen3.6:35b` | `anthropic` |
 | `writer` | `writer` | `claude-sonnet-5` | `glm-5.2:cloud` | `qwen3.6:35b` | `anthropic` |

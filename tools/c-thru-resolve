@@ -1,65 +1,108 @@
 #!/usr/bin/env node
 'use strict';
-// CLI wrapper: resolve a capability alias to a concrete model under the active selected config.
-// Usage: CLAUDE_LLM_MODE=<mode> CLAUDE_MODEL_MAP_PATH=<path> node tools/c-thru-resolve <capability>
+// Resolve a capability alias, or an internally selected model-route target,
+// against the explicit active config.
 // Exit 0: resolved model on stdout. Exit 2: unknown capability. Exit 1: config/profile error.
 
+const { spawnSync } = require('node:child_process');
 const { loadSelectedConfig } = require('./model-map-config.js');
 const {
-  resolveProfileModel,
-  resolveLlmMode,
-  resolveActiveTier,
-  resolveCapabilityAlias,
-  resolveTerminalTarget,
-  baseModeFor,
-  isGovMode,
-  isChineseOrigin,
+  resolveProfileModel, resolveLlmMode, resolveActiveTier, resolveCapabilityAlias,
+  resolveTerminalTarget, resolveRouteTarget, baseModeFor, isGovMode, isChineseOrigin,
 } = require('./model-map-resolve.js');
 
+const args = process.argv.slice(2);
+const command = args[0];
+const isModelRouteCommand = command === '--model-route-target';
+
+// Preserve the launcher's jq/Oniguruma nested-regex dialect at this boundary;
+// proxy callers retain JavaScript RegExp semantics.
+function legacyNestedRegexTest(pattern, value) {
+  const result = spawnSync('jq', [
+    '-n', '-e', '--arg', 'value', value, '--arg', 'pattern', pattern,
+    'try ($value | test($pattern)) catch false',
+  ], { encoding: 'utf8' });
+  if (result.error || (result.status !== 0 && result.status !== 1)) {
+    throw result.error || new Error((result.stderr || 'jq regex match failed').trim());
+  }
+  return result.status === 0;
+}
+
 let config;
-let selected;
 try {
-  selected = loadSelectedConfig({ baseDir: __dirname });
-  config = selected.config;
+  // The launcher already selected this config; avoid a redundant profile sync.
+  config = loadSelectedConfig({
+    baseDir: __dirname,
+    syncProfile: !isModelRouteCommand,
+  }).config;
 }
 catch (e) {
   process.stderr.write('c-thru-resolve: cannot load active model-map: ' + e.message + '\n');
   process.exit(1);
 }
 
-const cap = process.argv[2];
-if (!cap) {
-  process.stderr.write('usage: c-thru-resolve <capability>\n');
-  process.exit(1);
-}
+if (isModelRouteCommand) {
+  const model = args[1];
+  const routeJson = args[3];
+  if (!model || routeJson == null) {
+    process.stderr.write('usage: c-thru-resolve --model-route-target <model> <mode> <route-json>\n');
+    process.exitCode = 1;
+  } else {
+    const mode = args[2] || resolveLlmMode(config);
+    try {
+      const resolved = resolveRouteTarget(JSON.parse(routeJson), model, {
+        routes: config.model_routes || {},
+        endpoints: config.endpoints || config.backends || {},
+        mode,
+        maxDepth: 9,
+        matchOptions: { regexTest: legacyNestedRegexTest,
+          onBadPattern: (_key, error) => { throw error; } },
+      });
+      if (!resolved) {
+        process.exitCode = 2;
+      } else {
+        process.stdout.write(`${resolved.endpointId}\t${resolved.servedBy}`);
+      }
+    } catch (error) {
+      process.stderr.write(`c-thru-resolve: cannot resolve model-route target: ${error.message}\n`);
+      process.exitCode = 1;
+    }
+  }
+} else {
+  const cap = command;
+  if (!cap) {
+    process.stderr.write('usage: c-thru-resolve <capability>\n');
+    process.exit(1);
+  }
 
-const tier     = resolveActiveTier(config);
-const mode     = resolveLlmMode(config);
-const capAlias = resolveCapabilityAlias(cap, config, tier);
+  const tier     = resolveActiveTier(config);
+  const mode     = resolveLlmMode(config);
+  const capAlias = resolveCapabilityAlias(cap, config, tier);
 
-if (!capAlias) {
-  process.stderr.write('c-thru-resolve: unknown capability or agent: ' + JSON.stringify(cap) + '\n');
-  process.exit(2);
-}
+  if (!capAlias) {
+    process.stderr.write('c-thru-resolve: unknown capability or agent: ' + JSON.stringify(cap) + '\n');
+    process.exit(2);
+  }
 
-const aliasKey = capAlias === 'general-default' ? 'default' : capAlias;
-const entry = (config.llm_profiles || {})[aliasKey];
-if (!entry || typeof entry !== 'object') {
-  process.stderr.write('c-thru-resolve: no profile entry for ' + JSON.stringify(capAlias) + '\n');
-  process.exit(2);
-}
+  const aliasKey = capAlias === 'general-default' ? 'default' : capAlias;
+  const entry = (config.llm_profiles || {})[aliasKey];
+  if (!entry || typeof entry !== 'object') {
+    process.stderr.write('c-thru-resolve: no profile entry for ' + JSON.stringify(capAlias) + '\n');
+    process.exit(2);
+  }
 
-const resolved = resolveProfileModel(entry, tier, mode, baseModeFor(mode, config));
-if (typeof resolved !== 'string' || !resolved) {
-  process.stderr.write('c-thru-resolve: resolveProfileModel returned empty for ' + JSON.stringify(capAlias) + '\n');
-  process.exit(1);
+  const resolved = resolveProfileModel(entry, tier, mode, baseModeFor(mode, config));
+  if (typeof resolved !== 'string' || !resolved) {
+    process.stderr.write('c-thru-resolve: resolveProfileModel returned empty for ' + JSON.stringify(capAlias) + '\n');
+    process.exit(1);
+  }
+  // Gov filter parity with the proxy + c-thru-explain: a gov mode refuses a
+  // Chinese-origin model rather than printing it (which would mislead callers into
+  // thinking the proxy will serve it — the proxy now 502s).
+  if (isGovMode(mode, config) && isChineseOrigin(resolved)) {
+    process.stderr.write(`c-thru-resolve: '${resolved}' is blocked in gov mode '${mode}' for capability ${JSON.stringify(capAlias)}\n`);
+    process.exit(3);
+  }
+  const target = resolveTerminalTarget(config, resolved);
+  process.stdout.write((target ? target.providerModel : resolved) + '\n');
 }
-// Gov filter parity with the proxy + c-thru-explain: a gov mode refuses a
-// Chinese-origin model rather than printing it (which would mislead callers into
-// thinking the proxy will serve it — the proxy now 502s).
-if (isGovMode(mode, config) && isChineseOrigin(resolved)) {
-  process.stderr.write(`c-thru-resolve: '${resolved}' is blocked in gov mode '${mode}' for capability ${JSON.stringify(capAlias)}\n`);
-  process.exit(3);
-}
-const target = resolveTerminalTarget(config, resolved);
-process.stdout.write((target ? target.providerModel : resolved) + '\n');
