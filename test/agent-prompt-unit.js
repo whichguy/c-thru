@@ -11,6 +11,10 @@
 const fs   = require('fs');
 const http = require('http');
 const path = require('path');
+const { ensureModelTestSupervisor, modelTestTimeoutMs } = require('./helpers');
+if (require.main === module) ensureModelTestSupervisor();
+
+const REQUEST_TIMEOUT_MS = modelTestTimeoutMs();
 
 const args = [];
 for (let i = 2; i < process.argv.length; i++) {
@@ -173,6 +177,9 @@ async function postMessages(name, system, user) {
         });
       }
     );
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error(`model request timed out after ${REQUEST_TIMEOUT_MS}ms`));
+    });
     req.on('error', reject);
     req.write(bodyStr);
     req.end();

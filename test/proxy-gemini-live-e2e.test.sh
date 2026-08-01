@@ -12,19 +12,68 @@
 
 set -uo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+has_active_test_supervisor() {
+  node "$ROOT/tools/test-supervisor-capability.js" --verify-shell-child
+}
+
+if ! has_active_test_supervisor; then
+  exec node "$ROOT/tools/run-with-hard-timeout.js" \
+    --timeout-seconds "${C_THRU_TEST_TIMEOUT_SECONDS:-3600}" \
+    -- bash "${BASH_SOURCE[0]}" "$@"
+fi
+
+LIVE_PROVIDER="gemini"
+LIVE_SUITE="proxy-gemini-live-e2e"
+emit_live_outcome() {
+  local status="$1" reason="$2"
+  reason=$(printf '%s' "$reason" | tr -c 'A-Za-z0-9_.:/+-' '_')
+  printf 'C_THRU_LIVE_OUTCOME|provider=%s|suite=%s|status=%s|reason=%s\n' \
+    "$LIVE_PROVIDER" "$LIVE_SUITE" "$status" "$reason"
+}
+
 if [[ "${C_THRU_LIVE_GEMINI:-0}" != "1" ]]; then
   echo "SKIP: C_THRU_LIVE_GEMINI not set"
+  emit_live_outcome skipped gate_not_enabled
   exit 0
 fi
 if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
   echo "SKIP: GOOGLE_API_KEY not set"
+  emit_live_outcome skipped missing_GOOGLE_API_KEY
   exit 0
 fi
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MODEL_TEST_TIMEOUT_MS="${C_THRU_MODEL_TEST_TIMEOUT_MS:-3600000}"
+if [[ ! "$MODEL_TEST_TIMEOUT_MS" =~ ^[1-9][0-9]*$ ]] \
+  || (( ${#MODEL_TEST_TIMEOUT_MS} > 7 )) \
+  || { (( ${#MODEL_TEST_TIMEOUT_MS} == 7 )) && [[ "$MODEL_TEST_TIMEOUT_MS" > "3600000" ]]; }; then
+  echo "ERROR: C_THRU_MODEL_TEST_TIMEOUT_MS must be an integer from 1 to 3600000" >&2
+  emit_live_outcome failed invalid_C_THRU_MODEL_TEST_TIMEOUT_MS
+  exit 2
+fi
+MODEL_TEST_TIMEOUT_SECONDS=$(( (MODEL_TEST_TIMEOUT_MS + 999) / 1000 ))
+CLI_TIMEOUT_SECONDS="${TIMEOUT:-$MODEL_TEST_TIMEOUT_SECONDS}"
+if [[ ! "$CLI_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] \
+  || (( ${#CLI_TIMEOUT_SECONDS} > 4 )) \
+  || { (( ${#CLI_TIMEOUT_SECONDS} == 4 )) && [[ "$CLI_TIMEOUT_SECONDS" > "3600" ]]; }; then
+  echo "ERROR: TIMEOUT must be an integer from 1 to 3600" >&2
+  emit_live_outcome failed invalid_TIMEOUT
+  exit 2
+fi
+export C_THRU_MODEL_TEST_TIMEOUT_MS="$MODEL_TEST_TIMEOUT_MS"
+export CLAUDE_PROXY_ANTHROPIC_TIMEOUT_MS="$MODEL_TEST_TIMEOUT_MS"
+export CLAUDE_PROXY_GEMINI_TIMEOUT_MS="$MODEL_TEST_TIMEOUT_MS"
+export CLAUDE_PROXY_RESPONSES_TIMEOUT_MS="$MODEL_TEST_TIMEOUT_MS"
+export CLAUDE_PROXY_OLLAMA_TIMEOUT_MS="$MODEL_TEST_TIMEOUT_MS"
+export CLAUDE_PROXY_OLLAMA_TTFT_MS="$MODEL_TEST_TIMEOUT_MS"
+export CLAUDE_PROXY_STREAM_STALL_MS="$MODEL_TEST_TIMEOUT_MS"
+export CLAUDE_PROXY_STREAM_WALL_MS="$MODEL_TEST_TIMEOUT_MS"
+export C_THRU_KEEP_PROXY=0
+
 CTHRU="$ROOT/tools/c-thru"
 if [[ ! -x "$CTHRU" ]]; then
   echo "FAIL: $CTHRU not executable"
+  emit_live_outcome failed c_thru_not_executable
   exit 1
 fi
 
@@ -34,43 +83,41 @@ SKIP=0
 
 pass() { echo "  PASS  $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
-skip_test() { echo "  SKIP  $1"; SKIP=$((SKIP+1)); }
+opportunistic_skip() { echo "  SKIP  OPPORTUNISTIC: $1"; SKIP=$((SKIP+1)); }
 
-# Pick a timeout binary if one exists; otherwise run without bounded timeout.
-TIMEOUT_BIN=""
-if command -v timeout >/dev/null 2>&1; then TIMEOUT_BIN="timeout"
-elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_BIN="gtimeout"
-fi
-if [[ -z "$TIMEOUT_BIN" ]]; then
-  echo "WARN: no timeout binary; install via: brew install coreutils"
-fi
-
-ARTIFACT_DIR="${TMPDIR:-/tmp}"
-RUN_TS="$(date +%Y%m%d-%H%M%S)"
-
-# O1 (per-process proxy cleanup): snapshot pre-existing claude-proxy PIDs so a
-# parallel test invocation isn't killed by ours. cleanup_proxies kills only
-# proxies whose PID was NOT in the original snapshot.
-#
-# pgrep portability: -f matches against the full command line. Output is
-# whitespace-separated PIDs; an empty result is OK (returns 1).
-PRE_PIDS_FILE="$ARTIFACT_DIR/c-thru-e2e-${RUN_TS}-pre-pids.txt"
-pgrep -f claude-proxy > "$PRE_PIDS_FILE" 2>/dev/null || : > "$PRE_PIDS_FILE"
-
-cleanup_proxies() {
-  local cur
-  cur="$(pgrep -f claude-proxy 2>/dev/null || true)"
-  [[ -z "$cur" ]] && return 0
-  while IFS= read -r pid; do
-    [[ -z "$pid" ]] && continue
-    if ! grep -qx "$pid" "$PRE_PIDS_FILE"; then
-      kill -9 "$pid" 2>/dev/null || true
-    fi
-  done <<< "$cur"
+run_bounded() {
+  local secs="$1"; shift
+  local term_after="$secs"
+  local kill_grace=0
+  if (( secs > 3 )); then
+    term_after=$(( secs - 3 ))
+    kill_grace=2
+  fi
+  "$@" &
+  local pid=$!
+  (
+    sleep "$term_after" &
+    local sleeper=$!
+    trap 'kill "$sleeper" 2>/dev/null || true; exit 0' TERM INT
+    wait "$sleeper" 2>/dev/null || exit 0
+    kill -TERM "$pid" 2>/dev/null || exit 0
+    if (( kill_grace > 0 )); then sleep "$kill_grace"; fi
+    kill -KILL "$pid" 2>/dev/null || true
+  ) &
+  local watcher=$!
+  local rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  return "$rc"
 }
 
-# Final cleanup on any exit path so leaked proxies from this run don't linger.
-trap 'cleanup_proxies; rm -f "$PRE_PIDS_FILE"' EXIT
+ARTIFACT_PARENT="${TMPDIR:-/tmp}"
+ARTIFACT_DIR="$(mktemp -d "$ARTIFACT_PARENT/c-thru-e2e.XXXXXX")"
+RUN_TS="$$"
+# Successful invocations ask their own launcher to reap only the proxy PID it
+# started. Keep failed-call artifacts; remove the unique directory when empty.
+trap 'rmdir "$ARTIFACT_DIR" 2>/dev/null || true' EXIT
 
 # Run a c-thru invocation with a hard timeout when available. Captures combined
 # stdout+stderr into the caller's variable named by $1. On non-zero exit, also
@@ -86,17 +133,13 @@ run_cthru() {
   if [[ "${1:-}" != -* && "${1:-}" != "" ]]; then
     label="$1"; shift
   fi
-  local -i to="${TIMEOUT:-90}"
+  local -i to="$CLI_TIMEOUT_SECONDS"
   # O2: mirror stdout to a file so live progress can be observed with
   # `tail -f /tmp/c-thru-e2e-*-<label>.out` while the test is running.
   local _rc_buf _err_file _out_file
   _err_file="$ARTIFACT_DIR/c-thru-e2e-${RUN_TS}-${label}.err"
   _out_file="$ARTIFACT_DIR/c-thru-e2e-${RUN_TS}-${label}.out"
-  if [[ -n "$TIMEOUT_BIN" ]]; then
-    _rc_buf="$($TIMEOUT_BIN "${to}" "$CTHRU" "$@" 2>"$_err_file" | tee "$_out_file")"
-  else
-    _rc_buf="$("$CTHRU" "$@" 2>"$_err_file" | tee "$_out_file")"
-  fi
+  _rc_buf="$(run_bounded "${to}" "$CTHRU" "$@" 2>"$_err_file" | tee "$_out_file")"
   local rc=$?
   if [[ $rc -ne 0 ]]; then
     _rc_buf+=$'\n[stderr saved to: '"$_err_file"$']'
@@ -111,7 +154,6 @@ run_cthru() {
 # ── L1. PONG smoke ────────────────────────────────────────────────────────
 echo
 echo "L1. gemini-latest single-turn 'PONG' check"
-cleanup_proxies
 out=""
 run_cthru out L1 --model gemini-latest -p "Reply with the literal word PONG and nothing else."
 rc=$?
@@ -121,7 +163,6 @@ rc=$?
 # ── L2. gemini-flash basic completion ─────────────────────────────────────
 echo
 echo "L2. gemini-flash 3-word hello"
-cleanup_proxies
 out=""
 run_cthru out L2 --model gemini-flash -p "Say hello in 3 words."
 rc=$?
@@ -131,16 +172,11 @@ rc=$?
 # ── L3. THE TEST — list files in folder (full tool_use loop) ──────────────
 echo
 echo "L3. gemini-latest 'list files' (full tool_use roundtrip — the headline test)"
-cleanup_proxies
 TMPDIR_L3="$(mktemp -d 2>/dev/null || mktemp -d -t gemini-l3)"
 touch "$TMPDIR_L3/alpha.txt" "$TMPDIR_L3/beta.md" "$TMPDIR_L3/gamma.json"
 L3_ERR="$ARTIFACT_DIR/c-thru-e2e-${RUN_TS}-L3.err"
 out=""
-if [[ -n "$TIMEOUT_BIN" ]]; then
-  out="$(cd "$TMPDIR_L3" && $TIMEOUT_BIN 120 "$CTHRU" --model gemini-latest -p "list the files in the current folder" 2>"$L3_ERR")"
-else
-  out="$(cd "$TMPDIR_L3" && "$CTHRU" --model gemini-latest -p "list the files in the current folder" 2>"$L3_ERR")"
-fi
+out="$(cd "$TMPDIR_L3" && run_bounded "$CLI_TIMEOUT_SECONDS" "$CTHRU" --model gemini-latest -p "list the files in the current folder" 2>"$L3_ERR")"
 rc=$?
 [[ $rc -eq 0 ]] && rm -f "$L3_ERR" || out+=$'\n[stderr saved to: '"$L3_ERR"$']'
 [[ $rc -eq 0 ]] && pass "L3 exit 0" || fail "L3 exit $rc — output: ${out:0:300}"
@@ -158,7 +194,6 @@ rm -rf "$TMPDIR_L3"
 # ── L4. tool_use with arithmetic ──────────────────────────────────────────
 echo
 echo "L4. gemini-latest arithmetic (lets Claude Code inject default tools)"
-cleanup_proxies
 out=""
 run_cthru out L4 --model gemini-latest -p "What is 2 + 2? Answer with just the number."
 rc=$?
@@ -168,7 +203,6 @@ rc=$?
 # ── L5. gemini-pro reasoning ──────────────────────────────────────────────
 echo
 echo "L5. gemini-pro 1+1 reasoning"
-cleanup_proxies
 out=""
 run_cthru out L5 --model gemini-pro -p "What is 1+1? Show your reasoning briefly."
 rc=$?
@@ -179,9 +213,8 @@ rc=$?
 echo
 echo "L6. Vertex AI smoke (requires GOOGLE_CLOUD_TOKEN + project + region)"
 if [[ -z "${GOOGLE_CLOUD_TOKEN:-}" || -z "${GOOGLE_CLOUD_PROJECT:-}" || -z "${GOOGLE_CLOUD_REGION:-}" ]]; then
-  echo "  SKIP  L6 — set GOOGLE_CLOUD_TOKEN, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_REGION to run"
+  opportunistic_skip "L6 — dedicated Vertex credentials not present"
 else
-  cleanup_proxies
   out=""
   run_cthru out L6 --model gemini-vertex -p "Reply with the literal word VERTEX_OK."
   rc=$?
@@ -195,7 +228,6 @@ fi
 # the follow-up turn.
 echo
 echo "L7. gemini-latest parallel tool calls (list + read in one turn)"
-cleanup_proxies
 TMPDIR_L7="$(mktemp -d 2>/dev/null || mktemp -d -t gemini-l7)"
 ALPHA_TOKEN="QUOKKA_BANANA_42"
 printf '%s\n' "$ALPHA_TOKEN" > "$TMPDIR_L7/alpha.txt"
@@ -203,11 +235,7 @@ printf '%s\n' "$ALPHA_TOKEN" > "$TMPDIR_L7/alpha.txt"
 : > "$TMPDIR_L7/gamma.json"
 L7_ERR="$ARTIFACT_DIR/c-thru-e2e-${RUN_TS}-L7.err"
 out=""
-if [[ -n "$TIMEOUT_BIN" ]]; then
-  out="$(cd "$TMPDIR_L7" && $TIMEOUT_BIN 120 "$CTHRU" --model gemini-latest -p "List the files in the current folder AND read the contents of alpha.txt. Do both in parallel." 2>"$L7_ERR")"
-else
-  out="$(cd "$TMPDIR_L7" && "$CTHRU" --model gemini-latest -p "List the files in the current folder AND read the contents of alpha.txt. Do both in parallel." 2>"$L7_ERR")"
-fi
+out="$(cd "$TMPDIR_L7" && run_bounded "$CLI_TIMEOUT_SECONDS" "$CTHRU" --model gemini-latest -p "List the files in the current folder AND read the contents of alpha.txt. Do both in parallel." 2>"$L7_ERR")"
 rc=$?
 [[ $rc -eq 0 ]] && rm -f "$L7_ERR" || out+=$'\n[stderr saved to: '"$L7_ERR"$']'
 [[ $rc -eq 0 ]] && pass "L7 exit 0" || fail "L7 exit $rc — output: ${out:0:300}"
@@ -222,7 +250,6 @@ rm -rf "$TMPDIR_L7"
 for alias_name in gemini-pro gemini-flash gemini-fast gemini-2.5-flash; do
   echo
   echo "L8/9/10/11. alias=$alias_name PONG"
-  cleanup_proxies
   out=""
   run_cthru out "L-${alias_name}" --model "$alias_name" -p "Reply with the literal word PONG and nothing else."
   rc=$?
@@ -238,7 +265,6 @@ done
 for mode in best-cloud best-cloud-oss; do
   echo
   echo "L12. mode=$mode + gemini-latest"
-  cleanup_proxies
   out=""
   run_cthru out "L12-${mode}" --mode "$mode" --model gemini-latest -p "Reply with the literal word PONG and nothing else."
   rc=$?
@@ -250,7 +276,6 @@ done
 # + file I/O + claude-CLI's `-p` mode end-of-turn detection.
 echo
 echo "L13. realistic CC session — read README + write summary"
-cleanup_proxies
 TMPDIR_L13="$(mktemp -d 2>/dev/null || mktemp -d -t gemini-l13)"
 SUMMARY_PATH="$TMPDIR_L13/summary.txt"
 # P2 tightening: place a unique token ONLY in the body (not also derivable from
@@ -263,11 +288,7 @@ cat > "$TMPDIR_L13/README.md" <<EOF
 This codebase orchestrates $README_BODY_TOKEN across X, Y, and Z subsystems.
 EOF
 L13_ERR="$ARTIFACT_DIR/c-thru-e2e-${RUN_TS}-L13.err"
-if [[ -n "$TIMEOUT_BIN" ]]; then
-  out="$(cd "$TMPDIR_L13" && $TIMEOUT_BIN 180 "$CTHRU" --model gemini-latest -p "Read the README.md in this folder, then write a one-line summary to $SUMMARY_PATH" 2>"$L13_ERR")"
-else
-  out="$(cd "$TMPDIR_L13" && "$CTHRU" --model gemini-latest -p "Read the README.md in this folder, then write a one-line summary to $SUMMARY_PATH" 2>"$L13_ERR")"
-fi
+out="$(cd "$TMPDIR_L13" && run_bounded "$CLI_TIMEOUT_SECONDS" "$CTHRU" --model gemini-latest -p "Read the README.md in this folder, then write a one-line summary to $SUMMARY_PATH" 2>"$L13_ERR")"
 rc=$?
 [[ $rc -eq 0 ]] && rm -f "$L13_ERR" || out+=$'\n[stderr saved to: '"$L13_ERR"$']'
 [[ $rc -eq 0 ]] && pass "L13 exit 0" || fail "L13 exit $rc — output: ${out:0:300}"
@@ -291,4 +312,9 @@ if [[ $SKIP -gt 0 ]]; then
 else
   echo "$((PASS + FAIL)) tests: $PASS passed, $FAIL failed"
 fi
-[[ $FAIL -eq 0 ]] && exit 0 || exit 1
+if [[ $FAIL -eq 0 ]]; then
+  emit_live_outcome passed "all_mandatory_contracts_exercised_${SKIP}_opportunistic_skips"
+  exit 0
+fi
+emit_live_outcome failed "${FAIL}_assertions_failed"
+exit 1

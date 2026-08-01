@@ -13,18 +13,58 @@ const fs   = require('fs');
 const http = require('http');
 const os   = require('os');
 const path = require('path');
-const { writeConfig, httpJson, withProxy, assert, assertEq, skip, summary } = require('./helpers');
+const {
+  ensureModelTestSupervisor,
+  writeConfig,
+  modelHttpJson: httpJson,
+  httpJson: infrastructureHttpJson,
+  withModelTestProxy: withProxy,
+  modelTestTimeoutMs,
+  assert,
+  assertEq,
+  skip: recordSkip,
+  summary,
+} = require('./helpers');
+if (require.main === module) ensureModelTestSupervisor();
+const { emitLiveOutcome } = require('./provider-live-prerequisites');
+
+const LIVE_SUITE = 'proxy-gemini-live-shapes';
 
 if (process.env.C_THRU_LIVE_GEMINI !== '1') {
   console.log('SKIP: C_THRU_LIVE_GEMINI not set');
+  emitLiveOutcome('gemini', LIVE_SUITE, 'skipped', 'gate_not_enabled');
   process.exit(0);
 }
 if (!process.env.GOOGLE_API_KEY) {
   console.log('SKIP: GOOGLE_API_KEY not set');
+  emitLiveOutcome('gemini', LIVE_SUITE, 'skipped', 'missing_GOOGLE_API_KEY');
   process.exit(0);
 }
 
 const MODEL = process.env.C_THRU_LIVE_GEMINI_MODEL || 'gemini-flash-lite-latest';
+let MODEL_TEST_TIMEOUT_MS;
+try {
+  MODEL_TEST_TIMEOUT_MS = modelTestTimeoutMs();
+} catch (err) {
+  console.error(err);
+  emitLiveOutcome('gemini', LIVE_SUITE, 'failed', err?.message || 'invalid_model_test_timeout');
+  process.exit(1);
+}
+let mandatorySkips = 0;
+let opportunisticSkips = 0;
+
+// Mandatory means an advertised suite contract was not exercised; strict live
+// runs must not count it as provider coverage. Opportunistic means a rare or
+// provider-controlled trigger did not occur, while all mandatory checks ran.
+function mandatorySkip(message) {
+  mandatorySkips++;
+  recordSkip(`MANDATORY: ${message}`);
+}
+
+function opportunisticSkip(message) {
+  opportunisticSkips++;
+  recordSkip(`OPPORTUNISTIC: ${message}`);
+}
 
 async function main() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-live-shapes-'));
@@ -46,7 +86,7 @@ async function main() {
       max_tokens: 50,
       messages: [{ role: 'user', content: 'Reply with the literal word PONG and nothing else.' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r.status === 200, `S1 status 200 (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
     assert(r.json?.stop_reason === 'end_turn', `S1 stop_reason=end_turn (got ${r.json?.stop_reason})`);
     assert(typeof r.json?.content?.[0]?.text === 'string' && r.json.content[0].text.length > 0, 'S1 non-empty text');
@@ -82,7 +122,10 @@ async function main() {
         });
         res.on('error', reject);
       });
-      req.setTimeout(30000, () => { req.destroy(); reject(new Error('S2 stream timeout')); });
+      req.setTimeout(MODEL_TEST_TIMEOUT_MS, () => {
+        req.destroy();
+        reject(new Error(`S2 stream timed out after ${MODEL_TEST_TIMEOUT_MS}ms`));
+      });
       req.write(JSON.stringify({ model: MODEL, max_tokens: 50, messages: [{ role: 'user', content: 'Say hi in one word.' }], stream: true }));
       req.end();
     });
@@ -102,7 +145,7 @@ async function main() {
       tool_choice: { type: 'auto' },
       messages: [{ role: 'user', content: "What's the weather in Tokyo? Use the get_weather tool." }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r.status === 200, `S3 status 200 (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
     const toolUse = (r.json?.content || []).find(b => b.type === 'tool_use');
     assert(!!toolUse, `S3 tool_use block returned (got content: ${JSON.stringify(r.json?.content || [])})`);
@@ -132,7 +175,7 @@ async function main() {
       }],
       messages: [{ role: 'user', content: 'Look up the value 42.' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r.status === 200, `S4 status 200 — Gemini accepts scrubbed schema (got ${r.status}: ${r.bodyText?.slice(0,300)})`);
     assert(/oneOf/.test(r.headers?.['x-c-thru-schema-scrubbed'] || ''), `S4 x-c-thru-schema-scrubbed mentions oneOf (got ${r.headers?.['x-c-thru-schema-scrubbed']})`);
   });
@@ -150,7 +193,7 @@ async function main() {
       tool_choice: { type: 'tool', name: 'get_time' },
       messages: [{ role: 'user', content: 'Tell me about Paris.' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r.status === 200, `S5 status 200 (got ${r.status})`);
     const toolUse = (r.json?.content || []).find(b => b.type === 'tool_use');
     assert(toolUse?.name === 'get_time', `S5 forced tool_choice → get_time (got ${toolUse?.name})`);
@@ -175,7 +218,7 @@ async function main() {
       model: MODEL, max_tokens: 200, tools, tool_choice: { type: 'auto' },
       messages: [{ role: 'user', content: 'Get the weather in Tokyo.' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r1.status === 200, `S6 turn-1 status 200 (got ${r1.status}: ${r1.bodyText?.slice(0,200)})`);
     const tu1 = (r1.json?.content || []).find(b => b.type === 'tool_use');
     assert(!!tu1, `S6 turn-1 produced tool_use`);
@@ -190,7 +233,7 @@ async function main() {
         { role: 'user', content: [{ type: 'tool_result', tool_use_id: tu1.id, content: '{"tempC":18,"sky":"clear"}' }] },
       ],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r2.status === 200, `S6 turn-2 status 200 — proxy re-attached signature for ${tu1.id} (got ${r2.status}: ${r2.bodyText?.slice(0,200)})`);
 
     // Turn 3 — push another user prompt; full history goes back through proxy.
@@ -206,7 +249,7 @@ async function main() {
         { role: 'user', content: 'Thanks. Now what about Paris?' },
       ],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r3.status === 200, `S6 turn-3 status 200 — full multi-turn history round-trip (got ${r3.status}: ${r3.bodyText?.slice(0,300)})`);
   });
 
@@ -225,11 +268,11 @@ async function main() {
       model: MODEL, max_tokens: 300, tools, tool_choice: { type: 'auto' },
       messages: [{ role: 'user', content: 'Get the weather in Tokyo AND in Paris. Use parallel tool calls.' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r1.status === 200, `S7 turn-1 status 200 (got ${r1.status})`);
     const tus = (r1.json?.content || []).filter(b => b.type === 'tool_use');
     if (tus.length < 2) {
-      console.log(`  SKIP  S7: model returned ${tus.length} tool_use blocks (lite model may serialize) — cache-collision path not exercised`);
+      mandatorySkip(`S7: model returned ${tus.length} tool_use blocks (lite model may serialize) — cache-collision path not exercised`);
       return;
     }
     assert(tus[0].id !== tus[1].id, `S7 distinct tool_use ids (got ${tus[0].id}, ${tus[1].id})`);
@@ -247,7 +290,7 @@ async function main() {
         ] },
       ],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r2.status === 200, `S7 turn-2 status 200 — both tool_use_ids preserved their signatures (got ${r2.status}: ${r2.bodyText?.slice(0,300)})`);
   });
 
@@ -362,7 +405,7 @@ async function main() {
         tools: [tool],
         messages: [{ role: 'user', content: `Use the ${tool.name} tool to do something reasonable.` }],
         stream: false,
-      }, {}, 30000);
+      });
       assert(r.status === 200, `S8/${tool.name} status 200 — Gemini accepts (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
       const scrubbedRaw = r.headers?.['x-c-thru-schema-scrubbed'] || '';
       const scrubbedSet = scrubbedRaw ? scrubbedRaw.split(',').filter(Boolean).sort() : [];
@@ -399,7 +442,7 @@ async function main() {
       }],
       messages: [{ role: 'user', content: 'Call the deep tool with any plausible arguments.' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r.status === 200, `S9 status 200 — recursive scrubber removed $ref at depth 4 (got ${r.status}: ${r.bodyText?.slice(0,300)})`);
     const scrubbed = r.headers?.['x-c-thru-schema-scrubbed'] || '';
     assert(/\$ref/i.test(scrubbed) || scrubbed === '', `S9 scrubber observed (header: '${scrubbed}')`);
@@ -413,7 +456,7 @@ async function main() {
       model: MODEL, max_tokens: 50,
       messages: [{ role: 'user', content: 'Hello.' }],
       stream: false,
-    }, {}, 15000);
+    });
     assert(r.status >= 400, `E1 upstream rejection propagated (got ${r.status})`);
     assert(r.json?.type === 'error', `E1 Anthropic error envelope (got type=${r.json?.type})`);
     assert(typeof r.json?.error?.message === 'string', `E1 error.message present`);
@@ -430,7 +473,7 @@ async function main() {
         model: MODEL, max_tokens: 20,
         messages: [{ role: 'user', content: `Reply with the number ${i}.` }],
         stream: false,
-      }, {}, 30000).catch(e => ({ status: 0, error: e.message })));
+      }).catch(e => ({ status: 0, error: e.message })));
     }
     const results = await Promise.all(reqs);
     const ok    = results.filter(r => r.status === 200).length;
@@ -448,7 +491,7 @@ async function main() {
       max_tokens: 50,
       messages: [{ role: 'user', content: 'Hello.' }],
       stream: false,
-    }, {}, 15000);
+    });
     assert(r.status >= 400 && r.status < 600, `E3 returned an error status (got ${r.status})`);
     assert(r.json?.type === 'error', `E3 Anthropic error envelope (got type=${r.json?.type})`);
   });
@@ -471,7 +514,7 @@ async function main() {
         model: SAFETY_MODEL, max_tokens: 200,
         messages: [{ role: 'user', content: prompt }],
         stream: false,
-      }, {}, 30000);
+      });
       if (r.status !== 200) continue;
       if (r.json?.stop_reason === 'stop_sequence' && r.json?.stop_sequence === 'gemini_safety_block') {
         assert(true, `S10 SAFETY → stop_reason=stop_sequence, stop_sequence=gemini_safety_block (corpus: ${prompt.slice(0,40)}...)`);
@@ -479,7 +522,7 @@ async function main() {
         break;
       }
     }
-    if (!exercised) skip(`S10: no corpus prompt triggered SAFETY on ${SAFETY_MODEL} — mapping path not exercised`);
+    if (!exercised) opportunisticSkip(`S10: no corpus prompt triggered SAFETY on ${SAFETY_MODEL} — mapping path not exercised`);
   });
 
   // ── S11. streaming + tool_use mid-response ─────────────────────────────
@@ -519,7 +562,10 @@ async function main() {
         });
         res.on('error', reject);
       });
-      req.setTimeout(30000, () => { req.destroy(); reject(new Error('S11 stream timeout')); });
+      req.setTimeout(MODEL_TEST_TIMEOUT_MS, () => {
+        req.destroy();
+        reject(new Error(`S11 stream timed out after ${MODEL_TEST_TIMEOUT_MS}ms`));
+      });
       req.write(JSON.stringify({
         model: MODEL, max_tokens: 200,
         tools: [{ name: 'get_weather', description: 'Weather', input_schema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] } }],
@@ -562,7 +608,10 @@ async function main() {
         });
         res.on('error', reject);
       });
-      req.setTimeout(60000, () => { req.destroy(); reject(new Error('S12 stream timeout')); });
+      req.setTimeout(MODEL_TEST_TIMEOUT_MS, () => {
+        req.destroy();
+        reject(new Error(`S12 stream timed out after ${MODEL_TEST_TIMEOUT_MS}ms`));
+      });
       req.write(JSON.stringify({
         model: MODEL, max_tokens: 4000,
         messages: [{ role: 'user', content: 'Write a 3000-word essay about the history of the printing press, including detailed coverage of Gutenberg, regional adoption in Europe, and the social impacts through the 17th century.' }],
@@ -581,7 +630,7 @@ async function main() {
       system: 'You are an assistant that always replies in ALL CAPS. Reply with one short greeting.',
       messages: [{ role: 'user', content: 'Hello!' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r1.status === 200, `S13a status 200 (got ${r1.status}: ${r1.bodyText?.slice(0,200)})`);
     const t1 = r1.json?.content?.find(b => b.type === 'text')?.text || '';
     const upperRatio = t1.length === 0 ? 0 : (t1.match(/[A-Z]/g) || []).length / Math.max(1, (t1.match(/[A-Za-z]/g) || []).length);
@@ -595,7 +644,7 @@ async function main() {
       ],
       messages: [{ role: 'user', content: 'Hello!' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r2.status === 200, `S13b status 200 — cache_control silently stripped (got ${r2.status}: ${r2.bodyText?.slice(0,200)})`);
     const t2 = r2.json?.content?.find(b => b.type === 'text')?.text || '';
     const upperRatio2 = t2.length === 0 ? 0 : (t2.match(/[A-Z]/g) || []).length / Math.max(1, (t2.match(/[A-Za-z]/g) || []).length);
@@ -610,10 +659,10 @@ async function main() {
       model: MODEL, max_tokens: 30, temperature: 0,
       messages: [{ role: 'user', content: 'Reply with the single word "salutations" and nothing else. Call ' + i }],
       stream: false,
-    }, {}, 30000);
+    });
     const [d1, d2] = await Promise.all([det(1), det(2)]);
     if (d1.status !== 200 || d2.status !== 200) {
-      skip(`S14a: upstream non-200 (${d1.status}/${d2.status}) — skipping determinism check`);
+      mandatorySkip(`S14a: upstream non-200 (${d1.status}/${d2.status}) — skipping determinism check`);
     } else {
       const a = (d1.json?.content?.[0]?.text || '').trim();
       const b = (d2.json?.content?.[0]?.text || '').trim();
@@ -627,7 +676,7 @@ async function main() {
       model: MODEL, max_tokens: 30, top_k: 1,
       messages: [{ role: 'user', content: 'Say hi.' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(rk.status === 200, `S14b top_k:1 accepted (got ${rk.status}: ${rk.bodyText?.slice(0,200)})`);
     assert((rk.json?.content?.[0]?.text || '').length > 0, `S14b top_k:1 returned non-empty text`);
 
@@ -636,7 +685,7 @@ async function main() {
       model: MODEL, max_tokens: 200, stop_sequences: ['STOP_HERE'],
       messages: [{ role: 'user', content: 'Count from 1 to 5, then write the literal token STOP_HERE, then write the words "after stop".' }],
       stream: false,
-    }, {}, 30000);
+    });
     if (rs.status === 200) {
       const txt = rs.json?.content?.find(b => b.type === 'text')?.text || '';
       // Either Gemini honored the stop sequence (no "after stop") OR it didn't (skip)
@@ -644,10 +693,10 @@ async function main() {
         assert(rs.json?.stop_sequence === 'STOP_HERE', `S14c stop_sequence echoed back (got ${rs.json?.stop_sequence})`);
         assert(!/after stop/i.test(txt), `S14c text truncated before "after stop" (text='${txt.slice(0,80)}')`);
       } else {
-        skip(`S14c: stop_sequence not triggered (stop_reason=${rs.json?.stop_reason}) — flash-lite may not honor`);
+        mandatorySkip(`S14c: stop_sequence not triggered (stop_reason=${rs.json?.stop_reason}) — flash-lite may not honor`);
       }
     } else {
-      skip(`S14c: upstream ${rs.status}`);
+      mandatorySkip(`S14c: upstream ${rs.status}`);
     }
   });
 
@@ -663,7 +712,7 @@ async function main() {
       tool_choice: { type: 'any' },
       messages: [{ role: 'user', content: 'Hello there!' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r.status === 200, `S15 status 200 (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
     const tu = (r.json?.content || []).find(b => b.type === 'tool_use');
     assert(!!tu, `S15 tool_use block returned (tool_choice:any forced a call)`);
@@ -684,7 +733,7 @@ async function main() {
         { role: 'user', content: 'And what is one more than that?' },
       ],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r.status === 200, `S16 status 200 — Gemini accepts structured thought part in history (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
     const txt = r.json?.content?.find(b => b.type === 'text')?.text || '';
     assert(/5|five/i.test(txt), `S16 model continued the conversation (text='${txt.slice(0,80)}')`);
@@ -698,7 +747,7 @@ async function main() {
     const r = await httpJson(port, 'POST', '/v1/messages/count_tokens', {
       model: MODEL,
       messages: [{ role: 'user', content: 'Hello, world.' }],
-    }, {}, 15000);
+    });
     assert(r.status === 200, `S17 status 200 (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
     assert(typeof r.json?.input_tokens === 'number' && r.json.input_tokens > 0, `S17 input_tokens>0 (got ${r.json?.input_tokens})`);
     assert(r.json?.type !== 'message', `S17 not a message response (got type=${r.json?.type})`);
@@ -708,7 +757,7 @@ async function main() {
   // ── S18/S28. /v1/models lists configured routes (Anthropic shape) ──────
   console.log('\nS18/S28. /v1/models -> Anthropic {data:[{type:model,id}]} (after G2)');
   await withProxy({ configPath: cfgPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY } }, async ({ port }) => {
-    const r = await httpJson(port, 'GET', '/v1/models', null, {}, 15000);
+    const r = await infrastructureHttpJson(port, 'GET', '/v1/models', null, {}, 15000);
     assert(r.status === 200, `S28 status 200 (got ${r.status})`);
     assert(Array.isArray(r.json?.data), `S28 data is array (got ${typeof r.json?.data})`);
     assert((r.json.data || []).every(m => m.type === 'model' && typeof m.id === 'string'), 'S28 all entries shape {type:"model",id:string}');
@@ -736,7 +785,7 @@ async function main() {
       model: MODEL, max_tokens: 20,
       messages: [{ role: 'user', content: 'hi' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r.status === 200, `S29 status 200 (got ${r.status})`);
     const rid = r.headers?.['request-id'] || '';
     assert(/^req_[a-f0-9]+$/i.test(rid), `S29 request-id matches ^req_[a-f0-9]+$ (got '${rid}')`);
@@ -754,12 +803,12 @@ async function main() {
       messages: [{ role: 'user', content: 'Reply with just OK.' }],
       stream: false,
     };
-    const r1 = await httpJson(port, 'POST', '/v1/messages', reqBody, {}, 60000);
+    const r1 = await httpJson(port, 'POST', '/v1/messages', reqBody);
     assert(r1.status === 200, `S30 turn1 status 200 (got ${r1.status})`);
     assert(r1.headers?.['x-c-thru-cache-status'] === 'miss', `S30 turn1 cache-status=miss (got '${r1.headers?.['x-c-thru-cache-status']}')`);
     // Allow time for the fire-and-forget cachedContents.create to settle upstream.
     await new Promise(r => setTimeout(r, 4000));
-    const r2 = await httpJson(port, 'POST', '/v1/messages', reqBody, {}, 60000);
+    const r2 = await httpJson(port, 'POST', '/v1/messages', reqBody);
     assert(r2.status === 200, `S30 turn2 status 200 (got ${r2.status})`);
     assert(r2.headers?.['x-c-thru-cache-status'] === 'hit', `S30 turn2 cache-status=hit (got '${r2.headers?.['x-c-thru-cache-status']}')`);
     const cacheRead = r2.json?.usage?.cache_read_input_tokens || 0;
@@ -786,7 +835,7 @@ async function main() {
         res.on('end', () => {
           const elapsed = Date.now() - startTs;
           if (elapsed < 10000) {
-            skip(`S20: upstream completed in ${elapsed}ms (<10s) — keepalive path not exercisable`);
+            opportunisticSkip(`S20: upstream completed in ${elapsed}ms (<10s) — keepalive path not exercisable`);
           } else {
             assert(sawPing, `S20 ≥1 SSE ping observed during ${elapsed}ms stream`);
           }
@@ -794,7 +843,10 @@ async function main() {
         });
         res.on('error', reject);
       });
-      req.setTimeout(120000, () => { req.destroy(); reject(new Error('S20 stream timeout')); });
+      req.setTimeout(MODEL_TEST_TIMEOUT_MS, () => {
+        req.destroy();
+        reject(new Error(`S20 stream timed out after ${MODEL_TEST_TIMEOUT_MS}ms`));
+      });
       req.write(JSON.stringify({
         model: MODEL, max_tokens: 8000,
         messages: [{ role: 'user', content: 'Write a 6000-word detailed history of medieval European universities, covering at least 12 institutions in depth.' }],
@@ -814,16 +866,18 @@ async function main() {
       thinking: { type: 'enabled', budget_tokens: 1024 },
       messages: [{ role: 'user', content: 'A train leaves Boston at 9am at 60 mph. Another leaves NYC (200mi away) at 10am at 80 mph travelling toward Boston. When and where do they meet? Show your reasoning.' }],
       stream: false,
-    }, {}, 60000);
+    });
     assert(r.status === 200, `S21 status 200 (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
     const blocks = r.json?.content || [];
     const tBlock = blocks.find(b => b.type === 'thinking');
     if (tBlock) {
       assert(typeof tBlock.thinking === 'string' && tBlock.thinking.length > 0, `S21 thinking block has non-empty text`);
-      // After G6: signature is non-empty when Gemini emitted any thoughtSignature
-      // on the candidate (we backfill from a sibling part if the thought part
-      // itself lacked one). Streaming already does this via currentThinkingSignature.
-      assert(typeof tBlock.signature === 'string' && tBlock.signature.length > 0, `S21 thinking block carries non-empty signature (got '${tBlock.signature?.slice(0,40)}...')`);
+      // Google documents that Gemini 2.5 emits thought signatures only when
+      // function declarations are present. S21 has no tools, so an empty
+      // signature is the provider contract; Gemini 3 is covered separately by
+      // the function-calling round-trip suite, where signatures are mandatory.
+      assert(typeof tBlock.signature === 'string' && tBlock.signature.length === 0,
+        `S21 Gemini 2.5 no-tool thinking block carries no signature (got '${tBlock.signature?.slice(0,40)}')`);
       const textIdx = blocks.findIndex(b => b.type === 'text');
       const thinkIdx = blocks.findIndex(b => b.type === 'thinking');
       if (textIdx >= 0) {
@@ -831,7 +885,7 @@ async function main() {
       } // if model returned only thinking (no final text), ordering is N/A
       priorThinking = tBlock;
     } else {
-      skip(`S21: ${THINK_MODEL} returned no thinking block (model may not have surfaced thoughts) — feature path not exercised`);
+      mandatorySkip(`S21: ${THINK_MODEL} returned no thinking block (model may not have surfaced thoughts) — feature path not exercised`);
     }
   });
 
@@ -848,9 +902,9 @@ async function main() {
           { role: 'user', content: 'Now solve the same problem if both trains were going 100 mph.' },
         ],
         stream: false,
-      }, {}, 60000);
+      });
       if (r2.status === 503 || r2.status === 429) {
-        skip(`S21b: upstream ${r2.status} (transient capacity) — re-run later`);
+        mandatorySkip(`S21b: upstream ${r2.status} (transient capacity) — re-run later`);
       } else {
         assert(r2.status === 200, `S21b multi-turn status 200 — Gemini accepts echoed thinking block (got ${r2.status}: ${r2.bodyText?.slice(0,200)})`);
       }
@@ -865,12 +919,12 @@ async function main() {
       thinking: { type: 'enabled', budget_tokens: 1024 },
       messages: [{ role: 'user', content: 'Reply with one short sentence.' }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r.status === 200, `S22 status 200 — older model accepts thinkingConfig (got ${r.status}: ${r.bodyText?.slice(0,300)})`);
     // Observed: flash-lite-latest also surfaces thought parts when budget set.
     // The contract we care about is "no 400" — model behavior on thinking is upstream's choice.
     const hasThinking = (r.json?.content || []).some(b => b.type === 'thinking');
-    if (hasThinking) skip(`S22: flash-lite returned a thinking block — newer flash variants surface thoughts; no 400 is the real contract`);
+    if (hasThinking) opportunisticSkip(`S22: flash-lite returned a thinking block — newer flash variants surface thoughts; no 400 is the real contract`);
   });
 
   // ── S23. Streaming thinking events ─────────────────────────────────────
@@ -897,7 +951,7 @@ async function main() {
         res.on('end', () => {
           const thinkingStart = events.find(e => e.data?.type === 'content_block_start' && e.data?.content_block?.type === 'thinking');
           if (!thinkingStart) {
-            skip(`S23: no thinking content_block_start in stream (model may not have surfaced thoughts)`);
+            mandatorySkip(`S23: no thinking content_block_start in stream (model may not have surfaced thoughts)`);
             return resolve();
           }
           const idx = thinkingStart.data.index;
@@ -922,7 +976,10 @@ async function main() {
         });
         res.on('error', reject);
       });
-      req.setTimeout(60000, () => { req.destroy(); reject(new Error('S23 stream timeout')); });
+      req.setTimeout(MODEL_TEST_TIMEOUT_MS, () => {
+        req.destroy();
+        reject(new Error(`S23 stream timed out after ${MODEL_TEST_TIMEOUT_MS}ms`));
+      });
       req.write(JSON.stringify({
         model: THINK_MODEL, max_tokens: 600,
         thinking: { type: 'enabled', budget_tokens: 512 },
@@ -949,7 +1006,7 @@ async function main() {
     const hasThinking = blocks.some(b => b.type === 'thinking');
     const hasToolUse  = blocks.some(b => b.type === 'tool_use');
     if (!hasThinking || !hasToolUse) {
-      skip(`S24: response did not contain both blocks (thinking=${hasThinking}, tool_use=${hasToolUse}) — feature path not fully exercised`);
+      mandatorySkip(`S24: response did not contain both blocks (thinking=${hasThinking}, tool_use=${hasToolUse}) — feature path not fully exercised`);
     } else {
       assert(true, `S24 response contains both thinking and tool_use blocks`);
     }
@@ -965,37 +1022,39 @@ async function main() {
       thinking: { type: 'enabled', budget_tokens: 128 },
       messages: [{ role: 'user', content: 'What is 7 × 8? Show brief reasoning.' }],
       stream: false,
-    }, {}, 60000);
+    });
     if (r.status === 400 && /thinking budget/i.test(r.bodyText || '')) {
-      skip(`S25: upstream rejected budget=128 (min budget moved); update test when stable`);
+      mandatorySkip(`S25: upstream rejected budget=128 (min budget moved); update test when stable`);
       return;
     }
     assert(r.status === 200, `S25 status 200 (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
     const tBlock = (r.json?.content || []).find(b => b.type === 'thinking');
     if (!tBlock) {
-      skip(`S25: no thinking block returned — budget may have been zeroed by upstream`);
+      mandatorySkip(`S25: no thinking block returned — budget may have been zeroed by upstream`);
     } else {
       const len = (tBlock.thinking || '').length;
       assert(len <= 600, `S25 thinking text ≤600 chars at budget=64 (got ${len})`);
     }
   });
 
-  // ── S26. Image content block (1×1 PNG) → Gemini accepts inlineData ──────
-  console.log('\nS26. image block (1×1 red PNG) → Gemini describes the image');
+  // ── S26. Image content block (32×32 PNG) → Gemini accepts inlineData ─────
+  console.log('\nS26. image block (32×32 red PNG) → Gemini describes the image');
   await withProxy({ configPath: cfgPath, profile: '16gb', env: { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY } }, async ({ port }) => {
-    // 1×1 red PNG
-    const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+    // Opaque 32×32 solid-red RGBA PNG. The retired fixture decoded to
+    // semi-transparent yellow (RGBA 255,255,0,127), so Gemini correctly
+    // answering "Yellow" was a fixture defect rather than a vision defect.
+    const redPng = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAK0lEQVR4nO3OIQEAAAwEoetfeovxBoGnq1tKQEBAQEBAQEBAQEBAQEBgHXhUDfhqRFDd3gAAAABJRU5ErkJggg==';
     const r = await httpJson(port, 'POST', '/v1/messages', {
       model: MODEL, max_tokens: 100,
       messages: [{
         role: 'user',
         content: [
           { type: 'text', text: 'What single dominant color is this image? Reply with just the color name.' },
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tinyPng } },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: redPng } },
         ],
       }],
       stream: false,
-    }, {}, 30000);
+    });
     assert(r.status === 200, `S26 status 200 (got ${r.status}: ${r.bodyText?.slice(0,200)})`);
     const txt = (r.json?.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ');
     assert(txt.length > 0, `S26 model returned text (got '${txt.slice(0,80)}')`);
@@ -1010,7 +1069,7 @@ async function main() {
       model: MODEL, max_tokens: -1,
       messages: [{ role: 'user', content: 'Hello.' }],
       stream: false,
-    }, {}, 15000);
+    });
     assert(r.status >= 400 && r.status < 600, `E4 returned an error status (got ${r.status})`);
     assert(r.json?.type === 'error', `E4 Anthropic error envelope (got type=${r.json?.type})`);
     if (r.json?.error?.type) {
@@ -1028,10 +1087,10 @@ async function main() {
       model: MODEL, max_tokens: 50,
       messages: [{ role: 'user', content: huge }],
       stream: false,
-    }, {}, 30000);
+    });
     if (r.status === 200) {
       // Some Gemini tiers accept large inputs — record but don't fail.
-      skip(`E5: upstream accepted ~2MB request (status 200) — request_too_large path not exercised`);
+      opportunisticSkip(`E5: upstream accepted ~2MB request (status 200) — request_too_large path not exercised`);
     } else {
       assert(r.status >= 400 && r.status < 600, `E5 returned an error status (got ${r.status})`);
       assert(r.json?.type === 'error', `E5 Anthropic error envelope (got type=${r.json?.type})`);
@@ -1048,12 +1107,12 @@ async function main() {
         model: MODEL, max_tokens: 20,
         messages: [{ role: 'user', content: `Reply ${i}.` }],
         stream: false,
-      }, {}, 30000).catch(e => ({ status: 0, error: e.message })));
+      }).catch(e => ({ status: 0, error: e.message })));
     }
     const results = await Promise.all(reqs);
     const rate = results.filter(r => r.status === 429);
     if (rate.length === 0) {
-      skip(`E6: no 429 across ${N} parallel requests — overloaded_error path not exercised`);
+      opportunisticSkip(`E6: no 429 across ${N} parallel requests — overloaded_error path not exercised`);
     } else {
       const sample = rate[0];
       assert(sample.json?.type === 'error', `E6 429 envelope is Anthropic error shape (got type=${sample.json?.type})`);
@@ -1065,7 +1124,22 @@ async function main() {
   });
 
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-  process.exit(summary());
+  const failed = summary();
+  if (failed > 0) {
+    emitLiveOutcome('gemini', LIVE_SUITE, 'failed', `${failed}_assertions_failed`);
+  } else if (mandatorySkips > 0) {
+    emitLiveOutcome('gemini', LIVE_SUITE, 'skipped',
+      `${mandatorySkips}_mandatory_contracts_not_exercised_${opportunisticSkips}_opportunistic_skips`);
+  } else {
+    emitLiveOutcome('gemini', LIVE_SUITE, 'passed',
+      `all_mandatory_contracts_exercised_${opportunisticSkips}_opportunistic_skips`);
+  }
+  process.exit(failed > 0 ? 1 :
+    (mandatorySkips > 0 && process.env.C_THRU_STRICT_LIVE_PROVIDERS === '1' ? 2 : 0));
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+main().catch(err => {
+  console.error(err);
+  emitLiveOutcome('gemini', LIVE_SUITE, 'failed', err?.code || err?.message || 'uncaught_error');
+  process.exit(1);
+});

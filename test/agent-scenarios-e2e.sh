@@ -27,6 +27,15 @@
 set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+has_active_test_supervisor() {
+  node "$REPO_DIR/tools/test-supervisor-capability.js" --verify-shell-child
+}
+
+if ! has_active_test_supervisor; then
+  exec node "$REPO_DIR/tools/run-with-hard-timeout.js" \
+    --timeout-seconds "${C_THRU_TEST_TIMEOUT_SECONDS:-3600}" \
+    -- bash "${BASH_SOURCE[0]}" "$@"
+fi
 
 skip() { echo "SKIP  agent-scenarios-e2e: $1"; exit 0; }
 
@@ -47,6 +56,22 @@ CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}"
 C_THRU="$REPO_DIR/tools/c-thru"
 [ -x "$C_THRU" ] || [ -f "$C_THRU" ] || skip "tools/c-thru entrypoint not found"
 
+MODEL_TEST_TIMEOUT_MS="${C_THRU_MODEL_TEST_TIMEOUT_MS:-3600000}"
+if [[ ! "$MODEL_TEST_TIMEOUT_MS" =~ ^[1-9][0-9]*$ ]] \
+  || (( ${#MODEL_TEST_TIMEOUT_MS} > 7 )) \
+  || { (( ${#MODEL_TEST_TIMEOUT_MS} == 7 )) && [[ "$MODEL_TEST_TIMEOUT_MS" > "3600000" ]]; }; then
+  echo "ERROR: C_THRU_MODEL_TEST_TIMEOUT_MS must be an integer from 1 to 3600000" >&2
+  exit 2
+fi
+MODEL_TEST_TIMEOUT_SECONDS=$(( (MODEL_TEST_TIMEOUT_MS + 999) / 1000 ))
+E2E_TIMEOUT_SECONDS="${C_THRU_E2E_TIMEOUT:-$MODEL_TEST_TIMEOUT_SECONDS}"
+if [[ ! "$E2E_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] \
+  || (( ${#E2E_TIMEOUT_SECONDS} > 4 )) \
+  || { (( ${#E2E_TIMEOUT_SECONDS} == 4 )) && [[ "$E2E_TIMEOUT_SECONDS" > "3600" ]]; }; then
+  echo "ERROR: C_THRU_E2E_TIMEOUT must be an integer from 1 to 3600" >&2
+  exit 2
+fi
+
 WORK="$(mktemp -d -t c-thru-agent-e2e-XXXXXX)"
 JOURNAL_DIR="$WORK/journal"
 TARGET_FILE="$WORK/target.py"
@@ -60,13 +85,28 @@ trap 'rm -rf "$WORK"' EXIT
 # background, kill after $1 seconds. Returns the command's own exit status.
 run_with_timeout() {
   local secs="$1"; shift
+  local term_after="$secs"
+  local kill_grace=0
+  if (( secs > 3 )); then
+    term_after=$(( secs - 3 ))
+    kill_grace=2
+  fi
   "$@" &
   local pid=$!
-  ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; sleep 2; kill -KILL "$pid" 2>/dev/null ) &
+  (
+    sleep "$term_after" &
+    local sleeper=$!
+    trap 'kill "$sleeper" 2>/dev/null || true; exit 0' TERM INT
+    wait "$sleeper" 2>/dev/null || exit 0
+    kill -TERM "$pid" 2>/dev/null || exit 0
+    if (( kill_grace > 0 )); then sleep "$kill_grace"; fi
+    kill -KILL "$pid" 2>/dev/null || true
+  ) &
   local watcher=$!
   local rc=0
   wait "$pid" 2>/dev/null || rc=$?
   kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
   return $rc
 }
 
@@ -78,10 +118,18 @@ scenario() {
   echo ""
   echo "Scenario: $label  (expect capability='$expected_cap')"
 
-  run_with_timeout "${C_THRU_E2E_TIMEOUT:-180}" \
+  run_with_timeout "$E2E_TIMEOUT_SECONDS" \
     env CLAUDE_LLM_MODE=best-local-oss \
         CLAUDE_PROXY_JOURNAL=1 \
         CLAUDE_PROXY_JOURNAL_DIR="$JOURNAL_DIR" \
+        CLAUDE_PROXY_ANTHROPIC_TIMEOUT_MS="$MODEL_TEST_TIMEOUT_MS" \
+        CLAUDE_PROXY_GEMINI_TIMEOUT_MS="$MODEL_TEST_TIMEOUT_MS" \
+        CLAUDE_PROXY_RESPONSES_TIMEOUT_MS="$MODEL_TEST_TIMEOUT_MS" \
+        CLAUDE_PROXY_OLLAMA_TIMEOUT_MS="$MODEL_TEST_TIMEOUT_MS" \
+        CLAUDE_PROXY_OLLAMA_TTFT_MS="$MODEL_TEST_TIMEOUT_MS" \
+        CLAUDE_PROXY_STREAM_STALL_MS="$MODEL_TEST_TIMEOUT_MS" \
+        CLAUDE_PROXY_STREAM_WALL_MS="$MODEL_TEST_TIMEOUT_MS" \
+        C_THRU_MODEL_TEST_TIMEOUT_MS="$MODEL_TEST_TIMEOUT_MS" \
         C_THRU_NO_UPDATE=1 \
         C_THRU_NO_MARKETPLACE_UPDATE=1 \
         CLAUDE_BIN="$CLAUDE_BIN" \

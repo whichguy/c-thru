@@ -6,9 +6,9 @@
 //   2. The proxy routes correctly to the cloud backend in connected mode
 //   3. The judge VERDICT format is parseable
 //
-// Distinct from C_THRU_JUDGE=1 in the behavioral suite (which validates
-// every agent's output): this is a single check that signals "the judge
-// path itself is healthy". Cheap enough to run on every CI gate.
+// This is a single check that signals "the Anthropic judge path itself is
+// healthy"; role-specific behavioral coverage lives in the agent contract
+// suite and is independently fail-closed on multiple evidence signals.
 //
 // Guard: ANTHROPIC_API_KEY required. Skips gracefully without it.
 // Run:   ANTHROPIC_API_KEY=... node test/judge-canary.test.js
@@ -17,12 +17,26 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
-const { assert, summary, writeConfig, withProxy, httpJson } = require('./helpers');
+const {
+  assert,
+  ensureModelTestSupervisor,
+  summary,
+  writeConfig,
+  withModelTestProxy,
+  modelHttpJson,
+  modelTestTimeoutMs,
+} = require('./helpers');
+if (require.main === module) ensureModelTestSupervisor();
+const { emitLiveOutcome } = require('./provider-live-prerequisites');
+
+const LIVE_PROVIDER = 'anthropic';
+const LIVE_SUITE = 'judge-canary';
 
 console.log('judge canary smoke test\n');
 
 if (!process.env.ANTHROPIC_API_KEY) {
   console.log('SKIP: ANTHROPIC_API_KEY not set — judge canary requires real cloud access');
+  emitLiveOutcome(LIVE_PROVIDER, LIVE_SUITE, 'skipped', 'missing_ANTHROPIC_API_KEY');
   process.exit(0);
 }
 
@@ -56,7 +70,7 @@ async function main() {
     const configPath = writeConfig(tmpDir, config);
 
     console.log('1. judge call against real Anthropic API (haiku, low-cost)');
-    await withProxy(
+    await withModelTestProxy(
       { configPath, profile: '128gb', mode: 'connected' },
       async ({ port }) => {
         const judgeBody = {
@@ -68,7 +82,7 @@ async function main() {
           }],
         };
 
-        const r = await httpJson(port, 'POST', '/v1/messages', judgeBody, {}, 30000);
+        const r = await modelHttpJson(port, 'POST', '/v1/messages', judgeBody);
 
         assert(r.status === 200, `judge request 200 (got ${r.status}, body: ${(r.bodyText || '').slice(0, 200)})`);
         const text = (r.json?.content || []).map(c => c.text || '').join('');
@@ -86,7 +100,7 @@ async function main() {
 
         // Latency sanity check
         if (typeof via.latency_ms === 'number') {
-          assert(via.latency_ms > 0 && via.latency_ms < 30000,
+          assert(via.latency_ms > 0 && via.latency_ms < modelTestTimeoutMs(),
             `latency_ms reasonable (got ${via.latency_ms})`);
         }
       }
@@ -97,10 +111,17 @@ async function main() {
   }
 
   const failed = summary();
+  emitLiveOutcome(
+    LIVE_PROVIDER,
+    LIVE_SUITE,
+    failed ? 'failed' : 'passed',
+    failed ? `${failed}_assertions_failed` : 'all_mandatory_contracts_exercised',
+  );
   process.exit(failed ? 1 : 0);
 }
 
 main().catch(err => {
   console.error(err);
+  emitLiveOutcome(LIVE_PROVIDER, LIVE_SUITE, 'failed', err?.code || err?.message || 'uncaught_error');
   process.exit(1);
 });

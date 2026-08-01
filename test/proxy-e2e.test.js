@@ -8,11 +8,21 @@
 //
 // Run with: node test/proxy-e2e.test.js
 
+const fs           = require('fs');
 const http         = require('http');
+const os           = require('os');
 const { execFile } = require('child_process');
 const path         = require('path');
 
-const { assert, assertEq, summary } = require('./helpers');
+const {
+  assert,
+  assertEq,
+  ensureModelTestSupervisor,
+  summary,
+  modelTestTimeoutMs,
+  modelTestProxyEnv,
+} = require('./helpers');
+if (require.main === module) ensureModelTestSupervisor();
 
 console.log('proxy-e2e integration tests (c-thru -p)\n');
 
@@ -20,16 +30,76 @@ console.log('proxy-e2e integration tests (c-thru -p)\n');
 
 const REPO_ROOT      = path.join(__dirname, '..');
 const C_THRU         = path.join(REPO_ROOT, 'tools', 'c-thru');
+const CHECKOUT_MODEL_MAP = path.join(REPO_ROOT, 'config', 'model-map.json');
 const E2E_MODEL      = 'qwen3:1.7b';    // smallest available; already pulled
-// Full-suite load + cold Ollama resident models can exceed 60s on a single
-// -p turn (observed under make test). Keep headroom without masking hangs.
-const E2E_TIMEOUT_MS = 120_000;
+const TEST_ROOT      = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-proxy-e2e-'));
+const TEST_PROFILE   = path.join(TEST_ROOT, 'claude-profile');
+fs.mkdirSync(TEST_PROFILE, { recursive: true });
+process.once('exit', () => {
+  try { fs.rmSync(TEST_ROOT, { recursive: true, force: true }); } catch {}
+});
+// A cold or queued local model may take hours. The shared override also widens
+// the proxy's generation watchdogs, while probeOllama stays intentionally short.
+const E2E_TIMEOUT_MS = modelTestTimeoutMs();
+const LIVE_ANTHROPIC = process.env.C_THRU_LIVE_ANTHROPIC === '1';
+const ANTHROPIC_CREDENTIAL_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+];
 
 // Short prompt: e2e only needs a non-empty model reply. Long identity prompts
 // inflate local-model latency and flaked under concurrent suite pressure.
 const IDENTITY_PROMPT = 'Reply with one word: ok';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+function childEnv({ allowLiveAnthropic = false } = {}) {
+  const env = Object.assign({}, process.env, modelTestProxyEnv(E2E_TIMEOUT_MS), {
+    CLAUDE_CONFIG_DIR: TEST_PROFILE,
+    CLAUDE_DIR: TEST_PROFILE,
+    CLAUDE_PROFILE_DIR: TEST_PROFILE,
+    CLAUDE_MODEL_MAP_LAUNCH_CWD: TEST_ROOT,
+    CLAUDE_MODEL_MAP_PATH: CHECKOUT_MODEL_MAP,
+    C_THRU_BRAND_REUSE_GATEWAY_PROXY: '0',
+    C_THRU_KEEP_PROXY: '0',
+    C_THRU_NO_UPDATE: '1',
+    C_THRU_NO_MARKETPLACE_UPDATE: '1',
+    C_THRU_NO_OAUTH_INJECT: '1',
+    C_THRU_SKIP_INFO_INJECTION: '1',
+    C_THRU_SKIP_PREPULL: '1',
+    C_THRU_SKIP_PREFLIGHT: '1',
+    NO_AGENTS: '1',
+  });
+  for (const key of [
+    'ANTHROPIC_BASE_URL',
+    'CLAUDE_CODE_SUBAGENT_MODEL',
+    'CLAUDE_MODEL_MAP_DEFAULTS_PATH',
+    'CLAUDE_MODEL_MAP_OVERRIDES_PATH',
+    'CLAUDE_MODEL_MAP_SYNC_STATE_FILE',
+    'CLAUDE_PROXY_BIND_ADDR',
+    'CLAUDE_PROXY_BYPASS',
+    'CLAUDE_PROXY_PORT',
+    'CLAUDE_PROXY_READY_TIMEOUT_SECONDS',
+    'CLAUDE_PROXY_USE_OLLAMA_PORT',
+    'CLAUDE_ROUTER_SKIP_PROXY_AUTOSTART',
+    'C_THRU_SKIP_PROXY_AUTOSTART',
+    'PROXY_PORT',
+  ]) {
+    delete env[key];
+  }
+  if (!allowLiveAnthropic) {
+    for (const key of ANTHROPIC_CREDENTIAL_KEYS) delete env[key];
+    // Claude Code requires a credential even when ANTHROPIC_BASE_URL points to
+    // the local c-thru proxy. This non-secret placeholder satisfies the CLI;
+    // the local endpoint's auth:none policy strips it before Ollama.
+    env.ANTHROPIC_AUTH_TOKEN = 'c-thru-local-e2e-placeholder';
+  } else {
+    // The live path is admitted only after main() verifies the explicit gate
+    // plus a real ANTHROPIC_API_KEY. Never let an ambient auth token substitute.
+    delete env.ANTHROPIC_AUTH_TOKEN;
+  }
+  return env;
+}
 
 function probeOllama(timeoutMs = 2000) {
   return new Promise(resolve => {
@@ -64,13 +134,12 @@ function runCThru(model, extraArgs = []) {
     // Skip bulk pre-pull AND preflight fleet pulls — e2e only needs the
     // explicit --model tag. Offline mode otherwise blocks on ollama pull of
     // every missing local_models entry from /v1/active-models (e.g. qwen3.6:35b).
-    const env = Object.assign({}, process.env, {
-      C_THRU_NO_UPDATE: '1',
-      C_THRU_NO_MARKETPLACE_UPDATE: '1',
-      C_THRU_SKIP_PREPULL: '1',
-      C_THRU_SKIP_PREFLIGHT: '1',
-    });
-    const proc = execFile(C_THRU, args, { timeout: E2E_TIMEOUT_MS, env }, (err, stdout, stderr) => {
+    const env = childEnv();
+    const proc = execFile(C_THRU, args, {
+      cwd: TEST_ROOT,
+      timeout: E2E_TIMEOUT_MS,
+      env,
+    }, (err, stdout, stderr) => {
       if (err && err.killed) {
         reject(new Error(`c-thru timed out after ${E2E_TIMEOUT_MS}ms.\nstderr: ${stderr.slice(0, 500)}`));
         return;
@@ -107,7 +176,10 @@ async function main() {
   {
     const r = await runCThru(E2E_MODEL);
     assertEq(r.exitCode, 0, `direct route: exit code 0 (got ${r.exitCode})`);
-    assert(r.stdout.trim().length > 0, 'direct route: stdout is non-empty');
+    assert(
+      r.stdout.trim().length > 0,
+      `direct route: stdout is non-empty (stderr tail: ${JSON.stringify(r.stderr.slice(-300))})`,
+    );
     console.log(`  response: ${r.stdout.trim().slice(0, 120)}…`);
   }
 
@@ -116,7 +188,10 @@ async function main() {
   {
     const r = await runCThru(E2E_MODEL, ['--mode', 'offline']);
     assertEq(r.exitCode, 0, `offline: exit code 0 (got ${r.exitCode})`);
-    assert(r.stdout.trim().length > 0, 'offline: stdout is non-empty');
+    assert(
+      r.stdout.trim().length > 0,
+      `offline: stdout is non-empty (stderr tail: ${JSON.stringify(r.stderr.slice(-300))})`,
+    );
     console.log(`  response: ${r.stdout.trim().slice(0, 120)}…`);
   }
 
@@ -125,12 +200,16 @@ async function main() {
   {
     const hasRealKey = process.env.ANTHROPIC_API_KEY &&
       !process.env.ANTHROPIC_API_KEY.startsWith('sk-ant-test');
-    if (!hasRealKey) {
-      skip('default route (no real ANTHROPIC_API_KEY — would hit real Anthropic)');
+    if (!LIVE_ANTHROPIC || !hasRealKey) {
+      skip('default route (requires C_THRU_LIVE_ANTHROPIC=1 + real ANTHROPIC_API_KEY)');
     } else {
       const r = await new Promise((resolve, reject) => {
         const args = ['-p', IDENTITY_PROMPT];
-        execFile(C_THRU, args, { timeout: E2E_TIMEOUT_MS }, (err, stdout, stderr) => {
+        execFile(C_THRU, args, {
+          cwd: TEST_ROOT,
+          timeout: E2E_TIMEOUT_MS,
+          env: childEnv({ allowLiveAnthropic: true }),
+        }, (err, stdout, stderr) => {
           if (err && err.killed) { reject(new Error(`timed out.\nstderr: ${stderr.slice(0, 500)}`)); return; }
           resolve({ exitCode: err ? (err.code || 1) : 0, stdout, stderr });
         });

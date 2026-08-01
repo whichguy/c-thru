@@ -65,12 +65,21 @@ const fs    = require('fs');
 const path  = require('path');
 const https = require('https');
 
-const { assert, summary } = require('./helpers');
+const {
+  assert,
+  ensureModelTestSupervisor,
+  summary,
+  modelTestTimeoutMs,
+} = require('./helpers');
+if (require.main === module) ensureModelTestSupervisor();
+const { emitLiveOutcome } = require('./provider-live-prerequisites');
 
 // ── Config ───────────────────────────────────────────────────────────────────
 const REPO        = path.resolve(__dirname, '..');
 const AGENTS_DIR  = path.join(REPO, 'agents');
 const CORPUS_PATH = path.join(REPO, 'test', 'fixtures', 'agent-selection-corpus.json');
+const LIVE_PROVIDER = 'anthropic';
+const LIVE_SUITE = 'agent-selection-llm-judge';
 
 // A small, fast model is fine for this classification task (judge-canary uses
 // the haiku tier). Allow override via env for re-baselining.
@@ -102,7 +111,6 @@ const PLACEHOLDERS = {
 // Concurrency + retry knobs.
 const CONCURRENCY  = Number(process.env.C_THRU_SELECTION_CONCURRENCY || '5');
 const MAX_RETRIES  = 3;
-const REQ_TIMEOUT  = 30_000;
 
 // ── Description parsing (mirrors agent-description-quality.test.js) ─────────────
 function parseDescription(body) {
@@ -111,7 +119,10 @@ function parseDescription(body) {
 }
 
 function loadAgentDescriptions() {
-  const files = fs.readdirSync(AGENTS_DIR).filter(f => f.endsWith('.md')).sort();
+  const reservedAgentFiles = new Set(['AGENTS.md', 'CLAUDE.md']);
+  const files = fs.readdirSync(AGENTS_DIR)
+    .filter(f => f.endsWith('.md') && !reservedAgentFiles.has(f))
+    .sort();
   const out = {};
   for (const file of files) {
     const name = file.replace(/\.md$/, '');
@@ -169,6 +180,7 @@ function parsePick(raw) {
 
 // ── Live judge call (direct HTTPS to api.anthropic.com, like judge-canary) ─────
 function postAnthropic(apiKey, body) {
+  const requestTimeoutMs = modelTestTimeoutMs();
   const opts = {
     hostname: 'api.anthropic.com',
     path: '/v1/messages',
@@ -191,8 +203,8 @@ function postAnthropic(apiKey, body) {
         resolve({ status: res.statusCode, json, bodyText: text });
       });
     });
-    req.setTimeout(REQ_TIMEOUT, () => {
-      req.destroy(new Error(`anthropic request timed out after ${REQ_TIMEOUT}ms`));
+    req.setTimeout(requestTimeoutMs, () => {
+      req.destroy(new Error(`anthropic request timed out after ${requestTimeoutMs}ms`));
     });
     req.on('error', reject);
     req.write(body);
@@ -568,6 +580,14 @@ async function main() {
       : 'SKIP live judge: requires C_THRU_LIVE_SELECTION=1 — running DRY self-test instead (no network)\n');
     await selfTest();
     const failed = summary();
+    emitLiveOutcome(
+      LIVE_PROVIDER,
+      LIVE_SUITE,
+      failed ? 'failed' : 'skipped',
+      failed
+        ? `${failed}_self_test_assertions_failed`
+        : (!LIVE ? 'gate_not_enabled' : 'missing_ANTHROPIC_API_KEY'),
+    );
     process.exit(failed ? 1 : 0);
   }
 
@@ -579,6 +599,7 @@ async function main() {
     card = await runJudge({ apiKey: KEY, model: JUDGE_MODEL, callFn: callAnthropic });
   } catch (err) {
     console.error('FATAL: judge run failed:', err && err.stack || err);
+    emitLiveOutcome(LIVE_PROVIDER, LIVE_SUITE, 'failed', err?.code || err?.message || 'judge_run_failed');
     process.exit(1);
   }
 
@@ -600,8 +621,14 @@ async function main() {
     // Fully advisory (local default): record the DECISIVE verdict too, exit 0.
     assert(true,
       `advisory mode — decisive ${card.decisive.score.toFixed(4)} (>=${DECISIVE_THRESHOLD}? ${decisiveOk}) — not gating`);
-    summary();
-    process.exit(0);
+    const failed = summary();
+    emitLiveOutcome(
+      LIVE_PROVIDER,
+      LIVE_SUITE,
+      failed ? 'failed' : 'passed',
+      failed ? `${failed}_assertions_failed` : 'live_advisory_completion',
+    );
+    process.exit(failed ? 1 : 0);
   }
 
   // Gate: DECISIVE only — descriptions MUST let the model pick the right specialist.
@@ -610,6 +637,12 @@ async function main() {
     `(${card.decisive.correct}/${card.decisive.total}; ${card.decisive.misses.length} miss(es))`);
 
   const failed = summary();
+  emitLiveOutcome(
+    LIVE_PROVIDER,
+    LIVE_SUITE,
+    failed ? 'failed' : 'passed',
+    failed ? `${failed}_assertions_failed` : 'all_mandatory_contracts_exercised',
+  );
   process.exit(failed ? 1 : 0);
 }
 
@@ -638,6 +671,7 @@ module.exports = {
 if (require.main === module) {
   main().catch(err => {
     console.error('FATAL:', err && err.stack || err);
+    emitLiveOutcome(LIVE_PROVIDER, LIVE_SUITE, 'failed', err?.code || err?.message || 'uncaught_error');
     process.exit(1);
   });
 }

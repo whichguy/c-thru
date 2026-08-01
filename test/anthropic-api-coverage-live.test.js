@@ -8,9 +8,10 @@
  * through the proxy so that ⚠️ Tier-2 cells in
  * `docs/anthropic-api-coverage.md` can be flipped to 🔁 (live-verified).
  *
- * Self-skip protocol:
- *   - Skipped (exit 0) unless BOTH `C_THRU_LIVE_ANTHROPIC=1` and
- *     `ANTHROPIC_API_KEY` are set in the environment.
+ * Gate protocol:
+ *   - Gate off: skipped (exit 0).
+ *   - Gate on without `ANTHROPIC_API_KEY`: blocked (exit 2), because explicitly
+ *     requested live coverage must never be painted green.
  *
  * What it verifies:
  *   1. GET  /v1/models                              — 200 with non-empty data[]
@@ -50,15 +51,40 @@
 
 const path = require('path');
 const {
-  assert, assertEq, summary, httpJson, withProxy,
+  assert,
+  assertEq,
+  ensureModelTestSupervisor,
+  summary,
+  modelHttpJson,
+  withModelTestProxy,
 } = require('./helpers');
+if (require.main === module) ensureModelTestSupervisor();
+const { emitLiveOutcome } = require('./provider-live-prerequisites');
 
 const LIVE = process.env.C_THRU_LIVE_ANTHROPIC === '1';
 const KEY  = process.env.ANTHROPIC_API_KEY;
+const LIVE_PROVIDER = 'anthropic';
+const LIVE_SUITE = 'anthropic-api-coverage-live';
 
-if (!LIVE || !KEY) {
-  console.log('SKIP: live anthropic tests require C_THRU_LIVE_ANTHROPIC=1 and ANTHROPIC_API_KEY');
+if (!LIVE) {
+  console.log('SKIP: live anthropic tests require C_THRU_LIVE_ANTHROPIC=1');
+  emitLiveOutcome(
+    LIVE_PROVIDER,
+    LIVE_SUITE,
+    'skipped',
+    'gate_not_enabled',
+  );
   process.exit(0);
+}
+if (!KEY) {
+  console.error('BLOCKED: C_THRU_LIVE_ANTHROPIC=1 requires ANTHROPIC_API_KEY');
+  emitLiveOutcome(
+    LIVE_PROVIDER,
+    LIVE_SUITE,
+    'blocked',
+    'missing_ANTHROPIC_API_KEY',
+  );
+  process.exit(2);
 }
 
 console.log('anthropic-api-coverage-live: real api.anthropic.com via proxy\n');
@@ -76,21 +102,21 @@ const AUTH_HEADERS = {
 };
 
 (async () => {
-  await withProxy({
+  await withModelTestProxy({
     configPath: SHIPPED_CONFIG,
     env: { ANTHROPIC_API_KEY: KEY },
   }, async ({ port }) => {
     // ─── 1. GET /v1/models (proxy-synthesized — sanity / liveness check) ─
-    const modelsRes = await httpJson(
-      port, 'GET', '/v1/models', null, AUTH_HEADERS, 10000,
+    const modelsRes = await modelHttpJson(
+      port, 'GET', '/v1/models', null, AUTH_HEADERS,
     );
     assertEq(modelsRes.status, 200, 'GET /v1/models returns 200 (synthesized)');
     assert(modelsRes.json && Array.isArray(modelsRes.json.data) && modelsRes.json.data.length > 0,
       'GET /v1/models response has non-empty data[]');
 
     // ─── 2. GET /v1/organizations/me (true catch-all → Anthropic) ────────
-    const orgRes = await httpJson(
-      port, 'GET', '/v1/organizations/me', null, AUTH_HEADERS, 15000,
+    const orgRes = await modelHttpJson(
+      port, 'GET', '/v1/organizations/me', null, AUTH_HEADERS,
     );
     assertEq(orgRes.headers['x-c-thru-passthrough'], '1',
       'GET /v1/organizations/me has x-c-thru-passthrough: 1 (catch-all forwarded)');
@@ -107,11 +133,10 @@ const AUTH_HEADERS = {
     }
 
     // ─── 3. DELETE /v1/messages/batches/<bogus> + anthropic-beta round-trip
-    const delRes = await httpJson(
+    const delRes = await modelHttpJson(
       port, 'DELETE', '/v1/messages/batches/msgbatch_does_not_exist_xyz123',
       null,
       Object.assign({}, AUTH_HEADERS, { 'anthropic-beta': BETA_TOKEN }),
-      15000,
     );
     assertEq(delRes.headers['x-c-thru-passthrough'], '1',
       'DELETE response has x-c-thru-passthrough: 1 (method propagated through catch-all)');
@@ -126,8 +151,16 @@ const AUTH_HEADERS = {
       'DELETE 404 body has error.type === "not_found_error" (upstream Anthropic shape)');
   });
 
-  process.exit(summary());
+  const failed = summary();
+  emitLiveOutcome(
+    LIVE_PROVIDER,
+    LIVE_SUITE,
+    failed ? 'failed' : 'passed',
+    failed ? `${failed}_assertions_failed` : 'all_mandatory_contracts_exercised',
+  );
+  process.exit(failed ? 1 : 0);
 })().catch(err => {
   console.error('FATAL:', err && err.stack || err);
+  emitLiveOutcome(LIVE_PROVIDER, LIVE_SUITE, 'failed', err?.code || err?.message || 'uncaught_error');
   process.exit(1);
 });

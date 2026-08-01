@@ -17,18 +17,49 @@ const fs   = require('fs');
 const http = require('http');
 const os   = require('os');
 const path = require('path');
-const { writeConfig, httpJson, withProxy, assert, skip, summary } = require('./helpers');
+const {
+  ensureModelTestSupervisor,
+  writeConfig,
+  modelHttpJson,
+  withModelTestProxy,
+  modelTestTimeoutMs,
+  assert,
+  skip: recordSkip,
+  summary,
+} = require('./helpers');
+if (require.main === module) ensureModelTestSupervisor();
+const { emitLiveOutcome } = require('./provider-live-prerequisites');
+
+const LIVE_SUITE = 'proxy-gemini-live-thinking';
 
 if (process.env.C_THRU_LIVE_GEMINI !== '1') {
   console.log('SKIP: C_THRU_LIVE_GEMINI not set');
+  emitLiveOutcome('gemini', LIVE_SUITE, 'skipped', 'gate_not_enabled');
   process.exit(0);
 }
 if (!process.env.GOOGLE_API_KEY) {
   console.log('SKIP: GOOGLE_API_KEY not set');
+  emitLiveOutcome('gemini', LIVE_SUITE, 'skipped', 'missing_GOOGLE_API_KEY');
   process.exit(0);
 }
 
 const MODEL = process.env.C_THRU_LIVE_GEMINI_MODEL || 'gemini-pro-latest';
+let MODEL_TEST_TIMEOUT_MS;
+try {
+  MODEL_TEST_TIMEOUT_MS = modelTestTimeoutMs();
+} catch (err) {
+  console.error(err);
+  emitLiveOutcome('gemini', LIVE_SUITE, 'failed', err?.message || 'invalid_model_test_timeout');
+  process.exit(1);
+}
+let mandatorySkips = 0;
+
+// Every skip in this focused suite suppresses one of its advertised thinking
+// contracts, so all are mandatory rather than trigger-only diagnostics.
+function mandatorySkip(message) {
+  mandatorySkips++;
+  recordSkip(`MANDATORY: ${message}`);
+}
 
 async function main() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-live-think-'));
@@ -45,36 +76,38 @@ async function main() {
   const env = { CLAUDE_LLM_MODE: 'best-cloud', GOOGLE_API_KEY: process.env.GOOGLE_API_KEY };
 
   // ── L1. Auto-enable thinking on Gemini 3 Pro ─────────────────────────────
-  // Asserts: header surfaces auto-enable + budget-added + thinking-level. The
+  // Asserts: header surfaces auto-enable + thinking-level without inflating
+  // the caller's total-output ceiling. The
   // exact thinking_tokens count varies per request; we just check it's > 0.
   console.log('\nL1. Live: Gemini 3 Pro auto-enables thinking on default request');
-  await withProxy({ configPath: cfgPath, profile: '16gb', env }, async ({ port }) => {
-    const r = await httpJson(port, 'POST', '/v1/messages', {
+  await withModelTestProxy({ configPath: cfgPath, profile: '16gb', env }, async ({ port }) => {
+    const r = await modelHttpJson(port, 'POST', '/v1/messages', {
       model: MODEL,
       max_tokens: 200,
       messages: [{ role: 'user', content: 'In one sentence, why is the sky blue?' }],
       stream: false,
-    }, {}, 60000);
+    });
     assert(r.status === 200, `L1 status 200 (got ${r.status}: ${r.bodyText?.slice(0, 300)})`);
     if (r.headers?.['x-c-thru-thinking-auto-enabled'] === '1') {
       assert(true, 'L1 auto-enable header present');
       assert(typeof r.headers?.['x-c-thru-thinking-level'] === 'string',
         `L1 thinking-level header set (got '${r.headers?.['x-c-thru-thinking-level']}')`);
-      const added = Number(r.headers?.['x-c-thru-thinking-budget-added']);
-      assert(added > 0, `L1 budget-added > 0 (got ${added})`);
+      assert(r.headers?.['x-c-thru-thinking-budget-added'] === undefined,
+        `L1 deprecated budget-added header absent (got '${r.headers?.['x-c-thru-thinking-budget-added']}')`);
       // output_tokens parity: should include thinking. If thinking-tokens header
       // is set, output_tokens must be >= candidates + thoughts.
       const thinkTokens = Number(r.headers?.['x-c-thru-thinking-tokens'] || 0);
       const outTokens = r.json?.usage?.output_tokens || 0;
       assert(outTokens >= thinkTokens,
         `L1 output_tokens(${outTokens}) >= thinking_tokens(${thinkTokens})`);
+      assert(outTokens <= 200,
+        `L1 output_tokens(${outTokens}) respects max_tokens=200`);
     } else {
       // If Google rolled back auto-thinking on the model in use, surface the
       // skip rather than failing — the model behavior is upstream-controlled.
-      skip(`L1 auto-enable did not fire on ${MODEL} (header absent — possibly downgraded variant)`);
+      mandatorySkip(`L1 auto-enable did not fire on ${MODEL} (header absent — possibly downgraded variant)`);
     }
-    // Visible text must be substantive — i.e. the budget-arithmetic fix actually
-    // gave the response room. The pre-fix bug truncated at ~10 visible tokens.
+    // The caller owns the quality/cost tradeoff: a 200-token cap remains 200.
     const text = (r.json?.content || []).find(b => b.type === 'text')?.text || '';
     assert(text.length > 30,
       `L1 visible answer is substantive (length=${text.length}, got '${text.slice(0, 80)}')`);
@@ -82,24 +115,28 @@ async function main() {
 
   // ── L2. Explicit thinking:{type:'disabled'} opts out ─────────────────────
   console.log('\nL2. Live: thinking:{type:"disabled"} suppresses auto-enable');
-  await withProxy({ configPath: cfgPath, profile: '16gb', env }, async ({ port }) => {
-    const r = await httpJson(port, 'POST', '/v1/messages', {
+  await withModelTestProxy({ configPath: cfgPath, profile: '16gb', env }, async ({ port }) => {
+    const r = await modelHttpJson(port, 'POST', '/v1/messages', {
       model: MODEL,
       max_tokens: 100,
       thinking: { type: 'disabled' },
       messages: [{ role: 'user', content: 'Say hi.' }],
       stream: false,
-    }, {}, 60000);
+    });
     assert(r.status === 200, `L2 status 200 (got ${r.status}: ${r.bodyText?.slice(0, 300)})`);
     assert(r.headers?.['x-c-thru-thinking-auto-enabled'] === undefined,
       `L2 no auto-enable header on opt-out (got '${r.headers?.['x-c-thru-thinking-auto-enabled']}')`);
+    assert(r.headers?.['x-c-thru-thinking-level'] === 'low',
+      `L2 Gemini Pro uses nearest supported low level (got '${r.headers?.['x-c-thru-thinking-level']}')`);
+    assert(r.headers?.['x-c-thru-translation-gap']?.includes('thinking.type:disabled'),
+      `L2 unsupported full disable is reported (got '${r.headers?.['x-c-thru-translation-gap']}')`);
   });
 
   // ── L3. Streaming: c-thru-thinking-tokens custom event ───────────────────
   // Validates Task #8 — when thinking happens on a stream, the custom event
   // fires before message_delta. Anthropic's usage object stays spec-compliant.
   console.log('\nL3. Live streaming: c-thru-thinking-tokens custom event');
-  await withProxy({ configPath: cfgPath, profile: '16gb', env }, async ({ port }) => {
+  await withModelTestProxy({ configPath: cfgPath, profile: '16gb', env }, async ({ port }) => {
     const sse = await new Promise((resolve, reject) => {
       const req = http.request({
         port, method: 'POST', path: '/v1/messages',
@@ -110,7 +147,10 @@ async function main() {
         res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: buf }));
         res.on('error', reject);
       });
-      req.setTimeout(60000, () => { req.destroy(); reject(new Error('L3 stream timeout')); });
+      req.setTimeout(MODEL_TEST_TIMEOUT_MS, () => {
+        req.destroy();
+        reject(new Error(`L3 stream timed out after ${MODEL_TEST_TIMEOUT_MS}ms`));
+      });
       req.write(JSON.stringify({
         model: MODEL,
         max_tokens: 200,
@@ -139,10 +179,10 @@ async function main() {
       } else {
         // Gemini sometimes returns 0 thoughts even when thinking is requested
         // ("LOW thinking bug" — see test 20c). Surface as skip, not fail.
-        skip('L3 c-thru-thinking-tokens event absent (upstream returned 0 thoughts)');
+        mandatorySkip('L3 c-thru-thinking-tokens event absent (upstream returned 0 thoughts)');
       }
     } else {
-      skip('L3 auto-enable did not fire — skipping custom-event assertion');
+      mandatorySkip('L3 auto-enable did not fire — skipping custom-event assertion');
     }
   });
 
@@ -152,7 +192,7 @@ async function main() {
   // 400 "Function call is missing a thought_signature". This test catches
   // sig-cache regressions that the mock tests can't.
   console.log('\nL4. Live: multi-turn tool_use roundtrip preserves thoughtSignature');
-  await withProxy({ configPath: cfgPath, profile: '16gb', env }, async ({ port }) => {
+  await withModelTestProxy({ configPath: cfgPath, profile: '16gb', env }, async ({ port }) => {
     const tools = [{
       name: 'add',
       description: 'Add two integers and return the sum.',
@@ -162,18 +202,18 @@ async function main() {
         required: ['a', 'b'],
       },
     }];
-    const turn1 = await httpJson(port, 'POST', '/v1/messages', {
+    const turn1 = await modelHttpJson(port, 'POST', '/v1/messages', {
       model: MODEL,
       max_tokens: 200,
       tools,
       tool_choice: { type: 'auto' },
       messages: [{ role: 'user', content: 'What is 7 + 11? Use the add tool.' }],
       stream: false,
-    }, {}, 60000);
+    });
     assert(turn1.status === 200, `L4 turn1 status 200 (got ${turn1.status}: ${turn1.bodyText?.slice(0, 300)})`);
     const toolUse = (turn1.json?.content || []).find(b => b.type === 'tool_use');
     if (!toolUse) {
-      skip(`L4 turn1 produced no tool_use — model declined to call (content: ${JSON.stringify(turn1.json?.content || []).slice(0, 200)})`);
+      mandatorySkip(`L4 turn1 produced no tool_use — model declined to call (content: ${JSON.stringify(turn1.json?.content || []).slice(0, 200)})`);
       return;
     }
     assert(toolUse.name === 'add', `L4 turn1 tool name=add (got ${toolUse.name})`);
@@ -184,7 +224,7 @@ async function main() {
     const assistantContent = (turn1.json?.content || []).filter(b =>
       b.type === 'text' || b.type === 'tool_use' || b.type === 'thinking',
     );
-    const turn2 = await httpJson(port, 'POST', '/v1/messages', {
+    const turn2 = await modelHttpJson(port, 'POST', '/v1/messages', {
       model: MODEL,
       max_tokens: 200,
       tools,
@@ -194,7 +234,7 @@ async function main() {
         { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: '18' }] },
       ],
       stream: false,
-    }, {}, 60000);
+    });
     assert(turn2.status === 200,
       `L4 turn2 status 200 — sig roundtrip held (got ${turn2.status}: ${turn2.bodyText?.slice(0, 300)})`);
     const finalText = (turn2.json?.content || []).find(b => b.type === 'text')?.text || '';
@@ -207,7 +247,20 @@ async function main() {
   // paints the suite green — the proxy-runtime-fallback P0. Enforced by
   // test/exit-code-gating.test.js.
   const failed = summary();
-  process.exit(failed > 0 ? 1 : 0);
+  if (failed > 0) {
+    emitLiveOutcome('gemini', LIVE_SUITE, 'failed', `${failed}_assertions_failed`);
+  } else if (mandatorySkips > 0) {
+    emitLiveOutcome('gemini', LIVE_SUITE, 'skipped',
+      `${mandatorySkips}_mandatory_contracts_not_exercised`);
+  } else {
+    emitLiveOutcome('gemini', LIVE_SUITE, 'passed', 'all_mandatory_contracts_exercised');
+  }
+  process.exit(failed > 0 ? 1 :
+    (mandatorySkips > 0 && process.env.C_THRU_STRICT_LIVE_PROVIDERS === '1' ? 2 : 0));
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(e => {
+  console.error(e);
+  emitLiveOutcome('gemini', LIVE_SUITE, 'failed', e?.code || e?.message || 'uncaught_error');
+  process.exit(1);
+});
