@@ -1,35 +1,84 @@
 #!/usr/bin/env node
 'use strict';
-// Live contract test — reads each agent's system prompt, POSTs to the running proxy,
-// and validates the STATUS block in the response.
-// Tests routing AND prompt behavior without spawning a stub backend.
+// Live contract test — reads each agent's system prompt, POSTs to a managed proxy,
+// and validates the current TASK_STATUS / recusal contract in the response.
+// Tests routing AND prompt behavior without spawning a stub backend. The test
+// owns the proxy so its upstream watchdogs share the same wide model-call cap.
 //
 // Guard: set C_THRU_LIVE_AGENT_TESTS=1 to enable.
-// Proxy: set CLAUDE_PROXY_URL or CLAUDE_PROXY_PORT, or start with c-thru --proxy.
 // Run: C_THRU_LIVE_AGENT_TESTS=1 node test/agent-contract-live.test.js
 
 const fs   = require('fs');
 const http = require('http');
 const path = require('path');
-const { parseStatusBlock, tierTimeout } = require('./helpers');
+const {
+  ensureModelTestSupervisor,
+  parseAgentContractResult,
+  modelTestTimeoutMs,
+  withModelTestProxy,
+} = require('./helpers');
+if (require.main === module) ensureModelTestSupervisor();
+const {
+  AGENT_CONTRACT_CASES,
+  AGENT_CONTRACT_MAX_TOKENS,
+  STRUCTURED_AGENTS,
+  boundedResponseTail,
+  formatContractFailureDiagnostics,
+  preflightAgentContracts,
+  universalNormalRecusalError,
+  validateContractCase,
+  validateContractResponseIntegrity,
+} = require('./agent-contract-fixtures');
+const { emitLiveOutcome } = require('./provider-live-prerequisites');
 
-if (!process.env.C_THRU_LIVE_AGENT_TESTS) {
+const LIVE_PROVIDER = 'agent';
+const LIVE_SUITE = 'agent-contract-live';
+let outcomeEmitted = false;
+
+function finish(status, reason, exitCode = status === 'failed' ? 1 : 0) {
+  if (!outcomeEmitted) {
+    outcomeEmitted = true;
+    emitLiveOutcome(LIVE_PROVIDER, LIVE_SUITE, status, reason);
+  }
+  process.exit(exitCode);
+}
+
+process.once('exit', code => {
+  if (outcomeEmitted) return;
+  process.exitCode = 1;
+  outcomeEmitted = true;
+  emitLiveOutcome(LIVE_PROVIDER, LIVE_SUITE, 'failed', `missing_terminal_outcome_exit_${code}`);
+});
+
+if (process.env.C_THRU_LIVE_AGENT_TESTS !== '1') {
   console.log('agent-contract-live: skip (set C_THRU_LIVE_AGENT_TESTS=1 to enable)');
-  process.exit(0);
+  finish('skipped', 'gate_not_enabled');
 }
 
 const REPO_ROOT  = path.resolve(__dirname, '..');
 const AGENTS_DIR = path.join(REPO_ROOT, 'agents');
-const MAX_TOKENS = 2000;
-const PER_AGENT_TIMEOUT_MS = 120_000;
+const MODEL_MAP = process.env.CLAUDE_MODEL_MAP_PATH ||
+  path.join(REPO_ROOT, 'config', 'model-map.json');
+const PER_AGENT_TIMEOUT_MS = modelTestTimeoutMs();
 
-// Cloud/judge tiers where 401/403 is expected when ANTHROPIC_API_KEY is absent.
-const CLOUD_TIERS = new Set(['judge', 'judge-strict', 'implementer-heavy', 'test-writer-heavy']);
+const PROXY_ENV_KEYS = [
+  'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_CLOUD_TOKEN',
+  'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_REGION', 'OPENAI_API_KEY',
+  'OPENROUTER_API_KEY', 'XAI_API_KEY', 'OLLAMA_API_KEY', 'OLLAMA_URL',
+];
 
-// Tiers served by Qwen3 models that need /no_think in the system prompt.
-// judge/judge-strict cascade to qwen3.6:35b without ANTHROPIC_API_KEY;
-// /no_think is harmless for cloud models (ignored as text) but essential for local Qwen3.
-const QWEN3_TIERS = new Set(['pattern-coder', 'orchestrator', 'local-planner', 'judge', 'judge-strict']);
+function managedProxyEnv() {
+  const env = {
+    ANTHROPIC_BASE_URL: '',
+    CLAUDE_PROXY_URL: '',
+    CLAUDE_PROXY_PORT: '',
+    PROXY_PORT: '',
+  };
+  for (const key of PROXY_ENV_KEYS) {
+    if (process.env[key]) env[key] = process.env[key];
+  }
+  return env;
+}
 
 let passed           = 0;
 let failed           = 0;
@@ -55,30 +104,6 @@ function skipExpected(label, reason) {
 function skipUnexpected(label, reason) {
   console.log(`  SKIP! ${label}${reason ? ' — ' + reason : ''} (UNEXPECTED)`);
   skippedUnexpected++;
-}
-
-// ── Proxy helpers ─────────────────────────────────────────────────────────────
-
-function resolveProxy() {
-  if (process.env.CLAUDE_PROXY_URL) {
-    try {
-      const u = new URL(process.env.CLAUDE_PROXY_URL);
-      return { host: u.hostname, port: Number(u.port) || 80 };
-    } catch { /* fall through */ }
-  }
-  return { host: '127.0.0.1', port: Number(process.env.CLAUDE_PROXY_PORT) || 9001 };
-}
-
-function pingProxy(host, port, timeoutMs = 8000) {
-  return new Promise(resolve => {
-    const req = http.request(
-      { hostname: host, port, path: '/ping', method: 'GET' },
-      res => resolve(res.statusCode === 200)
-    );
-    req.setTimeout(timeoutMs, () => { req.destroy(); resolve(false); });
-    req.on('error', () => resolve(false));
-    req.end();
-  });
 }
 
 function postMessages(host, port, body, timeoutMs = PER_AGENT_TIMEOUT_MS) {
@@ -129,273 +154,91 @@ function readSystemPrompt(agentName) {
   return stripFrontmatter(fs.readFileSync(p, 'utf8'));
 }
 
-// ── Live roster ───────────────────────────────────────────────────────────────
-// Each entry: { name, userMessage, extraChecks(block) → errorString|null }
-// Only worker agents with a declared STATUS contract.
-
-const LIVE_ROSTER = [
-  {
-    name: 'implementer',
-    expectedCapability: 'deep-coder',
-    userMessage: "Digest: TASK: Append a comment '// hello' to an empty file. TARGET: /tmp/test.js. SCOPE: 1 line add.",
-    extraChecks(r) {
-      if (r.LINT_ITERATIONS !== undefined && !/^\d+$/.test(r.LINT_ITERATIONS))
-        return `LINT_ITERATIONS must be non-negative integer (got "${r.LINT_ITERATIONS}")`;
-      return null;
-    },
-  },
-  {
-    name: 'implementer-heavy',
-    expectedCapability: 'implementer-heavy',
-    userMessage: "Digest: TASK: Append a comment '// hello' to an empty file. TARGET: /tmp/test.js. SCOPE: 1 line add.",
-    extraChecks(r) {
-      if (r.LINT_ITERATIONS !== undefined && !/^\d+$/.test(r.LINT_ITERATIONS))
-        return `LINT_ITERATIONS must be non-negative integer (got "${r.LINT_ITERATIONS}")`;
-      return null;
-    },
-  },
-  {
-    name: 'wave-reviewer',
-    expectedCapability: 'code-analyst',
-    userMessage: "Review this code: console.log('hello'). Return STATUS block.",
-    extraChecks(r) {
-      if (r.STATUS !== 'RECUSE' && r.ITERATIONS === undefined) return 'ITERATIONS absent on non-RECUSE response';
-      if (r.ITERATIONS !== undefined && !/^\d+$/.test(r.ITERATIONS))
-        return `ITERATIONS must be non-negative integer (got "${r.ITERATIONS}")`;
-      return null;
-    },
-  },
-  {
-    name: 'test-writer',
-    expectedCapability: 'code-analyst',
-    userMessage: 'Write one test for: function add(a,b){return a+b}',
-  },
-  {
-    name: 'test-writer-heavy',
-    expectedCapability: 'test-writer-heavy',
-    userMessage: 'Write one test for: function add(a,b){return a+b}',
-  },
-  {
-    name: 'scaffolder',
-    expectedCapability: 'pattern-coder',
-    userMessage: 'Scaffold a minimal Node.js CLI entrypoint file.',
-  },
-  {
-    name: 'converger',
-    expectedCapability: 'code-analyst',
-    userMessage: 'Two parallel outputs both implement the same function identically. Output A: function f(){return 1} Output B: function f(){return 1}. Merge them.',
-  },
-  {
-    name: 'integrator',
-    expectedCapability: 'orchestrator',
-    userMessage: "Wire this function into a no-op Express router: function greet(){return 'hi'}",
-  },
-  {
-    name: 'doc-writer',
-    expectedCapability: 'orchestrator',
-    userMessage: 'Write a one-sentence docstring for: function add(a,b){return a+b}',
-  },
-  {
-    name: 'explorer',
-    expectedCapability: 'pattern-coder',
-    userMessage: 'List JavaScript files in /tmp',
-  },
-  {
-    name: 'discovery-advisor',
-    expectedCapability: 'pattern-coder',
-    userMessage: 'What should I investigate first in a codebase that has no tests?',
-  },
-  {
-    name: 'security-reviewer',
-    expectedCapability: 'judge-strict',
-    userMessage: 'Review: eval(userInput)',
-  },
-  {
-    name: 'auditor',
-    expectedCapability: 'judge',
-    userMessage: 'replan_brief: /tmp/test-brief.md\ndecision_out: /tmp/test-decision.json\n\nWave 001 outcome: partial. 1 of 3 items completed (item-001). Items 2 and 3 timed out. Intent: add authentication middleware.',
-  },
-  {
-    name: 'final-reviewer',
-    expectedCapability: 'judge',
-    userMessage: 'All items complete. Plan: add user auth. Outcome: implemented JWT middleware, protected routes, added tests. All items status:complete. Review and confirm plan is met.',
-  },
-  {
-    name: 'journal-digester',
-    expectedCapability: 'judge',
-    userMessage: 'journal_path: /tmp/test-journal.md\noutput_path: /tmp/test-digest.md\n\nJournal: Wave 001 complete. Discovery found no test framework. Implementer added Jest config.',
-  },
-  {
-    name: 'learnings-consolidator',
-    expectedCapability: 'pattern-coder',
-    userMessage: 'findings_paths: []\noutput_path: /tmp/test-learnings.md\n\nLearning 1: system prompts too verbose. Learning 2: test coverage missing for edge cases.',
-  },
-  {
-    name: 'plan-orchestrator',
-    expectedCapability: 'orchestrator',
-    userMessage: 'current.md: /tmp/current.md\nREADY_ITEMS: [item-001]\ncommit_message: feat: add greeting module\nwave_dir: /tmp/wave-001',
-  },
-  {
-    name: 'planner',
-    expectedCapability: 'judge',
-    userMessage: 'current.md: /tmp/current.md\nsignal: intent\noutcome: build a hello-world CLI\n\nItems:\n- id: item-001, status: pending, agent: implementer, depends_on: []',
-  },
-  {
-    name: 'review-plan',
-    expectedCapability: 'judge',
-    userMessage: 'current.md: /tmp/current.md\nreview_out: /tmp/review-001.md\n\nPlan: 1 item, no deps, outcome: add greet function. Item: id:item-001 status:pending target:src/greet.js',
-  },
-  {
-    name: 'wave-synthesizer',
-    expectedCapability: 'code-analyst',
-    userMessage: 'wave_dir: /tmp/wave-001\nreplan_brief_out: /tmp/replan-brief.md\noutcome: partial\nreason: item-002 timed out\ncompleted: [item-001]\nfailed: [item-002]',
-  },
-  {
-    name: 'planner-local',
-    expectedCapability: 'local-planner',
-    userMessage: 'current.md: /tmp/current.md\nsignal: dep_update\nwave_summary: /tmp/wave-summary.json\naffected_items: [item-001]',
-  },
-  {
-    name: 'uplift-decider',
-    expectedCapability: 'judge',
-    userMessage: 'PARTIAL_OUTPUT: /tmp/impl-output.md\nmode: uplift\nRecusal reason: cannot confirm lint pass.\nPrior agent: implementer, tier: deep-coder, attempted: yes',
-  },
-];
-
 // ── Validation helpers ────────────────────────────────────────────────────────
 
-const VALID_STATUS     = new Set(['COMPLETE', 'PARTIAL', 'ERROR', 'RECUSE']);
-const VALID_CONFIDENCE = new Set(['high', 'medium', 'low']);
-
-function validateBlock(agentName, block) {
-  if (!VALID_STATUS.has(block.STATUS)) {
-    fail(`${agentName}: STATUS "${block.STATUS}" not in {COMPLETE, PARTIAL, ERROR, RECUSE}`);
+function validateContractResult(entry, result, text, response) {
+  const label = `${entry.caseId} (${entry.agent})`;
+  const errors = [
+    ...validateContractResponseIntegrity(response),
+    ...validateContractCase(entry, result, text, { checkBehavior: false }),
+  ];
+  if (errors.length > 0) {
+    fail(
+      `${label}: contract assertion failed`,
+      `${errors.join('; ')}; ${formatContractFailureDiagnostics(response, text)}`,
+    );
   } else {
-    ok(`${agentName}: STATUS=${block.STATUS}`);
-  }
-
-  if (block.CONFIDENCE && !VALID_CONFIDENCE.has(block.CONFIDENCE)) {
-    fail(`${agentName}: CONFIDENCE "${block.CONFIDENCE}" not in {high, medium, low}`);
-  } else {
-    ok(`${agentName}: CONFIDENCE=${block.CONFIDENCE || '(absent→medium)'}`);
-  }
-
-  if (!block.SUMMARY) {
-    fail(`${agentName}: SUMMARY absent`);
-  } else {
-    ok(`${agentName}: SUMMARY present`);
-  }
-
-  if (block.STATUS === 'RECUSE') {
-    if (!block.RECUSAL_REASON) {
-      fail(`${agentName}: RECUSAL_REASON absent on RECUSE`);
-    } else {
-      ok(`${agentName}: RECUSAL_REASON present`);
-    }
-
-    // security-reviewer: ATTEMPTED + RECOMMEND must be absent (exception)
-    if (agentName === 'security-reviewer') {
-      if (block.RECOMMEND) {
-        fail(`${agentName}: RECOMMEND must be absent (no cascade target)`);
-      } else {
-        ok(`${agentName}: RECOMMEND correctly absent (security-reviewer exception)`);
-      }
-    } else {
-      if (!block.ATTEMPTED) {
-        fail(`${agentName}: ATTEMPTED absent on RECUSE`);
-      } else {
-        ok(`${agentName}: ATTEMPTED=${block.ATTEMPTED}`);
-      }
-      if (!block.RECOMMEND) {
-        fail(`${agentName}: RECOMMEND absent on RECUSE`);
-      } else {
-        ok(`${agentName}: RECOMMEND=${block.RECOMMEND}`);
-      }
-    }
+    ok(`${label}: ${result.kind === 'task' ? 'TASK_STATUS' : 'STATUS'}=${result.status}`);
   }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-async function main() {
-  const { host, port } = resolveProxy();
+async function runContracts(host, port, roster) {
+  const observations = [];
+  for (const entry of roster) {
+    const { caseId, agent, expectedCapability, userMessage } = entry;
+    const label = `${caseId} (${agent})`;
 
-  process.stdout.write(`Checking proxy at ${host}:${port}… `);
-  const alive = await pingProxy(host, port);
-  if (!alive) {
-    console.log('');
-    console.log('agent-contract-live: SKIP — proxy not reachable');
-    console.log('  Start with: c-thru --proxy   or set CLAUDE_PROXY_URL / CLAUDE_PROXY_PORT');
-    process.exit(0);
-  }
-  console.log('ok\n');
-
-  for (const entry of LIVE_ROSTER) {
-    const { name, expectedCapability, userMessage, extraChecks } = entry;
-
-    const systemPrompt = readSystemPrompt(name);
+    const systemPrompt = readSystemPrompt(agent);
     if (!systemPrompt) {
-      skipUnexpected(`${name}`, 'agent file not found');
+      fail(`${label}: agent file disappeared after preflight`);
       continue;
     }
 
-    const timeout = tierTimeout(expectedCapability, PER_AGENT_TIMEOUT_MS);
-    const sysPrompt = QWEN3_TIERS.has(expectedCapability)
-      ? `/no_think\n\n${systemPrompt}`
-      : systemPrompt;
-    process.stdout.write(`  [${name}] … `);
+    const timeout = PER_AGENT_TIMEOUT_MS;
+    process.stdout.write(`  [${label}] … `);
     let res;
     try {
       res = await postMessages(host, port, {
-        model:      name,
-        max_tokens: MAX_TOKENS,
+        model:      agent,
+        max_tokens: AGENT_CONTRACT_MAX_TOKENS,
         stream:     false,
-        system:     sysPrompt,
+        system:     systemPrompt,
         messages:   [{ role: 'user', content: userMessage }],
       }, timeout);
     } catch (e) {
       console.log('');
-      skipUnexpected(`${name}`, `request failed — ${e.message}`);
+      skipUnexpected(label, `request failed — ${e.message}`);
       continue;
     }
     console.log(`HTTP ${res.status}`);
 
     if (res.status === 401 || res.status === 403) {
-      if (CLOUD_TIERS.has(expectedCapability)) {
-        skipExpected(`${name}`, `HTTP ${res.status} — cloud backend auth not configured`);
-      } else {
-        skipUnexpected(`${name}`, `HTTP ${res.status} — unexpected auth error on local tier`);
-      }
+      skipExpected(label, `HTTP ${res.status} — selected provider auth not configured`);
       continue;
     }
     if (res.status !== 200) {
-      fail(`${name}: proxy returned HTTP ${res.status}`, res.bodyText.slice(0, 300));
+      fail(
+        `${label}: proxy returned HTTP ${res.status}`,
+        boundedResponseTail(res.bodyText, 300),
+      );
       continue;
     }
 
     // Verify the response came through c-thru with agent-name resolution.
     const resolvedVia = res.headers && res.headers['x-c-thru-resolved-via'];
     if (!resolvedVia) {
-      fail(`${name}: x-c-thru-resolved-via header absent — response did not come through c-thru proxy`);
+      fail(`${label}: x-c-thru-resolved-via header absent — response did not come through c-thru proxy`);
     } else {
       try {
         const via = JSON.parse(resolvedVia);
-        ok(`${name}: routed through c-thru → served_by=${via.served_by} capability=${via.capability} tier=${via.tier}`);
-        if (via.served_by === name) {
-          fail(`${name}: served_by equals agent name — agent_to_capability resolution did not fire`);
+        ok(`${label}: routed through c-thru → served_by=${via.served_by} capability=${via.capability} tier=${via.tier}`);
+        if (via.served_by === agent) {
+          fail(`${label}: served_by equals agent name — agent_to_capability resolution did not fire`);
         } else {
-          ok(`${name}: agent name resolved (served_by "${via.served_by}" ≠ agent name "${name}")`);
+          ok(`${label}: agent name resolved (served_by "${via.served_by}" ≠ agent name "${agent}")`);
         }
         if (!via.served_by) {
-          fail(`${name}: served_by is null/empty — no model was resolved`);
+          fail(`${label}: served_by is null/empty — no model was resolved`);
         }
-        if (expectedCapability && via.capability !== expectedCapability) {
-          fail(`${name}: capability "${via.capability}" expected "${expectedCapability}"`);
-        } else if (expectedCapability) {
-          ok(`${name}: capability matches expected (${expectedCapability})`);
+        if (via.capability !== expectedCapability) {
+          fail(`${label}: capability "${via.capability}" expected "${expectedCapability}"`);
+        } else {
+          ok(`${label}: capability matches selected model map (${expectedCapability})`);
         }
       } catch (e) {
-        fail(`${name}: x-c-thru-resolved-via is not valid JSON — ${e.message}`);
+        fail(`${label}: x-c-thru-resolved-via is not valid JSON — ${e.message}`);
       }
     }
 
@@ -403,23 +246,14 @@ async function main() {
       ? res.json.content.map(c => (c != null && typeof c === 'object' && c.text) ? c.text : '').join('')
       : res.bodyText;
 
-    const block = parseStatusBlock(text);
+    const result = parseAgentContractResult(text);
+    observations.push({ caseId, result });
+    validateContractResult(entry, result, text, res);
+  }
 
-    if (!block.STATUS) {
-      skipUnexpected(`${name}`, 'no STATUS block in response (truncation — try increasing MAX_TOKENS)');
-      continue;
-    }
-
-    validateBlock(name, block);
-
-    if (extraChecks) {
-      const err = extraChecks(block);
-      if (err) {
-        fail(`${name}: ${err}`);
-      } else {
-        ok(`${name}: agent-specific field check passed`);
-      }
-    }
+  const universalRecusal = universalNormalRecusalError(roster, observations);
+  if (universalRecusal) {
+    fail('actionable normal cases cannot universally recuse', universalRecusal);
   }
 
   const total = passed + failed + skippedExpected + skippedUnexpected;
@@ -428,11 +262,64 @@ async function main() {
   if (skippedUnexpected) skippedParts.push(`${skippedUnexpected} skipped (UNEXPECTED)`);
   const skippedSummary = skippedParts.length ? `, ${skippedParts.join(', ')}` : '';
   console.log(`\n${total} tests: ${passed} passed, ${failed} failed${skippedSummary}`);
-  process.exit(failed || skippedUnexpected ? 1 : 0);
+}
+
+async function main() {
+  let roster;
+  try {
+    const preflight = preflightAgentContracts({
+      agentsDir: AGENTS_DIR,
+      modelMapPath: MODEL_MAP,
+      cases: AGENT_CONTRACT_CASES,
+      requiredCaseAgents: STRUCTURED_AGENTS,
+      requiredRecusalCaseAgents: STRUCTURED_AGENTS,
+      suiteName: LIVE_SUITE,
+    });
+    roster = preflight.cases;
+    console.log(
+      `agent-contract-live: preflight ok ` +
+      `(${preflight.structuredAgents.length} structured agents, ${roster.length} cases)`,
+    );
+  } catch (err) {
+    console.error(err && err.stack || err);
+    finish('failed', 'preflight_failed');
+  }
+
+  let proxyStarted = false;
+  try {
+    await withModelTestProxy({
+      configPath: MODEL_MAP,
+      cwd: REPO_ROOT,
+      env: managedProxyEnv(),
+    }, async ({ port }) => {
+      proxyStarted = true;
+      console.log(
+        `agent-contract-live: managed proxy 127.0.0.1:${port}, ` +
+        `timeout=${PER_AGENT_TIMEOUT_MS}ms\n`,
+      );
+      await runContracts('127.0.0.1', port, roster);
+    });
+  } catch (err) {
+    console.error('agent-contract-live:', err && err.stack || err);
+    if (!proxyStarted) finish('blocked', 'managed_proxy_unavailable');
+    finish('failed', err?.code || err?.message || 'contract_run_failed');
+  }
+
+  if (failed || skippedUnexpected) {
+    finish(
+      'failed',
+      failed ? `${failed}_assertions_failed` : `${skippedUnexpected}_unexpected_mandatory_skips`,
+    );
+  }
+  if (skippedExpected) {
+    finish('skipped', `${skippedExpected}_mandatory_contracts_not_exercised`);
+  }
+  if (passed === 0) finish('skipped', 'no_mandatory_contracts_exercised');
+  finish('passed', 'all_mandatory_contracts_exercised');
 }
 
 // unhandledRejection handler is installed by helpers.js on require.
 main().catch(err => {
-  console.error(err);
-  process.exit(1);
+  console.error(err && err.stack || err);
+  finish('failed', err?.code || err?.message || 'uncaught_error');
 });
