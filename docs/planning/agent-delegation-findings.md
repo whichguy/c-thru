@@ -12,11 +12,18 @@ agents → many models work concurrently in one session:
 
 - **Hook** (`tools/c-thru-agent-router-hook.sh`), on every Agent call: (1) injects a VALID model
   alias (`C_THRU_AGENT_FALLBACK_ALIAS`, default `sonnet`) to pass Claude Code's enum and as the
-  proxy-absent fallback; (2) prepends `[[c-thru-agent:<subagent_type>]]` to the task prompt, which
-  becomes the subagent's first user message and rides in `body.messages`.
-- **Proxy** (`tools/claude-proxy`), before `resolveBackend`: scans `body.messages` for the
-  sentinel; if it resolves to a known agent, sets `body.model=<agent>` (→ agent→capability→model)
-  and attributes usage to the AGENT (`by_agent` is now a true per-agent scoreboard).
+  proxy-absent fallback; (2) prepends a full-HMAC-SHA256
+  `[[c-thru-agent:<subagent_type>:<signature>]]` marker to the task prompt, which becomes the
+  subagent's first user message and rides in `body.messages`.
+- **Proxy** (`tools/claude-proxy`), before `resolveBackend`: considers markers only in direct
+  user string/`type:"text"` content and requires loopback + a nonempty
+  `x-claude-code-agent-id` + a valid signature under the stable per-user 0600
+  `proxy.agent-token`. A first-level agent does not carry a parent ID; when a nested agent
+  supplies `x-claude-code-parent-agent-id`, the proxy validates it too. If the authenticated
+  name resolves, it sets `body.model=<agent>`
+  (→ agent→capability→model) and attributes usage to the AGENT. Nested assistant `tool_use`
+  and user `tool_result` copies are ignored, and all marker strings are stripped recursively
+  before either a primary or fallback upstream request.
 - **Part D** (`tools/c-thru`, `C_THRU_PROXY_ALWAYS`, **default ON**, opt out with `=0`): routes the
   whole session through the proxy even in subscription/best-cloud mode (subagents inherit the
   session's `ANTHROPIC_BASE_URL`; the proxy forwards main-thread traffic upstream with the OAuth
@@ -25,14 +32,25 @@ agents → many models work concurrently in one session:
   lost for that session only) instead of failing to launch, bounding the blast radius of the proxy
   being load-bearing for every session.
 
-Agent definitions are untouched. Validated end-to-end (proxy journal `served_by` + subagent
-self-report, distinguishing non-Anthropic models): OSS mode — `coder`→`qwen3.6:35b-a3b-coding-nvfp4`
-and `fast-scout`→`phi4-mini:3.8b` in one session; subscription mode (`C_THRU_PROXY_ALWAYS=1`) —
-main→`claude-sonnet-5` (auth/streaming intact) and `fast-scout`→`phi4-mini:3.8b`. Hook suite
-38/38; `make test-fast` 107/107. Known limitation: the sentinel lives in `body.messages[0]`, which
+Agent definitions are untouched. The original pre-HMAC handshake was validated end-to-end
+(proxy journal `served_by` + subagent self-report, distinguishing non-Anthropic models):
+OSS mode — `coder`→`qwen3.6:35b-a3b-coding-nvfp4` and `fast-scout`→`phi4-mini:3.8b` in one
+session; subscription mode (`C_THRU_PROXY_ALWAYS=1`) — main→`claude-sonnet-5`
+(auth/streaming intact) and `fast-scout`→`phi4-mini:3.8b`. The current authenticated
+handshake has gating hook/parser/spawned-proxy tests plus the opt-in strict
+`claude-agent-route-live` suite for the real Claude Agent → spawned-agent-ID →
+signed-marker seam. It is not part of the credential-free hermetic suite.
+The stable agent token is separate from the control token so fixed-port proxies can be reused by
+independent sessions. It is a same-user routing-integrity control, not a local privilege boundary:
+a process that can read the 0600 token can sign/replay a marker if it also presents the delegated
+`x-claude-code-agent-id` header. First-level agents have no parent ID; nested agents supply an additional
+parent-agent correlation header. Known limitation: the sentinel lives in `body.messages[0]`, which
 a long subagent run could compact away mid-task → graceful fallback to the alias model.
 
-## TL;DR
+The remaining sections preserve the pre-fix Claude Code 2.1.178 investigation. Their present-tense
+statements describe the historical failure state, not the implemented current path above.
+
+## Historical TL;DR (pre-fix, Claude Code 2.1.178)
 
 1. **The agent-router hook is *blocking* delegation to every c-thru agent.** It injects the
    *capability name* (e.g. `planner`) as the Agent tool's `model`. Current Claude Code validates
@@ -48,7 +66,8 @@ a long subagent run could compact away mid-task → graceful fallback to the ali
    non-Anthropic backends (Ollama/Gemini/localhost). So proxy `by_agent` stats cannot measure
    delegation in that mode.
 
-Net: the agents aren't idle because their descriptions are weak — they're being **blocked**.
+Historical conclusion: the agents were not idle because their descriptions were weak — they were
+being **blocked** before the authenticated sentinel path was implemented.
 
 ## The verified Agent-tool `model` contract (Claude Code 2.1.178)
 
@@ -57,7 +76,7 @@ What Claude Code accepts as a subagent's model, when injected per-call by the ho
 
 | Injected value | Example | Result |
 |---|---|---|
-| Capability name (**c-thru today**) | `planner` | **BLOCKED** — orchestrator reports "value outside the allowed enum (sonnet, opus, haiku, fable)"; delegation fails, retries, falls back to `general-purpose` |
+| Capability name (**pre-fix c-thru**) | `planner` | **BLOCKED** — orchestrator reports "value outside the allowed enum (sonnet, opus, haiku, fable)"; delegation fails, retries, falls back to `general-purpose` |
 | Full Anthropic model id | `claude-opus-4-8` | **BLOCKED** — same enum rejection |
 | Non-Anthropic / Ollama id | `qwen3:1.7b` | **BLOCKED** — subagent ran on the mode default, never `qwen3:1.7b` |
 | Tier alias | `opus` | ✅ **Works** — delegation succeeds, subagent ran on `claude-opus-4-8` |
@@ -94,11 +113,16 @@ per-agent routing to arbitrary models:
 - **Global (`CLAUDE_CODE_SUBAGENT_MODEL`):** any string (proxy-routable to OSS/Gemini), but a
   single value for *every* subagent.
 
-So c-thru's design goal — *each* agent transparently routed to *its own* mapped model, including
-local/OSS models — is **not achievable through Claude Code's supported mechanisms today**. The
-best per-agent routing available is across the 4 Anthropic tiers.
+Under the tested 2.1.178 supported levers alone, c-thru's design goal — *each* agent transparently
+routed to *its own* mapped model, including local/OSS models — was not achievable. The implemented
+signed sentinel/proxy handshake above is a c-thru extension around that limitation, not an official
+Claude model-selection mechanism.
 
-## Chosen fix — tier-alias mapping (unblock + best achievable per-agent routing)
+## Historical proposed interim fix — tier-alias mapping
+
+This proposal was superseded by the authenticated hook→prompt sentinel handshake documented at
+the top of this file. The safe alias remains a proxy-absent fallback, while the signed identity
+drives per-agent routing when the proxy is present.
 
 Make the hook (and the definition/`--agents` model fields) emit a **valid tier alias** instead of
 the capability name.
