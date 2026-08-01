@@ -92,15 +92,18 @@ cthru_chmod_tree_bins() {
   chmod +x "$root/tools/c-thru" "$root/tools/claude-proxy" 2>/dev/null || true
   chmod +x "$root/tools/"*.sh "$root/tools/c-thru-resolve" 2>/dev/null || true
   # Node CLIs already tracked 100755 (shebang entrypoints); re-assert those only.
+  # Tracked 100644 libraries: strip accidental +x so install-smoke cannot leave
+  # mode-only dirty that breaks hermetic evidence identity.
   local f
   for f in "$root/tools/"*.js; do
     [[ -f "$f" ]] || continue
-    # Skip if git (when available) tracks this path as non-executable.
     if command -v git >/dev/null 2>&1 && git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       local mode
       mode=$(git -C "$root" ls-files -s -- "${f#"$root"/}" 2>/dev/null | awk '{print $1}')
       if [[ "$mode" == "100755" ]]; then
         chmod +x "$f" 2>/dev/null || true
+      elif [[ "$mode" == "100644" ]]; then
+        chmod a-x "$f" 2>/dev/null || true
       fi
     fi
   done

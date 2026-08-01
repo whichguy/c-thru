@@ -19,6 +19,16 @@ drift=0
 # can flag bundle files that no longer correspond to any source list entry.
 EXPECTED_DESTS=()
 
+# Portable mode octal (macOS stat -f %Lp; GNU stat -c %a).
+file_mode() {
+  local p="$1"
+  if stat -f '%Lp' "$p" >/dev/null 2>&1; then
+    stat -f '%Lp' "$p"
+  else
+    stat -c '%a' "$p"
+  fi
+}
+
 check_or_copy() {
   local src="$1" dst="$2"
   EXPECTED_DESTS+=("$dst")
@@ -27,9 +37,22 @@ check_or_copy() {
       echo "DRIFT: $dst differs from $src"
       drift=1
     fi
+    # Content-only cmp is mode-blind — marketplace hooks.json direct-execs
+    # copied shell hooks, so a 0644 mirror of a 0755 source is shipped-broken
+    # while --check stays green (advisors cycle-2 M1).
+    if [ -e "$src" ] && [ -e "$dst" ]; then
+      local sm dm
+      sm=$(file_mode "$src")
+      dm=$(file_mode "$dst")
+      if [ "$sm" != "$dm" ]; then
+        echo "DRIFT: $dst mode $dm != source mode $sm ($src)"
+        drift=1
+      fi
+    fi
   else
     mkdir -p "$(dirname "$dst")"
-    cp "$src" "$dst" || { echo "FAIL: could not copy $src → $dst"; drift=1; }
+    # -p preserves mode (and times) so hook +x survives the mirror.
+    cp -p "$src" "$dst" || { echo "FAIL: could not copy $src → $dst"; drift=1; }
   fi
 }
 

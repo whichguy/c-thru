@@ -82,11 +82,6 @@ ok(String(market.plugins[0].description || '').toLowerCase().includes('cli') ||
    String(plugin.description || '').toLowerCase().includes('fleet'),
   'plugin description mentions CLI/fleet honesty');
 
-if (fails) {
-  console.error(`setup-docs-alignment: ${fails} failure(s)`);
-  process.exit(1);
-}
-
 ok(fs.existsSync(path.join(root, 'test/shape-c-spec-contract.test.js')) || fs.existsSync(path.join(root, 'test/shape-c-spec-contract.test.sh')),
   'shape-c-spec-contract test exists');
 const envDocs = read('docs/env-vars.md');
@@ -96,4 +91,11 @@ ok(envDocs.includes('C_THRU_ALLOW_UNPINNED') || read('docs/marketplace-release.m
   'uninstall purge-src or allow-unpinned documented');
 ok(read('uninstall.sh').includes('--purge-src'), 'uninstall supports --purge-src');
 
+// Exit must be last — mid-file process.exit(1) left later ok() failures as
+// exit-code theater (advisors cycle-2 A1 / setup-docs-alignment).
+if (fails) {
+  console.error(`setup-docs-alignment: ${fails} failure(s)`);
+  process.exit(1);
+}
 console.log('setup-docs-alignment: ok');
+process.exit(0);

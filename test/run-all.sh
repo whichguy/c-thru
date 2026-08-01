@@ -692,6 +692,8 @@ echo ""
 echo "Shell tests:"
 run_suite "install-smoke (idempotency, symlinks, ephemeral arch)" \
   bash "$REPO_DIR/test/install-smoke.test.sh"
+run_suite "install-core-chmod-modes (cthru_chmod_tree_bins 644/755 pin)" \
+  bash "$REPO_DIR/test/install-core-chmod-modes.test.sh"
 run_suite "uninstall-smoke (symlink removal C24, hook scrub, overrides preserved)" \
   bash "$REPO_DIR/test/uninstall-smoke.test.sh"
 run_suite "ollama-probe (health-check script)" \
