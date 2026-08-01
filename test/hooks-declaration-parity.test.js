@@ -36,15 +36,6 @@ const CLI_ONLY = new Set([
   'c-thru-agent-router-hook', // PreToolUse Agent|WebSearch|WebFetch|Monitor|Plan — capability routing
   'c-thru-enter-plan-hook',   // PreToolUse EnterPlanMode — advisory /c-thru-plan hint
   'c-thru-autonomous-gate',   // Stop — opt-in integrity gate (no-op without sentinel file)
-  // Shape C: remaining fleet hooks are CLI-ephemeral inject only (plugin no-ops under cthru).
-  'c-thru-session-start',
-  'c-thru-postcompact-context',
-  'c-thru-proxy-health',
-  'c-thru-classify',
-  'c-thru-map-changed',
-  'c-thru-plan-visibility-hook',
-  'c-thru-stop-hook',
-  'c-thru-stop-failure-hook',
 ]);
 
 const norm = b => b.replace(/\.sh$/, '');
@@ -129,10 +120,15 @@ function extractHooksJson(json) {
       const matcher = ('matcher' in entry) ? entry.matcher : '(absent)';
       for (const h of (entry.hooks || [])) {
         if (typeof h.command !== 'string') continue;
+        // Plugin hooks wrap scripts as: env C_THRU_PLUGIN_HOOK=1 "${…}/hooks/name.sh"
+        // path.basename keeps a trailing quote; strip quotes and take the .sh leaf.
+        const cmd = String(h.command || '');
+        const m = cmd.match(/([\w.-]+\.sh)/);
+        const base = m ? m[1] : path.basename(cmd).replace(/["']+$/g, '');
         tuples.push({
           event,
           matcher,
-          basename: norm(path.basename(h.command)),
+          basename: norm(base),
           timeout: h.timeout,
           async: h.async === true,
           asyncRewake: h.asyncRewake === true,
