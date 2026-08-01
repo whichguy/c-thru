@@ -359,6 +359,84 @@ async function main() {
         await secondary.close();
       }
     }
+
+    // ── 5. Gemini brand pin 403: hard_fail headers on error path ──────────
+    // Skeptic: success-path buildCthruResponseHeaders was fixed, but Gemini
+    // relayError omitted hardFailErrorHeaders — attribution headers missing.
+    console.log('\n5. gemini brand model: pin 403 → hard_fail headers (no cascade)');
+    {
+      const gem = await stubBackend({ failWith: 403 });
+      const gen = await stubBackend({ responseBody: anthropicOk('glm-fake:cloud', 'I am Gemini') });
+      try {
+        const cfg = {
+          endpoints: {
+            gemini_ai: {
+              url: `http://127.0.0.1:${gem.port}`,
+              format: 'gemini',
+              auth: { literal: 'fake-gemini-key' },
+            },
+            generalist_ep: {
+              url: `http://127.0.0.1:${gen.port}`,
+              format: 'anthropic',
+              auth: 'none',
+            },
+          },
+          model_routes: {
+            'gemini-pro-latest': 'gemini_ai',
+            'glm-fake:cloud': 'generalist_ep',
+          },
+          agent_to_capability: {
+            gemini: 'model:gemini-pro-latest',
+          },
+          routes: { default: 'generalist' },
+          llm_profiles: {
+            generalist: {
+              'best-cloud-oss': { '64gb': 'glm-fake:cloud' },
+              on_failure: 'cascade',
+            },
+          },
+          llm_mode: 'best-cloud-oss',
+        };
+        const configPath = writeConfig(tmpDir, cfg);
+        await withProxy(
+          {
+            configPath,
+            profile: '64gb',
+            mode: 'best-cloud-oss',
+            env: {
+              GOOGLE_API_KEY: 'fake',
+              C_THRU_AGENT_SENTINEL_SECRET: SENTINEL_SECRET,
+            },
+          },
+          async ({ port }) => {
+            const res = await httpJson(
+              port,
+              'POST',
+              '/v1/messages',
+              bodyWithAgent('gemini'),
+              SUBAGENT_HEADERS,
+            );
+            assert(res.status >= 400, `gemini brand 403: non-2xx (got ${res.status})`);
+            assertEq(res.status, 403, 'gemini brand 403: surface upstream status');
+            assertEq(gem.requests.length, 1, 'gemini brand 403: Gemini tried exactly once');
+            assertEq(gen.requests.length, 0, 'gemini brand 403: generalist NEVER hit');
+            assertEq(res.headers['x-c-thru-fallback-suppressed'], 'true',
+              'gemini brand 403: x-c-thru-fallback-suppressed');
+            assertEq(res.headers['x-c-thru-on-failure'], 'hard_fail',
+              'gemini brand 403: x-c-thru-on-failure=hard_fail');
+            assertEq(res.headers['x-c-thru-agent'], 'gemini',
+              'gemini brand 403: x-c-thru-agent=gemini');
+            assert(
+              !res.headers['x-c-thru-fallback-from'] || res.headers['x-c-thru-fallback-from'] === '',
+              'gemini brand 403: no fallback-from success path',
+            );
+          },
+        );
+      } finally {
+        await gem.close();
+        await gen.close();
+      }
+    }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

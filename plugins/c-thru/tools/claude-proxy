@@ -4424,9 +4424,14 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
         markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(statusCode, decoded));
         const relayError = () => {
           if (res.headersSent) return;
+          // Parity with forwardAnthropic / OpenAI relayPreCommitFailure: brand
+          // model: pin hard_fail must surface attribution headers when cascade
+          // is suppressed (x-c-thru-fallback-suppressed / on-failure / agent).
+          const hf = hardFailErrorHeaders(requestMeta, effectiveModel);
           res.writeHead(statusCode, Object.assign(
             { 'Content-Type': 'application/json' },
             extraHeaders,
+            hf || {},
           ));
           res.end(JSON.stringify({
             type: 'error',
@@ -4445,7 +4450,9 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
       }).catch((e) => {
         if (!res.headersSent) {
           sendAnthropicError(res, statusCode || 502,
-            `Gemini error: failed to read error body (${e.message})`);
+            `Gemini error: failed to read error body (${e.message})`,
+            null,
+            hardFailErrorHeaders(requestMeta, effectiveModel));
         }
       });
       return;
@@ -4731,7 +4738,8 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           nonStreamAborted = true;
           ctxLog(ctx, 'gemini.nonstream.body_cap_exceeded', { cap_bytes: UPSTREAM_NONSTREAM_BODY_CAP });
           try { upRes.destroy(); } catch {}
-          sendAnthropicError(res, 502, `Gemini non-stream response exceeded ${UPSTREAM_NONSTREAM_BODY_CAP} bytes`);
+          sendAnthropicError(res, 502, `Gemini non-stream response exceeded ${UPSTREAM_NONSTREAM_BODY_CAP} bytes`,
+            null, hardFailErrorHeaders(requestMeta, effectiveModel));
           return;
         }
         respBody += d;
@@ -4743,7 +4751,8 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
         }
         ctxLog(ctx, 'gemini.nonstream.upstream_error', { error: e.message, backend: backend.id });
-        sendAnthropicError(res, 502, `upstream ${backend.id} failed mid-response: ${e.message}`);
+        sendAnthropicError(res, 502, `upstream ${backend.id} failed mid-response: ${e.message}`,
+          null, hardFailErrorHeaders(requestMeta, effectiveModel));
       };
       upRes.on('error', onGeminiNonStreamFailure);
       upRes.on('aborted', () => onGeminiNonStreamFailure(new Error('upstream aborted')));
@@ -4883,7 +4892,8 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
     markBackendFailed(backend.id, !!backend.fallback_to, classifyFailure(null, e.message));
     const handled = await tryFallbackOrFail(ctx, req, res, body, backend, requestMeta, { reason: e.message, statusCode: 502 });
     if (!handled && !res.headersSent) {
-      sendAnthropicError(res, 502, `backend gemini at ${targetUrl.origin} error: ${e.message}`);
+      sendAnthropicError(res, 502, `backend gemini at ${targetUrl.origin} error: ${e.message}`,
+        null, hardFailErrorHeaders(requestMeta, effectiveModel));
     }
   });
 
