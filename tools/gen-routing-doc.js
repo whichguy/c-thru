@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { resolveModelRoute } = require('./model-map-resolve.js');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const EXPLAIN = path.join(__dirname, 'c-thru-explain.js');
@@ -46,6 +47,20 @@ function explain(mode) {
   return byCap;
 }
 
+function explainPin(capability, mode, config) {
+  const model = capability.slice('model:'.length);
+  const resolved = resolveModelRoute(model, {
+    routes: config.model_routes || {},
+    endpoints: config.endpoints || config.backends || {},
+    mode,
+  });
+  if (!resolved || !resolved.endpointId) return null;
+  return {
+    model: resolved.servedBy || model,
+    endpoint_id: resolved.endpointId,
+  };
+}
+
 function buildTable() {
   const config = JSON.parse(fs.readFileSync(CONFIG, 'utf8'));
   const a2c = config.agent_to_capability || {};
@@ -64,10 +79,14 @@ function buildTable() {
     const remap = agent !== cap;
     const nameCell = '`' + agent + '`' + (remap ? ' &nbsp;⚠' : '');
     const cells = MODES.map((m) => {
-      const row = perMode[m].get(cap);
+      const row = cap.startsWith('model:')
+        ? explainPin(cap, m, config)
+        : perMode[m].get(cap);
       return '`' + (row ? row.model : '—') + '`';
     });
-    const ep = endpoints.get(cap);
+    const ep = cap.startsWith('model:')
+      ? explainPin(cap, ENDPOINT_MODE, config)
+      : endpoints.get(cap);
     const epCell = '`' + (ep ? ep.endpoint_id : '—') + '`';
     lines.push(`| ${nameCell} | \`${cap}\` | ${cells.join(' | ')} | ${epCell} |`);
   }

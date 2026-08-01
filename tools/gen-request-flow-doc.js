@@ -30,8 +30,8 @@ const END = '<!-- END request-flow-steps -->';
 
 // Scenario key -> the heading shown in the README summary.
 const TITLES = {
-  happy: 'Happy path — coder, best-cloud, 64gb',
-  failover: 'Backend failure — the cascade in payloads',
+  happy: 'Happy path — coder, best-cloud-oss, 64gb',
+  failover: 'Explicit Gemini failure — the cascade in payloads',
   pinned: 'Named agent — ask agent grok',
 };
 // Pipeline node id -> who is acting at that step.
