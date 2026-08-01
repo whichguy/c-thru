@@ -42,6 +42,7 @@ const INTENTIONALLY_UNSTRUCTURED_AGENTS = Object.freeze([
   'haiku',
   'claude-haiku-4-5-20251001',
   'fable',
+  'claude-fable-5',
   'grok',
   'grok-4-5',
   'deepseek',
@@ -66,7 +67,6 @@ const INTENTIONALLY_UNSTRUCTURED_AGENTS = Object.freeze([
   'qwen3-vl-8b',
   'kimi',
   'kimi-k3-cloud',
-  'kimi-k2-7-code-cloud',
   'gemini',
   'gemini-pro',
   'gemini-pro-latest',
@@ -536,8 +536,9 @@ function preflightAgentContracts(options) {
 
   let agentFiles;
   try {
+    const reservedAgentFiles = new Set(['AGENTS.md', 'CLAUDE.md']);
     agentFiles = fs.readdirSync(agentsDir)
-      .filter(file => file.endsWith('.md'))
+      .filter(file => file.endsWith('.md') && !reservedAgentFiles.has(file))
       .map(file => file.replace(/\.md$/, ''))
       .sort();
   } catch (error) {

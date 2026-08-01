@@ -6,7 +6,7 @@
 // TODO: Evaluate porting test/*.test.sh to Node — if consolidating bash tests here
 // is simpler than maintaining a mixed Node+bash suite, port them to use this harness.
 
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs   = require('fs');
 const http = require('http');
 const os   = require('os');
@@ -59,6 +59,35 @@ function summary() {
 }
 
 // ── Temp directory ─────────────────────────────────────────────────────────
+
+// Config-selection tests walk every ancestor of their launch cwd looking for
+// .claude/model-map.json. os.tmpdir() is not always isolated: a caller can set
+// TMPDIR to a directory under $HOME, causing that walk to reach the real
+// ~/.claude config. Use an absolute temp base outside the real home for any
+// fixture whose path participates in config/profile discovery.
+function makeIsolatedTmpDir(prefix = 'c-thru-isolated-') {
+  let realHome = null;
+  try { realHome = fs.realpathSync(os.homedir()); } catch {}
+  const candidates = ['/tmp', '/private/tmp', os.tmpdir()];
+  for (const candidate of candidates) {
+    let realBase;
+    try {
+      realBase = fs.realpathSync(candidate);
+      fs.accessSync(realBase, fs.constants.W_OK);
+    } catch {
+      continue;
+    }
+    if (realHome &&
+        (realBase === realHome || realBase.startsWith(realHome + path.sep))) {
+      continue;
+    }
+    return fs.mkdtempSync(path.join(realBase, prefix));
+  }
+  throw new Error(
+    `No writable temp directory outside home (${realHome || os.homedir()}); ` +
+    'cannot safely exercise ancestor-based config discovery',
+  );
+}
 
 function withTmpDir(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-test-'));
@@ -187,31 +216,36 @@ function spawnCapture(cmd, args, opts = {}) {
 // ── Proxy spawn ────────────────────────────────────────────────────────────
 
 // Spawns the proxy with test isolation env and returns { child, port, hooksPort }.
-// opts: { configPath, profile, mode, hooksPort, env, cwd }
+// opts: { configPath, profile, mode, hooksPort, env, cwd, readyTimeoutMs,
+//         proxyBin (test-only fixture injection) }
 // Does NOT pass --port so the proxy prints "READY <port>" on stdout.
 async function spawnProxy(opts = {}) {
   const { configPath, profile, mode, hooksPort, env: extraEnv = {}, cwd } = opts;
+  const readyTimeoutMs = opts.readyTimeoutMs ?? DEFAULT_HERMETIC_READY_TIMEOUT_MS;
+  const proxyBin = opts.proxyBin || PROXY_BIN;
 
   const args = [];
   if (configPath) args.push('--config', configPath);
   if (profile)    args.push('--profile', profile);
   if (mode)       args.push('--mode', mode);
 
-  const tmpHome = opts.tmpHome || fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-home-'));
+  const ownsTmpHome = !opts.tmpHome;
+  const tmpHome = opts.tmpHome || makeIsolatedTmpDir('c-thru-home-');
+  const profileDir = path.join(tmpHome, '.claude');
+  const processCwd = cwd || tmpHome;
+  fs.mkdirSync(profileDir, { recursive: true });
 
   const proxyEnv = Object.assign({}, process.env, {
     HOME: tmpHome,
+    CLAUDE_PROFILE_DIR: profileDir,
+    CLAUDE_MODEL_MAP_LAUNCH_CWD: processCwd,
   }, extraEnv);
   if (!extraEnv.CLAUDE_MODEL_MAP_PATH) delete proxyEnv.CLAUDE_MODEL_MAP_PATH;
-  delete proxyEnv.CLAUDE_MODEL_MAP_LAUNCH_CWD;
   // When this test runs from inside a live c-thru session, the ambient
   // CLAUDE_CONFIG_DIR/CLAUDE_PROFILE_DIR/CLAUDE_DIR point at that session's
-  // real ephemeral profile dir. profileClaudeDir() (tools/model-map-config.js)
-  // checks those before falling back to HOME/.claude, so without scrubbing
-  // them the spawned proxy loads the real session's config instead of this
-  // test's tmpHome sandbox — hijacking anything that depends on the profile
-  // dir (e.g. the config watcher arming on the wrong file).
-  for (const k of ['CLAUDE_CONFIG_DIR', 'CLAUDE_PROFILE_DIR', 'CLAUDE_DIR']) {
+  // real ephemeral profile dir. Pin CLAUDE_PROFILE_DIR above and scrub the
+  // lower-precedence aliases unless a test explicitly supplies them.
+  for (const k of ['CLAUDE_CONFIG_DIR', 'CLAUDE_DIR']) {
     if (!Object.prototype.hasOwnProperty.call(extraEnv, k)) delete proxyEnv[k];
   }
   Object.assign(proxyEnv, {
@@ -250,48 +284,112 @@ async function spawnProxy(opts = {}) {
   for (const k of AUTH_ENV_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(extraEnv, k)) delete proxyEnv[k];
   }
+  // Anthropic upstream override must not leak from a live c-thru shell into
+  // hermetic suites (proxy exits 2 on invalid/loopback override without opt-in).
+  for (const k of [
+    'CLAUDE_PROXY_ANTHROPIC_UPSTREAM',
+    'C_THRU_ANTHROPIC_UPSTREAM',
+    'C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT',
+    'C_THRU_TRUST_AMBIENT_UPSTREAM',
+    'C_THRU_IGNORE_AMBIENT_ANTHROPIC_BASE_URL',
+    'C_THRU_ALLOW_INSECURE_ANTHROPIC_UPSTREAM',
+    'C_THRU_ALLOW_LOOPBACK_ANTHROPIC_UPSTREAM',
+  ]) {
+    if (!Object.prototype.hasOwnProperty.call(extraEnv, k)) delete proxyEnv[k];
+  }
 
-  const child = spawn(process.execPath, [PROXY_BIN, ...args], {
+  const child = spawn(process.execPath, [proxyBin, ...args], {
     env: proxyEnv,
-    cwd: cwd || path.dirname(PROXY_BIN),
+    cwd: processCwd,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
   const resolvedHooksPort = Number(proxyEnv.CLAUDE_PROXY_HOOKS_PORT);
 
-  const port = await new Promise((resolve, reject) => {
-    let buf = '';
-    const timeout = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error('spawnProxy: timed out waiting for READY line'));
-    }, 8000);
+  let port;
+  try {
+    port = await new Promise((resolve, reject) => {
+      let buf = '';
+      let settled = false;
+      let timeout;
 
-    child.on('error', err => {
-      clearTimeout(timeout);
-      reject(new Error(`spawnProxy: spawn error: ${err.message}`));
-    });
-
-    child.on('exit', code => {
-      clearTimeout(timeout);
-      reject(new Error(`spawnProxy: proxy exited with code ${code} before emitting READY`));
-    });
-
-    child.stdout.on('data', chunk => {
-      buf += chunk.toString();
-      const m = buf.match(/READY (\d+)/);
-      if (m) {
+      const cleanup = () => {
         clearTimeout(timeout);
-        // Remove the 'exit' listener that would reject — proxy is alive
-        child.removeAllListeners('exit');
+        child.removeListener('error', onError);
+        child.removeListener('exit', onExit);
+        child.stdout.removeListener('data', onData);
+      };
+
+      const rejectNow = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      const rejectAfterReap = async (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        try {
+          await terminateAndReap(child, 'SIGKILL');
+        } catch (cleanupError) {
+          reject(new AggregateError(
+            [error, cleanupError],
+            'spawnProxy: READY wait failed and child cleanup failed',
+          ));
+          return;
+        }
+        reject(error);
+      };
+
+      function onError(err) {
+        const error = new Error(`spawnProxy: spawn error: ${err.message}`);
+        if (child.pid) void rejectAfterReap(error);
+        else rejectNow(error);
+      }
+
+      function onExit(code, signal) {
+        rejectNow(new Error(
+          `spawnProxy: proxy exited with code ${code} signal ${signal || 'none'} before emitting READY`,
+        ));
+      }
+
+      function onData(chunk) {
+        buf += chunk.toString();
+        const m = buf.match(/READY (\d+)/);
+        if (!m || settled) return;
+        settled = true;
+        cleanup();
         resolve(Number(m[1]));
       }
+
+      timeout = setTimeout(() => {
+        void rejectAfterReap(new Error(
+          `spawnProxy: timed out after ${readyTimeoutMs}ms waiting for READY line`,
+        ));
+      }, readyTimeoutMs);
+      child.once('error', onError);
+      child.once('exit', onExit);
+      child.stdout.on('data', onData);
     });
-  });
+  } catch (e) {
+    if (ownsTmpHome) {
+      try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+    }
+    throw e;
+  }
 
   return { child, port, hooksPort: resolvedHooksPort, tmpHome };
 }
 
 // ── /ping poller ───────────────────────────────────────────────────────────
+
+// Hermetic proxy tests still cross child-process and loopback boundaries, so
+// loaded hosts need wider infrastructure budgets than behavior-specific tests.
+// These remain finite and intentionally separate from model/live timeouts.
+const DEFAULT_HERMETIC_READY_TIMEOUT_MS = 15_000;
+const DEFAULT_HERMETIC_REQUEST_TIMEOUT_MS = 10_000;
 
 // Polls the proxy's /ping endpoint until it returns 200, or `timeoutMs` elapses.
 // Per-attempt timeout grows from 250ms → 1500ms (catches slow first-bind on
@@ -301,25 +399,50 @@ async function spawnProxy(opts = {}) {
 // ECONNREFUSED = listener not bound yet; ECONNRESET = "socket hang up" (proxy
 // accepted then reset the connection while still coming up under load). Both
 // mean "listener not stable yet" and we shouldn't sleep on either.
-function waitForPing(port, timeoutMs = 5000) {
+function waitForPing(port, timeoutMs = DEFAULT_HERMETIC_READY_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + timeoutMs;
     const lastError = { kind: null, message: null };
     let attemptCount = 0;
+    let activeRequest = null;
+    let settled = false;
     const perAttemptTimeouts = [250, 500, 750, 1000, 1500];
     const backoffMs        = [30, 60, 120, 250, 500];
+    const deadlineTimer = setTimeout(rejectAtDeadline, timeoutMs);
+
+    function rejectAtDeadline() {
+      if (settled) return;
+      settled = true;
+      if (activeRequest) activeRequest.destroy();
+      reject(new Error(
+        `waitForPing: timed out after ${timeoutMs}ms (last: ${lastError.kind || 'none'} ${lastError.message || ''})`,
+      ));
+    }
+
     function attempt() {
+      if (settled) return;
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) return rejectAtDeadline();
       const idx = Math.min(attemptCount, perAttemptTimeouts.length - 1);
       attemptCount++;
       const req = http.request({ hostname: '127.0.0.1', port, path: '/ping', method: 'GET' }, res => {
+        if (settled) { res.resume(); return; }
         // Drain so the socket can be released even on non-200.
         res.resume();
-        if (res.statusCode === 200) return resolve();
+        if (res.statusCode === 200) {
+          settled = true;
+          clearTimeout(deadlineTimer);
+          activeRequest = null;
+          resolve();
+          return;
+        }
         lastError.kind = 'status';
         lastError.message = `status=${res.statusCode}`;
         schedule(false);
       });
+      activeRequest = req;
       req.on('error', (err) => {
+        if (settled) return;
         lastError.kind = err.code || 'error';
         lastError.message = err.message;
         // ECONNREFUSED = listener not bound yet; ECONNRESET = socket hang up
@@ -328,22 +451,22 @@ function waitForPing(port, timeoutMs = 5000) {
         // full backoff — saves up to 500ms during proxy startup.
         schedule(err.code === 'ECONNREFUSED' || err.code === 'ECONNRESET');
       });
-      req.setTimeout(perAttemptTimeouts[idx], () => {
+      const attemptTimeoutMs = Math.max(1, Math.min(perAttemptTimeouts[idx], remainingMs));
+      req.setTimeout(attemptTimeoutMs, () => {
+        if (settled) return;
         lastError.kind = 'timeout';
-        lastError.message = `per-attempt timeout ${perAttemptTimeouts[idx]}ms`;
+        lastError.message = `per-attempt timeout ${attemptTimeoutMs}ms`;
         req.destroy();
       });
       req.end();
     }
     function schedule(immediate) {
-      if (Date.now() >= deadline) {
-        return reject(new Error(
-          `waitForPing: timed out after ${timeoutMs}ms (last: ${lastError.kind || 'none'} ${lastError.message || ''})`,
-        ));
-      }
+      if (settled) return;
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) return rejectAtDeadline();
       if (immediate) return setImmediate(attempt);
       const idx = Math.min(attemptCount - 1, backoffMs.length - 1);
-      setTimeout(attempt, backoffMs[Math.max(0, idx)]);
+      setTimeout(attempt, Math.min(backoffMs[Math.max(0, idx)], remainingMs));
     }
     attempt();
   });
@@ -352,7 +475,14 @@ function waitForPing(port, timeoutMs = 5000) {
 // ── HTTP helper ────────────────────────────────────────────────────────────
 
 // Returns { status, headers, json, bodyText }.
-function httpJson(port, method, urlPath, body, extraHeaders = {}, timeout = 3000) {
+function httpJson(
+  port,
+  method,
+  urlPath,
+  body,
+  extraHeaders = {},
+  timeout = DEFAULT_HERMETIC_REQUEST_TIMEOUT_MS,
+) {
   return new Promise((resolve, reject) => {
     const bodyStr = body ? JSON.stringify(body) : null;
     const headers = Object.assign(
@@ -385,24 +515,125 @@ function httpJson(port, method, urlPath, body, extraHeaders = {}, timeout = 3000
 
 // ── withProxy wrapper ──────────────────────────────────────────────────────
 
+function childExited(child) {
+  return !child || child.exitCode !== null || child.signalCode !== null;
+}
+
+function childExitPromise(child) {
+  if (childExited(child)) return Promise.resolve();
+  return new Promise(resolve => {
+    const onExit = () => resolve();
+    child.once('exit', onExit);
+    // Close the race where the child exits between the initial state check and
+    // listener registration.
+    if (childExited(child)) {
+      child.removeListener('exit', onExit);
+      resolve();
+    }
+  });
+}
+
+function settlesWithin(promise, timeoutMs) {
+  return new Promise(resolve => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      resolve(false);
+    }, timeoutMs);
+    promise.then(
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      },
+    );
+  });
+}
+
+// Best-effort but bounded child shutdown used by both normal teardown and
+// startup failures. The exit listener is armed before signaling so a fast exit
+// cannot be missed; all watchdog timers are cleared when the child exits.
+async function terminateAndReap(child, initialSignal = 'SIGTERM', finalReapTimeoutMs = 1000) {
+  if (!child) return;
+  const exitPromise = childExitPromise(child);
+  if (childExited(child)) {
+    await exitPromise;
+    return;
+  }
+  let signalSent = false;
+  try { signalSent = child.kill(initialSignal); } catch {}
+  if (!signalSent && !childExited(child)) {
+    throw new Error(`terminateAndReap: failed to send ${initialSignal} to child ${child.pid}`);
+  }
+  if (initialSignal === 'SIGKILL') {
+    if (!await settlesWithin(exitPromise, finalReapTimeoutMs)) {
+      throw new Error(
+        `terminateAndReap: child ${child.pid} did not report exit within ${finalReapTimeoutMs}ms after SIGKILL`,
+      );
+    }
+    return;
+  }
+  if (await settlesWithin(exitPromise, 3000)) return;
+  signalSent = false;
+  try { signalSent = child.kill('SIGKILL'); } catch {}
+  if (!signalSent && !childExited(child)) {
+    throw new Error(`terminateAndReap: failed to SIGKILL child ${child.pid}`);
+  }
+  // Once SIGKILL is accepted, do not report cleanup complete unless Node has
+  // observed the exit and reaped the child. Remain bounded and fail loudly if
+  // that invariant cannot be confirmed.
+  if (!await settlesWithin(exitPromise, finalReapTimeoutMs)) {
+    throw new Error(
+      `terminateAndReap: child ${child.pid} did not report exit within ${finalReapTimeoutMs}ms after SIGKILL`,
+    );
+  }
+}
+
 // Spawns proxy, waits for /ping, runs fn({ port, hooksPort, child }), then cleans up.
 // Guarantees SIGTERM even if fn throws.
 async function withProxy(opts, fn) {
+  const readyTimeoutMs = opts.readyTimeoutMs ?? DEFAULT_HERMETIC_READY_TIMEOUT_MS;
+  const readyDeadline = Date.now() + readyTimeoutMs;
   const hooksPort = opts.hooksPort || await getFreePort();
-  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-home-'));
+  const tmpHome = makeIsolatedTmpDir('c-thru-home-');
   let child, port, resolvedHooksPort;
   try {
+    const remainingForReady = Math.max(1, readyDeadline - Date.now());
     ({ child, port, hooksPort: resolvedHooksPort } = await spawnProxy(
-      Object.assign({}, opts, { hooksPort, tmpHome })
+      Object.assign({}, opts, {
+        hooksPort,
+        tmpHome,
+        readyTimeoutMs: remainingForReady,
+      })
     ));
 
-    await waitForPing(port);
+    const remainingForPing = readyDeadline - Date.now();
+    if (remainingForPing <= 0) {
+      throw new Error(`withProxy: readiness timed out after ${readyTimeoutMs}ms before /ping`);
+    }
+    try {
+      await waitForPing(port, remainingForPing);
+    } catch (e) {
+      throw new Error(
+        `withProxy: readiness timed out after ${readyTimeoutMs}ms (${e.message})`,
+        { cause: e },
+      );
+    }
   } catch (e) {
-    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+    try {
+      await terminateAndReap(child);
+    } finally {
+      try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+    }
     throw e;
   }
-
-  const exitPromise = new Promise(resolve => child.on('exit', resolve));
 
   let fnError = null;
   try {
@@ -410,30 +641,7 @@ async function withProxy(opts, fn) {
   } catch (e) {
     fnError = e;
   } finally {
-    try { child.kill('SIGTERM'); } catch {}
-    // raceWithTimeout: like Promise.race([p, timeout]) but CLEARS the timer once
-    // the race settles. A bare `Promise.race([p, new Promise(r=>setTimeout(r,ms))])`
-    // leaks the timer when p wins (the happy path): it keeps the test event loop
-    // alive and — for the rejecting variant below — its late reject() becomes an
-    // unhandledRejection that the global guard turns into process.exit(1), racing
-    // the suite's real summary()-gated exit. Tracking + clearing the timer makes
-    // teardown leave no pending timer behind summary().
-    const raceWithTimeout = (p, ms, onTimeout) => new Promise((resolve, reject) => {
-      const t = setTimeout(() => { onTimeout ? onTimeout(resolve, reject) : resolve(); }, ms);
-      p.then(
-        v => { clearTimeout(t); resolve(v); },
-        e => { clearTimeout(t); reject(e); },
-      );
-    });
-    await raceWithTimeout(
-      exitPromise, 3000,
-      (_resolve, reject) => reject(new Error('withProxy: child did not exit within 3s')),
-    ).catch(() => {
-      try { child.kill('SIGKILL'); } catch {}
-    });
-    // Second bounded wait: SIGKILL should be near-instant, but cap at 1s to
-    // prevent an indefinite hang if the kernel delays signal delivery.
-    await raceWithTimeout(exitPromise, 1000);
+    await terminateAndReap(child);
     try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
   }
   if (fnError) throw fnError;
@@ -824,11 +1032,39 @@ function httpStream(port, method, urlPath, body, extraHeaders = {}, timeout = 10
 // Unified parser shared by live and behavioral test suites.
 // Strips <think> blocks and normalizes Qwen3 pipe-separated STATUS lines.
 
-function parseStatusBlock(text) {
-  if (typeof text !== 'string') return {};
-  const stripped = text
+function normalizeStatusText(text) {
+  if (typeof text !== 'string') return '';
+  return text
     .replace(/<think>[\s\S]*?<\/think>/g, '')
     .replace(/\|([A-Z_]+:)/g, '\n$1');
+}
+
+function boundedDiagnosticSnippet(value, maxChars = 120) {
+  if (!Number.isSafeInteger(maxChars) || maxChars < 1) {
+    throw new Error('maxChars must be a positive safe integer');
+  }
+  const sanitized = String(value ?? '')
+    .replace(
+      /\b((?:[A-Z][A-Z0-9_.-]*[_-])?(?:API[_-]?KEY|AUTH(?:ORIZATION)?(?:[_-]?TOKEN)?|ACCESS[_-]?KEY|TOKEN|SECRET|PASSWORD))\s*[:=]\s*(?:"[^"]*"|'[^']*'|(?:Bearer\s+)?[^\s,;]+)/gi,
+      '$1=[REDACTED]',
+    )
+    .replace(
+      /\bBearer\s+(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      'Bearer [REDACTED]',
+    )
+    .replace(
+      /\b(?:sk-[A-Za-z0-9_-]{12,}|AIza[A-Za-z0-9_-]{20,}|gh[opusr]_[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_]{12,})\b/g,
+      '[REDACTED]',
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (sanitized.length <= maxChars) return sanitized;
+  if (maxChars === 1) return '…';
+  return `${sanitized.slice(0, maxChars - 1)}…`;
+}
+
+function parseStatusBlock(text) {
+  const stripped = normalizeStatusText(text);
   const out = {};
   for (const line of stripped.split('\n')) {
     const m = line.match(/^([A-Z_]+):\s*(.*)$/);
@@ -837,7 +1073,253 @@ function parseStatusBlock(text) {
   return out;
 }
 
+const VALID_TASK_STATUSES = new Set(['COMPLETE', 'PARTIAL', 'FAILED']);
+const TASK_CONTRACT_FIELDS = new Set([
+  'ATTEMPTED',
+  'COMPLETED',
+  'FAILED',
+  'PARTIAL',
+  'UNBLOCKED_TASKS',
+  'VERDICT',
+]);
+const RECUSAL_CONTRACT_FIELDS = new Set(['INSTALL', 'REASON', 'RECUSAL_REASON']);
+
+function finalContractBlockError(text) {
+  const lines = normalizeStatusText(text).split('\n');
+  const statusIndexes = [];
+  for (let index = 0; index < lines.length; index++) {
+    if (/^\s*(?:TASK_STATUS|STATUS):\s*/.test(lines[index])) {
+      statusIndexes.push(index);
+    }
+  }
+  if (statusIndexes.length > 1) {
+    return 'response contains multiple TASK_STATUS/STATUS contract blocks';
+  }
+  if (statusIndexes.length === 0) return null;
+
+  const start = statusIndexes[0];
+  const marker = lines[start].trimStart().match(/^(TASK_STATUS|STATUS):/)[1];
+  const allowedFields = marker === 'TASK_STATUS'
+    ? TASK_CONTRACT_FIELDS
+    : RECUSAL_CONTRACT_FIELDS;
+  let continuationField = null;
+  const seenFields = new Set();
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index];
+    if (line.trim() === '') continue;
+    if (/^(?:```|~~~)$/.test(line.trim()) &&
+        lines.slice(index + 1).every(remaining => remaining.trim() === '')) {
+      continue;
+    }
+    const fieldMatch = line.match(/^([A-Z_]+):\s*/);
+    if (fieldMatch) {
+      const field = fieldMatch[1];
+      const diagnosticField = boundedDiagnosticSnippet(field);
+      if (!allowedFields.has(field)) {
+        return (
+          `TASK_STATUS/STATUS contract block contains unexpected field ` +
+          `${JSON.stringify(diagnosticField)} on line ${index + 1}`
+        );
+      }
+      const semanticField = field === 'REASON' || field === 'RECUSAL_REASON'
+        ? 'RECUSAL_REASON'
+        : field;
+      if (seenFields.has(semanticField)) {
+        return (
+          `TASK_STATUS/STATUS contract block contains duplicate field ` +
+          `${JSON.stringify(diagnosticField)} on line ${index + 1}`
+        );
+      }
+      seenFields.add(semanticField);
+      continuationField = field;
+      continue;
+    }
+    if ((/^\s+/.test(line) || /^[-*]\s+/.test(line)) && continuationField) {
+      continue;
+    }
+    if (continuationField === 'UNBLOCKED_TASKS' &&
+        (/^Task\(/.test(line.trim()) ||
+         /^#\s*(?:Task\(|COMPLETE\b|PARTIAL\b|FAILED\b|APPROVED\b|NEEDS_REVISION\b)/.test(
+           line.trim(),
+         ))) {
+      continue;
+    }
+    const unexpected = boundedDiagnosticSnippet(line);
+    return (
+      `TASK_STATUS/STATUS contract block is not final; ` +
+      `unexpected trailing content on line ${index + 1}: ` +
+      `${JSON.stringify(unexpected)}`
+    );
+  }
+  return null;
+}
+
+// Current structured agents use TASK_STATUS for normal completion. STATUS is
+// reserved for the separate recusal path; accepting STATUS: COMPLETE here would
+// let a deleted contract silently return.
+function parseAgentContractResult(text) {
+  const fields = parseStatusBlock(text);
+  const placementError = finalContractBlockError(text);
+  if (placementError) {
+    return {
+      kind: 'invalid',
+      valid: false,
+      status: null,
+      fields,
+      reason: placementError,
+    };
+  }
+  const hasTaskStatus = Object.prototype.hasOwnProperty.call(fields, 'TASK_STATUS');
+  const hasStatus = Object.prototype.hasOwnProperty.call(fields, 'STATUS');
+  const hasRecusalReason =
+    Object.prototype.hasOwnProperty.call(fields, 'RECUSAL_REASON') ||
+    Object.prototype.hasOwnProperty.call(fields, 'REASON');
+  const recusalReason = fields.RECUSAL_REASON || fields.REASON || '';
+
+  if (fields.STATUS === 'RECUSE' && !hasTaskStatus) {
+    if (!recusalReason) {
+      return {
+        kind: 'invalid',
+        valid: false,
+        status: null,
+        fields,
+        reason: 'STATUS: RECUSE requires a non-empty RECUSAL_REASON or REASON',
+      };
+    }
+    return {
+      kind: 'recusal',
+      valid: true,
+      status: 'RECUSE',
+      recusalReason,
+      fields,
+    };
+  }
+  if (!hasStatus && !hasRecusalReason && VALID_TASK_STATUSES.has(fields.TASK_STATUS)) {
+    return { kind: 'task', valid: true, status: fields.TASK_STATUS, fields };
+  }
+
+  let reason = 'missing TASK_STATUS or STATUS: RECUSE';
+  if (hasStatus && fields.STATUS !== 'RECUSE') {
+    reason =
+      `legacy normal STATUS ` +
+      `${JSON.stringify(boundedDiagnosticSnippet(fields.STATUS))} is not accepted`;
+  } else if (hasTaskStatus && !VALID_TASK_STATUSES.has(fields.TASK_STATUS)) {
+    reason =
+      `TASK_STATUS ${JSON.stringify(boundedDiagnosticSnippet(fields.TASK_STATUS))} ` +
+      `is not in {COMPLETE, PARTIAL, FAILED}`;
+  } else if (fields.STATUS === 'RECUSE' && hasTaskStatus) {
+    reason = 'response mixes STATUS: RECUSE with TASK_STATUS';
+  } else if (hasTaskStatus && hasRecusalReason) {
+    reason = 'response mixes TASK_STATUS with a recusal reason';
+  }
+  return { kind: 'invalid', valid: false, status: null, fields, reason };
+}
+
 // ── Tier timeouts ──────────────────────────────────────────────────────────
+
+// Keep every model-backed test operation bounded to one hour. The same cap is
+// propagated to the outer HTTP/CLI wait and the proxy's upstream watchdogs so
+// a provider or tool hang cannot outlive the test's configured deadline.
+const MAX_MODEL_TEST_TIMEOUT_MS = 60 * 60 * 1000;
+const DEFAULT_MODEL_TEST_TIMEOUT_MS = MAX_MODEL_TEST_TIMEOUT_MS;
+const MODEL_TEST_SUPERVISOR = path.resolve(
+  __dirname,
+  '..',
+  'tools',
+  'run-with-hard-timeout.js',
+);
+const {
+  consumeTestSupervisorCapability,
+} = require('../tools/test-supervisor-capability');
+
+function hasActiveModelTestSupervisor(env = process.env, nowMs = Date.now()) {
+  return consumeTestSupervisorCapability({
+    env,
+    nowMs,
+    claimantParentPid: process.ppid,
+    maxRemainingMs: MAX_MODEL_TEST_TIMEOUT_MS,
+  });
+}
+
+// Directly invoked model suites re-exec once through the same out-of-process
+// supervisor used by run-all.sh. Unlike an HTTP inactivity timer, this deadline
+// still fires during spawnSync, CPU stalls, or a response that trickles bytes.
+function ensureModelTestSupervisor() {
+  if (hasActiveModelTestSupervisor()) return false;
+  const timeoutSeconds = process.env.C_THRU_TEST_TIMEOUT_SECONDS || '3600';
+  const result = spawnSync(
+    process.execPath,
+    [
+      MODEL_TEST_SUPERVISOR,
+      '--timeout-seconds',
+      timeoutSeconds,
+      '--',
+      process.execPath,
+      ...process.argv.slice(1),
+    ],
+    {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: 'inherit',
+    },
+  );
+  if (result.error) {
+    console.error(`model test supervisor failed: ${result.error.message}`);
+    process.exit(127);
+  }
+  if (Number.isInteger(result.status)) process.exit(result.status);
+  const signalExitCodes = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129, SIGKILL: 137 };
+  process.exit(signalExitCodes[result.signal] || 1);
+}
+
+function validateModelTestTimeoutMs(value, label) {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_MODEL_TEST_TIMEOUT_MS) {
+    throw new Error(`${label} must be an integer from 1 to ${MAX_MODEL_TEST_TIMEOUT_MS}`);
+  }
+  return value;
+}
+
+function modelTestTimeoutMs(fallback = DEFAULT_MODEL_TEST_TIMEOUT_MS) {
+  const raw = process.env.C_THRU_MODEL_TEST_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === '') {
+    return validateModelTestTimeoutMs(fallback, 'model test fallback timeout');
+  }
+  if (!/^[1-9]\d*$/.test(raw.trim())) {
+    throw new Error('C_THRU_MODEL_TEST_TIMEOUT_MS must be a positive integer');
+  }
+  const value = Number(raw);
+  return validateModelTestTimeoutMs(value, 'C_THRU_MODEL_TEST_TIMEOUT_MS');
+}
+
+function modelTestProxyEnv(timeoutMs = modelTestTimeoutMs()) {
+  const value = String(validateModelTestTimeoutMs(timeoutMs, 'model proxy timeout'));
+  return {
+    C_THRU_MODEL_TEST_TIMEOUT_MS: value,
+    CLAUDE_PROXY_ANTHROPIC_TIMEOUT_MS: value,
+    CLAUDE_PROXY_GEMINI_TIMEOUT_MS: value,
+    CLAUDE_PROXY_RESPONSES_TIMEOUT_MS: value,
+    CLAUDE_PROXY_OLLAMA_TIMEOUT_MS: value,
+    CLAUDE_PROXY_OLLAMA_TTFT_MS: value,
+    CLAUDE_PROXY_STREAM_STALL_MS: value,
+    CLAUDE_PROXY_STREAM_WALL_MS: value,
+  };
+}
+
+function modelHttpJson(port, method, urlPath, body, extraHeaders = {}) {
+  return httpJson(port, method, urlPath, body, extraHeaders, modelTestTimeoutMs());
+}
+
+function modelHttpStream(port, method, urlPath, body, extraHeaders = {}) {
+  return httpStream(port, method, urlPath, body, extraHeaders, modelTestTimeoutMs());
+}
+
+function withModelTestProxy(opts, fn) {
+  const modelEnv = modelTestProxyEnv();
+  const merged = Object.assign({}, opts, {
+    env: Object.assign({}, modelEnv, opts.env || {}),
+  });
+  return withProxy(merged, fn);
+}
 
 const TIER_TIMEOUTS_MS = {
   'judge':              600_000,
@@ -852,7 +1334,7 @@ const TIER_TIMEOUTS_MS = {
 };
 
 function tierTimeout(tier, fallback = 180_000) {
-  return TIER_TIMEOUTS_MS[tier] || fallback;
+  return modelTestTimeoutMs(TIER_TIMEOUTS_MS[tier] || fallback);
 }
 
 // ── tmpDir registry (SIGINT safety) ───────────────────────────────────────
@@ -921,6 +1403,7 @@ module.exports = {
   assertEq,
   skip,
   summary,
+  makeIsolatedTmpDir,
   withTmpDir,
   writeConfig,
   writeConfigFresh,
@@ -928,8 +1411,11 @@ module.exports = {
   startStubServer,
   spawnCapture,
   spawnProxy,
+  DEFAULT_HERMETIC_READY_TIMEOUT_MS,
+  DEFAULT_HERMETIC_REQUEST_TIMEOUT_MS,
   waitForPing,
   httpJson,
+  terminateAndReap,
   withProxy,
   assertLogContains,
   collectStderr,
@@ -938,7 +1424,16 @@ module.exports = {
   ollamaStubBackend,
   classifierStub,
   httpStream,
+  modelTestTimeoutMs,
+  hasActiveModelTestSupervisor,
+  ensureModelTestSupervisor,
+  modelTestProxyEnv,
+  modelHttpJson,
+  modelHttpStream,
+  withModelTestProxy,
+  boundedDiagnosticSnippet,
   parseStatusBlock,
+  parseAgentContractResult,
   tierTimeout,
   registerTmpDir,
   cleanupTmpDirs,
