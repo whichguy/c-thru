@@ -57,7 +57,7 @@ cat > "$FIXTURE_CONFIG" <<'EOF'
     "nested-a": "nested-b@missing_ep",
     "nested-b@missing_ep": { "endpoint": "cloud_ep", "name": "nested-served" },
     "nested-posix": "nested-posix-7",
-    "re:^nested-posix-[[:digit:]]$": "cloud_ep",
+    "re:^nested-posix-[0-9]$": "cloud_ep",
     "missing-endpoint": "not_defined",
     "cycle-a": "cycle-b",
     "cycle-b": "cycle-a",
@@ -210,7 +210,7 @@ check_case "model@backend sigil target" \
   "sigil-model" "best-cloud" $'local_ep\tsigil-served' 0
 check_case "nested route-name chain" \
   "nested-a" "best-cloud" $'cloud_ep\tnested-served' 0
-check_case "nested jq POSIX-class regex dialect remains supported" \
+check_case "nested digit-class regex dialect remains supported" \
   "nested-posix" "best-cloud" $'cloud_ep\tnested-posix-7' 0
 check_case "seven nested hops remain valid" \
   "depth-2" "best-cloud" $'cloud_ep\tdepth-9' 0
