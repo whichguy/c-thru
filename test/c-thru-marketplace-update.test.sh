@@ -205,6 +205,31 @@ echo "8. Long-running update warns but is never killed"
     || fail "slow CLI finishes naturally and stamp follows it"
 }
 
+echo "9. plugin-fixups-check failure is logged but stays fail-open"
+{
+  D="$BASE/fixups-fail"; make_case "$D" claude
+  cat > "$D/bin/plugin-fixups-check" <<'STUB'
+#!/usr/bin/env bash
+echo "plugin-fixups-check: simulated failure" >&2
+exit 7
+STUB
+  chmod +x "$D/bin/plugin-fixups-check"
+  # Capture stderr (warn line) + still expect exit 0
+  (
+    export HOME="$D/home" CLAUDE_DIR="$D/durable" CLAUDE_CONFIG_DIR="" CLAUDE_PROFILE_DIR="$D/shadow"
+    export C_THRU_MARKETPLACE_CLAUDE_DIR="$D/scan-claude" C_THRU_MARKETPLACE_GROK_DIR="$D/scan-grok"
+    export PATH="$D/bin:$NODE_DIR:/usr/bin:/bin" CLI_LOG="$D/cli.log"
+    bash "$SCRIPT" >"$D/stdout.txt" 2>"$D/stderr.txt"
+    echo $? > "$D/ec"
+  )
+  ec="$(cat "$D/ec" 2>/dev/null || echo 99)"
+  logged="$(grep -c 'plugin-fixups-check --fix rc=7' "$D/durable/.c-thru-marketplace-update.log" 2>/dev/null || true)"
+  warned="$(grep -c 'plugin-fixups-check failed rc=7' "$D/stderr.txt" 2>/dev/null || true)"
+  [[ "$ec" -eq 0 && "$logged" -ge 1 && "$warned" -ge 1 ]] \
+    && pass "failing plugin-fixups-check logs rc and exits 0" \
+    || fail "failing plugin-fixups-check logs rc and exits 0 (ec=$ec logged=$logged warned=$warned)"
+}
+
 echo ""
 if [[ "$FAIL" -gt 0 ]]; then
   echo "$PASS/$((PASS+FAIL)) passed — $FAIL FAILED"

@@ -315,6 +315,28 @@ async function testHttpJsonTimeoutOverride() {
   }
 }
 
+async function testHttpJsonRetryOnTimeout() {
+  console.log('\nhttpJson retries once after timeout');
+  let hits = 0;
+  const srv = await rawServer((req, res) => {
+    hits += 1;
+    if (hits === 1) {
+      // hang first attempt so client times out and retries
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, hits }));
+  });
+  try {
+    const r = await httpJson(srv.port, 'GET', '/retry-me', null, {}, { timeout: 80, retries: 1 });
+    assertEq(r.status, 200, 'retry attempt returns 200');
+    assertEq(r.json?.ok, true, 'retry body ok');
+    assert(hits >= 2, `server saw at least 2 hits (got ${hits})`);
+  } finally {
+    await srv.close();
+  }
+}
+
 async function testStartStubServer() {
   console.log('\nstartStubServer');
 
@@ -550,6 +572,7 @@ async function main() {
   await testWithProxyPreReadyCleanup();
   await testWaitForPing();
   await testHttpJsonTimeoutOverride();
+  await testHttpJsonRetryOnTimeout();
   await testStartStubServer();
   await testSpawnCapture();
   testModelTestTimeout();

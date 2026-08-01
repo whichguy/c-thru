@@ -105,6 +105,13 @@ cthru_chmod_tree_bins() {
       elif [[ "$mode" == "100644" ]]; then
         chmod a-x "$f" 2>/dev/null || true
       fi
+    else
+      # Git-less install (marketplace extract / tarball): no mode ledger. Only
+      # promote shebang Node CLIs to +x — never strip libraries (would guess
+      # wrong without git index modes). Known launchers already +x above.
+      if head -n 1 "$f" 2>/dev/null | grep -q '^#!'; then
+        chmod +x "$f" 2>/dev/null || true
+      fi
     fi
   done
 }

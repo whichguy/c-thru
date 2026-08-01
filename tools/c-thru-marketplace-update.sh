@@ -203,9 +203,21 @@ _with_lock _critical_section >> "$UPDATE_LOG" 2>&1 || true
 # fail with "Cannot find module '/scripts/*-companion.mjs'" because
 # CLAUDE_PLUGIN_ROOT is only interpolated for hooks.json commands, never for
 # Bash-tool calls. Re-apply here rather than waiting for the next dispatch to
-# fail. Fail-open: an update must never be blocked by this.
+# fail. Fail-open: an update must never be blocked by this (background best-
+# effort script; never exit non-zero for missing/failed external fixups).
 if command -v plugin-fixups-check >/dev/null 2>&1; then
-  plugin-fixups-check --fix >> "$UPDATE_LOG" 2>&1 || true
+  _pf_rc=0
+  plugin-fixups-check --fix >> "$UPDATE_LOG" 2>&1 || _pf_rc=$?
+  {
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) plugin-fixups-check --fix rc=${_pf_rc}"
+  } >> "$UPDATE_LOG" 2>/dev/null || true
+  if [[ "$_pf_rc" -ne 0 ]]; then
+    echo "c-thru-marketplace-update: warn: plugin-fixups-check failed rc=${_pf_rc} (see $UPDATE_LOG)" >&2 || true
+  fi
+else
+  {
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) plugin-fixups-check: not on PATH (skipped)"
+  } >> "$UPDATE_LOG" 2>/dev/null || true
 fi
 
 exit 0

@@ -7284,6 +7284,10 @@ const server = http.createServer((req, res) => {
       }
 
       if (req.method === 'GET' && (req.url === '/c-thru/recent' || req.url === '/c-thru/recent/' || req.url.startsWith('/c-thru/recent?'))) {
+        // In-memory only (no disk). Slow wall time under suite load is almost
+        // always event-loop contention — log so full-run flakes leave evidence
+        // without raising hermetic client timeouts as the "fix".
+        const recentStarted = Date.now();
         let n = 50;
         try {
           const raw = new URL(req.url, 'http://x').searchParams.get('n');
@@ -7300,13 +7304,24 @@ const server = http.createServer((req, res) => {
         const pool = scopedSessionId
           ? RECENT_REQUESTS.filter(r => r.session_id === scopedSessionId)
           : RECENT_REQUESTS;
-        return send(res, 200, {
+        const payload = {
           ok: true,
           session: scopedSessionId,
           buffered: pool.length,
           cap: RECENT_MAX,
           requests: pool.slice(-n).reverse(),  // newest first
-        });
+        };
+        const elapsed = Date.now() - recentStarted;
+        if (elapsed > 250) {
+          proxyLog('recent.slow', {
+            elapsed_ms: elapsed,
+            ring_size: RECENT_REQUESTS.length,
+            pool_size: pool.length,
+            n,
+            session: scopedSessionId || null,
+          });
+        }
+        return send(res, 200, payload);
       }
 
       // In-memory launch default (c-thru --model X). Not persisted to disk.

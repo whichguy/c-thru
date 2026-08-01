@@ -58,6 +58,37 @@ else
   fail=1
 fi
 
+# Git-less install: shebang Node CLIs still get +x; non-shebang libs untouched
+GITLESS=$(mktemp -d "${TMPDIR:-/tmp}/c-thru-chmod-gitless.XXXXXX")
+mkdir -p "$GITLESS/tools"
+printf '%s\n' '#!/usr/bin/env node' 'console.log(1);' > "$GITLESS/tools/shebang-cli.js"
+printf '%s\n' 'module.exports = {};' > "$GITLESS/tools/lib-noshebang.js"
+# known launchers present so unconditional +x path is exercised
+: > "$GITLESS/tools/c-thru"
+: > "$GITLESS/tools/claude-proxy"
+chmod 644 "$GITLESS/tools/shebang-cli.js" "$GITLESS/tools/lib-noshebang.js" \
+  "$GITLESS/tools/c-thru" "$GITLESS/tools/claude-proxy"
+REPO_DIR="$GITLESS" CLAUDE_DIR="$GITLESS/claude" cthru_chmod_tree_bins "$GITLESS"
+if [[ -x "$GITLESS/tools/shebang-cli.js" ]]; then
+  echo "PASS  git-less: shebang Node CLI promoted to +x"
+else
+  echo "FAIL  git-less: shebang Node CLI not executable"
+  fail=1
+fi
+if [[ ! -x "$GITLESS/tools/lib-noshebang.js" ]]; then
+  echo "PASS  git-less: non-shebang library left non-executable"
+else
+  echo "FAIL  git-less: non-shebang library wrongly +x"
+  fail=1
+fi
+if [[ -x "$GITLESS/tools/c-thru" && -x "$GITLESS/tools/claude-proxy" ]]; then
+  echo "PASS  git-less: known launchers +x"
+else
+  echo "FAIL  git-less: known launchers not executable"
+  fail=1
+fi
+rm -rf "$GITLESS"
+
 if [[ $fail -ne 0 ]]; then
   echo "install-core-chmod-modes: $fail failure(s)"
   exit 1

@@ -475,42 +475,82 @@ function waitForPing(port, timeoutMs = DEFAULT_HERMETIC_READY_TIMEOUT_MS) {
 // ── HTTP helper ────────────────────────────────────────────────────────────
 
 // Returns { status, headers, json, bodyText }.
+// timeoutOrOpts: number ms, or { timeout, retries } where retries is one
+// additional attempt after a request timeout (not connection errors).
+// On timeout before final attempt, dumps lightweight load diagnostics to stderr
+// so full-suite flakes leave evidence without raising the default 10s bound.
 function httpJson(
   port,
   method,
   urlPath,
   body,
   extraHeaders = {},
-  timeout = DEFAULT_HERMETIC_REQUEST_TIMEOUT_MS,
+  timeoutOrOpts = DEFAULT_HERMETIC_REQUEST_TIMEOUT_MS,
 ) {
-  return new Promise((resolve, reject) => {
-    const bodyStr = body ? JSON.stringify(body) : null;
-    const headers = Object.assign(
-      { 'Content-Type': 'application/json' },
-      bodyStr ? { 'Content-Length': Buffer.byteLength(bodyStr) } : {},
-      extraHeaders,
-    );
-    const req = http.request(
-      { hostname: '127.0.0.1', port, path: urlPath, method, headers },
-      res => {
-        const chunks = [];
-        res.on('data', c => chunks.push(c));
-        res.on('end', () => {
-          const bodyText = Buffer.concat(chunks).toString('utf8');
-          let json = null;
-          try { json = JSON.parse(bodyText); } catch {}
-          resolve({ status: res.statusCode, headers: res.headers, json, body: json, bodyText });
-        });
-      }
-    );
-    req.setTimeout(timeout, () => {
-      req.destroy();
-      reject(new Error(`httpJson: request to ${urlPath} timed out after ${timeout}ms`));
+  let timeout = DEFAULT_HERMETIC_REQUEST_TIMEOUT_MS;
+  let retries = 0;
+  if (timeoutOrOpts && typeof timeoutOrOpts === 'object') {
+    if (timeoutOrOpts.timeout != null) timeout = timeoutOrOpts.timeout;
+    if (timeoutOrOpts.retries != null) retries = timeoutOrOpts.retries;
+  } else if (typeof timeoutOrOpts === 'number') {
+    timeout = timeoutOrOpts;
+  }
+
+  function once() {
+    return new Promise((resolve, reject) => {
+      const bodyStr = body ? JSON.stringify(body) : null;
+      const headers = Object.assign(
+        { 'Content-Type': 'application/json' },
+        bodyStr ? { 'Content-Length': Buffer.byteLength(bodyStr) } : {},
+        extraHeaders,
+      );
+      const req = http.request(
+        { hostname: '127.0.0.1', port, path: urlPath, method, headers },
+        res => {
+          const chunks = [];
+          res.on('data', c => chunks.push(c));
+          res.on('end', () => {
+            const bodyText = Buffer.concat(chunks).toString('utf8');
+            let json = null;
+            try { json = JSON.parse(bodyText); } catch {}
+            resolve({ status: res.statusCode, headers: res.headers, json, body: json, bodyText });
+          });
+        }
+      );
+      req.setTimeout(timeout, () => {
+        req.destroy();
+        reject(new Error(`httpJson: request to ${urlPath} timed out after ${timeout}ms`));
+      });
+      req.on('error', reject);
+      if (bodyStr) req.write(bodyStr);
+      req.end();
     });
-    req.on('error', reject);
-    if (bodyStr) req.write(bodyStr);
-    req.end();
-  });
+  }
+
+  async function withRetry() {
+    let attempt = 0;
+    // attempt 0 + retries extra attempts
+    for (;;) {
+      try {
+        return await once();
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        const isTimeout = /timed out after \d+ms/.test(msg);
+        if (!isTimeout || attempt >= retries) throw err;
+        attempt += 1;
+        try {
+          const load = typeof os.loadavg === 'function' ? os.loadavg() : null;
+          process.stderr.write(
+            `httpJson: timeout ${method} ${urlPath} port=${port}; retry ${attempt}/${retries}` +
+            (load ? ` loadavg=${load.map(n => n.toFixed(2)).join(',')}` : '') +
+            ` free_mb≈${Math.round((os.freemem?.() || 0) / 1024 / 1024)}\n`,
+          );
+        } catch { /* diagnostic best-effort */ }
+      }
+    }
+  }
+
+  return withRetry();
 }
 
 // ── withProxy wrapper ──────────────────────────────────────────────────────

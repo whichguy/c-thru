@@ -45,6 +45,13 @@ function msgBody(extra = {}) {
 
 const AUTH_HEADERS = { 'x-api-key': 'test', 'anthropic-version': '2023-06-01' };
 
+// Control GETs under full-suite load can hit the 10s hermetic bound when the
+// event loop is contended. One retry + diagnostic dump (helpers) — do not raise
+// DEFAULT_HERMETIC_REQUEST_TIMEOUT_MS as the flake "fix".
+function getRecent(port, urlPath = '/c-thru/recent') {
+  return httpJson(port, 'GET', urlPath, null, {}, { retries: 1 });
+}
+
 function killAndWait(child, signal = 'SIGTERM') {
   return new Promise(resolve => {
     let done = false;
@@ -99,7 +106,7 @@ async function testOrderingAndFields() {
     await httpJson(port, 'GET', '/c-thru/status', null, {});
     await httpJson(port, 'POST', '/v1/messages/count_tokens', msgBody(), AUTH_HEADERS);
 
-    const r = await httpJson(port, 'GET', '/c-thru/recent', null, {});
+    const r = await getRecent(port, '/c-thru/recent');
     assertEq(r.status, 200, 'Test 1: GET /c-thru/recent returned 200');
     assert(r.json && r.json.ok === true, 'Test 1: response has ok:true');
     assertEq(r.json.buffered, 3, 'Test 1: buffered === 3 (control + count_tokens excluded)');
@@ -148,17 +155,17 @@ async function testNClamp() {
       await httpJson(port, 'POST', '/v1/messages', msgBody(), AUTH_HEADERS);
     }
 
-    const r2 = await httpJson(port, 'GET', '/c-thru/recent?n=2', null, {});
+    const r2 = await getRecent(port, '/c-thru/recent?n=2');
     assertEq(r2.json.requests.length, 2, 'Test 2: n=2 returns 2 entries');
     assertEq(r2.json.buffered, 4, 'Test 2: buffered still reports 4');
 
-    const r0 = await httpJson(port, 'GET', '/c-thru/recent?n=0', null, {});
+    const r0 = await getRecent(port, '/c-thru/recent?n=0');
     assertEq(r0.json.requests.length, 1, 'Test 2: n=0 clamps to 1');
 
-    const rBig = await httpJson(port, 'GET', '/c-thru/recent?n=99999', null, {});
+    const rBig = await getRecent(port, '/c-thru/recent?n=99999');
     assertEq(rBig.json.requests.length, 4, 'Test 2: n=99999 clamps to cap, returns all 4');
 
-    const rDefault = await httpJson(port, 'GET', '/c-thru/recent/', null, {});
+    const rDefault = await getRecent(port, '/c-thru/recent/');
     assertEq(rDefault.status, 200, 'Test 2: trailing-slash variant returns 200');
     assertEq(rDefault.json.requests.length, 4, 'Test 2: default n=50 returns all 4');
 
@@ -184,7 +191,7 @@ async function testCapEviction() {
         msgBody({ metadata: { user_id: `req_${i}` } }), AUTH_HEADERS);
     }
 
-    const r = await httpJson(port, 'GET', '/c-thru/recent?n=10', null, {});
+    const r = await getRecent(port, '/c-thru/recent?n=10');
     assertEq(r.json.cap, 5, 'Test 3: cap === 5');
     assertEq(r.json.buffered, 5, 'Test 3: buffered === 5 (3 oldest evicted)');
     assertEq(r.json.requests.length, 5, 'Test 3: 5 entries returned');
@@ -211,7 +218,7 @@ async function testErrorCapture() {
     const { status } = await httpJson(port, 'POST', '/v1/messages', msgBody(), AUTH_HEADERS);
     assertEq(status, 502, 'Test 4: proxy surfaced the upstream 502');
 
-    const r = await httpJson(port, 'GET', '/c-thru/recent', null, {});
+    const r = await getRecent(port, '/c-thru/recent');
     assertEq(r.json.buffered, 1, 'Test 4: error request entered the ring');
     const e = r.json.requests[0];
     assertEq(e.status, 502, 'Test 4: entry.status === 502');
@@ -255,7 +262,7 @@ async function testFallbackAttribution() {
     const { status } = await httpJson(port, 'POST', '/v1/messages', msgBody({ model: 'primary-model' }), AUTH_HEADERS);
     assertEq(status, 200, 'Test 5: request served via fallback (200)');
 
-    const r = await httpJson(port, 'GET', '/c-thru/recent', null, {});
+    const r = await getRecent(port, '/c-thru/recent');
     assertEq(r.json.buffered, 1, 'Test 5: one ring entry for the whole fallback chain');
     const e = r.json.requests[0];
     assertEq(e.model, 'primary-model', 'Test 5: entry.model is the original request');
@@ -293,7 +300,7 @@ async function testStreamingTokens() {
     const r1 = await httpStream(port, 'POST', '/v1/messages', msgBody({ stream: true }), AUTH_HEADERS);
     assertEq(r1.status, 200, 'Test 6: streaming request returned 200');
 
-    const r = await httpJson(port, 'GET', '/c-thru/recent', null, {});
+    const r = await getRecent(port, '/c-thru/recent');
     const e = r.json.requests[0];
     assertEq(e.stream, true, 'Test 6: entry.stream === true');
     assertEq(e.input_tokens, 7, 'Test 6: input_tokens from message_start frame');
@@ -315,12 +322,12 @@ async function testZeroPersistence() {
     stub = await stubBackend();
     state = await spawnRecentProxy(buildConfig(stub.port));
     await httpJson(state.port, 'POST', '/v1/messages', msgBody(), AUTH_HEADERS);
-    const before = await httpJson(state.port, 'GET', '/c-thru/recent', null, {});
+    const before = await getRecent(state.port, '/c-thru/recent');
     assertEq(before.json.buffered, 1, 'Test 7: entry buffered before restart');
     await killAndWait(state.child, 'SIGTERM');
 
     state2 = await spawnRecentProxy(buildConfig(stub.port));
-    const after = await httpJson(state2.port, 'GET', '/c-thru/recent', null, {});
+    const after = await getRecent(state2.port, '/c-thru/recent');
     assertEq(after.json.buffered, 0, 'Test 7: ring empty after restart');
     assertEq(after.json.requests.length, 0, 'Test 7: no entries returned after restart');
 
@@ -579,12 +586,9 @@ async function testRequestCompleteLog() {
     assertEq(abortedCompletion?.aborted, true, 'Test 8: disconnect is aborted');
     assertEq(abortedCompletion?.success, false, 'Test 8: aborted completion is unsuccessful');
 
-    const recent = await httpJson(
+    const recent = await getRecent(
       port,
-      'GET',
       `${sessionPrefix}/c-thru/recent?n=10&access_token=QUERY_SECRET_SHOULD_NOT_LOG`,
-      null,
-      {},
     );
     assertEq(recent.status, 200, 'Test 8: session-scoped recent view returned 200');
     assert(
