@@ -2956,7 +2956,8 @@ async function forwardAnthropic(ctx, req, res, body, backend, effectiveModel, re
       }).catch(async (e) => {
         if (!res.headersSent) {
           sendAnthropicError(res, upRes.statusCode || 502,
-            `backend ${backend.id} returned ${upRes.statusCode}: failed to read error body (${e.message})`);
+            `backend ${backend.id} returned ${upRes.statusCode}: failed to read error body (${e.message})`,
+            null, hardFailErrorHeaders(requestMeta, effectiveModel));
         }
       });
       return;
@@ -4353,7 +4354,8 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
   if (!applyOutboundAuth(backend, req.headers, headers, requestMeta)) {
     return sendAnthropicError(res, 401,
       `Endpoint "${backend.id}" is configured with auth:"subscription" — ` +
-      'only Bearer session tokens are accepted. API key billing (x-api-key) is blocked on this endpoint.');
+      'only Bearer session tokens are accepted. API key billing (x-api-key) is blocked on this endpoint.',
+      null, hardFailErrorHeaders(requestMeta, effectiveModel));
   }
   if (requestMeta) requestMeta.authMissing = isAuthMissing(backend);
 
@@ -4878,7 +4880,8 @@ async function forwardGemini(ctx, req, res, body, backend, effectiveModel, reque
           scheduleCacheCreate();
         } catch (e) {
           ctxLog(ctx, 'gemini.parse_error', { error: e.message, body: respBody });
-          sendAnthropicError(res, 502, `failed to parse Gemini response: ${e.message}`);
+          sendAnthropicError(res, 502, `failed to parse Gemini response: ${e.message}`,
+            null, hardFailErrorHeaders(requestMeta, effectiveModel));
         }
       });
     }
@@ -6071,7 +6074,8 @@ async function forwardOpenAI(ctx, req, res, body, backend, effectiveModel, reque
   headers['content-type'] = 'application/json';
   if (!applyOutboundAuth(backend, req.headers, headers, requestMeta)) {
     return sendAnthropicError(res, 401,
-      `Endpoint "${backend.id}" is configured with auth:"subscription" — only Bearer session tokens are accepted.`);
+      `Endpoint "${backend.id}" is configured with auth:"subscription" — only Bearer session tokens are accepted.`,
+      null, hardFailErrorHeaders(requestMeta, body && body.model || effectiveModel));
   }
   if (requestMeta) requestMeta.authMissing = isAuthMissing(backend);
   const payload = JSON.stringify(openaiBody);
