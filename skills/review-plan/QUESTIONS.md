@@ -219,7 +219,7 @@ Count ui-evaluator edits → `ui_plan_changes += count` (combined into `changes_
 
 ## Post-Convergence Questions
 
-*3 questions. Evaluated once after convergence loop exits.
+*4 questions. Evaluated once after convergence loop exits.
 Not part of per-pass evaluation or convergence scoring.*
 
 | Q | Gate | Question | When |
@@ -227,6 +227,7 @@ Not part of per-pass evaluation or convergence scoring.*
 | Q-G9 | — | Organization pass | inline (team-lead) |
 | Q-E1 | 1 | Git lifecycle | epilogue (team-lead) |
 | Q-E2 | 1 | Post-implementation workflow | epilogue (team-lead) |
+| Q-E3 | 2 | Review Coverage | epilogue (team-lead) |
 
 Q-G9 sub-questions (Q-G9a through Q-G9f) are defined in the Layer 1 section above.
 
@@ -245,6 +246,12 @@ IS_GAS: N/A — covered by gas-evaluator Q1, Q2.
 | Q-E2 | 1 | Post-implementation workflow | Post-impl section (after impl, not bundled) has all 4: (1) `/review-fix` loop→0 findings, (2) build if applicable, (3) tests if any, (4) fail→fix→re-run `/review-fix`→re-run until pass. All imperative, not optional. Flag: user-optional or user-confirmation language. EDIT: absent→inject `## Post-Implementation Workflow` (all 4); missing step 4→append. | IS_GAS (covered by Q42 in gas-plan) |
 
 IS_GAS: N/A — covered by gas-evaluator Q42.
+
+### Q-E3: Review Coverage
+
+| Q | Gate | Question | Criteria | N/A |
+|---|------|----------|----------|-----|
+| Q-E3 | 2 | Review Coverage | Non-trivial code plans include a filled `## Review Coverage` section (skill-craft `review-coverage` template / `review-coverage template`), or the valid waiver `None — residual loop waived: <reason>`. Require Base ref, Target paths, and Test command when known. Prefer Edit plan over exit gating. | IS_TRIVIAL; documentation-only; or residual loop waived with reason |
 
 ---
 

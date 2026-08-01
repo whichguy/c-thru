@@ -30,6 +30,7 @@ See also: `CLAUDE.md PLAN_EXIT` directive — `Skill("review-plan")` is the only
 4. **Goal:** Drive the plan to 0 NEEDS_UPDATE on Gate 1 questions within 5 passes, then produce the scorecard and exit.
 5. **Directive:** After convergence, extract plan-specific Implementation Intent Questions (Phase 5c.5) and append to the plan file. These become the POST_IMPLEMENT verification contract for `/review-fix` (intent-to-code drift detection).
 6. **Directive:** After every FULL-tier review, spawn a senior-engineer Task() agent (Phase 5g) to surface 0–5 skill improvements (not plan retrospectives). Renders as `SKILL LEARNINGS` panel before cleanup.
+7. **Directive:** After convergence, ensure non-trivial code plans have a filled `## Review Coverage` section or waiver per Q-E3 and skill-craft `review-coverage` (not an ExitPlanMode force).
 
 ---
 
