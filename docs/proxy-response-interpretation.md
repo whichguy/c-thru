@@ -33,10 +33,10 @@ restart (see [Restart after proxy code changes](#restart-after-proxy-code-change
 
 - **Content-Length** is deleted on outbound rewrite (`scrubCthruHeaders`) — Node recomputes length. Correct.
 - **Agent sentinel** is prepended by the PreToolUse hook into the task prompt. The proxy:
-  1. Finds the marker with **`lastIndexOf`** (newest wins when multi-turn history still carries older markers).
-  2. Extracts an **opaque name** (arbitrary agent, capability, or model id until `]]`; optional legacy trailing `:<16-hex>` tag, peeled but not verified). When trusted (loopback client or `x-c-thru-agent` header), sets `body.model = name` and runs normal **`resolveBackend`** mapping (not limited to `agent_to_capability`).
-  3. **`stripAgentSentinelFromBody`** removes all `[[c-thru-agent:…]]` strings before forwarding so the upstream LLM never sees routing metadata.
-  Client SQLite history still retains markers for the next turn. HTTP headers `x-c-thru-*` are already scrubbed outbound; the header `x-c-thru-agent` is optional and unused by stock Claude Code.
+  1. Inspects only direct `role:"user"` string content and `type:"text"` blocks. It does not recurse into assistant `tool_use.input`, user `tool_result`, system text, or arbitrary JSON, so a delegated prompt retained in the parent transcript is not a routing candidate.
+  2. Requires all three trust signals before overriding `body.model`: a loopback TCP peer, a syntactically valid `x-claude-code-agent-id` (spawned-agent request), and a full HMAC-SHA256 signature under the distinct per-user `proxy.agent-token`. First-level agents have no parent ID; when a nested agent supplies `x-claude-code-parent-agent-id`, that additional correlation value is validated too. Unsigned, legacy 16-hex, invalid, missing-token, remote, and main-thread candidates fail closed. The optional `x-c-thru-agent` header also requires `x-c-thru-agent-signature`.
+  3. Resolves the authenticated opaque name through normal **`resolveBackend`** mapping, then **`stripAgentSentinelFromBody`** removes markers recursively from all message/system fields before forwarding. Client `x-c-thru-*` headers are scrubbed outbound.
+  The stable 0600 agent token is separate from `proxy.control-token` so independent sessions can reuse a fixed proxy. Replay boundary: a local process that can read `proxy.agent-token` (or otherwise obtain a valid signed marker) can replay that name while also supplying a syntactically valid spawned-agent ID; this mechanism is not a privilege boundary against same-user local code. Ordinary upstream models and nested tool results do not receive usable markers because the proxy strips them.
 - **Model rewrite** changes request JSON size; response is not a slice of the request.
 - **Default mode** is `best-cloud-oss` (cloud OSS). Enum aliases `sonnet`/`opus`/`haiku`/`fable` are mode-conditional so they do not force Anthropic under OSS mode.
 

@@ -65,8 +65,10 @@ Remaining intentional stderr (not “debug noise”):
 | Rule | Detail |
 |---|---|
 | Absent-only | Inject default only if user/caller has **no** `statusLine` |
-| Opt out | `C_THRU_NO_STATUSLINE=1` |
+| Opt out inject | `C_THRU_NO_STATUSLINE=1` |
+| Skill enable | `/c-thru-config statusline on` writes durable `settings.json` (restart required); `off` / `style stats\|default\|minimal` |
 | Overlay off | `C_THRU_STATUSLINE_OVERLAY=0` → `model \| cwd` only (skips recent fetch, fallback badge, **and** dash — all share one gate) |
+| Style | `C_THRU_STATUSLINE_STYLE=minimal\|default\|stats` or durable `c-thru-statusline.json` (`stats` → `GET /c-thru/statusline`) |
 | Dash off | `C_THRU_STATUSLINE_DASH=0` — hides dash only when the overlay path is still on |
 | No OSC-8 | Hyperlinks in the statusline are unreliable in Claude Code; bar uses plain `dash :PORT/c-thru/dashboard` |
 

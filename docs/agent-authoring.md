@@ -7,6 +7,9 @@ their descriptions and delegate" `--append-system-prompt`. A vague description m
 never selected, no matter how good its system prompt is. **The description is the agent's only
 discovery surface.**
 
+`agents/CLAUDE.md` and `agents/AGENTS.md` are reserved scoped instruction files, not agent
+definitions. The launcher excludes both from the ephemeral agent store and `--agents` payload.
+
 This guide documents the house conventions that make a description discoverable. They are
 enforced by `test/agent-description-quality.test.js` (fail-closed), so a new agent must follow
 them to land green.
@@ -175,6 +178,43 @@ and to use `advisors` for multi-model panels. Grok multi-file implement: externa
 `name`, `model`, and `tier_budget` are validated by `tools/c-thru-contract-check.sh` and the
 agent→capability tests — leave them exactly as-is when editing a description. Prefer omitting
 `tools` so agents inherit the session toolset.
+
+### `effort` — optional reasoning depth
+
+Agent definitions may set Claude Code's native optional effort field:
+
+```yaml
+effort: high
+```
+
+Accepted values are `low`, `medium`, `high`, `xhigh`, and `max`. The ephemeral agent builder
+copies a valid value into the injected `--agents` JSON and fails before launch on an invalid
+value. When `effort` is omitted, the agent inherits the session effort; adaptive-reasoning models
+still decide how much thinking an individual prompt needs within that setting. This inherited,
+adaptive behavior is the recommended default unless a role has a measured reason to force a
+different cost/latency envelope.
+
+Prompt wording can also steer an adaptive model to think more or less for that task, but it does
+not make C-Thru infer or rewrite the discrete `effort` field. Omit `effort` when prompt-sensitive
+adaptation is desired; set it only when the role itself needs a stable posture.
+
+Use `effort`, not a custom `thinking_level` field. Claude Code does not currently expose effort as
+a per-invocation `Agent(...)` argument, and `CLAUDE_CODE_EFFORT_LEVEL` takes precedence over agent
+frontmatter. C-Thru therefore does not infer or encode effort in the signed routing sentinel.
+
+Under Claude Code's documented agent/API contract, the selected value is supplied as Anthropic
+`output_config.effort`:
+
+- Anthropic, OpenRouter, and modern Ollama Messages routes receive that field unchanged. For
+  Ollama/Kimi this proves transport only; whether a specific model honors every level requires
+  provider/live evidence.
+- OpenAI Responses maps it to `reasoning.effort`.
+- xAI Responses preserves `low`/`medium`/`high` and clamps `xhigh`/`max` to `high` with an
+  `x-c-thru-translation-gap` marker.
+- Gemini 3 HTTP APIs map it to the closest supported `thinkingLevel`; Gemini 2.5 HTTP APIs receive
+  an approximate `thinkingBudget`. The translator preserves the caller's hard `max_tokens` cap and
+  `display: omitted`; model-specific coercions are exposed as translation gaps. This path calls
+  Google's API directly and has no Gemini CLI dependency.
 
 ### `color` — not used (removed)
 

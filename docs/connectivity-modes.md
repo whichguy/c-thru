@@ -53,7 +53,7 @@ A flat string value (no per-tier object) is also accepted and applies to every t
 
 | Mode | Intent |
 |---|---|
-| `best-cloud` | Anthropic (Opus/Sonnet) + Gemini cloud; local fallback at 64gb+. |
+| `best-cloud` | Anthropic-led cloud (Fable/Opus/Sonnet), with local small-model routing for selected roles/tiers. |
 | `best-cloud-oss` | **Default.** Cloud-hosted OSS (DeepSeek, Kimi, GLM via `*:cloud` / OpenRouter); Anthropic fallback |
 | `best-local-oss` | Fully local inference (Phi, Qwen, Devstral, Llama); no cloud egress |
 | `best-cloud-gov` | USGov-compliant cloud — Anthropic + non-Chinese-origin OSS only; Chinese-origin models blocked |
@@ -91,8 +91,8 @@ time and runtime, even if a fallback chain would otherwise reach one.
 **Commercial US cloud (not FedRAMP ATO by itself).** Selected capabilities (currently
 `generalist` and `writer` at 32gb+) route to **Grok** (`grok-4.5` via `endpoints.xai`,
 `XAI_API_KEY`) under `best-cloud-gov`. That is **Grok surface B** (silent capability pin) —
-the same proxy Anthropic Messages path as the brand leaf (surface A), not the Grok Build CLI
-(surface C). See `docs/agent-architecture.md` § Grok surfaces. It is a US commercial path
+the same Anthropic-to-xAI Responses translation path as surface A, not the subscription-backed
+Grok Build CLI (surface C). See `docs/agent-architecture.md` § Grok surfaces. It is a US commercial path
 (GSA OneGov / xAI for Government framing); operators must confirm agency ATO before CUI.
 High-stakes capabilities (`planner-hard`, `reviewer-security`, `coder`, `tester`,
 `code-reviewer`, …) stay on Claude. Named agents `deepseek` / `qwen` / `kimi` pin
@@ -165,8 +165,8 @@ a built-in mode slot):
 
 ```json
 "llm_profiles": {
-  "planner-hard":      { "best-cloud-oss": "deepseek-v4-flash:cloud", "deepseek-hybrid": "claude-opus-4-8" },
-  "reviewer-security": { "best-cloud-oss": "deepseek-v4-flash:cloud", "deepseek-hybrid": "claude-opus-4-8" }
+  "planner-hard":      { "best-cloud-oss": "deepseek-v4-pro:cloud", "deepseek-hybrid": "claude-opus-5" },
+  "reviewer-security": { "best-cloud-oss": "deepseek-v4-pro:cloud", "deepseek-hybrid": "claude-opus-5" }
 }
 ```
 

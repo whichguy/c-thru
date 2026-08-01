@@ -249,7 +249,7 @@ Groups: **observability** (`dashboard`, `backend-latency-ms`, `auth-missing`, `a
 `tier-detected`/`tier-used`), **routing** (`served-by`, `resolution-chain`, `resolved-via`,
 `fallback-from`, `deprecated-model`), **cache** (`cache-status`, `user-id`), **translation gaps**
 (`schema-scrubbed`, `redacted-thinking-dropped`, `translation-gap`, `beta-dropped`, `passthrough[-host]`),
-**thinking** (`thinking-auto-enabled`, `thinking-level`, `thinking-budget-added`, `thinking-tokens`).
+**thinking** (`thinking-auto-enabled`, `thinking-level`, `thinking-tokens`).
 
 ---
 

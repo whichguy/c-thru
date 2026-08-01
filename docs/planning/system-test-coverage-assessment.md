@@ -1,5 +1,13 @@
 # System-test coverage assessment (c-thru)
 
+> **Historical snapshot — not a current coverage ledger (2026-07-24).**
+> Subsequent changes added real spawned-proxy sentinel, launcher-secret,
+> auth-strip, custom-mode, and fallback tests, and the sentinel trust design is
+> now loopback **plus** parent-agent correlation and HMAC-based, rather than
+> trusting a forgeable in-band name. Use `test/run-all.sh` plus the
+> current test files as executable evidence; re-audit any remaining lifecycle
+> gaps instead of treating the gap list below as present tense.
+
 Produced by a multi-agent assessment (6 dimension assessors over the live test tree + source → a
 cross-cutting synthesis critic). Question: *do we have the right system/integration tests, or need to expand
 coverage?* Answer: **roughly the right shape, but ~6 high-leverage end-to-end holes at the trust/failure

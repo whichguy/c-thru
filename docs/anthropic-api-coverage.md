@@ -39,8 +39,8 @@ catch-all even when a Gemini backend is present).
 | **Anthropic** | `call_style: "anthropic"` (default), `endpoints.anthropic`, OpenRouter, etc. |
 | **Gemini** | `call_style: "gemini"` (Google AI Studio + Vertex). Translated by `forwardGemini`. |
 | **Ollama** | `kind: "ollama"` or `localhost:11434`. Default path is `forwardAnthropic` to Ollama's `/v1/messages` adapter (Ollama 0.4+); `legacy_ollama_chat: true` opts into `forwardOllamaLegacy` (`/api/chat`). |
-| **xAI (Grok)** | `endpoints.xai` — `format: "anthropic"` passthrough to `https://api.x.ai/v1/messages`. **Upstream status:** xAI documents Anthropic SDK / Messages compatibility as **fully deprecated** (prefer Responses API or gRPC for new clients). c-thru still uses Messages for brand-agent and `best-cloud-gov` Grok cells; the proxy sanitizes known 400 shapes (`sanitizeXaiAnthropicBody`). Non-2xx responses log `anthropic.upstream.error` (safe `message` + `body_preview`, `tools_in`, `xai`); midstream SSE failures log `client_cancelled` on `anthropic.upstream.midstream_error`. **Canary:** `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js` (C1–C5). Auth: `XAI_API_KEY` via `header_env` (never Anthropic client keys). The separate Grok Build CLI (`grok-cc`) does **not** use this path. See `docs/agent-architecture.md` § Grok surfaces. |
-| **OpenAI** | `call_style: "openai"` — P0 Anthropic ↔ OpenAI Responses-API translation is shipped and live (commits `135070b`, `a671704`, `adb74c7`, `c240c86`). |
+| **xAI (Grok)** | `endpoints.xai` — `format: "openai"` routes through the shared Responses translator to `https://api.x.ai/v1/responses`. This replaces xAI's fully deprecated Anthropic-compatible `/v1/messages` surface. Routes `grok`, `grok-4.5`, `grok-build`, and `grok-build-latest` resolve to `grok-4.5`; the latter two name the API model route, not the subscription CLI. xAI's documented nested named-function `tool_choice` is isolated from OpenAI Responses' flat selector. **Canary:** `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js`. Auth: `XAI_API_KEY` only (never Anthropic client keys or cached `grok login`). |
+| **Responses (OpenAI / xAI)** | `call_style: "openai"` — shared Anthropic ↔ OpenAI-compatible Responses translation: typed text/image input, client function declarations and multi-turn `function_call` / `function_call_output`, incremental SSE, reasoning summaries, usage, Anthropic-valid refusal normalization, and explicit translation-gap reporting. |
 
 ---
 
@@ -51,8 +51,8 @@ client**. The authoritative operator contract is Anthropic’s
 [gateway protocol reference](https://code.claude.com/docs/en/llm-gateway-protocol)
 (plus [connect](https://code.claude.com/docs/en/llm-gateway-connect) /
 [rollout](https://code.claude.com/docs/en/llm-gateway-rollout)). c-thru’s
-`claude-proxy` is that gateway: it also *translates* to Gemini/Ollama and
-sanitizes xAI Messages quirks. The matrix below is the full Anthropic API
+`claude-proxy` is that gateway: it also *translates* to Gemini, OpenAI-compatible
+Responses (OpenAI and xAI), and legacy Ollama shapes. The matrix below is the full Anthropic API
 surface; this section marks what is **load-bearing for day-to-day Claude Code**
 vs rare admin / Managed Agents traffic.
 
@@ -61,14 +61,25 @@ vs rare admin / Managed Agents traffic.
 | Requirement | Official | c-thru | Pins |
 |---|---|---|---|
 | `POST /v1/messages` (+ `?beta=true`) | Required | ✅ all backends above | suite-wide |
-| Stream SSE as bytes arrive (no full-body buffer) | Required | ✅ Anthropic: `upRes.pipe(res)` after headers; Gemini/Ollama: re-encoded Anthropic SSE | `test/proxy-gateway-protocol.test.js` §1; `test/proxy-streaming.test.js` |
-| Forward `anthropic-beta` / `anthropic-version` open-list | Required | ✅ `scrubCthruHeaders` only strips host / content-length / `x-c-thru-*` | `test/proxy-gateway-protocol.test.js` §3 |
+| Stream SSE as bytes arrive (no full-body buffer) | Required | ✅ Anthropic: `upRes.pipe(res)` after headers; Gemini/Responses/legacy Ollama: incrementally re-encoded Anthropic SSE | `test/proxy-gateway-protocol.test.js` §1; `test/proxy-streaming.test.js`; `test/proxy-openai-translation.test.js` |
+| Forward `anthropic-beta` / `anthropic-version` open-list | Required | ✅ preserved by `scrubCthruHeaders` | `test/proxy-gateway-protocol.test.js` §3 |
+| Handle `x-claude-code-session-id`, `x-claude-code-agent-id`, and `x-claude-code-parent-agent-id` | Gateway attribution input; upstream forwarding is policy-controlled | ✅ endpoint trust policy preserves or strips all three together | `test/proxy-gateway-protocol.test.js` §3; `test/anthropic-api-coverage.test.js` §2 |
+| Scrub client-supplied `x-c-thru-*` before upstream dispatch | c-thru safety boundary | ✅ all proxy-private request headers removed | `test/proxy-gateway-protocol.test.js` §3 |
 | Forward request body fields unchanged (Anthropic upstream) | Required | ✅ passthrough; translators intentionally rewrite | `tool_reference` pin §4 |
 | Upstream **400** error wording unmodified | Required (CC auto-recovery matches text) | ✅ non-fallback 400: raw body; 5xx may use structured wrapper | `test/proxy-gateway-protocol.test.js` §2 |
 | `POST /v1/messages/count_tokens` | Optional (CC estimates if absent) | ✅ | `test/proxy-count-tokens.test.js` |
 | `GET /v1/models` | Optional discovery | ✅ synthesized from `model_routes` + `claude-via-*` | §5 of gateway-protocol suite |
 | `HEAD /` | Best-effort startup probe | ✅ empty 200 | §5 |
 | Long-lived SSE / stall | Client idle ~5m on gateways (`API_FORCE_IDLE_TIMEOUT`) | Proxy `STREAM_STALL_HARDFAIL_MS` (~5m) + translate-path `event: ping` keepalives | env: `CLAUDE_PROXY_PING_INTERVAL_MS` |
+
+Correlation headers contain session-scoped and per-spawn agent identifiers, so
+Anthropic wire compatibility alone is not a trust grant. Endpoint boolean
+`preserve_claude_code_correlation` explicitly preserves (`true`) or strips
+(`false`) all three headers. When absent, legacy behavior preserves them only
+for endpoint id `anthropic` or an `anthropic.com` hostname, including
+subdomains; unrelated custom and non-Anthropic providers strip them. The same
+predicate applies to `/v1/messages` and the Anthropic catch-all. The shipped
+`endpoints.anthropic` sets the field to `true` so its trust is explicit.
 
 ### Model discovery filter (Claude Code client)
 
@@ -174,17 +185,16 @@ DELETE method propagation through the catch-all forwarder, and
 
 Cells describe what happens to a block of that type in the **inbound** request
 on its way to the upstream backend. Output translation (upstream → Anthropic)
-is a separate concern handled by `forwardGemini` SSE assembly and the Ollama
-adapters.
+is a separate concern handled by the Gemini, Responses, and Ollama adapters.
 
-| Block type | Anthropic | Gemini | Ollama (`/v1/messages`) | Ollama (legacy `/api/chat`) | OpenAI |
+| Block type | Anthropic | Gemini | Ollama (`/v1/messages`) | Ollama (legacy `/api/chat`) | Responses (OpenAI / xAI) |
 |---|---|---|---|---|---|
 | `text` | ✅ | ✅ → `parts[].text` | ✅ | ✅ | ✅ → `input_text` |
-| `image` (base64/url/file) | ✅ | ✅ → `inlineData` / `fileData` | ✅ (forwarded; backend may reject) | ⚠️ flattened to text | 🚫 dropped; `x-c-thru-translation-gap` |
+| `image` (base64/url/file) | ✅ | ✅ → `inlineData` / `fileData` | ✅ (forwarded; backend may reject) | ⚠️ flattened to text | ⚠️ user base64 → `input_image`; URL/file/invalid source records `image.source` |
 | `document` (PDF) | ✅ | ✅ → `inlineData` / `fileData` (PDF mime) | ✅ (forwarded) | ⚠️ flattened | 🚫 dropped; `x-c-thru-translation-gap` |
-| `tool_use` | ✅ | ✅ → `functionCall` (with `thoughtSignature` for Gemini 3+) | ✅ | 🚫 stripped | 🚫 inbound history dropped; `x-c-thru-translation-gap` (request-level `tools[]` mapping works) |
-| `tool_result` | ✅ | ✅ → `functionResponse` (`is_error` wrapped in `.error`) | ✅ | 🚫 stripped | 🚫 inbound history dropped; `x-c-thru-translation-gap` (request-level `tools[]` mapping works) |
-| `thinking` | ✅ | ✅ → `parts[].thought:true` (+ `thoughtSignature`) | ✅ | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
+| `tool_use` | ✅ | ✅ → `functionCall` (with `thoughtSignature` for Gemini 3+) | ✅ | 🚫 stripped | ✅ assistant history → `function_call`, preserving order and parallel call IDs |
+| `tool_result` | ✅ | ✅ → `functionResponse` (`is_error` wrapped in `.error`) | ✅ | 🚫 stripped | ⚠️ user history → `function_call_output`; text/base64-image content retained, but `is_error` is an explicit gap |
+| `thinking` | ✅ | ✅ → `parts[].thought:true` (+ `thoughtSignature`) | ✅ | 🚫 stripped | ⚠️ `enabled` budget is approximated by low/medium/high effort; `adaptive` maps effort but records its non-equivalence; xAI `disabled` becomes the nearest low-effort setting because Grok 4.5 cannot disable reasoning. Provider encrypted reasoning is replayed from a privacy-scoped cache bounded by TTL, entry count, per-item bytes, and aggregate bytes. |
 | `redacted_thinking` | ✅ | 🚫 dropped (Gemini cannot decrypt; surfaced via `x-c-thru-redacted-thinking-dropped` + `x-c-thru-translation-gap`) | ✅ | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
 | `server_tool_use` | ✅ | 🚫 dropped (Gemini grounding has different lifecycle; gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
 | `web_search_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
@@ -196,11 +206,34 @@ adapters.
 | `container_upload` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
 | `citations[]` field on text | ✅ (passthrough) | ⚠️ stripped on translate to `parts[].text`; gap recorded as `text.citations` | ⚠️ unknown | 🚫 stripped | ⚠️ text retained but citations dropped; `x-c-thru-translation-gap` |
 
-The **translation-gap header** (`x-c-thru-translation-gap`) was added to make
-the 🚫 cells in the Gemini column observable. When `mapAnthropicToGemini`
-encounters a block type it does not handle, it records the type into a Set
-and `buildCthruResponseHeaders` joins the set into a comma-separated header.
-Absent header = no gaps recorded.
+The **translation-gap header** (`x-c-thru-translation-gap`) makes lossy Gemini
+and Responses cells observable. Each mapper records unsupported blocks or
+fields into a Set, and `buildCthruResponseHeaders` joins it into a
+comma-separated header. Absent header = no gaps recorded.
+
+Responses refusals are successful Anthropic-shaped messages: upstream refusal
+text becomes an ordinary `text` block/delta, `stop_reason` is `refusal`, and
+`stop_details` uses `{type:"refusal", category:null, explanation:null}` because
+an OpenAI-compatible provider does not supply an Anthropic policy category.
+The proxy never emits a non-standard `refusal` content block.
+
+Client-tool policy remains request-scoped: Anthropic
+`disable_parallel_tool_use:true` becomes Responses
+`parallel_tool_calls:false`. Generic OpenAI Responses preserves explicit
+`strict:true`; xAI omits the field because its schemas are implicitly strict,
+records `tool.strict` when Anthropic omits strictness, and records
+`tool.strict:false` for an explicit non-strict request because xAI cannot
+provide either best-effort behavior. Generic Responses preserves all current
+Anthropic effort levels (`low`, `medium`, `high`, `xhigh`, and `max`); Grok 4.5
+accepts only `low`/`medium`/`high`, so xAI clamps higher values to `high` and
+records `output_config.effort`. Gemini 3 maps effort to the closest supported
+`thinkingLevel`; Gemini 2.5 maps it to an approximate numeric `thinkingBudget`
+and records `output_config.effort` because that conversion is not exact.
+Anthropic-compatible Ollama routes preserve the field as transport; honoring it
+remains model/provider-specific. Gemini keeps `max_tokens` as the hard total
+output ceiling, honors `thinking.display:"omitted"`, and reports a gap when a
+model cannot fully disable thinking or cannot represent both a fixed budget and
+effort.
 
 ---
 
@@ -210,7 +243,7 @@ Server tools are tool definitions sent in the request `tools[]` array (each
 with a `type: "<server_tool>_<version>"` discriminator). Cell describes
 forwarding behavior:
 
-| Server tool | Anthropic | Gemini | Ollama | OpenAI |
+| Server tool | Anthropic | Gemini | Ollama | Responses (OpenAI / xAI) |
 |---|---|---|---|---|
 | `web_search_20260209` | ✅ passthrough | ⚠️ stripped by `scrubGeminiSchema` (no equivalent) | ⚠️ unknown | 🚫 |
 | `web_fetch_20250910` | ✅ | ⚠️ stripped | ⚠️ unknown | 🚫 |
@@ -316,6 +349,12 @@ Behavior:
 - `passthrough_allowlist`, when non-empty, requires a regex match; otherwise
   the same 403 is returned with message `path does not match passthrough_allowlist`.
 - Both lists absent or empty → unrestricted passthrough (current default).
+
+These lists decide whether a path may reach the catch-all, not which client
+identity headers leave the proxy. Once allowed, catch-all forwarding applies
+the configured `endpoints.anthropic.preserve_claude_code_correlation` policy
+just like Messages forwarding. Explicit `false` strips correlation headers
+even though the endpoint id is `anthropic`.
 
 These are advisory escape hatches for hardening multi-tenant or shared
 workstations — the gate philosophy remains "answer everything by default."

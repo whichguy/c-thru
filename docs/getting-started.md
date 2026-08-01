@@ -236,7 +236,7 @@ The repo has a deliberately small surface area. Here is each directory and
   truth for endpoints, routes, the capability table (`llm_profiles`), and the
   agent→capability map (`agent_to_capability`). Most model-routing changes
   are a one-value edit here.
-- **`agents/*.md`** — the 98-agent fleet definitions (roles + brand catalog). Each declares a
+- **`agents/*.md`** — the 97-agent fleet definitions (roles + brand catalog). Each declares a
   logical `model:` name in frontmatter and a `description` (its only
   discovery surface). These are runtime-injected each `c-thru` launch via
   ephemeral `--agents` JSON — they are **not** installed into Claude's
