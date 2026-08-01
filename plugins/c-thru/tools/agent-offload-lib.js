@@ -35,6 +35,165 @@
 
 const AGENT_TOOL_NAMES = new Set(['Agent', 'Task']);
 const ORPHAN_KEY = '__orphan__';
+const MAX_OFFLOAD_TIMEOUT_SECONDS = 60 * 60;
+const MAX_OFFLOAD_TIMEOUT_MS = MAX_OFFLOAD_TIMEOUT_SECONDS * 1000;
+const MAX_CLAUDE_DIAGNOSTIC_CHARS = 512;
+const CLAUDE_DIAGNOSTIC_IDENTIFIER_RE =
+  /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/;
+const CLAUDE_SPAWN_ERROR_CODE_RE =
+  /^(?:E[A-Z0-9_]{1,63}|ERR_[A-Z0-9_]{1,60})$/;
+
+// Resolve C_THRU_OFFLOAD_TIMEOUT, whose public unit is seconds, to the
+// millisecond value accepted by child_process.spawnSync(). Every individual
+// model-backed test invocation has a hard one-hour ceiling.
+function offloadTimeoutMs(rawSeconds, fallbackMs) {
+  if (rawSeconds == null || String(rawSeconds).trim() === '') {
+    if (!Number.isSafeInteger(fallbackMs) || fallbackMs <= 0 || fallbackMs > MAX_OFFLOAD_TIMEOUT_MS) {
+      throw new RangeError(
+        `agent-offload-lib: fallback timeout must be an integer from 1 to ${MAX_OFFLOAD_TIMEOUT_MS} ms`
+      );
+    }
+    return fallbackMs;
+  }
+
+  const text = String(rawSeconds).trim();
+  if (!/^[1-9]\d*$/.test(text)) {
+    throw new RangeError('C_THRU_OFFLOAD_TIMEOUT must be a positive whole number of seconds');
+  }
+  const seconds = Number(text);
+  const milliseconds = seconds * 1000;
+  if (!Number.isSafeInteger(milliseconds) || milliseconds > MAX_OFFLOAD_TIMEOUT_MS) {
+    throw new RangeError(
+      `C_THRU_OFFLOAD_TIMEOUT must not exceed ${MAX_OFFLOAD_TIMEOUT_SECONDS} seconds`
+    );
+  }
+  return milliseconds;
+}
+
+function diagnosticIdentifier(value) {
+  return (
+    typeof value === 'string' &&
+    CLAUDE_DIAGNOSTIC_IDENTIFIER_RE.test(value)
+  ) ? value : null;
+}
+
+function diagnosticStatusToken(value) {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    const text = String(value);
+    return text.length <= 32 ? text : null;
+  }
+  return diagnosticIdentifier(value);
+}
+
+function appendDiagnosticValue(parts, label, value, depth = 0) {
+  if (parts.length >= 5 || value == null || depth > 2) return;
+  if (Array.isArray(value)) {
+    for (const entry of value.slice(0, 3)) {
+      appendDiagnosticValue(parts, label, entry, depth + 1);
+    }
+    return;
+  }
+  if (typeof value === 'object') {
+    for (const key of ['type', 'code']) {
+      if (parts.length >= 5) return;
+      const token = Object.hasOwn(value, key)
+        ? diagnosticIdentifier(value[key])
+        : null;
+      if (token) parts.push(`${label}.${key}=${token}`);
+    }
+    for (const key of ['status', 'status_code']) {
+      if (parts.length >= 5) return;
+      const token = Object.hasOwn(value, key)
+        ? diagnosticStatusToken(value[key])
+        : null;
+      if (token) parts.push(`${label}.${key}=${token}`);
+    }
+    for (const key of ['error', 'cause']) {
+      if (Object.hasOwn(value, key)) {
+        appendDiagnosticValue(parts, `${label}.${key}`, value[key], depth + 1);
+      }
+    }
+    return;
+  }
+  const token = diagnosticStatusToken(value);
+  if (token) parts.push(`${label}=${token}`);
+}
+
+// Extract only structured identifier/status fields from Claude's parsed
+// stream-json result event. Free-form message/result prose, raw stream lines,
+// prompts, commands, tool inputs, and arbitrary event properties are excluded.
+function claudeResultDiagnostic(resultEvent) {
+  if (!resultEvent || typeof resultEvent !== 'object' || Array.isArray(resultEvent)) {
+    return '';
+  }
+
+  const parts = [];
+  const subtype = diagnosticIdentifier(resultEvent.subtype);
+  if (subtype) parts.push(`subtype=${subtype}`);
+
+  appendDiagnosticValue(parts, 'error', resultEvent.error);
+  appendDiagnosticValue(parts, 'errors', resultEvent.errors);
+
+  const diagnostic = parts.join('; ');
+  if (diagnostic.length <= MAX_CLAUDE_DIAGNOSTIC_CHARS) return diagnostic;
+  return `${diagnostic.slice(0, MAX_CLAUDE_DIAGNOSTIC_CHARS - 1)}…`;
+}
+
+function claudePermissionDenialTools(resultEvent) {
+  if (!Array.isArray(resultEvent?.permission_denials)) return Object.freeze([]);
+  const seen = new Set();
+  const names = [];
+  for (const denial of resultEvent.permission_denials) {
+    const name = denial?.tool_name;
+    if (
+      typeof name !== 'string' ||
+      !/^[A-Za-z0-9_.:-]{1,80}$/.test(name) ||
+      seen.has(name)
+    ) {
+      continue;
+    }
+    seen.add(name);
+    names.push(name);
+  }
+  return Object.freeze(names);
+}
+
+// Return null only when Claude produced a process-level success AND a successful
+// stream-json result event. Selection scoring must never reinterpret a timeout,
+// crash, missing result, or Claude-declared error as a legitimate inline answer.
+function claudeRunFailure(run) {
+  const value = run || {};
+  const resultDiagnostic = claudeResultDiagnostic(value.resultEvent);
+  const withResultDiagnostic = (message) => resultDiagnostic
+    ? `${message}; Claude result ${resultDiagnostic}`
+    : message;
+  if (value.timedOut || (value.error && value.error.code === 'ETIMEDOUT')) {
+    return 'Claude process timed out';
+  }
+  if (value.error) {
+    const code = typeof value.error.code === 'string' &&
+      CLAUDE_SPAWN_ERROR_CODE_RE.test(value.error.code)
+      ? value.error.code
+      : null;
+    return code
+      ? `Claude process spawn error: ${code}`
+      : 'Claude process spawn error';
+  }
+  if (value.signal) return `Claude process terminated by signal ${value.signal}`;
+  if (value.status !== 0) {
+    return withResultDiagnostic(value.status == null
+      ? 'Claude process ended without an exit status'
+      : `Claude process exited with status ${value.status}`);
+  }
+  if (!value.resultEvent) return 'Claude stream ended without a result event';
+  if (value.resultEvent.is_error !== false) {
+    return withResultDiagnostic(value.resultEvent.is_error === true
+      ? 'Claude result event reported an error'
+      : 'Claude result event did not explicitly report success');
+  }
+  return null;
+}
 
 // Normalize input to an array of parsed objects. Accepts a jsonl string, an array
 // of line strings, or an array of already-parsed objects. Non-JSON / blank lines
@@ -189,4 +348,16 @@ function aggregateByAgent(delegations) {
   return agg;
 }
 
-module.exports = { extractDelegations, aggregateByAgent, agentToolUseBlocks, AGENT_TOOL_NAMES };
+module.exports = {
+  extractDelegations,
+  aggregateByAgent,
+  agentToolUseBlocks,
+  offloadTimeoutMs,
+  claudeRunFailure,
+  claudeResultDiagnostic,
+  claudePermissionDenialTools,
+  AGENT_TOOL_NAMES,
+  MAX_OFFLOAD_TIMEOUT_SECONDS,
+  MAX_OFFLOAD_TIMEOUT_MS,
+  MAX_CLAUDE_DIAGNOSTIC_CHARS,
+};
