@@ -1,86 +1,45 @@
 # =============================================================================
-# Live / opt-in test suites — scheduled CI cadence
+# Scheduled live integrity, agent quality, and macOS platform verification
 # =============================================================================
 #
-# WHY THIS EXISTS
-# ---------------
-# Almost every suite in this repo is hermetic: it stands up a stub backend and
-# asserts against a recorded wire shape. That is fast and deterministic, but the
-# stubs go stale the moment a real upstream (api.anthropic.com, the Gemini /
-# Vertex APIs, a live Ollama-backed agent run) changes its request/response
-# shape, its streaming framing, or its model-selection behavior. Nothing in the
-# normal `make test` run touches those real endpoints, so wire-shape drift and
-# real agent-selection regressions are INVISIBLE until a user hits them.
+# The blocking Ubuntu matrix keeps provider and agent failures independently
+# attributable. Both shards use the release pinned for the blocking contract.
+# A separate latest-version agent canary is advisory, so upstream CLI drift is
+# visible before the pin moves without turning @latest into the only blocker.
 #
-# The live/opt-in suites are the only non-hermetic coverage we have. They
-# self-skip behind env gates (so they never slow down or flake the default
-# suite), which historically meant they "rarely ran cleanly" — i.e. almost
-# never ran at all. This workflow gives them a dependable cadence so drift and
-# real selection failures get caught on a schedule instead of in production.
-#
-# CADENCE
-# -------
-# NIGHTLY (not weekly). The whole point is early drift detection; a weekly
-# window can let an upstream shape change sit undetected for ~6 days. Live API
-# calls here are a handful of small canary requests, so nightly cost is trivial
-# relative to the value of catching drift within ~24h. Also runnable on demand
-# via workflow_dispatch.
-#
-# GREEN-BUT-SKIPPING UNTIL SECRETS ARE SET
-# ----------------------------------------
-# Each gated suite self-skips when its API key / creds are absent (see the
-# `*_API_KEY` / `GOOGLE_CLOUD_*` checks inside test/run-all.sh and the live
-# test files). The gate ENV VARS below are always exported, but the secrets are
-# only present once a maintainer configures them — so until then this workflow
-# runs green while skipping every live suite. That is intentional: the cron job
-# is wired up first, secrets are added later, and the moment they land the live
-# coverage starts running with zero further changes.
-#
-# HOW TO ENABLE THE LIVE COVERAGE (add these repo secrets)
-# --------------------------------------------------------
-#   Settings → Secrets and variables → Actions → New repository secret
-#     ANTHROPIC_API_KEY     — enables anthropic-api-coverage-live, judge-canary,
-#                             and the Anthropic half of cross-provider-parity
-#     GOOGLE_API_KEY        — enables proxy-gemini-live-{shapes,thinking,e2e}
-#                             and the Gemini half of cross-provider-parity
-#     GOOGLE_CLOUD_TOKEN    — enables proxy-gemini-live-vertex (Vertex AI)
-#     GOOGLE_CLOUD_PROJECT  — Vertex project id   (required with the token)
-#     GOOGLE_CLOUD_REGION   — Vertex region       (required with the token)
-#
-#   The agent-offload / behavioral / hierarchy / e2e suites additionally need a
-#   real `claude` binary and/or a local Ollama on the runner; on a stock GitHub
-#   runner those are absent, so they self-skip (advisory). They are still gated
-#   on here so that a self-hosted runner with those tools present picks them up
-#   for free.
+# `make test-live-shard` selects only its live registry; it does not rerun the
+# deterministic suite. macOS owns one hermetic `make test` lane for platform
+# behavior (BSD stat/mkdir-lock/script differences). Every test command has a
+# 3,300-second process cap inside a 70-minute job lifecycle. The additional
+# 15 minutes cover setup plus owned-process cleanup and artifact upload.
+# Each lane writes one unique evidence file and uploads it even after failure.
+# Raw failing-suite logs remain a private-repository-only, one-day,
+# failure-only diagnostic artifact.
 # =============================================================================
 
 name: live-suites
 
 on:
   schedule:
-    # 07:13 UTC daily (~00:13 PT). Off the top of the hour to avoid the
-    # cron-stampede GitHub schedules at :00.
+    # 07:13 UTC daily (~00:13 PT), away from the top-of-hour cron stampede.
     - cron: "13 7 * * *"
   workflow_dispatch: {}
 
-# Never let two scheduled runs (or a manual run on top of a scheduled one) pile
-# up against the live endpoints; a slow live call shouldn't double-spend or race.
 concurrency:
   group: live-suites
   cancel-in-progress: false
 
 jobs:
-  live:
-    name: live suites (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  blocking-live-shards:
+    name: blocking live ${{ matrix.shard }} (Claude Code 2.1.220)
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      DISABLE_AUTOUPDATER: "1"
     strategy:
       fail-fast: false
       matrix:
-        # Linux is the primary CI surface and the cheap one. macOS is included
-        # because run-all.sh's mkdir-lock / stat fallbacks are macOS-specific
-        # code paths worth exercising; drop the macos-latest entry if cost is a
-        # concern (macOS runner minutes bill at a higher multiplier).
-        os: [ubuntu-latest, macos-latest]
+        shard: [provider, agent]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -90,53 +49,149 @@ jobs:
         with:
           node-version: "20"
 
-      # No ./install.sh: it symlinks tools into ~/.claude and edits the shell rc
-      # PATH, none of which the test runner needs — run-all.sh invokes every
-      # tool through absolute $REPO_DIR/tools/... paths. The suites only need
-      # node + the checked-out repo, so we skip install entirely.
+      - name: Install pinned Claude Code
+        run: npm install --global @anthropic-ai/claude-code@2.1.220
 
-      - name: Run live / opt-in suites
+      - name: Verify Claude Code
+        run: claude --version
+
+      - name: Run blocking live shard
         env:
-          # Pin TMPDIR so run-all.sh's FAIL_LOG_DIR (${TMPDIR:-/tmp}/c-thru-runall-<pid>)
-          # lands in a known, collectable place on both Linux and macOS runners.
           TMPDIR: ${{ runner.temp }}
-          # API keys / creds — sourced from repo secrets. Absent secrets expand
-          # to empty strings, which makes the gated suites self-skip (see header).
+          C_THRU_TEST_TIMEOUT_SECONDS: "3300"
+          C_THRU_TEST_FAILURE_LOG_DIR: ${{ runner.temp }}/c-thru-runall-live-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          C_THRU_TEST_EVIDENCE_PATH: ${{ runner.temp }}/c-thru-evidence-live-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}.json
+          C_THRU_OFFLOAD_EVIDENCE_PATH: ${{ runner.temp }}/c-thru-offload-evidence-live-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}.json
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CLOUD_TOKEN: ${{ secrets.GOOGLE_CLOUD_TOKEN }}
           GOOGLE_CLOUD_PROJECT: ${{ secrets.GOOGLE_CLOUD_PROJECT }}
           GOOGLE_CLOUD_REGION: ${{ secrets.GOOGLE_CLOUD_REGION }}
-          # Agent-SELECTION live coverage gates. `make test-live-all` already prefixes
-          # these (kept in sync there), but we also export them at the job level so the
-          # workflow self-documents which selection suites the nightly run exercises:
-          #   C_THRU_LIVE_SELECTION — the LLM-judge selection test
-          #                           (test/agent-selection-llm-judge.test.js)
-          #   C_THRU_OFFLOAD        — the real-session offload scorecard
-          #                           (test/agent-offload-coverage.js); self-skips with no
-          #                           `claude` binary, so it's green-but-skipping on a stock
-          #                           runner and only runs on a self-hosted runner with claude
-          #   C_THRU_OFFLOAD_GATE   — promote the scorecard from advisory to threshold-gated
-          #                           (CI=true already does this; explicit here for clarity)
-          C_THRU_LIVE_SELECTION: "1"
-          C_THRU_OFFLOAD: "1"
-          C_THRU_OFFLOAD_GATE: "1"
-          # install.sh's PATH edit is skipped above; belt-and-suspenders for any
-          # transitive call that might otherwise try to touch the shell rc.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           C_THRU_INSTALL_NO_PATH: "1"
-        run: make test-live-all
+        run: make test-live-shard SHARD=${{ matrix.shard }}
 
-      - name: Upload failing-suite logs
-        if: failure()
+      - name: Upload blocking shard evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: run-all-fail-logs-${{ matrix.os }}
-          # run-all.sh persists each failing suite's output under
-          # $TMPDIR/c-thru-runall-<pid>/<slug>.log (FAIL_LOG_DIR). We pinned
-          # TMPDIR=runner.temp in the run step above, so collect from there;
-          # /tmp is kept as a fallback in case a child process overrode TMPDIR.
+          name: test-evidence-live-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/c-thru-runall-*/**
-            /tmp/c-thru-runall-*/**
-          if-no-files-found: ignore
+            ${{ runner.temp }}/c-thru-evidence-live-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/c-thru-offload-evidence-live-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}.json
+          if-no-files-found: error
           retention-days: 14
+
+      - name: Upload blocking shard failure logs
+        if: failure() && github.event.repository.private
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-all-fail-logs-live-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # Raw child output is unsanitized. Private repositories only: upload
+          # this run's exact directory, never a temp glob, for one day.
+          path: ${{ runner.temp }}/c-thru-runall-live-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 1
+
+  latest-agent-canary:
+    name: advisory agent canary (Claude Code latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    continue-on-error: true
+    env:
+      DISABLE_AUTOUPDATER: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install latest Claude Code
+        run: npm install --global @anthropic-ai/claude-code@latest
+
+      - name: Verify Claude Code
+        run: claude --version
+
+      - name: Run advisory latest agent shard
+        env:
+          TMPDIR: ${{ runner.temp }}
+          C_THRU_TEST_TIMEOUT_SECONDS: "3300"
+          C_THRU_TEST_FAILURE_LOG_DIR: ${{ runner.temp }}/c-thru-runall-agent-latest-${{ github.run_id }}-${{ github.run_attempt }}
+          C_THRU_TEST_EVIDENCE_PATH: ${{ runner.temp }}/c-thru-evidence-agent-latest-${{ github.run_id }}-${{ github.run_attempt }}.json
+          C_THRU_OFFLOAD_EVIDENCE_PATH: ${{ runner.temp }}/c-thru-offload-evidence-agent-latest-${{ github.run_id }}-${{ github.run_attempt }}.json
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CLOUD_TOKEN: ${{ secrets.GOOGLE_CLOUD_TOKEN }}
+          GOOGLE_CLOUD_PROJECT: ${{ secrets.GOOGLE_CLOUD_PROJECT }}
+          GOOGLE_CLOUD_REGION: ${{ secrets.GOOGLE_CLOUD_REGION }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          C_THRU_INSTALL_NO_PATH: "1"
+        run: make test-live-shard SHARD=agent
+
+      - name: Upload latest-agent evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence-agent-latest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/c-thru-evidence-agent-latest-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/c-thru-offload-evidence-agent-latest-${{ github.run_id }}-${{ github.run_attempt }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload latest-agent failure logs
+        if: failure() && github.event.repository.private
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-all-fail-logs-agent-latest-${{ github.run_id }}-${{ github.run_attempt }}
+          # This exact-path artifact contains unsanitized raw child output.
+          path: ${{ runner.temp }}/c-thru-runall-agent-latest-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 1
+
+  macos-hermetic:
+    name: macOS hermetic platform lane
+    runs-on: macos-latest
+    timeout-minutes: 70
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run macOS hermetic suite
+        env:
+          TMPDIR: ${{ runner.temp }}
+          C_THRU_TEST_TIMEOUT_SECONDS: "3300"
+          C_THRU_TEST_FAILURE_LOG_DIR: ${{ runner.temp }}/c-thru-runall-macos-hermetic-${{ github.run_id }}-${{ github.run_attempt }}
+          C_THRU_TEST_EVIDENCE_PATH: ${{ runner.temp }}/c-thru-evidence-macos-hermetic-${{ github.run_id }}-${{ github.run_attempt }}.json
+        run: make test
+
+      - name: Upload macOS hermetic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence-macos-hermetic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/c-thru-evidence-macos-hermetic-${{ github.run_id }}-${{ github.run_attempt }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload macOS hermetic failure logs
+        if: failure() && github.event.repository.private
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-all-fail-logs-macos-hermetic-${{ github.run_id }}-${{ github.run_attempt }}
+          # This exact-path artifact contains unsanitized raw child output.
+          path: ${{ runner.temp }}/c-thru-runall-macos-hermetic-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 1

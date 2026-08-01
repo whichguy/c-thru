@@ -30,6 +30,17 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKILL="$REPO_DIR/skills/c-thru-plan/SKILL.md"
 AGENTS_DIR="$REPO_DIR/agents"
 
+# Claude Code and Codex may place scoped instruction files beside the fleet.
+# They are repository control documents, never routable agent definitions.
+AGENT_FILES=()
+for _agent_file in "$AGENTS_DIR"/*.md; do
+    [ -f "$_agent_file" ] || continue
+    case "$(basename "$_agent_file")" in
+        AGENTS.md|CLAUDE.md) continue ;;
+    esac
+    AGENT_FILES+=("$_agent_file")
+done
+
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
@@ -61,7 +72,7 @@ fi
 # Check 1b — No hardcoded .c-thru/plans/ paths in agents/*.md
 # ---------------------------------------------------------------------------
 echo "1b/13 Hardcoded .c-thru/plans/ in agents/*.md..."
-hardcoded_agents=$(grep -l '\.c-thru/plans/' "$AGENTS_DIR"/*.md 2>/dev/null || true)
+hardcoded_agents=$(grep -l '\.c-thru/plans/' "${AGENT_FILES[@]}" 2>/dev/null || true)
 if [ -n "$hardcoded_agents" ]; then
     for f in $hardcoded_agents; do
         fail "$(basename "$f"): contains hardcoded .c-thru/plans/ path — agents must receive paths via prompt keys"
@@ -344,7 +355,7 @@ MODEL_MAP="$REPO_DIR/config/model-map.json"
 if [ ! -f "$MODEL_MAP" ]; then
     warn "config/model-map.json not found — skipping Check 4"
 else
-    agent_file_count=$(ls "$AGENTS_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
+    agent_file_count=${#AGENT_FILES[@]}
     cap_key_count=$(jq '.agent_to_capability | keys | length' "$MODEL_MAP" 2>/dev/null || echo "0")
     # Count routing-only keys: agent_to_capability entries with no corresponding agent file
     routing_only_count=0
@@ -558,7 +569,7 @@ done
 echo "9/13  Tier-budget frontmatter check..."
 
 BUDGET_WARNS=0
-for agent_file in "$AGENTS_DIR"/*.md; do
+for agent_file in "${AGENT_FILES[@]}"; do
     agent_base=$(basename "$agent_file")
     # Extract tier_budget from frontmatter (first ---...--- block)
     budget=$(awk '/^---/{fc++; if(fc==2) exit} fc==1 && /^tier_budget:/{print $2}' "$agent_file" 2>/dev/null || true)
@@ -887,7 +898,7 @@ ISSUES=$(( ISSUES + _missing_conv ))
 # ---------------------------------------------------------------------------
 echo "16.   Cross-plugin Skill() references in agents/*.md..."
 
-for _xp_agent in "$AGENTS_DIR"/*.md; do
+for _xp_agent in "${AGENT_FILES[@]}"; do
     [ -f "$_xp_agent" ] || continue
     _xp_base=$(basename "$_xp_agent")
     _xp_prev=""

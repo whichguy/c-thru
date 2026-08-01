@@ -1,5 +1,11 @@
 # Test Coverage Audit: c-thru Hot Paths
 
+> **Historical snapshot — superseded.** This audit records what was observed on 2026-04-26.
+> Its counts, source line numbers, and open-gap verdicts are not current. Use
+> [`functionality-verification.md`](functionality-verification.md) for the current evidence model
+> and intentional exclusions, and `test/run-all.sh` for the executable registry. The material
+> below is retained only to explain the April findings and should not be used as a release gate.
+
 **Date:** 2026-04-26  
 **Auditor:** Claude Code  
 **Scope:** `/tools/claude-proxy`, `/tools/c-thru` (bash), `/tools/model-map-*.js`  
@@ -7,7 +13,7 @@
 
 ---
 
-## Summary
+## Historical summary (as observed on 2026-04-26)
 
 **Total defensive checks audited:** 48  
 **Covered (explicit test):** 18 (37.5%)  

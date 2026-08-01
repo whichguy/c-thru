@@ -1,9 +1,10 @@
 # Writing a test here
 
 This doc is the mechanical HOW: suite conventions, registration, the exit-code contract. For
-WHAT'S currently untested, see `docs/test-coverage-audit.md` — a coverage-gap tracker, a
-different axis from this doc, consulted independently of it (you might write a test here for a
-brand-new feature that audit never mentions).
+the current coverage model and known executable exclusions, see
+`docs/functionality-verification.md`. The exact executable registry is `test/run-all.sh`, guarded
+by `test/run-all-coverage.test.js`. `docs/test-coverage-audit.md` is an April 2026 historical
+snapshot; do not use its counts, line numbers, or gap list as current state.
 
 ## Suite types
 
@@ -55,10 +56,100 @@ run_suite "my-new-thing (one-line description of what it covers)" \
   node "$REPO_DIR/test/my-new-thing.test.js"
 ```
 
-Place it near thematically related suites (grep `run-all.sh` for a sibling area first). Suites
-gated behind a live/opt-in env var (`C_THRU_LIVE_ANTHROPIC=1`, `C_THRU_DESTRUCTIVE_TESTS=1`, etc.)
-also need a `Makefile` `test-live-all` entry so the opt-in flag actually gets exported for a full
-live run.
+Place it near thematically related suites (grep `run-all.sh` for a sibling area first). A live
+suite must also be assigned to the `provider` or `agent` shard in `test/run-all.sh` and have its
+gate exported by `make test-live-shard SHARD=<provider|agent>`. `make test-live-all` remains a
+local compatibility aggregate; scheduled CI uses the disjoint shards and must not rerun the full
+deterministic registry.
+
+### OSS brand-leaf identity (opt-in live)
+
+Fleet/OSS pin + identity + proxy-lifecycle probe:
+
+```sh
+make test-live-oss-brand
+# or: C_THRU_LIVE_OSS_BRAND=1 C_THRU_LIVE_SHARD=agent bash test/run-all.sh
+```
+
+Driver: `test/c-thru-brand-identity-live.sh` (`MODE=direct` backend pins; `MODE=print` independent
+`c-thru -p` with prompt on STDIN, `C_THRU_KEEP_PROXY=0`, journal proof, identity gate).
+Ship agents default: `deepseek qwen kimi glm`. Hermetic pins live in
+`test/brand-identity-unit.test.js` and `test/c-thru-upstream-url.test.js` (always on in `make test`).
+
+### Live-provider outcome contract
+
+Every child registered through `run_live_suite` must emit exactly one terminal line:
+
+```text
+C_THRU_LIVE_OUTCOME|provider=<provider>|suite=<suite>|status=<passed|skipped|blocked|failed>|reason=<delimiter-safe-reason>
+```
+
+The provider and suite fields must match the runner registration, and the status must agree with
+the process exit. Missing, duplicate, mismatched, or exit-incoherent markers are harness failures.
+Use `blocked` for credentials, quota, billing, or another external prerequisite; use `skipped`
+only when a mandatory advertised contract was not exercised. Trigger-dependent probes are
+opportunistic: their absence may be reported in human output, but does not turn an otherwise
+complete child into a mandatory skip. `C_THRU_STRICT_LIVE_PROVIDERS=1` makes both blocked and
+mandatory-skipped requested suites fail the aggregate; both live-shard targets and the local
+compatibility aggregate enable that strict mode.
+
+Every suite launched by `test/run-all.sh` runs in its own supervised process group and has a
+hard wall-clock ceiling controlled by `C_THRU_TEST_TIMEOUT_SECONDS` (default and maximum:
+3,600 seconds). The aggregate `run-all.sh` command is self-supervised by the same deadline, so
+lock acquisition and cumulative suite execution cannot make the command appear hung beyond an
+hour. Directly runnable model-backed JavaScript suites must call
+`ensureModelTestSupervisor()`; shell entrypoints must self-exec through
+`tools/run-with-hard-timeout.js`. Register either pattern in `live-suite-wiring.test.js`.
+Scheduled workflow commands and the `test-live-shard`, `test-live-artifacts`, and
+`test-live-all` Make entrypoints use a narrower 3,300-second cap. Scheduled jobs place that
+55-minute test command inside a 70-minute lifecycle, reserving 15 minutes for setup, cleanup, and
+artifact upload. The test-command cap is unchanged; the extra lifecycle reserve does not
+authorize a longer individual test.
+
+Individual model operations also use `C_THRU_MODEL_TEST_TIMEOUT_MS`, which defaults to and may
+not exceed 3,600,000 ms. Keep narrower timeouts in hermetic tests that deliberately exercise
+timeout behavior. Any suite, model, or harness override above one hour is a configuration error.
+
+When `C_THRU_TEST_EVIDENCE_PATH` is set, the aggregate must write its machine-readable evidence
+there even on a non-green result. Give concurrent shards distinct paths. Model-backed offload
+campaigns additionally write the sanitized scorecard named by `C_THRU_OFFLOAD_EVIDENCE_PATH`
+(or a printed private temporary path when omitted). Scheduled agent jobs upload both evidence
+documents with `if: always()`. Scorecard schema v2 records requested/effective mode and profile,
+stable parent launch route/model/backend identity, a map-bound route/config digest, and sanitized
+per-fixture child-dispatch observations. Pooled comparisons require the stable parent execution
+coordinates and the observed route identity for each repeated fixture/selected-specialist pair to
+match. A route-proved fixture is rejected unless every selected specialist has a complete matching
+child-dispatch observation. A failed-proof fixture may retain an unproved selection only with
+failed integrity and `quality_status=not_evaluated`; selection-dependent absence alone is not
+treated as environment drift.
+
+Detailed failure logs have a stricter boundary because they contain raw, unsanitized child
+output. `run-all.sh` requires an owner-controlled or sticky resolved `TMPDIR`, creates a unique
+`0700` directory beneath it, creates each log as `0600`, and refuses pre-existing directory or
+file/symlink targets. CI sets
+`C_THRU_TEST_FAILURE_LOG_DIR` to one exact, non-existing `c-thru-runall-*` child of
+`runner.temp`; the failure-only upload names only that path, never a temp-directory glob, and
+retains it for one day. The upload is disabled unless the repository is private; public
+repositories leave the raw directory on the ephemeral runner only. Uploading moves the data from
+private runner filesystem permissions into the repository's Actions-artifact access boundary,
+so these artifacts are diagnostic material, not sanitized evidence, and must not be shared as if
+they were credential-safe.
+
+The six image/PDF/oversized-context selection cases use generated inputs rather than prompt-only
+stand-ins. Their deterministic generator test runs in `make test`; the paid/model-backed pilot is
+separate:
+
+```bash
+C_THRU_TEST_EVIDENCE_PATH=/absolute/path/artifact-run.json \
+C_THRU_OFFLOAD_EVIDENCE_PATH=/absolute/path/artifact-scorecard.json \
+  make test-live-artifacts
+```
+
+That target pins `best-cloud` at `32gb`, selects only the six artifact cases, keeps one-run
+quality advisory, and still treats missing artifacts, failed invocations, incomplete child
+results, or unproved routes as integrity failures. Do not add this pilot to blocking scheduled CI
+until at least three comparable baseline and three comparable candidate campaigns establish its
+cost and variance.
 
 ## Sandbox-safe vs. proxy-spawning suites
 
