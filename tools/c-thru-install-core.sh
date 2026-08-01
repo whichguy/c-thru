@@ -159,14 +159,15 @@ cthru_scrub_loopback_base_url() {
 # Actual checkout identity for a git root (never invents a missed pin tag).
 cthru_git_actual_sha() {
   local root="${1:-}"
-  [[ -n "$root" && -d "$root/.git" ]] || return 1
+  # Worktrees use a .git *file* (gitdir: …), not a directory — test -e, not -d.
+  [[ -n "$root" && -e "$root/.git" ]] || return 1
   command -v git >/dev/null 2>&1 || return 1
   git -C "$root" rev-parse HEAD 2>/dev/null
 }
 
 cthru_git_actual_ref() {
   local root="${1:-}" abr
-  [[ -n "$root" && -d "$root/.git" ]] || return 1
+  [[ -n "$root" && -e "$root/.git" ]] || return 1
   command -v git >/dev/null 2>&1 || return 1
   abr="$(git -C "$root" describe --tags --exact-match 2>/dev/null || true)"
   if [[ -n "$abr" ]]; then
