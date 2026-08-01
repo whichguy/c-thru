@@ -36,3 +36,7 @@ proxy.stdout
 
 # Editor/tool backup files — accumulate as untracked cruft otherwise.
 *.bak
+
+# Local multi-host IDE / one-shot residual cleaners (not product artifacts)
+.codex/
+.tmp-*.mjs

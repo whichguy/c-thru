@@ -1,9 +1,9 @@
 ---
 name: c-thru-status
-description: "Show c-thru routes, proxy URL, per-model usage stats (calls, tokens, last call time), and backend health. Args: clear|reset stats; statusline on|off|status|style. Use 'fix' to pull missing models and reload."
+description: "Show c-thru routes, proxy URL, per-model usage stats (calls, tokens, last call time), backend health, brand pin hard-fails, and provider env checks. Args: clear|reset; statusline on|off|status|style; doctor|keys (env/billing checklist); fix (reload + pull). Use 'fix' to pull missing models and reload."
 allowed-tools: "Bash"
 ---
-<!-- c-thru-managed: c-thru-status v2 -->
+<!-- c-thru-managed: c-thru-status v3 -->
 # c-thru Status
 
 Works for **plugin-only** and **CLI** installs. Prefer plugin-root tools and
@@ -42,6 +42,8 @@ Parse `$ARGUMENTS` (first word):
 |---|---|
 | empty / `--verbose` | Status tables + recent + dashboard (below) |
 | `clear` / `reset` | Clear lifetime usage stats, then re-show tables |
+| `doctor` / `keys` | Provider env checklist (set vs usable) + brand hard-fail callouts from recent |
+| `fix` | Pull missing local models if possible, `c-thru reload`, re-show status |
 | `statusline` / `statusline status` | Durable statusline enablement status |
 | `statusline on` / `statusline enable` | Enable c-thru statusline (durable settings; **restart required**) |
 | `statusline off` / `statusline disable` | Disable c-thru statusline if ours |
@@ -101,6 +103,53 @@ fi
 
 Tell the user: **Claude binds statusLine at session start — restart Claude / re-run `c-thru` after enable/disable.**
 
+### Doctor / keys (env set ≠ usable billing)
+
+```bash
+# Env presence only (never print secret values)
+for v in XAI_API_KEY GOOGLE_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY; do
+  eval "val=\${$v:-}"
+  if [ -n "$val" ]; then echo "$v: set (len=${#val}; value not printed)"; else echo "$v: unset"; fi
+done
+# Note: shell checks the *current* Claude session env. A long-lived proxy started
+# before export may still lack the key — run `c-thru restart` after rotating keys.
+echo "---"
+echo "Brand pins (agent model:*) hard-fail on primary 401/403/5xx — they do NOT cascade to routes.default."
+echo "Grok leaf needs usable xAI billing (credits/spend), not only XAI_API_KEY set."
+echo "Proof: GET /c-thru/recent fields agent, served_by, on_failure, fallback_suppressed, status."
+# Recent brand hard-fails (this session / this proxy)
+curl -s --max-time 2 "$BASE/c-thru/recent?n=20" 2>/dev/null | \
+  node -e '
+    let d=""; process.stdin.on("data",c=>d+=c); process.stdin.on("end",()=>{
+      try {
+        const j=JSON.parse(d||"{}");
+        const bad=(j.requests||[]).filter(r=>r.fallback_suppressed || r.on_failure==="hard_fail");
+        if (!bad.length) { console.log("recent brand hard-fails: (none in last ring window)"); return; }
+        console.log("recent brand hard-fails / hard_fail pins:");
+        for (const r of bad.slice(0,8)) {
+          console.log(`  ts=${r.ts} agent=${r.agent||"-"} model=${r.model} status=${r.status} served_by=${r.served_by||"-"} suppressed=${!!r.fallback_suppressed}`);
+        }
+      } catch { console.log("recent: unreadable"); }
+    });
+  ' || true
+# Optional live xAI canary (only if user wants — costs tokens)
+# With XAI_API_KEY set: C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js (CLI install)
+if command -v c-thru >/dev/null 2>&1 || [ -x "${HOME}/.claude/tools/c-thru" ]; then
+  "${HOME}/.claude/tools/c-thru" explain --agent grok 2>/dev/null || c-thru explain --agent grok 2>/dev/null || true
+fi
+```
+
+### Fix (reload + optional pull)
+
+```bash
+if command -v c-thru >/dev/null 2>&1 || [ -x "${HOME}/.claude/tools/c-thru" ]; then
+  "${HOME}/.claude/tools/c-thru" reload 2>/dev/null || c-thru reload 2>/dev/null || true
+  # After key rotation / billing fix, restart so the proxy process re-reads env:
+  # c-thru restart
+fi
+# then re-run default status path below
+```
+
 ---
 
 ## Default status path (no special args)
@@ -111,10 +160,16 @@ curl -s --max-time 2 "$BASE/c-thru/status" || echo "proxy unreachable at $BASE"
 ```
 Summarize: mode/tier, `dashboard_url`, **Usage totals (since clear)** from `.usage` (calls, tokens — cumulative since last clear, not one chat).
 
-**2. Recent activity**
+**2. Recent activity** (include brand/agent attribution)
 ```bash
 curl -s --max-time 2 "$BASE/c-thru/recent?n=10" || true
 ```
+When summarizing recent rows, call out:
+- `agent` — signed brand leaf (e.g. `grok`) when present
+- `served_by` — concrete model that served (or attempted)
+- `fallback_from` — cascade substitution occurred
+- `fallback_suppressed` / `on_failure=hard_fail` — brand pin refused cascade (good; not a silent Grok→GLM lie)
+- `status` / `ok` — HTTP outcome
 
 **3. Live dashboard** — from the status JSON `dashboard_url` field.
 

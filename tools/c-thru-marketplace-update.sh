@@ -197,4 +197,15 @@ _stamp_is_fresh && exit 0
 mkdir -p "$DURABLE_DIR" 2>/dev/null || true
 _with_lock _critical_section >> "$UPDATE_LOG" 2>&1 || true
 
+# A marketplace update reinstalls vendored plugin files, silently reverting the
+# local fixups that repoint the codex/grok rescue agents at the stable PATH
+# wrappers (~/.claude/tools/{codex,grok}-companion). Unrepaired, those agents
+# fail with "Cannot find module '/scripts/*-companion.mjs'" because
+# CLAUDE_PLUGIN_ROOT is only interpolated for hooks.json commands, never for
+# Bash-tool calls. Re-apply here rather than waiting for the next dispatch to
+# fail. Fail-open: an update must never be blocked by this.
+if command -v plugin-fixups-check >/dev/null 2>&1; then
+  plugin-fixups-check --fix >> "$UPDATE_LOG" 2>&1 || true
+fi
+
 exit 0

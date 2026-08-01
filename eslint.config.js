@@ -39,10 +39,13 @@ module.exports = [
     ],
   },
   {
-    files: ["tools/*.js", "test/*.js"],
+    files: ["tools/*.js", "tools/claude-proxy", "test/*.js"],
     languageOptions: {
       ecmaVersion: 2022,
-      sourceType: "script",
+      // These files run as Node CommonJS modules. Treating them as browser-style
+      // scripts makes every top-level function look like an implicit global and
+      // turns `npm run lint` into hundreds of false-positive errors.
+      sourceType: "commonjs",
       globals: nodeGlobals,
     },
     rules: {
