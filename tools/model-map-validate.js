@@ -790,7 +790,8 @@ function validateConfig(config, _errors, options) {
         report(`'${endpointsKey}.${id}.format' must be one of: ${[...VALID_FORMATS].join(', ')}`);
       }
       
-      if (entry.preserve_claude_code_correlation != null && typeof entry.preserve_claude_code_correlation !== 'boolean') {
+      if (Object.prototype.hasOwnProperty.call(entry, 'preserve_claude_code_correlation')
+          && typeof entry.preserve_claude_code_correlation !== 'boolean') {
         report(`'endpoints.${id}.preserve_claude_code_correlation' must be a boolean when present`);
       }
 if (entry.call_style != null) {
