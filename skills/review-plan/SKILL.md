@@ -31,6 +31,7 @@ See also: `CLAUDE.md PLAN_EXIT` directive — `Skill("review-plan")` is the only
 5. **Directive:** After convergence, extract plan-specific Implementation Intent Questions (Phase 5c.5) and append to the plan file. These become the POST_IMPLEMENT verification contract for `/review-fix` (intent-to-code drift detection).
 6. **Directive:** After every FULL-tier review, spawn a senior-engineer Task() agent (Phase 5g) to surface 0–5 skill improvements (not plan retrospectives). Renders as `SKILL LEARNINGS` panel before cleanup.
 7. **Directive:** After convergence, ensure non-trivial code plans have a filled `## Review Coverage` section or waiver per Q-E3 and skill-craft `review-coverage` (not an ExitPlanMode force).
+8. **Directive:** For logic-changing code plans, ensure layered tests (unit with mocks + e2e, Spec-bound) and a plan-end progressive ladder with a **paste-ready `/goal`** per Q-C29, Q-C45, and Q-E2. The `/goal` body must: **test planning first** each iteration; improve tests from cycle learnings + **last 10 git commits**; **git commit learnings each iteration**; and terminal **complete when only trivial findings remain for 2 consecutive cycles** (material findings reset the streak). Full suite is the final plan section only — not mid-plan.
 
 ---
 
@@ -227,6 +228,7 @@ Apply a 3-layer review: general quality, code-change quality, and GAS specializa
      # All L2 clusters superseded by gas-evaluator except impact (for Q-C26/Q-C35/Q-C37/Q-C38/Q-C39/Q-C40 — no gas equivalent)
      active_clusters = ["impact"]  # always active — Q-C26/Q-C35/Q-C37/Q-C38/Q-C39/Q-C40 evaluate here
      if "state" in ACTIVE_RISKS:  active_clusters.append("state")  # Q-C36 has no gas equivalent; Q-C13/18/19/24 → N/A-superseded within evaluator
+     if "testing" in ACTIVE_RISKS: active_clusters.append("testing")  # Q-C43/Q-C45 have no gas equivalent; Q-C4/C5/C9/C10/C11/C29 → N/A-superseded within evaluator
    ELSE:
      active_clusters = ["impact"]                              # always active (Gate 1 Q-C3)
      if "testing" in ACTIVE_RISKS:        active_clusters.append("testing")
@@ -456,8 +458,9 @@ Apply a 3-layer review: general quality, code-change quality, and GAS specializa
        small_questions.extend(["Q-C15", "Q-C22"])  # input validation, auth/permission
        risk_questions["security"] = ["Q-C15", "Q-C22"]
      if "testing" in ACTIVE_RISKS:
-       small_questions.extend(["Q-C4"])             # tests updated
-       risk_questions["testing"] = ["Q-C4"]
+       # Layered strategy + progressive ladder + tests-updated (not just "add a test")
+       small_questions.extend(["Q-C4", "Q-C29", "Q-C45"])
+       risk_questions["testing"] = ["Q-C4", "Q-C29", "Q-C45"]
      if "state" in ACTIVE_RISKS:
        small_questions.extend(["Q-C33"])            # config validation
        risk_questions["state"] = ["Q-C33"]
@@ -1536,18 +1539,17 @@ DO:
       - For Q-G13 (Phased decomposition): Apply four detection patterns in order:
           (1) Flat list: plan has >3 implementation steps with no phase/section headers →
               NEEDS_UPDATE. Cite the flat list and its step count.
-          (2) Test-at-end: phases exist but testing is consolidated in a final phase rather
-              than distributed per-phase → NEEDS_UPDATE. Cite the testing phase
-              (e.g., "Phase 4 consolidates all testing — each phase should verify its own work").
-          (3) Commit-before-test: a phase has a git commit step before its verification/test
-              step → NEEDS_UPDATE. Cite the misordered steps.
+          (2) No per-phase light checkpoint: phases exist with zero smoke/syntax/Pre-check
+              and no go/no-go before the next phase → NEEDS_UPDATE. Cite the phase.
+              **Exception / PASS:** consolidating the *full* unit+e2e suite into a final
+              Post-Implementation section (Q-C45/Q-E2) is correct — do not flag that as
+              "test-at-end". Full suite belongs at plan end; per-phase needs only light checks.
+          (3) Commit with zero verification: a phase commits without any checkpoint for that
+              phase's work → NEEDS_UPDATE. Cite the misordered steps.
           (4) No checkpoint: phases depend on each other with no explicit go/no-go between
               them → NEEDS_UPDATE. Cite the dependency.
-        Borderline: plan has phase headers but phases lack internal test steps:
-        - If phases also lack Pre-check/go-no-go markers → NEEDS_UPDATE (condition 2: no
-          per-phase verification of any kind). Cite the absent verification.
-        - If phases have explicit Pre-check or go/no-go markers but no per-phase tests →
-          NEEDS_UPDATE (mild: suggest distributing test steps, acknowledge checkpoints exist).
+        Borderline: plan has phase headers but only light Pre-check/go-no-go (no unit suite
+        per phase) and a full progressive ladder at plan end → PASS for Q-G13 (Q-C45 owns the ladder).
       - For Q-G10 (Assumption exposure): Apply two detection categories:
           Category 1 — Explicit markers: scan for "TBD", "need to determine", "maybe",
               "should handle...somehow", "might need to", "will need to investigate",
@@ -1631,8 +1633,11 @@ DO:
       Early-warning Q-E2 (pass-1 advisory — authoritative check is in epilogue):
       Also evaluate Q-E2 (Post-implementation workflow) as an early warning. If the plan
       is clearly missing a post-impl section entirely, flag it now (NEEDS_UPDATE) so the
-      section can be injected before other convergence work. If a partial section exists,
-      report it as advisory (PASS) and let the epilogue do the authoritative check.
+      section can be injected before other convergence work. If a partial section exists
+      but lacks a paste-ready `/goal` with test-planning-first, learnings-commit, last-10
+      commits, or terminal condition (and is not tests N/A), flag NEEDS_UPDATE so the
+      epilogue can inject the Canonical `/goal`. If only cosmetic incompleteness remains,
+      report advisory (PASS) and let the epilogue do the authoritative check.
       N/A when IS_GAS=true (covered by Q42). Output Q-E2 status in your JSON findings object.
 
       [See: EVALUATOR_OUTPUT_CONTRACT above, with EVALUATOR_NAME = "l1-advisory-process" and RESULTS_DIR = <RESULTS_DIR>]
@@ -1673,6 +1678,8 @@ DO:
         responsibility — no other evaluator will assess them.
         If you are the state-evaluator and IS_GAS=true above, evaluate Q-C36 only;
         Q-C13, Q-C18, Q-C19, Q-C24 are N/A-superseded (covered by gas-evaluator).
+        If you are the testing-evaluator and IS_GAS=true above, evaluate Q-C43 and Q-C45 only;
+        Q-C4, Q-C5, Q-C9, Q-C10, Q-C11, Q-C29 are N/A-superseded (covered by gas-evaluator Q11/Q12/Q17/Q19/Q20).
 
       Conditional question gates (per question-effectiveness-report.md 2026-04-10):
         Q-C14 (Bolt-on vs integrated) → N/A when HAS_EXISTING_INFRA=false. Only evaluate
@@ -1706,6 +1713,21 @@ DO:
         Example (Q-C39): "NEEDS_UPDATE — Step 1 extracts Field 3 as 'kind', but the
         actual TYPES format (shared-types.sh) has repo_subdir at position 3 and kind at
         position 4. [EDIT: correct field extraction in step 1 to use position 4 for kind]"
+      [IF cluster_name == "testing", append:]
+        - For Q-C29 (Layered test strategy): Require named unit cases with mock
+          boundaries, e2e (or e2e N/A reason), and Spec: mapping to plan steps/claims.
+          Vague "add tests" without cases/mocks/spec binding → NEEDS_UPDATE.
+        - For Q-C45 (Progressive post-impl test ladder + pasteable /goal): Full unit+e2e
+          campaign is the **last major plan block**. Require a **literal paste-ready `/goal`**
+          whose body (in order): (1) **test planning first** each iteration, (2) run batch,
+          (3) improve tests using cycle learnings + **last 10 git commit messages**,
+          (4) **git commit each iteration** with verbose learnings message, (5) **terminal
+          condition** exactly: only trivial findings remain for 2 consecutive cycles
+          (material findings reset streak). Prefer the Canonical `/goal` (test campaign)
+          from QUESTIONS.md §Q-E2. Flag: vague "use /goal"; missing any of the five
+          elements or wrong terminal condition; suite mid-plan; one-shot npm test only.
+        - Q-C4 still checks that changed signatures/error paths get tests; Q-C5 checks
+          light per-step smoke/checkpoints only — not a substitute for the end-of-plan ladder.
 
       [See: EVALUATOR_OUTPUT_CONTRACT above, with EVALUATOR_NAME = "<cluster_name>-evaluator" and RESULTS_DIR = <RESULTS_DIR>]
 
@@ -2681,7 +2703,7 @@ Q-G9 results are included in the scorecard output (step 4 of "After Review Compl
 ## Layer 2: Code Change Quality
 
 Question definitions are in QUESTIONS.md — cluster evaluators read that file directly. Team-lead
-only parses evaluator output (`Q-ID: PASS/NEEDS_UPDATE/N/A`). 38 questions organized into 6
+only parses evaluator output (`Q-ID: PASS/NEEDS_UPDATE/N/A`). 39 questions organized into 6
 concern clusters. Cluster-level triage activates/deactivates entire clusters based on Sonnet
 pre-classification. Active clusters are listed in `active_clusters` computed in Step 0.
 
@@ -2731,14 +2753,15 @@ When neither IS_GAS nor IS_NODE, no ecosystem evaluator is invoked.
 |---------|-------------|--------------------------|
 | Git | **epilogue** — Q-E1 evaluated post-convergence; IS_GAS: N/A (Q1, Q2) | Q1, Q2 |
 | Impact (1) | **partially** — Q-C26, Q-C35, Q-C37, Q-C38, Q-C39, Q-C40 have no gas equivalent (evaluate via impact cluster) | Q18, Q16, Q39, Q41; Q-C27 N/A (no external API consumers in GAS projects); Q-C32 (→Q22/Q25/Q26) superseded |
-| Testing (2) | **fully** | Q11, Q12, Q17, Q19, Q20; Q-C29 N/A (gas-evaluator Q11/Q12 cover test strategy) |
+| Testing (2) | **partially** — Q-C43/Q-C45 have no gas equivalent (evaluate via testing cluster when "testing" in ACTIVE_RISKS) | Q11, Q12, Q17, Q19, Q20; Q-C4/C5/C9/C10/C11/C29 N/A-superseded |
 | State (3) | **partially** — Q-C36 has no gas equivalent (evaluate via state cluster when "state" in ACTIVE_RISKS) | Q40, Q21, Q24, Q3 (for Q-C13/18/19/24) |
 | Security (4) | **fully** | Q27, Q28, Q23; Q-C30→Q28, Q-C31→N/A isolated exec, Q-C33→Q8, Q-C34→Q22 |
 | Operations (5) | **fully** | Q9, Q10, Q29, Q22, Q25; Q-C28 N/A (exec verification + Q6/Q12 cover GAS observability) |
 | Client (6) | **merged into ui-evaluator** when HAS_UI=true; **fully superseded** by gas-evaluator Q32, Q33 when IS_GAS | Q32, Q33 |
 
 Result: When IS_GAS=true, skip ALL cluster evaluators EXCEPT Impact cluster (always active — Q-C26/Q-C35/Q-C37/Q-C38/Q-C39/Q-C40
-have no gas equivalent) and State cluster when "state" in ACTIVE_RISKS (Q-C36 has no gas equivalent; Q-C13/18/19/24 → N/A-superseded).
+have no gas equivalent), State cluster when "state" in ACTIVE_RISKS (Q-C36 has no gas equivalent; Q-C13/18/19/24 → N/A-superseded),
+and Testing cluster when "testing" in ACTIVE_RISKS (Q-C43/Q-C45 have no gas equivalent; Q-C4/C5/C9/C10/C11/C29 → N/A-superseded).
 Q-C17 and Q-C25 are handled by ui-evaluator when HAS_UI=true (not a separate cluster evaluator). Mark all other IS_GAS-superseded questions N/A-superseded in the scorecard.
 
 **IS_NODE Individual Suppressions (7 questions span multiple clusters):**
@@ -2978,12 +3001,27 @@ After the convergence loop exits (scorecard not yet printed):
        Read the plan at <plan_path>.
        IS_GAS = <IS_GAS>
 
-       Evaluate Q-E2 (Post-implementation workflow):
+       Evaluate Q-E2 (Post-implementation workflow) — full criteria in QUESTIONS.md §Q-E2.
        IF NOT IS_GAS:
          Scan plan for "## Post-Implementation Workflow" section (or equivalent heading).
+         Required elements (all imperative, not optional):
+           (1) /review-fix loop → 0 findings
+           (2) build if applicable
+           (3) progressive test ladder at plan end with a **paste-ready `/goal` line** that
+               includes ALL of: test planning first each iteration; run batch; improve tests
+               from cycle learnings + last 10 git commit messages; git commit learnings each
+               iteration; terminal condition: only trivial findings remain for 2
+               consecutive cycles
+               OR explicit "tests N/A: <reason>"
+           (4) fail → fix → re-run /review-fix and re-enter /goal until pass
+           (5) if ## Review Coverage present, residual×2 after test campaign (pointer ok)
          IF section absent entirely:
            Output: "NEEDS_INJECT: full_section"
-         ELSE IF section present but missing step 4 (fail-fix-rerun cycle):
+         ELSE IF section present but missing paste-ready /goal or missing any required
+              /goal element (test-planning-first, last-10-commits, learnings-commit,
+              "only trivial findings" / 2 consecutive cycles terminal) and no "tests N/A":
+           Output: "NEEDS_INJECT: progressive_ladder"
+         ELSE IF section present but missing fail-fix-rerun cycle:
            Output: "NEEDS_INJECT: step_4_only"
          ELSE:
            Output: "PASS"
@@ -3011,7 +3049,13 @@ After the convergence loop exits (scorecard not yet printed):
    ```
 
    Parse results from both Tasks. Apply any injections sequentially after both complete:
-   - Q-E2 NEEDS_INJECT → inject Post-Implementation Workflow section. Mark <!-- review-plan -->.
+   - Q-E2 NEEDS_INJECT: full_section → inject the **Canonical inject body** from
+     QUESTIONS.md §Q-E2 as the **last major section of the plan**, including the
+     **Canonical `/goal` (test campaign)** paste block verbatim. Mark <!-- review-plan -->.
+   - Q-E2 NEEDS_INJECT: progressive_ladder → append Canonical `/goal` (test campaign) +
+     per-iteration order notes into the existing post-impl section; if post-impl is not
+     last, move that section to plan end.
+   - Q-E2 NEEDS_INJECT: step_4_only → append fail→fix→re-run cycle.
    - Q-E1 MISSING → inject missing git elements. Mark <!-- review-plan -->.
    - Both N/A → skip injection.
 
@@ -3606,7 +3650,7 @@ ELIF NOT _phase_5b5_skip:
            Verify by: [diff-level check]
 
        Do NOT output:
-         - Generic questions ("are there tests?") — Q-C4 already scores this
+         - Generic questions ("are there tests?") — Q-C4/Q-C29/Q-C45 already score strategy + ladder
          - Aspirational questions ("is the code clean?") — unverifiable
          - Duplicates of Q-G1..Q-G31 scorecard findings
          - More than 15 — prioritize ruthlessly

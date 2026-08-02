@@ -34,7 +34,7 @@ For each question: evaluate → **PASS** / **NEEDS_UPDATE** / **N/A**
 | Q-G5 | Scope focus | On-target, no scope creep? | never |
 | Q-G10 | Assumption exposure | Flag implicit high-risk assumptions (environment, APIs, data, third-party). Targets: "should work", unvalidated env deps, TBD markers, evidence-free "won't work" claims. Stated assumptions acceptable if explicit; unvalidated constraints need cited evidence (test, error, doc, platform limit). Unresolved decisions → flag unless investigation steps or low-risk annotation present. Rules: "assume X" → flag if high-risk; "TBD" → always flag; contradictions → flag. (Lightweight — cross-phase depth: Q-G21.) | no external calls, no environment-specific dependencies, no pre-existing data assumptions; and no open-question markers (TBD / will need to investigate) in implementation steps |
 | Q-G12 | Code consolidation | Substantive overlap addressed? If overlap: consolidate or defer with reason. Flag: touches near-identical logic without acknowledging. (Structural overlap only; utility reuse → Q-C12.) | purely additive (new file / new feature) with no substantively similar existing implementations |
-| Q-G13 | Phased decomposition | Phases group distinct concerns, each completing implement→test→commit before next? Flag: (1) flat list mixing concerns without phase breaks; (2) commit before test; (3) implicit cross-phase deps without checkpoints; (4) per-phase `/review` (→ Q-E2). | single atomic concern with no cross-phase dependencies (e.g. fix exactly one bug, rename one identifier, add one isolated function) |
+| Q-G13 | Phased decomposition | Phases group distinct concerns, each completing implement→**light checkpoint**→commit before next? Light checkpoint = syntax/smoke/stated expectation — **not** the full unit/e2e suite (that runs at plan end per Q-C45/Q-E2). Flag: (1) flat list mixing concerns without phase breaks; (2) commit with zero verification of that phase; (3) implicit cross-phase deps without checkpoints; (4) per-phase `/review` (→ Q-E2). Do **not** flag consolidating the full suite into a final Post-Implementation section. | single atomic concern with no cross-phase dependencies (e.g. fix exactly one bug, rename one identifier, add one isolated function) |
 | Q-G14 | Codebase style adherence | Changes follow existing patterns; deviations stated with reason. Flag: unacknowledged divergence from comparable code. | documentation-only change with no proposed code; or brand new project with no existing comparable code to inherit style from |
 | Q-G18 | Pre-condition verification | Edit without prior read? OK: "Read X to confirm Y"/"verify Z before". EDIT: unverified → [EDIT: before step N: "Read [path], verify [expectation — e.g., fn X ~line Y]"] | pure new-file creation with no existing files to verify; or plan modifies only documentation where current state is irrelevant |
 | Q-G20 | Story arc coherence | 4 story-arc elements explicit? (1) problem/need — trigger + current-state delta, (2) approach + rationale, (3) expected outcome, (4) testable verification. Good: "test X passes", "endpoint returns Y for input Z". Bad: "it works", "no errors". May span sections but each must be explicit. Flag: missing elements; jumping to implementation. EDIT: `[EDIT: inject after title: "## Context\n[Problem and current-state]\n\n## Approach\n[Method and rationale]\n\n## Expected Outcome\n[Success state and verification]"]`. | IS_TRIVIAL; or change is self-evidently scoped (e.g., "fix typo in line 42 of README") where all 4 elements are implicit in a single sentence |
@@ -85,7 +85,7 @@ Count L1 edits → `l1_changes += count` (27 questions total, combined into `cha
 
 ## Layer 2: Code Change Quality
 
-*38 questions organized into 6 concern clusters. Cluster-level triage activates/deactivates
+*39 questions organized into 6 concern clusters. Cluster-level triage activates/deactivates
 entire clusters based on Sonnet pre-classification. Active clusters are listed in active_clusters
 computed in Step 0.*
 
@@ -113,19 +113,20 @@ IS_NODE: Q-C32 → N/A-superseded (node N14). Q-C35, Q-C37, Q-C38, Q-C39, Q-C40:
 
 ### Cluster 2: Testing & Plan Quality
 
-*6 questions. Always active.*
+*8 questions. Always active when the testing cluster is active (see ACTIVE_RISKS / cluster activation).*
 
 | Q | Gate | Question | Criteria | N/A |
 |---|------|----------|----------|-----|
 | Q-C4 | 2 | Tests updated | Tests updated for changed signatures, new error paths, bug fixes? Flag: missing test for any. EDIT: [EDIT: after step N: "Test [function] — new signature/error paths/regression"]. | pure visual |
-| Q-C5 | 2 | Incremental verification | Each step has a checkpoint (not all-testing-at-end)? | single atomic |
+| Q-C5 | 2 | Incremental verification | Each implementation step has a light checkpoint (syntax, smoke, or stated expectation) so work is not only validated at the very end. **Does not** require the full unit/e2e suite mid-plan — that suite runs at plan end per Q-C45/Q-E2. Flag: zero mid-plan checkpoints of any kind on multi-step impl. | single atomic |
 | Q-C9 | 2 | Step ordering | Explicit DAG; no refs to uncreated files, no deploy-before-push? | single step |
 | Q-C10 | 2 | Empty code | No stubs/TODOs without full spec (phased OK if explicit)? | no placeholders |
 | Q-C11 | 3 | Dead code | Old implementations marked for removal? | nothing replaced |
-| Q-C29 | 2 | Test strategy defined upfront | Test strategy upfront? Acceptable: named cases, behavior coverage, or "existing tests suffice." Flag: logic changes sans pre-stated acceptance criteria. | cosmetic/doc-only change; single-line fix where correctness is self-evident; existing test suite explicitly confirmed as sufficient |
+| Q-C29 | 2 | Layered test strategy (unit mocks + e2e + spec binding) | Logic-changing plans name a layered strategy, not "add tests" prose. Require: (1) **unit** cases with explicit mock boundaries (what is mocked vs real — network, FS, clock, upstream APIs); (2) **e2e/integration** cases for the critical path, or explicit `e2e N/A: <reason>`; (3) each named case maps to a plan claim/step/spec (`Spec: step N / claim "…"`); (4) pre-stated acceptance criteria (pass/fail). Flag: vague "add tests"; unit cases with external deps and no mock boundary; e2e omitted without reason; cases not tied to any claim. EDIT: `[EDIT: add ## Test Strategy\n### Unit (mocked)\n- [case] — mocks: [deps]; Spec: [step/claim]\n### E2E\n- [case] — Spec: [step/claim]\n(or e2e N/A: reason)]`. Complements Q-C4 (which files/paths get tests) and Q-C45 (post-impl progressive run). | cosmetic/doc-only; single-line self-evident fix; pure visual; existing suite explicitly confirmed sufficient for every changed behavior |
 | Q-C43 | 2 | Test-blast radius alignment | Tests cover all callers/workflows identified as affected? Flag: impact analysis names N consumers but tests only cover changed function. EDIT: [EDIT: in test section: "Verify [affected caller] still works"]. | no callers/workflows identified as affected; self-contained change |
+| Q-C45 | 2 | Progressive post-impl test ladder + pasteable `/goal` (plan end) | Full unit+e2e campaign is the **last major work block** after all implement phases. The plan must embed a **paste-ready `/goal` command** (not "run /goal vaguely") whose body, in order: (1) **test planning first every iteration** — plan/refine the next unit (mocked) and e2e batch against implemented code + Specs; (2) run that batch; (3) improve test cases from this cycle's learnings **and the last 10 git commit messages**, with concrete how-to-improve notes; (4) **git commit each iteration** with a verbose message capturing key learnings; (5) **terminal condition** exactly: **only trivial findings remain for 2 consecutive cycles** (material/P0–P1 findings reset the streak; suites for planned batches still run each cycle). Also require: unit→integration→final e2e batch order; suite cmds + Spec maps; unintended-consequence cases or deferral; host max-turns + max-budget (never unlimited). Flag: no host-valid `/goal` paste; `/goal` missing test-planning-first / learnings-commit / last-10-commits / this terminal condition; suite mid-plan; one-shot `run tests` only. EDIT: inject `## Progressive Test Ladder (final)` + the **Canonical `/goal` (test campaign)** block from §Q-E2. Scope: terminal execution; strategy → Q-C29; residual×2 → Q-E3. | cosmetic/doc-only; single-line self-evident; no automated harness + manual pass criteria documented; IS_TRIVIAL |
 
-IS_GAS: **fully superseded** — skip this cluster when IS_GAS=true (gas-evaluator Q11, Q12, Q17, Q19, Q20; Q-C29 N/A — test strategy covered by gas-evaluator Q11/Q12). **Q-C43 has no gas equivalent — evaluate normally** when IS_GAS=true AND testing cluster is active.
+IS_GAS: **partially superseded** — when IS_GAS=true and testing cluster is active, evaluate **Q-C43 and Q-C45 only**; mark Q-C4, Q-C5, Q-C9, Q-C10, Q-C11, Q-C29 as N/A-superseded (gas-evaluator Q11, Q12, Q17, Q19, Q20). When testing not in ACTIVE_RISKS, skip the cluster.
 IS_NODE: not superseded — evaluate normally.
 
 ### Cluster 3: State & Data Integrity
@@ -243,9 +244,34 @@ IS_GAS: N/A — covered by gas-evaluator Q1, Q2.
 
 | Q | Gate | Question | Criteria | N/A |
 |---|------|----------|----------|-----|
-| Q-E2 | 1 | Post-implementation workflow | Post-impl section (after impl, not bundled) has all 4: (1) `/review-fix` loop→0 findings, (2) build if applicable, (3) tests if any, (4) fail→fix→re-run `/review-fix`→re-run until pass. All imperative, not optional. Flag: user-optional or user-confirmation language. EDIT: absent→inject `## Post-Implementation Workflow` (all 4); missing step 4→append. | IS_GAS (covered by Q42 in gas-plan) |
+| Q-E2 | 1 | Post-implementation workflow | Post-impl section is the **final major section of the plan** (after all implementation phases) and has **all 5**, imperative: (1) `/review-fix` loop→0 findings; (2) build if applicable; (3) **progressive test ladder at the very end** with a **paste-ready `/goal`** (see Canonical `/goal` below) — not a vague "use /goal"; (4) fail→fix→re-run `/review-fix` and re-run the failed test batch until pass; (5) when Q-E3 applies, residual×2 **after** the test campaign completes. The embedded `/goal` body **must** include, in this order: **test planning first** each iteration → run batch → improve tests from cycle learnings + **last 10 git commit messages** (concrete how-to-improve) → **git commit each iteration** with a verbose learnings message → **terminal condition: only trivial findings remain for 2 consecutive cycles**. Flag: post-impl mid-plan; no host-valid `/goal` paste; `/goal` missing test-planning-first, learnings-commit, last-10-commits, or this terminal condition; user-optional language. EDIT: absent→inject full `## Post-Implementation Workflow` at plan end; missing `/goal` block→append Canonical `/goal`; incomplete `/goal` elements→rewrite to Canonical; section not last→move to end. | IS_GAS (covered by Q42 in gas-plan) |
 
 IS_GAS: N/A — covered by gas-evaluator Q42.
+
+**Canonical `/goal` (test campaign)** — paste literally into the plan (do not paraphrase the static sentence; fill angle-bracket placeholders only):
+
+```text
+/goal first plan or refine the next unit-test batch (with explicit mocks) and e2e cases against the implemented code and Spec maps, then run that batch, then improve test cases using this cycle's learnings and the last 10 git commit messages with concrete notes on how to strengthen coverage and reduce flakiness, then git commit with a verbose message capturing key learnings before the next iteration, complete when only trivial findings remain for 2 consecutive cycles
+```
+
+**Terminal condition (normative):** `complete when only trivial findings remain for 2 consecutive cycles`. Material (P0/P1) findings — including suite FAIL/ERROR, unmapped Spec rows, and weakened/skipped tests — **reset the streak to 0**. Minors/P2 are trivial and do not block exit. Each cycle still runs the planned batch(es); green suite evidence is required for a cycle to count as having only trivial findings.
+
+Host caps (required next to the paste): set max-turns and max-budget; never unlimited ralph.
+
+**Canonical inject body** (team-lead uses this when Q-E2 fires full inject — place as the **last** major section of the plan; include the `/goal` line **verbatim** under step 3):
+
+- Heading: `## Post-Implementation Workflow`
+- Intro: *Final section — after all implementation phases are complete. Full test suite runs here only.*
+- Step 1: Run `/review-fix` until 0 findings (imperative — not optional).
+- Step 2: Build if applicable; fix build failures before the test campaign.
+- Step 3: Progressive test ladder (**very end of the plan**):
+  - Batches (order fixed): unit/mocked first → integration → **final e2e last**.
+  - Each batch names suite command + Spec maps (from ## Test Strategy / Q-C29).
+  - If no automated tests apply: `tests N/A: <concrete reason>` with manual pass criteria (skip `/goal`).
+  - Otherwise run this exact paste (host max-turns + max-budget; never unlimited) — the Canonical `/goal` (test campaign) from above.
+  - Per-iteration order (fixed): **(a) test planning first** → (b) run batch → (c) improve tests from learnings + last 10 commits (concrete how-to-improve) → (d) git commit learnings (verbose message) → (e) stop only when **only trivial findings remain for 2 consecutive cycles**.
+- Step 4: On failure outside `/goal` turns: fix → re-run `/review-fix` → re-enter `/goal` until green.
+- Step 5: If `## Review Coverage` present (Q-E3): residual×2 under its own `/goal` **after** the test campaign (do not merge into the test `/goal`).
 
 ### Q-E3: Review Coverage
 

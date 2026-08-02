@@ -41,8 +41,24 @@ REASON: <specific reason grounded in a condition below>
 2. **Dependencies** — are `depends_on` references valid item IDs that exist in the plan?
 3. **Scope creep / drift** — do any items address concerns outside the stated intent?
 4. **Verification coverage** — does each wave have a verification step (test, syntax check, or smoke test)?
-5. **Ambiguity** — are any steps so vague a coder could not execute them without guessing?
-6. **Risk flagging** — are destructive or irreversible steps (schema migrations, file deletions) explicitly marked?
+5. **Layered test plan (logic-changing items)** — for new/changed behavior:
+   - Named **unit** cases with explicit **mock boundaries** (what is mocked vs real)
+   - Named **e2e/integration** cases for the critical path, or explicit `e2e N/A: <reason>`
+   - Each case maps to a plan claim/step/spec (`Spec: …`)
+6. **Progressive post-impl ladder (plan end)** — full unit+e2e suite is the **last major work** after all implement phases:
+   - Not the main suite mid-plan; light per-step smoke is OK earlier
+   - Plan embeds a **paste-ready `/goal`** (not vague "use /goal"), with body order fixed:
+     1. **Test planning first** (unit mocks + e2e vs Specs)
+     2. Run the batch
+     3. Improve tests from cycle learnings + **last 10 git commit messages** (concrete how-to-improve)
+     4. **Git commit each iteration** with verbose learnings message
+     5. Explicit **terminal condition**: **only trivial findings remain for 2 consecutive cycles** (material findings reset the streak)
+   - Batches: unit → integration → final e2e; host max-turns + max-budget (never unlimited)
+   - Cover unintended consequences / regression surface from impact analysis, or defer with reason
+7. **Ambiguity** — are any steps so vague a coder could not execute them without guessing?
+8. **Risk flagging** — are destructive or irreversible steps (schema migrations, file deletions) explicitly marked?
+
+Skip items 5–6 for pure doc/cosmetic plans with no behavioral change.
 
 ## Output Format
 
