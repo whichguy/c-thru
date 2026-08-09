@@ -546,6 +546,14 @@ setup_ephemeral_session() {
     [[ -z "$name" ]] && continue
     item="$ORIGINAL_CLAUDE_PROFILE_DIR/$name"
     [[ "$name" == "settings.json" || "$name" == "settings.local.json" || "$name" == "agents" || "$name" == "skills" || "$name" == "backups" ]] && continue
+    # .claude.json / .claude.json.lock are NOT symlinked from the nested
+    # ~/.claude/ copy here: step 2 below symlinks the top-level $HOME/.claude.json
+    # into the session dir instead. Without this exclusion, the nested file wins
+    # the name first and step 2's symlink silently no-ops (EEXIST), leaving c-thru
+    # sessions reading ~/.claude/.claude.json while plain claude reads
+    # ~/.claude.json — a config-shadow split that can make a stale/missing
+    # oauthAccount in the nested copy show a login prompt at every c-thru start.
+    [[ "$name" == ".claude.json" || "$name" == ".claude.json.lock" ]] && continue
     ln -s "$item" "$EPHEMERAL_SESSION_DIR/$name" 2>/dev/null || true
   done < <(ls -A "$ORIGINAL_CLAUDE_PROFILE_DIR" 2>/dev/null)
 
@@ -5247,6 +5255,22 @@ run_real_claude() {
       fi
       ;;
   esac
+  # Fail-loud guard: routing through the proxy (not --bypass-proxy) but neither
+  # a Bearer token nor an API key reached the exec boundary. The usual cause is
+  # inject_subscription_oauth_from_store (line ~2540) silently no-op'ing —
+  # expired/unrefreshed or missing keychain OAuth, absent jq — which otherwise
+  # execs Claude Code straight into its startup auth gate / login screen with no
+  # explanation. Surface the remediation instead of a bare login prompt. Skipped
+  # on --bypass-proxy (Claude Code reads its own keychain there) and not a hard
+  # stop (Ollama-only setups with C_THRU_PROXY_PLACEHOLDER_KEY=1 should still
+  # be able to launch, and the placeholder path sets ANTHROPIC_API_KEY above).
+  if [[ "${CLAUDE_PROXY_BYPASS:-}" != "1" \
+        && -z "${ANTHROPIC_AUTH_TOKEN:-}" \
+        && -z "${ANTHROPIC_API_KEY:-}" ]]; then
+    echo "c-thru: no Anthropic credential found for the proxy hop." >&2
+    echo "c-thru: run 'claude login' to restore keychain OAuth, or export ANTHROPIC_API_KEY." >&2
+    echo "c-thru: (for Ollama-only setups, set C_THRU_PROXY_PLACEHOLDER_KEY=1.)" >&2
+  fi
   local url="${ANTHROPIC_BASE_URL:-}"
   local tok="${ANTHROPIC_AUTH_TOKEN:-}"
   local ec
