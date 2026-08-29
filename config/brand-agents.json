@@ -303,6 +303,10 @@
         {
           "id": "glm-5-2-cloud",
           "pin": "model:glm-5.2:cloud"
+        },
+        {
+          "id": "glm-5-3-cloud",
+          "pin": "model:glm-5.3:cloud"
         }
       ]
     },

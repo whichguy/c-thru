@@ -474,11 +474,17 @@
       "id": "glm-named",
       "prompt": "ask agent glm — spawn the glm brand leaf for a short second opinion.",
       "expect": [
-        "glm",
-        "glm-5-2-cloud",
-        "generalist"
+        "glm"
       ],
       "note": "explicit GLM brand leaf"
+    },
+    {
+      "id": "glm-5-3-cloud-named",
+      "prompt": "ask glm-5-3-cloud for a short second opinion using that exact agent id.",
+      "expect": [
+        "glm-5-3-cloud"
+      ],
+      "note": "exact-id GLM 5.3 brand alias"
     },
     {
       "id": "amb-greeting",

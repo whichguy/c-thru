@@ -79,6 +79,7 @@ const INTENTIONALLY_UNSTRUCTURED_AGENTS = Object.freeze([
   'devstral-small-2-24b-cloud',
   'glm',
   'glm-5-2-cloud',
+  'glm-5-3-cloud',
   'gemma',
   'gemma4-26b',
   'gemma4-e4b',

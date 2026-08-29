@@ -784,7 +784,8 @@
     "gpt-5-6-luna": "model:gpt-5.6-luna",
     "codex-luna": "model:gpt-5.6-luna",
     "codex": "model:codex",
-    "claude-fable-5": "model:claude-fable-5"
+    "claude-fable-5": "model:claude-fable-5",
+    "glm-5-3-cloud": "model:glm-5.3:cloud"
   },
   "model_routes": {
     "grok": {
@@ -953,7 +954,8 @@
     "luna": "gpt-5.6-luna",
     "codex": "gpt-5.6-terra",
     "gemini-3-flash-preview:cloud": "ollama_cloud",
-    "grok-4.6": "xai"
+    "grok-4.6": "xai",
+    "glm-5.3:cloud": "ollama_cloud"
   },
   "routes": {
     "default": "generalist",
@@ -1182,6 +1184,7 @@
     "gemma4-e4b",
     "glm",
     "glm-5-2-cloud",
+    "glm-5-3-cloud",
     "gpt-5-6-luna",
     "gpt-5-6-sol",
     "gpt-5-6-terra",
@@ -1238,7 +1241,7 @@
     "qwen": "qwen3.8:27b-mlx",
     "kimi": "kimi-k3:cloud",
     "gemini": "gemini-pro-latest",
-    "glm": "glm-5.2:cloud",
+    "glm": "glm-5.3:cloud",
     "gemma": "gemma4:31b",
     "phi": "phi4-mini:3.8b",
     "gpt-oss": "gpt-oss:120b",
@@ -1251,5 +1254,8 @@
     "terra": "gpt-5.6-terra",
     "luna": "gpt-5.6-luna",
     "codex": "gpt-5.6-terra"
+  },
+  "context_windows": {
+    "glm-5.3:cloud": 1000000
   }
 }

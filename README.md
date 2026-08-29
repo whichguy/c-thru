@@ -1138,8 +1138,9 @@ The full mapping, all the way through the implementation: **agent → capability
 | `gemma4-31b-mxfp8` &nbsp;⚠ | `model:gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `ollama_local` |
 | `gemma4-e4b` &nbsp;⚠ | `model:gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `gemma4:31b` | `ollama_local` |
 | `generalist` | `generalist` | `claude-sonnet-5` | `deepseek-v4-flash:0731-cloud` | `qwen3.8:27b-mlx` | `anthropic` |
-| `glm` &nbsp;⚠ | `model:glm` | `—` | `—` | `—` | `—` |
+| `glm` &nbsp;⚠ | `model:glm` | `glm-5.3:cloud` | `glm-5.3:cloud` | `glm-5.3:cloud` | `ollama_cloud` |
 | `glm-5-2-cloud` &nbsp;⚠ | `model:glm-5.2:cloud` | `glm-5.2:cloud` | `glm-5.2:cloud` | `glm-5.2:cloud` | `ollama_cloud` |
+| `glm-5-3-cloud` &nbsp;⚠ | `model:glm-5.3:cloud` | `glm-5.3:cloud` | `glm-5.3:cloud` | `glm-5.3:cloud` | `ollama_cloud` |
 | `gpt-5-6-luna` &nbsp;⚠ | `model:gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `gpt-5.6-luna` | `openai` |
 | `gpt-5-6-sol` &nbsp;⚠ | `model:gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `gpt-5.6-sol` | `openai` |
 | `gpt-5-6-terra` &nbsp;⚠ | `model:gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `gpt-5.6-terra` | `openai` |
