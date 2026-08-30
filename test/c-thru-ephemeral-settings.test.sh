@@ -453,6 +453,67 @@ NODE
 assert "reserved instruction files are not linked into the ephemeral agent store" test \
   ! -e "$SESSION_DIR/agents/CLAUDE.md" -a ! -L "$SESSION_DIR/agents/CLAUDE.md" -a \
   ! -e "$SESSION_DIR/agents/AGENTS.md" -a ! -L "$SESSION_DIR/agents/AGENTS.md"
+
+echo
+echo "10b. Empty-description discovered agents are skipped (Claude Code --agents gate)"
+printf '%s\n' '# timing probe notes' 'Do not treat as an agent.' \
+  > "$PROFILE_DIR/agents/survival-note.md"
+printf '%s\n' "---" "description:" "model: x" "---" "body" \
+  > "$AGENT_FLEET_DIR/empty-desc.md"
+printf '%s\n' "---" 'description: ""' "model: quoted-empty" "---" "body" \
+  > "$AGENT_FLEET_DIR/quoted-empty.md"
+printf '%s\n' "---" 'description: "   "' "model: blank-quoted" "---" "body" \
+  > "$AGENT_FLEET_DIR/blank-quoted.md"
+printf '%s\n' "---" "description: >" "  Folded paragraph for the scope-boundary guard" \
+  "model: folded" "---" "folded prompt" \
+  > "$AGENT_FLEET_DIR/folded-desc.md"
+printf '%s\n' "# profile note, no frontmatter" > "$PROFILE_DIR/agents/shadowed.md"
+printf '%s\n' "---" "description: fleet shadowed" "model: fleet-shadowed" "---" \
+  "fleet shadowed prompt" > "$AGENT_FLEET_DIR/shadowed.md"
+NO_AGENTS=0
+RUN_PAYLOADS=()
+rm -rf "$SESSION_DIR/agents"
+EMPTY_DESC_LOG="$FIXTURE_DIR/empty-desc.log"
+run_agents_builder 2>"$EMPTY_DESC_LOG"
+EMPTY_DESC_STATUS=$?
+assert "empty-description builder exits 0" test "$EMPTY_DESC_STATUS" -eq 0
+assert "empty-description discovered agents are omitted from --agents JSON" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+const banned = ["survival-note", "empty-desc", "quoted-empty", "blank-quoted"];
+process.exit(banned.every(name => !Object.prototype.hasOwnProperty.call(agents, name)) ? 0 : 1);
+NODE
+assert "folded description: > remains a non-empty injected agent" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+process.exit(agents["folded-desc"] ? 0 : 1);
+NODE
+assert "empty profile description falls back to the fleet definition" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+process.exit(agents.shadowed?.description === "fleet shadowed" ? 0 : 1);
+NODE
+assert "shadowed ephemeral path is a symlink" test -L "$SESSION_DIR/agents/shadowed.md"
+# -ef, not string equality: mktemp with TMPDIR=.../T/ yields a double-slash
+# path, and Node path.join normalizes it in the symlink target.
+assert "shadowed ephemeral link points at the fleet file" \
+  test "$SESSION_DIR/agents/shadowed.md" -ef "$AGENT_FLEET_DIR/shadowed.md"
+assert "valid agents still inject next to skipped files" node - "$BUILT_AGENTS_JSON" <<'NODE'
+const agents = JSON.parse(process.argv[2]);
+process.exit(agents.collision?.description === "profile collision" &&
+  agents["effort-high"]?.effort === "high" ? 0 : 1);
+NODE
+assert "skip warning names the no-frontmatter profile note" grep -Fqx \
+  "c-thru: skipping agent file survival-note.md: empty description (Claude Code rejects this in --agents)" \
+  "$EMPTY_DESC_LOG"
+assert "fleet-fallback warning names the shadowed profile file" grep -Fqx \
+  "c-thru: profile agent file shadowed.md has an empty description; using the fleet definition instead" \
+  "$EMPTY_DESC_LOG"
+assert "skipped profile note is unlinked from the ephemeral agents dir" test \
+  ! -e "$SESSION_DIR/agents/survival-note.md" -a ! -L "$SESSION_DIR/agents/survival-note.md"
+assert "skipped profile note is not deleted from the real profile" test \
+  -f "$PROFILE_DIR/agents/survival-note.md"
+rm -f "$PROFILE_DIR/agents/survival-note.md" "$PROFILE_DIR/agents/shadowed.md" \
+      "$AGENT_FLEET_DIR/empty-desc.md" "$AGENT_FLEET_DIR/quoted-empty.md" \
+      "$AGENT_FLEET_DIR/blank-quoted.md"
+
 RUN_PAYLOADS=('{"collision":{"description":"caller collision"},"caller-effort":{"description":"caller","effort":"max"}}')
 rm -rf "$SESSION_DIR/agents"
 run_agents_builder
