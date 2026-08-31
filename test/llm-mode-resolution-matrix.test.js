@@ -193,16 +193,16 @@ console.log('\n12. best-cloud-oss at 64gb: resolves to OSS cloud model');
 console.log('\n13. Key capabilities present in shipped llm_profiles');
 {
   const required = ['planner', 'planner-hard', 'coder', 'tester', 'code-reviewer',
-    'reviewer-security', 'generalist', 'fast-scout', 'edge', 'explore'];
+    'reviewer-security', 'generalist', 'fast-scout', 'microtask', 'explore'];
   for (const cap of required) {
     assert(cap in profiles, `capability '${cap}' present in llm_profiles`);
   }
 }
 
-// ── 14. Fast-scout and edge: always local (not cloud) in best-local-oss ────────
+// ── 14. Fast-scout and microtask: always local (not cloud) in best-local-oss ────────
 console.log('\n14. fast-scout and edge: local models in best-local-oss');
 {
-  for (const cap of ['fast-scout', 'edge']) {
+  for (const cap of ['fast-scout', 'microtask']) {
     const model = resolveProfileModel(profiles[cap], '64gb', 'best-local-oss');
     assert(typeof model === 'string' && model.length > 0,
       `${cap} best-local-oss/64gb resolves (got ${model})`);

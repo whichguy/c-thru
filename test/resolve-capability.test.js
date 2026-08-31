@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const {
+  expandLatestModel,
   resolveProfileModel,
   resolveLlmMode,
   resolveActiveTier,
@@ -280,18 +281,19 @@ console.log('\n11. Pinned-model regression guard — shipped config key triples'
     // Cloud planner pins intentionally route through the claude-* regex route.
     { cap: 'planner',      tier: '64gb',  mode: 'best-cloud',     want: 'claude-fable-5' },
     { cap: 'planner',      tier: '128gb', mode: 'best-cloud',     want: 'claude-fable-5' },
-    { cap: 'planner-hard', tier: '128gb', mode: 'best-cloud',     want: 'claude-fable-5' },
+    { cap: 'planner-hard', tier: '128gb', mode: 'best-cloud',     want: 'grok-4.6' },
     // fast-scout is always the small local model regardless of mode
     { cap: 'fast-scout',   tier: '64gb',  mode: 'best-cloud',     want: 'phi4-mini:3.8b'   },
     { cap: 'fast-scout',   tier: '64gb',  mode: 'best-local-oss', want: 'phi4-mini:3.8b'   },
     // coder in gov mode must be a non-Chinese claude model
     { cap: 'coder',        tier: '64gb',  mode: 'best-cloud-gov',  want: 'claude-sonnet-5' },
-    // edge is always the smallest local model
-    { cap: 'edge',         tier: '64gb',  mode: 'best-cloud',     want: 'gemma4:e4b'        },
+    // microtask is always the smallest local model
+    { cap: 'microtask',    tier: '64gb',  mode: 'best-cloud',     want: 'gemma4:e4b'        },
   ];
 
   for (const { cap, tier, mode, want } of pins) {
-    const got = resolveProfileModel(p[cap], tier, mode);
+    const selected = resolveProfileModel(p[cap], tier, mode);
+    const got = expandLatestModel(selected, shippedConfig.latest_models) || selected;
     assert(got === want, `pinned: ${cap}/${mode}/${tier} = ${want} (got ${got})`);
   }
 }
@@ -365,6 +367,17 @@ console.log('\n13. tools/c-thru-resolve follows config selection precedence');
       CLAUDE_LLM_PROFILE: '64gb',
       CLAUDE_LLM_MODE: 'best-cloud',
     };
+    // Make the fixture hermetic under a c-thru session: the launcher exports
+    // CLAUDE_MODEL_MAP_PATH (highest-precedence override) and
+    // CLAUDE_MODEL_MAP_LAUNCH_CWD (skews findParentModelMap project discovery),
+    // and profileClaudeDir() honors CLAUDE_PROFILE_DIR / CLAUDE_DIR /
+    // CLAUDE_CONFIG_DIR before HOME. Without clearing all five, the temp
+    // profile/project fixtures are never consulted and precedence can't be tested.
+    delete baseEnv.CLAUDE_MODEL_MAP_PATH;
+    delete baseEnv.CLAUDE_MODEL_MAP_LAUNCH_CWD;
+    delete baseEnv.CLAUDE_PROFILE_DIR;
+    delete baseEnv.CLAUDE_DIR;
+    delete baseEnv.CLAUDE_CONFIG_DIR;
 
     // Project-local wins over profile
     const projectOut = execSync(`node ${resolveScript} coder`, {

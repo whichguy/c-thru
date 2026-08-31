@@ -399,6 +399,22 @@ for (const primary of [...primaries].sort()) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// (C2) LOGICAL-AGENT COVERAGE
+// ════════════════════════════════════════════════════════════════════════════
+// Every logical (pipeline + utility) agent must lead at least one corpus task as
+// expect[0]. Brand leaves are exempt — they are formulaic and not every brand
+// needs a fixture. This is the guard that catches a logical agent silently
+// dropping out of the corpus (e.g. the former `edge` had zero entries).
+console.log('\n── (C2) Logical-agent coverage (every pipeline/utility agent leads ≥1 task) ──\n');
+
+const logicalAgents = agents.filter(a => !BRAND_IDS.has(a.name)).map(a => a.name);
+const primarySet = new Set(nonAmbiguous.filter(t => t.expect.length).map(t => t.expect[0]));
+for (const name of logicalAgents.sort()) {
+  assert(primarySet.has(name),
+    `${name}: logical agent has no corpus task naming it as primary (expect[0]) — add a fixture`);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // (D) AMBIGUOUS FLOOR
 // ════════════════════════════════════════════════════════════════════════════
 console.log('\n── (D) Ambiguous floor (no specialist matches a non-task prompt strongly) ──\n');

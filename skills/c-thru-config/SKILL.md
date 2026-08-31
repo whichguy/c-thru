@@ -89,7 +89,7 @@ agent by a natural-language role, resolve to the canonical key:
 | "fast generalist", "fast" | `fast-generalist` |
 | "fast scout", "scout", "quick search" | `fast-scout` |
 | "long context", "large context" | `long-context` |
-| "edge", "small tasks", "minimal" | `edge` |
+| "microtask", "small tasks", "minimal" | `microtask` |
 | "prose writer", "long-form writing" | `writer` |
 
 **Model name shorthand** — when the user mentions a model by a short/partial
@@ -483,7 +483,7 @@ const CAPS = [
   'planner','planner-hard','explore','coder','coder-fallback',
   'tester','docs','code-reviewer','reviewer-security',
   'debugger-hypothesis','debugger-investigate','debugger-hard',
-  'vision','pdf','writer','edge','generalist','fast-generalist','fast-scout','long-context',
+  'vision','pdf','writer','microtask','generalist','fast-generalist','fast-scout','long-context',
 ];
 const profiles = config.llm_profiles || {};
 const maxLen = CAPS.filter(c => profiles[c] && profiles[c][mode]).reduce((m,c) => Math.max(m,c.length), 0);

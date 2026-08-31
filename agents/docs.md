@@ -1,6 +1,6 @@
 ---
 name: docs
-description: MUST BE USED for documentation work after any public API, CLI flag, or schema change. Delegate "update the docs", "document this change", "write the help text", README, CLAUDE.md, and inline-doc tasks here instead of handling them inline. Focused writer for accurate, scoped documentation updates.
+description: MUST BE USED to sync documentation with a code change: update README sections, CLAUDE.md, inline docs, and changelog lines made stale by a changed API, flag, or schema. Use for "update the docs", "document this change", "README is out of date". Not for authoring new prose — new guides, full READMEs, and release notes are writer. README rule: writer creates or rewrites whole; docs edits sections after a change.
 model: docs
 tier_budget: 10000
 ---

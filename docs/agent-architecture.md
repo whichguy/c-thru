@@ -21,7 +21,7 @@ request time.
 
 ## Agent roster
 
-The fleet is **98 agents**: 23 pipeline/utility roles plus **brand-name leaves** from
+The fleet is **101 agents**: 23 pipeline/utility roles plus **brand-name leaves** from
 `config/brand-agents.json` (shorthands such as `opus` / `devstral` / `glm` plus Claude-safe
 full-name aliases). Each declares `model: <its-own-name>` in frontmatter. The proxy resolves
 `name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model` at
@@ -59,20 +59,27 @@ this fleet.
 | `fast-scout` | `fast-scout` | Rapid read-only recon / context mapping | (leaf) |
 | `long-context` | `long-context` | 384K-window retrieval over large spans | (leaf) |
 | `writer` | `writer` | Long-form prose (docs, release notes, guides) | (leaf) |
-| `edge` | `edge` | Tiny-model tasks (classify, summarize, transform) | (leaf) |
+| `microtask` | `microtask` | Tiny-model tasks (classify, summarize, transform) | (leaf) |
 | `vision` | `vision` | Screenshots, diagrams, image OCR | (leaf) |
 | `pdf` | `pdf` | PDF parsing (tables, multi-column, figures) | (leaf) |
-| `grok` 📌 | `model:grok-4.5` | Brand: xAI Grok commercial cloud | (leaf) |
-| `deepseek` 📌 | `model:deepseek-v4-pro:cloud` | Brand: DeepSeek cloud OSS | (leaf) |
-| `qwen` 📌 | `model:qwen3.6:35b` | Brand: local Qwen | (leaf) |
-| `kimi` 📌 | `model:kimi-k3:cloud` | Brand: Kimi cloud OSS | (leaf) |
-| `gemini` 📌 | `model:gemini-pro` | Brand: Google Gemini | (leaf) |
+| `grok` 📌 | `model:grok` | Brand: xAI Grok moving alias | (leaf) |
+| `deepseek` 📌 | `model:deepseek` | Brand: DeepSeek moving alias | (leaf) |
+| `qwen` 📌 | `model:qwen` | Brand: local Qwen (latest verified tag) | (leaf) |
+| `kimi` 📌 | `model:kimi` | Brand: Kimi cloud OSS moving alias | (leaf) |
+| `gemini` 📌 | `model:gemini` | Brand: Google Gemini moving alias | (leaf) |
 
 **Brand catalog (expanded).** Codex family leaves: `sol`, `terra`, `luna`, `codex` (default terra) pin to `gpt-5.6-*` via OpenAI API (`OPENAI_API_KEY`), not the Codex CLI subscription path. Additional brand leaves (`opus`, `sonnet`, `haiku`, `fable`,
 `devstral`, `glm`, `gemma`, `phi`, `gpt-oss`, `nemotron`, `minimax`, `hermes`, `mistral`, …)
 and Claude-safe full-name aliases are generated from
 [`config/brand-agents.json`](../config/brand-agents.json) via
 `node tools/gen-brand-agents.js`. Each pins through `agent_to_capability` → `model:<…>`.
+
+The primary `qwen` leaf is a moving alias for the latest local Qwen and currently
+expands through `latest_models` to `qwen3.8:27b-mxfp8`. GLM is the same shape: `glm`
+and `glm-flash` (no version or `-cloud` in the agent id; the Ollama tag may still
+be `:cloud`). Lower 3.8 quants (nvfp4/mlx, ~18 GB) remain in role profiles at 32 GB
+and above. 16 GB routes retain smaller Qwen/Phi models, with `qwen3-vl:8b` still
+used for 16 GB vision and PDF.
 
 **⚠ Non-1:1 rows.** `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`,
 `advisors` → `planner-hard`.
@@ -88,7 +95,7 @@ Grok appears in **three** places. Parents and operators must not treat them as o
 | Surface | How it is reached | Runtime | Auth | c-thru owns it? |
 |---|---|---|---|---|
 | **A — xAI Responses gateway** | Opinion leaf: `Agent(grok)`. Full Claude Code session: `cthru --model grok-build` (or agent view with `cthru agents --model grok-build`). | Claude Code sends Anthropic Messages → c-thru's shared Responses translator → `api.x.ai/v1/responses`; **Claude Code owns and executes the client tools** | `XAI_API_KEY` (metered API billing) | Yes |
-| **B — Capability pin** | Mode `best-cloud-gov`, tier ≥ 32gb: `generalist` / `writer` cells → `grok-4.5` | Same proxy path as A | `XAI_API_KEY` | Yes (`llm_profiles`) |
+| **B — Capability pin** | Mode `best-cloud-gov`, tier ≥ 32gb: `generalist` / `writer` cells → `grok-4.6` | Same proxy path as A | `XAI_API_KEY` | Yes (`llm_profiles`) |
 | **C — Grok Build CLI** | `grok-cc` plugin / `/grok-cc:rescue` / global Claude policy (stuck, review, explicit implement) | Separate `grok -p` process (or ACP client) — **Grok owns its session and tools; it is not the c-thru proxy** | `grok login` preferred (pooled subscription usage); `XAI_API_KEY` explicit fallback only when no login session exists — an ambient key is stripped from the child env when login is present, closing an inversion risk. See `docs/subscription-auth.md` § Delegate CLIs. | No (marketplace plugin) |
 
 **Install and auth conditions.** Surface A's named leaf needs the **CLI install** path (`c-thru` injects `--agents`); the full-session `--model grok-build` route only needs c-thru plus a usable `XAI_API_KEY`. Surface C needs the **grok-cc** plugin and a working Grok CLI; it works without c-thru fleet injection. Surfaces A and B use xAI's OpenAI-compatible Responses API, including stateless `function_call` / `function_call_output` round trips and Responses SSE translation. Live canary: `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js`. A cached `grok login` session cannot authenticate the API route, and an `XAI_API_KEY` cannot be silently replaced with CLI subscription auth.

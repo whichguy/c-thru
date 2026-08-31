@@ -28,7 +28,7 @@ A description must have all four:
    | `MUST BE USED` | the agent that should *always* handle a category (`coder`, `planner`, `reviewer-security`) |
    | `Use PROACTIVELY` | an agent the model should reach for without being asked (`code-reviewer`, `docs`, `explore`, `fast-scout`) |
    | `Use when <X> fails` / `Use when <condition>` | conditional/fallback agents (`coder-fallback`, `debugger-hypothesis`) |
-   | `Use for <query>` / `Use after` / `Use to` / `Use in` | scoped specialists (`tester`, `edge`, `plan-scheduler`) |
+   | `Use for <query>` / `Use after` / `Use to` / `Use in` | scoped specialists (`tester`, `microtask`, `plan-scheduler`) |
 
 3. **At least one concrete example** — quoted phrasings of what the user might actually say, so
    the matcher has literal strings to align against:
@@ -205,9 +205,13 @@ frontmatter. C-Thru therefore does not infer or encode effort in the signed rout
 Under Claude Code's documented agent/API contract, the selected value is supplied as Anthropic
 `output_config.effort`:
 
-- Anthropic, OpenRouter, and modern Ollama Messages routes receive that field unchanged. For
-  Ollama/Kimi this proves transport only; whether a specific model honors every level requires
-  provider/live evidence.
+- Anthropic, OpenRouter, and modern Ollama Messages routes receive that field unchanged. Current
+  Ollama's Anthropic adapter maps `low`/`medium`/`high`/`max` to its native thinking control and
+  normalizes `xhigh` to `high`; C-Thru intentionally does not rewrite this to the OpenAI-only
+  `reasoning_effort` field. The captured wire test proves transport to Qwen3.8, while whether a
+  particular Ollama/Kimi model produces meaningfully different reasoning at every level remains a
+  provider/live-inference question. The opt-in legacy Ollama `/api/chat` translator remains lossy
+  and does not carry agent effort; shipped Ollama routes use the modern Messages path.
 - OpenAI Responses maps it to `reasoning.effort`.
 - xAI Responses preserves `low`/`medium`/`high` and clamps `xhigh`/`max` to `high` with an
   `x-c-thru-translation-gap` marker.

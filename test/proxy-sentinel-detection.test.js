@@ -169,8 +169,8 @@ assert(parseAgentSentinel('plain text', undefined) === null, 'unrelated text →
 assert(parseAgentSentinel(null, undefined) === null, 'null body → null');
 assert(parseAgentSentinel(undefined, undefined) === null, 'undefined body → null');
 {
-  const r = parseAgentSentinel(body({ messages: [{ role: 'user', content: 'x'.repeat(50) + '[[c-thru-agent:edge]] go' }] }), undefined);
-  assert(r && r.name === 'edge', 'marker not at the start of a message is still found');
+  const r = parseAgentSentinel(body({ messages: [{ role: 'user', content: 'x'.repeat(50) + '[[c-thru-agent:microtask]] go' }] }), undefined);
+  assert(r && r.name === 'microtask', 'marker not at the start of a message is still found');
 }
 
 const longOk = 'org/model-' + 'x'.repeat(100) + ':cloud';

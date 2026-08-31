@@ -87,7 +87,7 @@ const ROSTER = {
   'vision':               { warnOnly: true },
   'pdf':                  { warnOnly: true },
   'writer':               { warnOnly: true },
-  'edge':                 { warnOnly: true },
+  'microtask':            { warnOnly: true },
   'generalist':           { warnOnly: true },
   'fast-generalist':      { warnOnly: true },
   'fast-scout':           { warnOnly: true },

@@ -479,12 +479,12 @@
       "note": "explicit GLM brand leaf"
     },
     {
-      "id": "glm-5-3-cloud-named",
-      "prompt": "ask glm-5-3-cloud for a short second opinion using that exact agent id.",
+      "id": "glm-flash-named",
+      "prompt": "ask glm flash for a short second opinion on this design.",
       "expect": [
-        "glm-5-3-cloud"
+        "glm-flash"
       ],
-      "note": "exact-id GLM 5.3 brand alias"
+      "note": "explicit GLM Flash brand leaf"
     },
     {
       "id": "amb-greeting",
@@ -556,6 +556,54 @@
         "generalist"
       ],
       "note": "Codex Luna brand leaf"
+    },
+    {
+      "id": "microtask-classify",
+      "prompt": "Classify each line in this log into one of three severity levels.",
+      "expect": [
+        "microtask"
+      ],
+      "note": "mechanical classification with structured output"
+    },
+    {
+      "id": "microtask-extract",
+      "prompt": "Extract the email address from each line of this CSV and return them as a list.",
+      "expect": [
+        "microtask"
+      ],
+      "note": "field extraction, machine-consumed output"
+    },
+    {
+      "id": "microtask-label",
+      "prompt": "Label each line in this access log as transient or permanent.",
+      "expect": [
+        "microtask"
+      ],
+      "note": "per-line labeling"
+    },
+    {
+      "id": "microtask-tag",
+      "prompt": "Tag each of these commit messages as feat, fix, or chore.",
+      "expect": [
+        "microtask"
+      ],
+      "note": "tagging with a fixed label set"
+    },
+    {
+      "id": "fast-scout-where",
+      "prompt": "Which files import the auth module in this codebase?",
+      "expect": [
+        "fast-scout"
+      ],
+      "note": "single-hop WHERE lookup, no analysis"
+    },
+    {
+      "id": "plan-scheduler-dispatch",
+      "prompt": "Schedule these ready tasks to the worker agents.",
+      "expect": [
+        "plan-scheduler"
+      ],
+      "note": "wave dispatch via /schedule-plan-tasks"
     }
   ]
 }

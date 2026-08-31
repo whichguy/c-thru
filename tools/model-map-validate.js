@@ -4,8 +4,15 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-// Single source of truth for the gov-mode Chinese-origin filter (custom_modes gov safety).
-const { deriveAuthProfile, isChineseOrigin } = require('./model-map-resolve.js');
+// Single source of truth for the gov-mode Chinese-origin filter (custom_modes gov safety),
+// and for the vision/pdf modality allowlist (C39 vision-capable guard).
+const {
+  deriveAuthProfile,
+  expandLatestModel,
+  isChineseOrigin,
+  isVisionCapable,
+  MODEL_PIN_PREFIX,
+} = require('./model-map-resolve.js');
 
 // Per-c-thru-session warning dedupe. When C_THRU_SESSION_ID is set (exported by
 // tools/c-thru as $$), each warning string is fingerprinted and recorded in a
@@ -36,7 +43,7 @@ const PROFILE_KEYS = [
   'planner', 'planner-hard', 'explore', 'coder', 'coder-fallback', 'tester',
   'docs', 'code-reviewer', 'reviewer-security',
   'debugger-hypothesis', 'debugger-investigate', 'debugger-hard',
-  'vision', 'pdf', 'writer', 'edge', 'generalist', 'fast-generalist', 'fast-scout', 'long-context',
+  'vision', 'pdf', 'writer', 'microtask', 'generalist', 'fast-generalist', 'fast-scout', 'long-context',
 ];
 
 // Returns the set of capability keys from llm_profiles (outer keys in new schema).
@@ -430,6 +437,70 @@ function validateCapabilityEntry(capabilityName, entry, report, options) {
         }
       }
     }
+    // C39: vision/pdf modality guard. A vision or pdf capability cell that resolves to a
+    // text-only model silently drops image/document input at runtime (no image encoder).
+    // Warn (non-fatal, session-deduped) so the misconfiguration surfaces on install/validate
+    // without breaking make test. Not reachability-scoped (mirrors the gov-safety block
+    // above) — report all modes so a mode-switch doesn't hide breakage. Skips @backend-sigil
+    // cells (model is runtime-determined; the runtime x-c-thru-vision-unsupported header is
+    // authoritative for those) and :TODO placeholders, and strips a `model:` pin prefix
+    // before consulting the allowlist. Single source of truth: opts.isVisionCapable is
+    // bound to this config in validateConfig, sharing the proxy's isVisionCapable.
+    if (capabilityName === 'vision' || capabilityName === 'pdf') {
+      const models = typeof value === 'string' ? [value]
+        : isObject(value) ? Object.values(value).filter((v) => typeof v === 'string') : [];
+      for (const m of models) {
+        if (!m || !m.trim() || m.endsWith(':TODO')) continue;
+        let candidate = m;
+        if (candidate.startsWith(MODEL_PIN_PREFIX)) candidate = candidate.slice(MODEL_PIN_PREFIX.length);
+        if (candidate.startsWith('@')) continue; // bare @backend sigil — runtime-determined
+        const atIdx = candidate.indexOf('@');
+        if (atIdx > 0) candidate = candidate.slice(0, atIdx); // model@backend sigil → model part (matches resolveBackend's sigil.base)
+        // Profiles may intentionally carry a moving alias such as `sonnet`.
+        // Validate the concrete model the runtime will serve, not the alias token.
+        if (opts.expandLatestModel) candidate = opts.expandLatestModel(candidate) || candidate;
+        if (opts.isVisionCapable && opts.isVisionCapable(candidate)) continue;
+        const modality = capabilityName === 'vision' ? 'image' : 'document';
+        warn(`model-map-validate: warning: 'llm_profiles.${capabilityName}.${key}' routes to text-only model '${m}' for the ${capabilityName} capability — ${modality} input will be silently dropped. Use a multimodal model, or add '${candidate}' to vision_capable_models if it is vision-capable.`);
+      }
+    }
+    // Context-window coverage: a non-Anthropic concrete model a profile cell resolves
+    // to must declare its window in context_windows, or the launcher falls back to
+    // disable-unknown-window-enforcement (auto-compact waits for the API instead of
+    // firing at the right threshold). Skips claude-* (Claude Code knows those),
+    // capability aliases, brand agents, model: pins, @backend sigils, :TODO
+    // placeholders, and regex routes (unbounded). Warn once per model. Only runs
+    // when the config actually declares a context_windows map — a config with no
+    // windows is not "missing" any, so we don't nag (keeps minimal test fixtures
+    // and bare configs silent).
+    {
+      const contextWindows = opts.contextWindows || {};
+      if (Object.keys(contextWindows).length === 0) {
+        // no declared windows → nothing to be missing from
+      } else {
+        const agentToCapability = opts.agentToCapability || {};
+        const warned = opts.contextWindowWarned || new Set();
+        const models = typeof value === 'string' ? [value]
+          : isObject(value) ? Object.values(value).filter((v) => typeof v === 'string') : [];
+        for (const m of models) {
+          if (!m || !m.trim() || m.endsWith(':TODO')) continue;
+          let candidate = m;
+          if (candidate.startsWith(MODEL_PIN_PREFIX)) continue; // model: pin — runtime-determined
+          if (candidate.startsWith('@')) continue; // bare @backend sigil — runtime-determined
+          const atIdx = candidate.indexOf('@');
+          if (atIdx > 0) candidate = candidate.slice(0, atIdx); // model@backend → model part
+          if (candidate.startsWith('re:')) continue; // regex route — unbounded
+          if (opts.expandLatestModel) candidate = opts.expandLatestModel(candidate) || candidate;
+          if (/^claude-/.test(candidate)) continue; // Claude Code knows native windows
+          if (capabilityAliases && capabilityAliases.has(candidate)) continue; // alias, not concrete
+          if (Object.prototype.hasOwnProperty.call(agentToCapability, candidate)) continue; // brand agent
+          if (Object.prototype.hasOwnProperty.call(contextWindows, candidate)) continue; // declared
+          if (warned.has(candidate)) continue;
+          warned.add(candidate);
+          warn(`model-map-validate: warning: model '${candidate}' has no context_windows entry — auto-compact falls back to disable-unknown-window-enforcement; add it to context_windows`);
+        }
+      }
+    }
     // Value must be a non-empty string (same model for all tiers) or a tier-keyed object
     if (typeof value === 'string') {
       if (!value.trim()) report(`'llm_profiles.${capabilityName}.${key}' must be a non-empty string`);
@@ -616,6 +687,34 @@ function validateDeprecatedModels(deprecatedModels, report) {
   }
 }
 
+// vision_capable_models: flat map of concrete model name -> boolean, extending the
+// built-in VISION_CAPABLE_DEFAULTS allowlist (see isVisionCapable in
+// model-map-resolve.js, the single source shared with the proxy). `true` force-adds a
+// text-only-looking tag the user knows is multimodal; `false` force-removes a built-in
+// entry. Mirrors validateDeprecatedModels' shape check and un-deprecate semantics.
+function validateVisionCapableModels(value, report) {
+  if (!isObject(value)) { report("'vision_capable_models' must be an object when present"); return; }
+  for (const [model, flag] of Object.entries(value)) {
+    if (typeof flag !== 'boolean') {
+      report(`'vision_capable_models.${model}' must be a boolean (true force-adds, false force-removes; got ${JSON.stringify(flag)})`);
+    }
+  }
+}
+
+// context_windows: flat map of concrete model name -> context-window token count.
+// Consumed by apply_background_model_overrides() in tools/c-thru to export
+// CLAUDE_CODE_MAX_CONTEXT_TOKENS for unrecognized (non-Anthropic) launch models,
+// so Claude Code's auto-compact fires at the model's real window instead of the
+// 200k assumption. Values must be positive integers.
+function validateContextWindows(value, report) {
+  if (!isObject(value)) { report("'context_windows' must be an object when present"); return; }
+  for (const [model, tokens] of Object.entries(value)) {
+    if (!Number.isInteger(tokens) || tokens <= 0) {
+      report(`'context_windows.${model}' must be a positive integer token count (got ${JSON.stringify(tokens)})`);
+    }
+  }
+}
+
 function resolveRoute(routes, start) {
   const seen = new Set();
   let current = start;
@@ -772,6 +871,19 @@ function validateConfig(config, _errors, options) {
   // the set of capability keys (model names may alias another capability via 2-hop lookup).
   opts.modelRoutes = isObject(config.model_routes) ? config.model_routes : {};
   opts.capabilityAliases = deriveCapabilityAliases(config);
+  // C39: bind the modality predicate to THIS config so the vision/pdf guard in
+  // validateCapabilityEntry honors a config-local `vision_capable_models` override
+  // (true force-adds, false force-removes — mirror getDeprecatedModelAdvice). The
+  // proxy imports the same isVisionCapable, so validator and runtime agree.
+  opts.isVisionCapable = (m) => isVisionCapable(m, config);
+  opts.expandLatestModel = (m) => expandLatestModel(m, config.latest_models);
+  // Context-window coverage: a non-Anthropic concrete model a profile cell resolves
+  // to must declare its window in context_windows, or the launcher falls back to
+  // disable-unknown-window-enforcement (auto-compact waits for the API instead of
+  // firing at the right threshold). Warn once per model (deduped in-run).
+  opts.contextWindows = isObject(config.context_windows) ? config.context_windows : {};
+  opts.agentToCapability = isObject(config.agent_to_capability) ? config.agent_to_capability : {};
+  opts.contextWindowWarned = new Set();
 
   for (const key of ['backends', 'endpoints', 'model_routes', 'routes']) {
     if (config[key] != null && !isObject(config[key])) {
@@ -1078,6 +1190,14 @@ if (entry.call_style != null) {
 
   if (config.deprecated_models != null) {
     validateDeprecatedModels(config.deprecated_models, report);
+  }
+
+  if (config.vision_capable_models != null) {
+    validateVisionCapableModels(config.vision_capable_models, report);
+  }
+
+  if (config.context_windows != null) {
+    validateContextWindows(config.context_windows, report);
   }
 
   if (config.targets != null) {

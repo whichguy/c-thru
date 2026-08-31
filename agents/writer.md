@@ -1,6 +1,6 @@
 ---
 name: writer
-description: Use for long-form prose — documentation, README files, architecture explainers, release notes, API guides. Use for "write the README", "draft release notes", "polish this architecture doc", "turn these notes into prose". Quality and style coherence over speed. Not for code generation — use coder; for quick docs after a change use docs.
+description: Use to author long-form prose where the document is the deliverable: new READMEs, architecture explainers, tutorials, API guides, and release notes. Use for "write a guide", "draft release notes", "write the README". Not for syncing existing docs to a code change — use docs. README rule: writer creates or rewrites whole; docs edits sections after a change.
 model: writer
 tier_budget: 999999
 ---

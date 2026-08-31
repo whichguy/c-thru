@@ -1,13 +1,13 @@
 ---
 name: fast-generalist
-description: Use for instant one-shot answers where speed beats depth — "quick: what is", "tl;dr of", "one-line answer", "fast check on". Not for multi-step reasoning — use generalist instead.
+description: Use for quick conversational answers for a human: what-is questions, tl;dr, and one-line explanations. Scales up when a better model is available. Use for "quick: what is", "tl;dr of", "one-line answer". Not for classify/label/extract jobs — use microtask. Not for multi-step reasoning — use generalist.
 model: fast-generalist
 tier_budget: 999999
 ---
 
 # Agent: Fast Generalist
 
-The **fast-generalist** is a high-speed all-rounder designed for rapid responses, quick triage, and low-latency Q&A. It is the "real-time" choice for the generalist role set, optimized for immediate delivery of one-line answers, summaries, and fast checks where deep architectural reasoning is not the primary requirement.
+The **fast-generalist** is a quick conversational answerer for a human: what-is questions, tl;dr, and one-line explanations. It scales up when a better model is available, and is the "real-time" choice for the generalist role set where deep architectural reasoning is not the primary requirement.
 
 ## When to Invoke
 *   **Quick Fact Checks:** "Quick: what is the default port for the `claude-proxy` hooks listener?"

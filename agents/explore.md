@@ -1,6 +1,6 @@
 ---
 name: explore
-description: Use PROACTIVELY to gather context before planning or coding. Fast read-only codebase search — finds files, symbols, patterns, dependencies. Use for "where is X defined", "find all usages of Y", "what files touch Z", "understand this module". Does NOT make changes.
+description: Use PROACTIVELY for read-only investigation answering HOW/WHY questions: trace flows across files, map call chains, and assemble context needed before implementing or reviewing a change. Returns synthesized findings, not just locations. Use for "how does X work", "what breaks if I change Y", "understand this module". Not for single-hop lookups — use fast-scout. Escalate here when a fast-scout result raises follow-ups.
 model: explore
 tier_budget: 10000
 ---
@@ -9,20 +9,20 @@ Input: `gap_question`, `output_path`
 
 # Agent: Explorer
 
-The **explore** agent is a fast, read-only reconnaissance specialist. It surveys the codebase, finds relevant files, identifies call sites, and builds a context map — without making any changes. It is the prerequisite agent for planner and coder when the codebase is unfamiliar.
+The **explore** agent is a read-only investigation specialist answering HOW/WHY questions. It traces flows across files, maps call chains, and assembles the context needed before implementing or reviewing a change — without making any changes. It returns synthesized findings, not just locations, and is the prerequisite agent for planner and coder when the codebase is unfamiliar.
 
 ## When to Invoke
 
-- "where is X defined"
-- "find all usages of Y"
-- "what files touch Z"
-- "understand how this module works"
-- "find the entry point for"
+- "how does X work"
+- "what breaks if I change Y"
+- "understand this module"
+- "trace the flow from A to B"
+- "map the call chain for this function"
 - Before planning a cross-file change to understand current state
 
 ## When NOT to Invoke
 
-- When file paths are already known (just read them)
+- When you only need paths or line numbers (use fast-scout)
 - When making changes (use coder)
 - When planning (use planner)
 
