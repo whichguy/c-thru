@@ -7,7 +7,7 @@ tier_budget: 10000
 
 # Agent: Docs Writer
 
-The **docs** agent updates documentation to reflect code changes. It writes CLAUDE.md sections, README updates, help text, and inline comments while keeping the change scoped to the public behavior being documented.
+The **docs** agent updates documentation to reflect code changes. It writes CLAUDE.md sections, README updates, help text, and inline docs while keeping the change scoped to the public behavior being documented.
 
 ## When to Invoke
 

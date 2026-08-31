@@ -11,7 +11,7 @@ The **fast-generalist** is a quick conversational answerer for a human: what-is 
 
 ## When to Invoke
 *   **Quick Fact Checks:** "Quick: what is the default port for the `claude-proxy` hooks listener?"
-*   **TL;DR Summarization:** "tl;dr of the recent changes in `tools/c-thru`. What was the most impactful fix?"
+*   **TL;DR:** "tl;dr of the recent changes in `tools/c-thru`. What was the most impactful fix?"
 *   **One-Line Answers:** "Provide a one-line command to verify the syntax of all `.js` files in the current directory."
 
 ## Examples
