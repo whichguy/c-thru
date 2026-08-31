@@ -49,14 +49,51 @@ _fmt_tok() {
   fi
 }
 
+# Display form for Ollama tags. Keep name:tag, but drop a leading YYYY
+# snapshot on the tag (deepseek-v4-flash:0731-cloud → deepseek-v4-flash:cloud).
+# Path prefix only otherwise — do not strip after the last colon.
 _short_model() {
   local m="$1"
   m="${m##*/}"
-  m="${m##*:}"
-  if (( ${#m} > 28 )); then
-    printf '%s...' "${m:0:25}"
+  if [[ "$m" == *:* ]]; then
+    local name="${m%%:*}"
+    local tag="${m#*:}"
+    if [[ "$tag" =~ ^[0-9]{4}-(.+)$ ]]; then
+      tag="${BASH_REMATCH[1]}"
+    fi
+    m="${name}:${tag}"
+  fi
+  if (( ${#m} > 32 )); then
+    printf '%s...' "${m:0:29}"
   else
     printf '%s' "$m"
+  fi
+}
+
+_same_model() {
+  local a b
+  a="$(_short_model "$1")"
+  b="$(_short_model "$2")"
+  [[ -n "$a" && "$a" == "$b" ]]
+}
+
+# Append last-hop chip + tokens. When served_by equals the prompt model, skip
+# the duplicate name and keep tokens on their own pipe.
+_append_served_tokens() {
+  local served="$1" tin="$2" tout="$3"
+  local chip="" tok=""
+  if [[ -n "$served" ]] && ! _same_model "$served" "$model"; then
+    chip="$(_short_model "$served")"
+  fi
+  if [[ "$tin" =~ ^[0-9]+$ ]] || [[ "$tout" =~ ^[0-9]+$ ]]; then
+    tok="$(_fmt_tok "${tin:-0}")/$(_fmt_tok "${tout:-0}")"
+  fi
+  if [[ -n "$chip" && -n "$tok" ]]; then
+    extra+=" | ${chip} ${tok}"
+  elif [[ -n "$chip" ]]; then
+    extra+=" | ${chip}"
+  elif [[ -n "$tok" ]]; then
+    extra+=" | ${tok}"
   fi
 }
 
@@ -131,11 +168,11 @@ if [[ "$_style" != "minimal" ]] && command -v jq >/dev/null 2>&1; then
         fb_model=$(printf '%s' "$sl_json" | jq -r '.fallback.served_by // empty' 2>/dev/null)
         if [[ -n "$last_fb" && "$last_fb" != "null" && -n "$served" ]]; then
           extra+=" | [fallback] -> $(_short_model "$served")"
-        elif [[ -n "$served" ]]; then
-          extra+=" | $(_short_model "$served")"
-        fi
-        if [[ "$tin" =~ ^[0-9]+$ ]] || [[ "$tout" =~ ^[0-9]+$ ]]; then
-          extra+=" $(_fmt_tok "${tin:-0}")/$(_fmt_tok "${tout:-0}")"
+          if [[ "$tin" =~ ^[0-9]+$ ]] || [[ "$tout" =~ ^[0-9]+$ ]]; then
+            extra+=" $(_fmt_tok "${tin:-0}")/$(_fmt_tok "${tout:-0}")"
+          fi
+        else
+          _append_served_tokens "$served" "$tin" "$tout"
         fi
         if [[ -n "$fb_model" && ( -z "$last_fb" || "$last_fb" == "null" ) ]]; then
           extra+=" | [fallback] -> $(_short_model "$fb_model")"
@@ -172,11 +209,11 @@ if [[ "$_style" != "minimal" ]] && command -v jq >/dev/null 2>&1; then
           if [ -n "$show_fallback" ] && [ -n "$last_fb" ] && [ "$served" = "$fb_model" ]; then
             extra+=" | [fallback] -> $(_short_model "$fb_model")"
             show_fallback=""
-          elif [ -n "$served" ]; then
-            extra+=" | $(_short_model "$served")"
-          fi
-          if [[ "$tin" =~ ^[0-9]+$ ]] || [[ "$tout" =~ ^[0-9]+$ ]]; then
-            extra+=" $(_fmt_tok "${tin:-0}")/$(_fmt_tok "${tout:-0}")"
+            if [[ "$tin" =~ ^[0-9]+$ ]] || [[ "$tout" =~ ^[0-9]+$ ]]; then
+              extra+=" $(_fmt_tok "${tin:-0}")/$(_fmt_tok "${tout:-0}")"
+            fi
+          else
+            _append_served_tokens "$served" "$tin" "$tout"
           fi
         fi
         if [ -n "$show_fallback" ] && [ -n "$fb_model" ]; then
@@ -191,5 +228,5 @@ if [[ "$_style" != "minimal" ]] && command -v jq >/dev/null 2>&1; then
   fi
 fi
 
-printf '%s | %s%s' "$model" "$cwd" "$extra"
+printf '%s | %s%s' "$(_short_model "$model")" "$cwd" "$extra"
 exit 0

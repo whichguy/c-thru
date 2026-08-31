@@ -56,9 +56,17 @@ served_by=$(printf '%s' "$fallback_entry" | jq -r '.served_by // empty' 2>/dev/n
 
 # ASCII only — wide emoji / unicode ellipsis mis-measure columns; no OSC-8.
 # Keep standalone for users who append this to a *custom* statusLine.
+# Path prefix only. Drop YYYY- snapshot on Ollama tags (0731-cloud → cloud).
 _short="$served_by"
 _short="${_short##*/}"
-_short="${_short##*:}"
-if (( ${#_short} > 28 )); then _short="${_short:0:25}..."; fi
+if [[ "$_short" == *:* ]]; then
+  _name="${_short%%:*}"
+  _tag="${_short#*:}"
+  if [[ "$_tag" =~ ^[0-9]{4}-(.+)$ ]]; then
+    _tag="${BASH_REMATCH[1]}"
+  fi
+  _short="${_name}:${_tag}"
+fi
+if (( ${#_short} > 32 )); then _short="${_short:0:29}..."; fi
 printf ' [fallback] -> %s' "$_short"
 exit 0

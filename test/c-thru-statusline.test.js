@@ -393,6 +393,85 @@ s.listen(0, '127.0.0.1', () => {
     fs.rmSync(badHome, { recursive: true, force: true });
   }
 
+  // ── Ollama name:tag served chip (screenshot: 0731-cloud fragment) ────────
+  console.log('\n9. Ollama name:tag is not reduced to the tag suffix');
+  const tagHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-sl-tag-'));
+  const tagTools = path.join(tagHome, 'tools');
+  fs.mkdirSync(tagTools, { recursive: true });
+  const tagHook = path.join(tagTools, 'c-thru-statusline.sh');
+  fs.copyFileSync(HOOK_SOURCE, tagHook);
+  fs.copyFileSync(LIB_SOURCE, path.join(tagTools, 'c-thru-lib.sh'));
+  fs.chmodSync(tagHook, 0o755);
+  const tagPortFile = path.join(tagHome, 'port.txt');
+  const tagFixture = path.join(tagHome, 'tag-server.js');
+  fs.writeFileSync(tagFixture, `
+'use strict';
+const http = require('http');
+const fs = require('fs');
+const hop = {
+  served_by: 'deepseek-v4-flash:0731-cloud',
+  input_tokens: 128600,
+  output_tokens: 1400,
+  fallback_from: null,
+  ts: new Date().toISOString(),
+};
+const s = http.createServer((req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  const pathOnly = (req.url || '').split('?')[0];
+  if (pathOnly.includes('/c-thru/recent')) {
+    res.end(JSON.stringify({ ok: true, requests: [hop] }));
+    return;
+  }
+  res.statusCode = 404;
+  res.end('{}');
+});
+s.listen(0, '127.0.0.1', () => {
+  fs.writeFileSync(process.env.PORT_FILE, String(s.address().port));
+});
+`);
+  const tagChild = spawn(process.execPath, [tagFixture], {
+    env: { ...process.env, PORT_FILE: tagPortFile },
+    stdio: 'ignore',
+  });
+  let tagPort = 0;
+  for (let i = 0; i < 50; i++) {
+    if (fs.existsSync(tagPortFile)) {
+      tagPort = parseInt(fs.readFileSync(tagPortFile, 'utf8'), 10);
+      if (tagPort > 0) break;
+    }
+    await new Promise(r => setTimeout(r, 20));
+  }
+  try {
+    assert(tagPort > 0, 'ollama-tag fixture published port');
+    const outTag = runStatusline(tagHook, tagHome, tagPort, 'sess', {
+      model: { id: 'sonnet' },
+      workspace: { current_dir: '/tmp/skill-craft' },
+    }, { C_THRU_STATUSLINE_DASH: '0' });
+    assertEq(outTag.status, 0, 'colon-tag (served != prompt) exits 0');
+    assert(outTag.stdout.includes('deepseek-v4-flash:cloud'),
+      `shows name:cloud without snapshot date (got ${JSON.stringify(outTag.stdout)})`);
+    assert(!/0731/.test(outTag.stdout),
+      `strips 0731 snapshot from the bar (got ${JSON.stringify(outTag.stdout)})`);
+
+    const outSame = runStatusline(tagHook, tagHome, tagPort, 'sess', {
+      model: { id: 'deepseek-v4-flash:0731-cloud' },
+      workspace: { current_dir: '/tmp/skill-craft' },
+    }, { C_THRU_STATUSLINE_DASH: '0' });
+    assertEq(outSame.status, 0, 'same-model tokens-only exits 0');
+    assert(outSame.stdout.startsWith('deepseek-v4-flash:cloud |'),
+      `left chip is display name without 0731 (got ${JSON.stringify(outSame.stdout)})`);
+    const afterCwd = outSame.stdout.split('skill-craft')[1] || '';
+    assert(!/deepseek-v4-flash/.test(afterCwd),
+      `does not repeat the model after cwd (got ${JSON.stringify(outSame.stdout)})`);
+    assert(!/0731/.test(outSame.stdout),
+      `same-model bar has no snapshot date (got ${JSON.stringify(outSame.stdout)})`);
+    assert(/128\.6k\/1\.4k/.test(outSame.stdout),
+      `same-model still shows tokens (got ${JSON.stringify(outSame.stdout)})`);
+  } finally {
+    try { tagChild.kill('SIGTERM'); } catch {}
+    fs.rmSync(tagHome, { recursive: true, force: true });
+  }
+
   const failed = summary();
   process.exit(failed > 0 ? 1 : 0);
 }

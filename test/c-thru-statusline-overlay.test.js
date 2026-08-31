@@ -13,7 +13,7 @@
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');
 
 const {
   assert, assertEq, summary,
@@ -119,6 +119,65 @@ async function main() {
     try { await primary.close(); } catch {}
     try { await secondary.close(); } catch {}
     fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  console.log('\n4. Fallback badge keeps Ollama name:tag (not tag-only 0731-cloud)');
+  const tagHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-sl-ov-tag-'));
+  const tagTools = path.join(tagHome, 'tools');
+  fs.mkdirSync(tagTools, { recursive: true });
+  const tagHook = path.join(tagTools, 'c-thru-statusline-overlay.sh');
+  fs.copyFileSync(HOOK_SOURCE, tagHook);
+  fs.copyFileSync(LIB_SOURCE, path.join(tagTools, 'c-thru-lib.sh'));
+  fs.chmodSync(tagHook, 0o755);
+  const tagPortFile = path.join(tagHome, 'port.txt');
+  const tagFixture = path.join(tagHome, 'tag-server.js');
+  fs.writeFileSync(tagFixture, `
+'use strict';
+const http = require('http');
+const fs = require('fs');
+const hop = {
+  served_by: 'deepseek-v4-flash:0731-cloud',
+  fallback_from: 'primary-model',
+  ts: new Date().toISOString(),
+};
+const s = http.createServer((req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  const pathOnly = (req.url || '').split('?')[0];
+  if (pathOnly.includes('/c-thru/recent')) {
+    res.end(JSON.stringify({ ok: true, requests: [hop] }));
+    return;
+  }
+  res.statusCode = 404;
+  res.end('{}');
+});
+s.listen(0, '127.0.0.1', () => {
+  fs.writeFileSync(process.env.PORT_FILE, String(s.address().port));
+});
+`);
+  const tagChild = spawn(process.execPath, [tagFixture], {
+    env: { ...process.env, PORT_FILE: tagPortFile },
+    stdio: 'ignore',
+  });
+  let tagPort = 0;
+  for (let i = 0; i < 50; i++) {
+    if (fs.existsSync(tagPortFile)) {
+      tagPort = parseInt(fs.readFileSync(tagPortFile, 'utf8'), 10);
+      if (tagPort > 0) break;
+    }
+    await new Promise(r => setTimeout(r, 20));
+  }
+  try {
+    assert(tagPort > 0, 'overlay ollama-tag fixture published port');
+    const home = fs.mkdtempSync(path.join(tagHome, 'home-'));
+    const out = await runHook(tagHook, home, tagPort, 'sess');
+    assertEq(out.status, 0, 'overlay colon-tag exits 0');
+    assert(/\[fallback\]/.test(out.stdout) && out.stdout.includes('deepseek-v4-flash:cloud'),
+      `overlay badge shows name:cloud (got ${JSON.stringify(out.stdout)})`);
+    assert(!/0731/.test(out.stdout),
+      `overlay drops the 0731 snapshot (got ${JSON.stringify(out.stdout)})`);
+  } finally {
+    try { tagChild.kill('SIGTERM'); } catch {}
+    fs.rmSync(tagHome, { recursive: true, force: true });
   }
 
   const failed = summary();
