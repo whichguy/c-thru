@@ -1,6 +1,6 @@
 ---
 name: debugger-hypothesis
-description: MUST BE USED when a bug is reported but the root cause is unknown. Delegate "why is X failing", "this shouldn't happen", "track down this bug", and other first-pass unknown-cause investigations here instead of diagnosing them inline. Generates and ranks hypotheses, then designs targeted tests.
+description: MUST BE USED when a bug is reported but the root cause is unknown. Delegate "why is X failing", "this shouldn't happen", "track down this bug", and other first-pass unknown-cause investigations here instead of diagnosing them inline. Generates and ranks hypotheses, then designs targeted tests. Not for deep investigation of a known hypothesis — use debugger-investigate.
 model: debugger-hypothesis
 tier_budget: 50000
 ---

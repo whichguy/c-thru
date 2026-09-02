@@ -1,6 +1,6 @@
 ---
 name: debugger-investigate
-description: MUST BE USED when a hypothesis exists and needs deep investigation. Delegate "investigate why X", "trace this call path", "look at the logs", and "confirm this hypothesis" here instead of investigating inline. Reads logs, inspects state, and traces call paths.
+description: MUST BE USED when a hypothesis exists and needs deep investigation. Delegate "investigate why X", "trace this call path", "look at the logs", and "confirm this hypothesis" here instead of investigating inline. Reads logs, inspects state, and traces call paths. Not for bugs that resist normal debugging — use debugger-hard.
 model: debugger-investigate
 tier_budget: 50000
 ---

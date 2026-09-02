@@ -1,6 +1,6 @@
 ---
 name: planner
-description: MUST BE USED for all planning, architecture, and design tasks. Produces detailed implementation plans before any code is written. Use for "plan how to", "design the architecture of", "what's the approach for", "break down this feature".
+description: MUST BE USED for all planning, architecture, and design tasks. Produces detailed implementation plans before any code is written. Use for "plan how to", "design the architecture of", "what's the approach for", "break down this feature". Not for high-stakes, ambiguous, or cross-system planning — use planner-hard.
 model: planner
 tier_budget: 999999
 ---

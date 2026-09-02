@@ -1,6 +1,6 @@
 ---
 name: coder
-description: MUST BE USED for all code implementation tasks. Writes, edits, and refactors code according to a plan. Use for "implement", "write the code for", "add this function", "edit this file". Requires a plan from planner or clear unambiguous intent.
+description: MUST BE USED for all code implementation tasks. Writes, edits, and refactors code according to a plan. Use for "implement", "write the code for", "add this function", "edit this file". Requires a plan from planner or clear unambiguous intent. Not for a second attempt after a failed edit — use coder-fallback.
 model: coder
 tier_budget: 50000
 ---

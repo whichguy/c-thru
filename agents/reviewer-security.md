@@ -1,6 +1,6 @@
 ---
 name: reviewer-security
-description: MUST BE USED for any change touching authentication, authorization, tokens, crypto, input validation, or external API calls. Security-focused code review: injection, credential leaks, privilege escalation, OWASP Top 10. Hard-fail — no degraded substitute.
+description: MUST BE USED for any change touching authentication, authorization, tokens, crypto, input validation, or external API calls. Security-focused code review: injection, credential leaks, privilege escalation, OWASP Top 10. Hard-fail — no degraded substitute. Not for general code review — use code-reviewer.
 model: reviewer-security
 tier_budget: 999999
 ---
