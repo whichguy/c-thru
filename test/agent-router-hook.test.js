@@ -130,7 +130,7 @@ check('fleet roster is >= 28 agents', 'true', String(agents.length >= 28));
 // ── 2. The injected alias is a VALID enum value, and is overridable ───────────────
 console.log('');
 console.log('2. Injected model is always a valid Agent-tool alias; remaps no longer affect the hook');
-check(`reviewer-plan → ${DEFAULT_ALIAS} (valid alias)`, DEFAULT_ALIAS, hookModel(agentPayload('reviewer-plan')));
+check(`plan-reviewer → ${DEFAULT_ALIAS} (valid alias)`, DEFAULT_ALIAS, hookModel(agentPayload('plan-reviewer')));
 check(`plan-scheduler → ${DEFAULT_ALIAS} (valid alias)`, DEFAULT_ALIAS, hookModel(agentPayload('plan-scheduler')));
 check('C_THRU_AGENT_FALLBACK_ALIAS=opus → model=opus', 'opus',
   hookModel(agentPayload('coder'), { C_THRU_AGENT_FALLBACK_ALIAS: 'opus' }));

@@ -142,8 +142,8 @@ assert(parseAgentSentinel('plain text', undefined) === null, 'unrelated text →
 
 // ── header tier (carries no tag) ─────────────────────────────────────────────────
 {
-  const r = parseAgentSentinel(body({ model: 'x', messages: [{ role: 'user', content: 'hi' }] }), 'reviewer-plan');
-  assert(r && r.name === 'reviewer-plan' && r.tag === null, 'x-c-thru-agent header → { name: reviewer-plan, tag: null }');
+  const r = parseAgentSentinel(body({ model: 'x', messages: [{ role: 'user', content: 'hi' }] }), 'plan-reviewer');
+  assert(r && r.name === 'plan-reviewer' && r.tag === null, 'x-c-thru-agent header → { name: plan-reviewer, tag: null }');
 }
 {
   const r = parseAgentSentinel(body({ messages: [{ role: 'user', content: '[[c-thru-agent:coder]]' }] }), 'planner');

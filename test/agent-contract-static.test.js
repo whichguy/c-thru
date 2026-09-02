@@ -76,7 +76,7 @@ const ROSTER = {
   'tester':               { warnOnly: true },
   'docs':                 { warnOnly: true },
   'code-reviewer':        { warnOnly: true },
-  'reviewer-plan':        { warnOnly: true },
+  'plan-reviewer':        { warnOnly: true },
   'reviewer-security':    { warnOnly: true },
   'plan-scheduler':       { warnOnly: true },
   'debugger-hypothesis':  { warnOnly: true },

@@ -50,10 +50,10 @@ try {
   fs.mkdirSync(projA, { recursive: true });
   fs.mkdirSync(projB, { recursive: true });
 
-  // proj-a: a reviewer-plan and a code-reviewer (the pair proxy stats can't tell apart)
+  // proj-a: a plan-reviewer and a code-reviewer (the pair proxy stats can't tell apart)
   fs.writeFileSync(path.join(projA, 'sess1.jsonl'), [
-    callLine('a1', 't1', 'reviewer-plan', '2026-06-12T10:00:00.000Z'),
-    resultLine('a1', 'reviewer-plan', 500, '2026-06-12T10:01:00.000Z'),
+    callLine('a1', 't1', 'plan-reviewer', '2026-06-12T10:00:00.000Z'),
+    resultLine('a1', 'plan-reviewer', 500, '2026-06-12T10:01:00.000Z'),
     callLine('a2', 't2', 'code-reviewer', '2026-06-12T11:00:00.000Z'),
     resultLine('a2', 'code-reviewer', 700, '2026-06-12T11:01:00.000Z'),
   ].join('\n') + '\n');
@@ -70,7 +70,7 @@ try {
     const r = runJson(['--config-dir', tmp]);
     const by = Object.fromEntries(r.agents.map((a) => [a.agent, a]));
     assert(r.totals.calls === 3, `3 total delegations (got ${r.totals.calls})`);
-    assert(by['reviewer-plan'] && by['reviewer-plan'].calls === 1, `reviewer-plan = 1 call`);
+    assert(by['plan-reviewer'] && by['plan-reviewer'].calls === 1, `plan-reviewer = 1 call`);
     assert(by['code-reviewer'] && by['code-reviewer'].calls === 2, `code-reviewer = 2 calls (the two collapse to one capability in proxy stats)`);
     assert(by['code-reviewer'] && by['code-reviewer'].tokens === 1000, `code-reviewer tokens summed = 1000 (got ${by['code-reviewer'] && by['code-reviewer'].tokens})`);
   }

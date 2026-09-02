@@ -124,7 +124,7 @@ assert "[[ -n '$AGENT_PORT' && -n '$DEFAULT_PORT' ]]" "stub backends bound (agen
 CONFIG="$BASE/model-map.json"
 cat > "$CONFIG" <<EOF
 {
-  "agent_to_capability": { "reviewer-plan": "plan-reviewer" },
+  "agent_to_capability": { "plan-reviewer": "plan-reviewer" },
   "llm_profiles": { "plan-reviewer": { "best-cloud": { "16gb": "agent-model" } } },
   "model_routes": { "agent-model": "agentBackend", "default-model": "defaultBackend" },
   "endpoints": {
@@ -197,20 +197,20 @@ post_control_status() {
 if [[ -n "$PROXY_PORT" ]]; then
   SIGNED="$(C_THRU_AGENT_SENTINEL_SECRET="$SESSION_SECRET" node -e '
     const {formatAgentSentinel}=require(process.argv[1]);
-    process.stdout.write(formatAgentSentinel("reviewer-plan", process.env.C_THRU_AGENT_SENTINEL_SECRET));
+    process.stdout.write(formatAgentSentinel("plan-reviewer", process.env.C_THRU_AGENT_SENTINEL_SECRET));
   ' "$REPO_DIR/tools/agent-sentinel.js") go"
   served_signed="$(post_messages_header "$SIGNED" "x-c-thru-served-by")"
   assert "[[ '$served_signed' == 'agent-model' ]]" \
     "signed loopback sentinel honored → served-by=agent-model (got '$served_signed')"
 
   # Loopback alone is not authentication.
-  UNSIGNED='[[c-thru-agent:reviewer-plan]] go'
+  UNSIGNED='[[c-thru-agent:plan-reviewer]] go'
   served_unsigned="$(post_messages_header "$UNSIGNED" "x-c-thru-served-by")"
   assert "[[ '$served_unsigned' == 'default-model' ]]" \
     "unsigned loopback sentinel rejected → served-by=default-model (got '$served_unsigned')"
 
   # Legacy tags remain parseable/strippable but are no longer trusted.
-  LEGACY='[[c-thru-agent:reviewer-plan:0000000000000000]] go'
+  LEGACY='[[c-thru-agent:plan-reviewer:0000000000000000]] go'
   served_legacy="$(post_messages_header "$LEGACY" "x-c-thru-served-by")"
   assert "[[ '$served_legacy' == 'default-model' ]]" \
     "legacy truncated tag rejected → served-by=default-model (got '$served_legacy')"

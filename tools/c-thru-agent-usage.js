@@ -5,7 +5,7 @@
 // WHY — the proxy can only report per-CAPABILITY usage (usage-stats.json's by_agent
 // map is keyed by capability; the hook collapses agent -> capability before the
 // proxy sees the request). So the proxy literally cannot tell you how often
-// `reviewer-plan` vs `code-reviewer` ran, or `plan-scheduler` vs `fast-generalist`.
+// `plan-reviewer` vs `code-reviewer` ran, or `plan-scheduler` vs `fast-generalist`.
 // This tool reads the transcripts Claude Code writes anyway and aggregates by the
 // REAL subagent name — agent-precise, retroactive over existing sessions, with zero
 // runtime overhead (it touches no proxy, no live session).

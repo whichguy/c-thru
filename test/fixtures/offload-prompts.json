@@ -46,7 +46,7 @@
     {
       "id": "review-plan",
       "prompt": "Here is a plan file: {{PLAN}}. Review it for gaps, risks, and missing steps before implementation.",
-      "expect": ["reviewer-plan", "planner", "code-reviewer"],
+      "expect": ["plan-reviewer", "planner", "code-reviewer"],
       "note": "plan review"
     },
     {

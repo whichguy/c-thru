@@ -48,7 +48,7 @@ this fleet.
 | `tester` | `tester` | Runs/writes tests, verifies behavior | `tester` (continue), `code-reviewer`, `debugger-hypothesis` |
 | `code-reviewer` | `code-reviewer` | Correctness/style/coverage review after `coder` | `coder` (fix), `reviewer-security` ↑ |
 | `reviewer-security` | `reviewer-security` | Security review (authz, crypto, injection); hard-fail | `coder` (fix) |
-| `reviewer-plan` ⚠ | `code-reviewer` | Plan-document review (APPROVED / NEEDS_REVISION) | `planner` (revise) |
+| `plan-reviewer` ⚠ | `code-reviewer` | Plan-document review (APPROVED / NEEDS_REVISION) | `planner` (revise) |
 | `plan-scheduler` ⚠ | `fast-generalist` | Standalone helper: dispatches a wave's READY_ITEMS via `/schedule-plan-tasks` when invoked directly (e.g. "schedule these tasks"). **Not** part of `/c-thru-plan`'s own Phase 4 loop — that loop dispatches straight to `coder` | (leaf) |
 | `debugger-hypothesis` | `debugger-hypothesis` | Generates/ranks hypotheses for an unknown bug | `debugger-investigate`, `debugger-hard` ↑ |
 | `debugger-investigate` | `debugger-investigate` | Deep investigation of a hypothesis (logs, traces) | `debugger-investigate` (continue), `tester`, `debugger-hard` ↑ |
@@ -81,7 +81,7 @@ be `:cloud`). Lower 3.8 quants (nvfp4/mlx, ~18 GB) remain in role profiles at 32
 and above. 16 GB routes retain smaller Qwen/Phi models, with `qwen3-vl:8b` still
 used for 16 GB vision and PDF.
 
-**⚠ Non-1:1 rows.** `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`,
+**⚠ Non-1:1 rows.** `plan-reviewer` → `code-reviewer`, `plan-scheduler` → `fast-generalist`,
 `advisors` → `planner-hard`.
 **📌 Brand pins** map via `model:<shorthand-or-concrete>` (not hardware-tier profiles).
 **Utility passthroughs** `WebSearch` / `WebFetch` /
@@ -156,7 +156,7 @@ Driven by `skills/c-thru-plan/SKILL.md`; all agent names below are live `agents/
    (max 60s each; partial discovery acceptable, missing gaps recorded as `assumed`)
 2. **Plan construction** — `planner` (signal=intent; the only unconditional cloud-judge call)
    writes `current.md` with an immutable `## Outcome` section + all items
-3. **Plan review loop** — `reviewer-plan` returns `APPROVED` or `NEEDS_REVISION`; revision
+3. **Plan review loop** — `plan-reviewer` returns `APPROVED` or `NEEDS_REVISION`; revision
    rounds shared with Phase 5 under the 20-round cap
 4. **Wave loop** — three-branch driver loop repeats until no ready items:
    - `coder` (wave executor) receives `current.md` + `READY_ITEMS` + a wave dir; mechanics
@@ -389,7 +389,7 @@ Agents that don't use the standard worker STATUS block:
 | Agent | STATUS shape | Key non-standard fields |
 |---|---|---|
 | `planner` | `STATUS: COMPLETE\|CYCLE\|ERROR` + `VERDICT: ready\|done` + `READY_ITEMS` + `COMMIT_MESSAGE` + `SUMMARY` (+ `ITEMS` on CYCLE, `PARALLEL_WAVES` annotation) | Validated by `test/planner-return-schema.test.js` rules a–h: VERDICT=ready requires non-empty READY_ITEMS; VERDICT=done forbids READY_ITEMS and COMMIT_MESSAGE |
-| `reviewer-plan` | `VERDICT: APPROVED\|NEEDS_REVISION` + `WROTE` + `FINDINGS_COUNT` + `SUMMARY` | No CONFIDENCE |
+| `plan-reviewer` | `VERDICT: APPROVED\|NEEDS_REVISION` + `WROTE` + `FINDINGS_COUNT` + `SUMMARY` | No CONFIDENCE |
 | `explore` | `STATUS: COMPLETE\|PARTIAL\|ERROR` + `WROTE` + `SUMMARY` (+ `GAPS: N` as gap advisor, `TEST_FRAMEWORKS` on CI questions) | No CONFIDENCE, no FINDING_CATS |
 
 ---

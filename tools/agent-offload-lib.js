@@ -6,7 +6,7 @@
 // (c-thru-agent-router-hook.sh) resolves subagent_type -> capability and injects
 // {model: capability} BEFORE the request reaches the proxy, so every proxy log and
 // usage-stats.json bucket is keyed by capability, not agent. Two agents that share a
-// capability (reviewer-plan -> code-reviewer, plan-scheduler -> fast-generalist) are
+// capability (plan-reviewer -> code-reviewer, plan-scheduler -> fast-generalist) are
 // indistinguishable in proxy data. The clean, agent-precise signal lives in Claude
 // Code's OWN surfaces — this module reads them.
 //

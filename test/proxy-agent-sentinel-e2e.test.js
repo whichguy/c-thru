@@ -14,7 +14,7 @@ const { computeAgentSentinelTag, formatAgentSentinel } = require('../tools/agent
 
 console.log('proxy agent-sentinel e2e (live proxy, loopback trust)\n');
 
-const AGENT         = 'reviewer-plan';
+const AGENT         = 'plan-reviewer';
 const CAPABILITY    = 'plan-reviewer';
 const AGENT_MODEL   = 'agent-model';
 const DEFAULT_MODEL = 'default-model';

@@ -185,7 +185,7 @@ stateDiagram-v2
     Phase1 --> Phase2
     Phase2: Phase 2 - plan construction (planner)
     Phase2 --> Phase3
-    Phase3: Phase 3 - review loop (reviewer-plan)
+    Phase3: Phase 3 - review loop (plan-reviewer)
     Phase3 --> Phase2 : NEEDS_REVISION
     Phase3 --> Phase4 : APPROVED
     state Phase4 {

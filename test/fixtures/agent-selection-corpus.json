@@ -203,7 +203,7 @@
       "id": "planreview-doc",
       "prompt": "Here is a drafted plan file: {{PLAN}}. Before we start building, check it for missing steps, broken dependencies, and weak verification.",
       "expect": [
-        "reviewer-plan",
+        "plan-reviewer",
         "planner",
         "code-reviewer"
       ],
@@ -213,7 +213,7 @@
       "id": "planreview-ready",
       "prompt": "Is this implementation plan ready to execute, or are there gaps and ambiguous scope to fix first?",
       "expect": [
-        "reviewer-plan",
+        "plan-reviewer",
         "planner"
       ],
       "note": "plan readiness check"

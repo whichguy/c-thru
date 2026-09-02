@@ -96,7 +96,7 @@ function installHierarchyHandler(backend, responseLinesForBody) {
 function installHierarchySuccessHandler(backend) {
   installHierarchyHandler(backend, body => {
     const responseLines = ['TASK_STATUS: COMPLETE'];
-    if (body?.model === 'reviewer-plan') {
+    if (body?.model === 'plan-reviewer') {
       responseLines.push('VERDICT: APPROVED');
     } else if (body?.model === 'code-reviewer') {
       responseLines.push('VERDICT: APPROVE');
@@ -130,7 +130,7 @@ async function testManagedHierarchyProxy() {
         coder: 'hierarchy_stub',
         tester: 'hierarchy_stub',
         'code-reviewer': 'hierarchy_stub',
-        'reviewer-plan': 'hierarchy_stub',
+        'plan-reviewer': 'hierarchy_stub',
         planner: 'hierarchy_stub',
       },
       llm_mode: 'best-cloud-oss',
@@ -165,8 +165,8 @@ async function testManagedHierarchyProxy() {
     assert(result.stdout.includes('Hierarchy Test Completed Successfully.'),
       'managed hierarchy run completes all phases');
     assertEq(backend.requests.length, 11, 'all 11 hierarchy requests reached the stub backend');
-    assertEq(backend.requests[9]?.body?.model, 'reviewer-plan',
-      'plan review phase dispatches to reviewer-plan');
+    assertEq(backend.requests[9]?.body?.model, 'plan-reviewer',
+      'plan review phase dispatches to plan-reviewer');
     const firstUserMessage = backend.requests[0]?.body?.messages?.[0]?.content || '';
     assert(firstUserMessage.includes('Use TASK_STATUS for a normal outcome.'),
       'hierarchy requests remind agents to use the current TASK_STATUS schema');
@@ -218,7 +218,7 @@ async function testManagedHierarchyProxy() {
       missingPlanVerdictResult.stderr,
     ), 'wrong plan-review verdict vocabulary is rejected');
     assertEq(missingPlanVerdictBackend.requests.length, 10,
-      'missing plan verdict fails at the reviewer-plan phase');
+      'missing plan verdict fails at the plan-reviewer phase');
 
     conflictingVerdictBackend = await stubBackend();
     installHierarchyHandler(conflictingVerdictBackend, body => {

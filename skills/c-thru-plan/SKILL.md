@@ -150,10 +150,10 @@ echo "3" > $PLAN_DIR/.c-thru-contract-version
 
 ## Phase 3 — Plan review loop
 
-<!-- This invokes reviewer-plan (APPROVED/NEEDS_REVISION verdict expected in response).
-     reviewer-plan checks plan structure: missing steps, broken dependencies,
+<!-- This invokes plan-reviewer (APPROVED/NEEDS_REVISION verdict expected in response).
+     plan-reviewer checks plan structure: missing steps, broken dependencies,
      ambiguous scope, incomplete verification — not code correctness. -->
-Invoke the `reviewer-plan` agent in a loop capped at 20 rounds.
+Invoke the `plan-reviewer` agent in a loop capped at 20 rounds.
 
 ```
 # Read persisted counter from disk on entry — guards against Phase-5 re-entry
@@ -164,7 +164,7 @@ meta.revision_rounds = meta.revision_rounds ?? 0
 write $PLAN_DIR/meta.json
 
 while meta.revision_rounds < 20:
-    result = Agent(subagent_type: "reviewer-plan",
+    result = Agent(subagent_type: "plan-reviewer",
                    prompt: "current.md:  $PLAN_DIR/current.md
                             INDEX:       $PLAN_DIR/INDEX.md
                             round:       <meta.revision_rounds>

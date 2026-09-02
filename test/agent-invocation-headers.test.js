@@ -17,7 +17,7 @@
 // The fixture points every capability at a unique `served-<cap>` model routed to
 // the local stub, so the suite is fully hermetic (no real backend, no network).
 // The real production agent_to_capability is copied verbatim so the two non-1:1
-// remaps (reviewer-plan→code-reviewer, plan-scheduler→fast-generalist) are
+// remaps (plan-reviewer→code-reviewer, plan-scheduler→fast-generalist) are
 // exercised exactly as they route in production.
 //
 // Run: node test/agent-invocation-headers.test.js

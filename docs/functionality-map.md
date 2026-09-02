@@ -178,7 +178,7 @@ Detail: `docs/model-map.md`, `docs/hardware-profile-matrix.md`.
   `agent_to_capability` (`config/model-map.json:642`) — workaround for claude-code #44385. Non-LLM tools
   (WebSearch/WebFetch/Monitor/Plan) pass through with logging only.
 - **Roster (22):** planner, planner-hard, explore, coder, coder-fallback, tester, docs, code-reviewer,
-  reviewer-security, reviewer-plan, plan-scheduler, debugger-hypothesis, debugger-investigate,
+  reviewer-security, plan-reviewer, plan-scheduler, debugger-hypothesis, debugger-investigate,
   debugger-hard, vision, pdf, writer, edge, generalist, fast-generalist, fast-scout, long-context.
 - **Public skills (3, shipped in plugin):** `c-thru-config`, `c-thru-control`, `c-thru-plan`.
 - **Dev/internal skills (not shipped in plugin):** `logical-gearbox`, `review-fix`, `review-plan`,

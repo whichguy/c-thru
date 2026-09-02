@@ -144,8 +144,8 @@ console.log('\n2. Full chain: agent → capability → model → route → endpo
 console.log('\n3. Documented non-1:1 remaps hold (guards the README "⚠" rows + brand pins)');
 {
   const a2c = CONFIG.agent_to_capability || {};
-  assert(a2c['reviewer-plan'] === 'code-reviewer',
-    `reviewer-plan → code-reviewer (got ${JSON.stringify(a2c['reviewer-plan'])})`);
+  assert(a2c['plan-reviewer'] === 'code-reviewer',
+    `plan-reviewer → code-reviewer (got ${JSON.stringify(a2c['plan-reviewer'])})`);
   assert(a2c['plan-scheduler'] === 'fast-generalist',
     `plan-scheduler → fast-generalist (got ${JSON.stringify(a2c['plan-scheduler'])})`);
   assert(a2c['advisors'] === 'planner-hard',
@@ -169,7 +169,7 @@ console.log('\n3. Documented non-1:1 remaps hold (guards the README "⚠" rows +
       `${name} brand leaf pins model:${name} with latest_models expansion (got ${JSON.stringify(a2c[name])})`);
   }
   // Every OTHER agent maps 1:1 to its own name.
-  const remapped = new Set(['reviewer-plan', 'plan-scheduler', 'advisors', ...Object.keys(brandPins)]);
+  const remapped = new Set(['plan-reviewer', 'plan-scheduler', 'advisors', ...Object.keys(brandPins)]);
   for (const agent of AGENTS) {
     if (remapped.has(agent)) continue;
     assert(a2c[agent] === agent,

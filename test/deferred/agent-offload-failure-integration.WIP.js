@@ -222,7 +222,7 @@ if (!Number.isInteger(fakeUpstreamPort) || fakeUpstreamPort <= 0) {
 fs.writeFileSync(configPath, JSON.stringify({
   agent_to_capability: {
     coder: 'coder',
-    'reviewer-plan': 'code-reviewer',
+    'plan-reviewer': 'code-reviewer',
     grok: `model:${HERMETIC_GROK_MODEL}`,
   },
   llm_profiles: {
@@ -552,7 +552,7 @@ const aliasDelegation = {
       id: 'toolu_fake_reviewer_plan',
       name: 'Agent',
       input: {
-        subagent_type: 'reviewer-plan',
+        subagent_type: 'plan-reviewer',
         description: 'review the implementation plan',
         prompt: 'review the plan',
       },
@@ -1006,7 +1006,7 @@ async function main() {
     await routeChild('coder', primaryAgentId, { betaQuery: true });
     emitSuccessfulOpaqueIdDelegation(primaryAgentId);
   } else if (mode === 'alias-delegation') {
-    await routeChild('reviewer-plan', primaryAgentId);
+    await routeChild('plan-reviewer', primaryAgentId);
     emitSuccessfulAliasDelegation(primaryAgentId);
   } else if (mode === 'model-pin-delegation') {
     await routeChild('grok', primaryAgentId);
@@ -2136,12 +2136,12 @@ try {
   const alias = runCase('alias-delegation', 'planreview-doc');
   assertLatestInvocation('alias-delegation', 'alias route case reached fake Claude');
   assertEq(alias.status, 0,
-    `reviewer-plan → code-reviewer alias clears the gate (stderr: ${JSON.stringify((alias.stderr || '').slice(-300))})`);
+    `plan-reviewer → code-reviewer alias clears the gate (stderr: ${JSON.stringify((alias.stderr || '').slice(-300))})`);
   assert(/exact 1  acceptable 0  ambiguous-correct 0  unexpected 0  no-offload 0  errored 0/.test(
     alias.stdout,
-  ), 'mapped reviewer-plan selection is scored exact');
-  assert(alias.stdout.includes('forwarded child text linked: reviewer-plan'),
-    'alias route links forwarded reviewer-plan child text');
+  ), 'mapped plan-reviewer selection is scored exact');
+  assert(alias.stdout.includes('forwarded child text linked: plan-reviewer'),
+    'alias route links forwarded plan-reviewer child text');
 
   console.log('\n3. model-pinned agents preserve the agent name as logical role');
   const modelPin = runCase('model-pin-delegation', 'grok-named');

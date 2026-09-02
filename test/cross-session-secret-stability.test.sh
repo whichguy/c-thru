@@ -49,7 +49,7 @@ PROFILE="$BASE/profile"
 export CLAUDE_PROFILE_DIR="$PROFILE"
 HMAC_FILE="$PROFILE/agent-hmac.key"
 TOKEN_FILE="$PROFILE/proxy.control-token"
-AGENT_NAME="reviewer-plan"
+AGENT_NAME="plan-reviewer"
 
 echo "A. Session A: create in-memory sentinel secret + on-disk control token"
 unset C_THRU_AGENT_SENTINEL_SECRET C_THRU_AGENT_SENTINEL_SECRET_FILE

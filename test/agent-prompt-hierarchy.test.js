@@ -320,9 +320,9 @@ ${artifacts.discovery}`;
     artifacts.currentPlan = resp;
   }
 
-  // 10. reviewer-plan (plan review)
+  // 10. plan-reviewer (plan review)
   {
-    const name = 'reviewer-plan';
+    const name = 'plan-reviewer';
     const sys = readSystemPrompt(name);
     const user = `Review the following plan for intent: ${SCENARIO.intent}
 

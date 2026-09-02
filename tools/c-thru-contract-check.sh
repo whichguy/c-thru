@@ -547,7 +547,7 @@ echo "8/13  HANDOFF / UNBLOCKED_TASKS declaration coverage check..."
 
 PIPELINE_AGENTS=(
   planner planner-hard explore coder coder-fallback tester docs
-  code-reviewer reviewer-security reviewer-plan debugger-hypothesis debugger-investigate debugger-hard
+  code-reviewer reviewer-security plan-reviewer debugger-hypothesis debugger-investigate debugger-hard
 )
 for agent_name in "${PIPELINE_AGENTS[@]}"; do
     agent_file="$AGENTS_DIR/${agent_name}.md"
