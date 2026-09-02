@@ -137,6 +137,20 @@ console.log('\n4b. Reserved agents/*.md control docs');
   }
 }
 
+// ── 4c. Named-brand list is catalog-derived (no drift) ─────────────────────
+console.log('\n4c. Named-brand list matches catalog primary ids');
+{
+  const catalogIds = (brand.agents || []).map(a => a.id).join(', ');
+  // Runtime path generates the list from the catalog; the fallback must match
+  // so a missing catalog still names every primary leaf (no silent drift).
+  const m = cthru.match(/\|\| brand_list="([^"]*)"/);
+  assert(m, 'c-thru has a brand_list fallback');
+  if (m) {
+    assert(m[1] === catalogIds,
+      `fallback brand_list matches catalog primary ids (${catalogIds})`);
+  }
+}
+
 // ── 5. Lean marketplace still excludes advisors skill ───────────────────────
 console.log('\n5. Shape C lean (advisors not in plugin skills)');
 {
