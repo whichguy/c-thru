@@ -86,6 +86,10 @@ console.log(JSON.stringify({
   coordinator_agent_is_symlink,
   coordinator_agent_realpath,
   anthropic_base_url:    process.env.ANTHROPIC_BASE_URL    || null,
+  anthropic_default_sonnet_model: process.env.ANTHROPIC_DEFAULT_SONNET_MODEL || null,
+  anthropic_default_haiku_model:  process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL  || null,
+  anthropic_default_opus_model:   process.env.ANTHROPIC_DEFAULT_OPUS_MODEL   || null,
+  anthropic_small_fast_model:     process.env.ANTHROPIC_SMALL_FAST_MODEL     || null,
   claude_llm_mode:       process.env.CLAUDE_LLM_MODE       || null,
   claude_llm_profile:    process.env.CLAUDE_LLM_PROFILE    || null,
   claude_llm_memory_gb:  process.env.CLAUDE_LLM_MEMORY_GB  || null,
@@ -97,6 +101,7 @@ console.log(JSON.stringify({
   c_thru_anthropic_upstream_fingerprint: process.env.C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT || null,
   c_thru_no_update: process.env.C_THRU_NO_UPDATE || null,
   c_thru_session_id: process.env.C_THRU_SESSION_ID || null,
+  c_thru_launch_default_model: process.env.C_THRU_LAUNCH_DEFAULT_MODEL || null,
   c_thru_coordinator_active: process.env.C_THRU_COORDINATOR_ACTIVE || null,
 }));
 ' -- "$@"
@@ -144,6 +149,9 @@ function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
   const childEnv = { ...process.env };
   for (const key of [
     'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL',
+    'C_THRU_ROUTE_NATIVE_SUBCMD',
     'CLAUDE_BIN', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROFILE_DIR', 'CLAUDE_DIR',
     'CLAUDE_MODEL_MAP_PATH', 'CLAUDE_MODEL_MAP_LAUNCH_CWD',
     'CLAUDE_PROXY_BYPASS', 'CLAUDE_PROXY_PORT', 'CLAUDE_PROXY_JOURNAL',
@@ -1065,6 +1073,86 @@ console.log('\n28. explicit CLI tool restrictions disable coordinator when Agent
         `28c ${label} preserves caller token ${JSON.stringify(arg)}`);
     }
   }
+}
+
+// ── Test 29: bare `agents` routes through the proxy instead of leaking ─────
+// Regression guard. `cthru agents` with no --model used to exec the vendor
+// binary with no proxy and no exported routing env; Claude Code then
+// pre-spawns bg-spare workers that inherit only the environment (they never
+// receive --settings), so every daemon-spawned child talked straight to
+// api.anthropic.com while the banner advertised the OSS default.
+console.log('\n29. bare `agents` resolves routes.default and exports routing env');
+{
+  const ossConfig = {
+    backends: { ollama: { kind: 'ollama', url: 'http://127.0.0.1:11434' } },
+    routes: { default: 'deepseek-v4-flash:cloud' },
+    model_routes: { 'deepseek-v4-flash:cloud': 'ollama', generalist: 'ollama', 'fast-generalist': 'ollama' },
+  };
+
+  const r = runCthru(['agents'], ossConfig, { CLAUDE_LLM_MODE: 'best-cloud-oss' });
+  assert(r.code === 0, `29a exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 220)})`);
+  assert(r.json !== null, `29b stub claude received args (stdout: ${r.stdout.slice(0, 200)})`);
+
+  // The leak assertion: a loopback base URL must be exported, not absent.
+  const base = r.json?.anthropic_base_url;
+  assert(/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+/.test(base || ''),
+    `29c ANTHROPIC_BASE_URL is loopback proxy (got ${JSON.stringify(base)})`);
+
+  // Background slots must be pinned to capability names, so daemon-spawned
+  // children cannot fall back to a vendor claude-* id.
+  assert(r.json?.anthropic_default_sonnet_model === 'generalist',
+    `29d sonnet slot pinned to generalist (got ${JSON.stringify(r.json?.anthropic_default_sonnet_model)})`);
+  assert(r.json?.anthropic_small_fast_model === 'fast-generalist',
+    `29e small-fast slot pinned (got ${JSON.stringify(r.json?.anthropic_small_fast_model)})`);
+
+  // The subcommand and its resolved route reach the vendor binary.
+  const args = r.json?.args || [];
+  assert(args.includes('agents'), `29f 'agents' subcommand forwarded (got ${formatArgs(args)})`);
+  assert(args.includes('deepseek-v4-flash:cloud'),
+    `29g resolved routes.default passed as --model (got ${formatArgs(args)})`);
+}
+
+// ── Test 30: the fallback stays narrow ────────────────────────────────────
+// It must not hijack an explicit Claude-native --model (documented
+// passthrough), must not fire for administrative subcommands (`auth` and
+// `setup-token` have to reach real Anthropic), and must respect the opt-out.
+console.log('\n30. routes.default fallback does not over-reach');
+{
+  const ossConfig = {
+    backends: { ollama: { kind: 'ollama', url: 'http://127.0.0.1:11434' } },
+    routes: { default: 'deepseek-v4-flash:cloud' },
+    model_routes: { 'deepseek-v4-flash:cloud': 'ollama', generalist: 'ollama' },
+  };
+
+  // 30a: an explicit Claude-native model keeps the historical passthrough.
+  const native = runCthru(['agents', '--model=claude-sonnet-5'], ossConfig,
+    { CLAUDE_LLM_MODE: 'best-cloud-oss' });
+  assert(native.json?.anthropic_base_url == null,
+    `30a explicit claude-native --model still bypasses proxy (got ${JSON.stringify(native.json?.anthropic_base_url)})`);
+
+  // 30b: `auth` must never be routed — it has to reach real Anthropic.
+  const auth = runCthru(['auth'], ossConfig, { CLAUDE_LLM_MODE: 'best-cloud-oss' });
+  assert(auth.json?.anthropic_base_url == null,
+    `30b auth subcommand is not routed (got ${JSON.stringify(auth.json?.anthropic_base_url)})`);
+
+  // 30c: explicit opt-out restores the old behavior.
+  const optOut = runCthru(['agents'], ossConfig,
+    { CLAUDE_LLM_MODE: 'best-cloud-oss', C_THRU_ROUTE_NATIVE_SUBCMD: '0' });
+  assert(optOut.json?.anthropic_base_url == null,
+    `30c C_THRU_ROUTE_NATIVE_SUBCMD=0 opts out (got ${JSON.stringify(optOut.json?.anthropic_base_url)})`);
+
+  // 30d/30e: the launch default is process-global on the proxy, so an
+  // AUTO-picked routes.default must not stamp it — otherwise opening the
+  // agents view would rewrite the generalist slot for every other session
+  // sharing that proxy. An explicitly-requested model still stamps.
+  const auto = runCthru(['agents'], ossConfig, { CLAUDE_LLM_MODE: 'best-cloud-oss' });
+  assert(auto.json?.c_thru_launch_default_model == null,
+    `30d auto-picked routes.default does not stamp launch default (got ${JSON.stringify(auto.json?.c_thru_launch_default_model)})`);
+
+  const explicit = runCthru(['agents', '--model', 'deepseek-v4-flash:cloud'], ossConfig,
+    { CLAUDE_LLM_MODE: 'best-cloud-oss' });
+  assert(explicit.json?.c_thru_launch_default_model === 'deepseek-v4-flash:cloud',
+    `30e explicit --model still stamps launch default (got ${JSON.stringify(explicit.json?.c_thru_launch_default_model)})`);
 }
 
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);

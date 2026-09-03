@@ -1169,6 +1169,7 @@ cmd_help() {
   echo "  CLAUDE_PROXY_ANTHROPIC_UPSTREAM=<url>  proxy child transport override (exported by c-thru)"
   echo "  C_THRU_TRUST_AMBIENT_UPSTREAM=1  adopt ambient ANTHROPIC_BASE_URL as upstream (default: off)"
   echo "  C_THRU_IGNORE_AMBIENT_ANTHROPIC_BASE_URL=1  never adopt ambient BASE_URL as upstream"
+  echo "  C_THRU_ROUTE_NATIVE_SUBCMD=0  don't route bare \`agents\` through routes.default (default: on)"
   echo "  C_THRU_NO_UPDATE=1     disable git self-update at startup"
   echo "  C_THRU_COORDINATOR=1      opt into the experimental session coordinator"
   echo "  CLAUDE_PROXY_JOURNAL=1        record every request/response to ~/.claude/journal/"
@@ -1722,6 +1723,8 @@ run_native_claude_subcommand() {
   local subcmd="${ORIG_ARGS[0]:-}"
   local REAL_CLAUDE="${CLAUDE_BIN:-$(find_real_claude)}"
   local route_model=""
+  local route_model_auto=0
+  local _routes_default=""
   local a inserted rebuilt
 
   strip_cthru_cli_args native_subcmd
@@ -1731,6 +1734,39 @@ run_native_claude_subcommand() {
     route_model="$explicit_model"
   elif [[ -n "${STRIPPED_MODEL:-}" ]]; then
     route_model="$STRIPPED_MODEL"
+  fi
+
+  # No --model at all: fall back to routes.default for the subcommands that
+  # actually drive inference. Without this the bare form execs the vendor binary
+  # with no proxy and no exported routing env — and because Claude Code
+  # pre-spawns bg-spare workers that inherit only the environment (they never
+  # receive --settings), every daemon-spawned child then talks straight to
+  # api.anthropic.com while the banner advertises the OSS default.
+  #
+  # Only `agents` — the one entry point with an evidenced leak. Every other
+  # native subcommand is deliberately left alone: auth/setup-token must reach
+  # real Anthropic, ultrareview is a cloud review that needs real Anthropic
+  # auth (routing it at a local OSS proxy would break it), and
+  # doctor/install/mcp/plugin/project/update/upgrade/gateway drive no inference.
+  # A Claude-native routes.default keeps the historical passthrough (no proxy)
+  # so `best-cloud` mode behaves exactly as before. Opt out: C_THRU_ROUTE_NATIVE_SUBCMD=0.
+  # Note: --route is stripped but never resolved on this path (pre-existing), so
+  # `agents --route <name>` lands here and gets routes.default, not <name>.
+  if [[ "$subcmd" == "agents" && -z "$route_model" \
+        && -z "${explicit_model:-}" && -z "${STRIPPED_MODEL:-}" \
+        && "${CLAUDE_PROXY_BYPASS:-0}" != "1" \
+        && "${C_THRU_ROUTE_NATIVE_SUBCMD:-1}" != "0" \
+        && -n "${CONFIG:-}" && -f "${CONFIG:-}" ]]; then
+    _routes_default="$(jq -r '.routes.default // empty' "$CONFIG" 2>/dev/null || true)"
+    if [[ -n "$_routes_default" ]] && ! is_claude_native_model_name "$_routes_default"; then
+      route_model="$_routes_default"
+      route_model_auto=1
+    elif [[ -z "$_routes_default" && -n "${C_THRU_DEBUG:-}" && "${C_THRU_DEBUG}" != "0" ]]; then
+      # Empty here means no routes.default, or jq is missing/failed. Either way
+      # the launch falls back to bare Anthropic — the exact silent leak this
+      # branch exists to close, so leave a breadcrumb rather than nothing.
+      echo "c-thru: ${subcmd} — no routes.default resolved from ${CONFIG}; launching unrouted" >&2
+    fi
   fi
 
   if [[ -n "$route_model" && "${CLAUDE_PROXY_BYPASS:-0}" != "1" ]]; then
@@ -1783,7 +1819,13 @@ run_native_claude_subcommand() {
     export ANTHROPIC_BASE_URL="$ENSURED_PROXY_HTTP_BASE"
     ensure_proxy_client_api_key
     # Brand / routed --model is also the map default + generalist for this proxy.
-    set_launch_default_model "$route_model"
+    # Only an explicitly-requested model stamps it: the launch default is
+    # process-global on the proxy, so an auto-picked routes.default must not
+    # rewrite the generalist slot for every other session sharing that proxy
+    # (see the "Auto-picked routes.default alone does not stamp" invariant).
+    if [[ "$route_model_auto" -eq 0 ]]; then
+      set_launch_default_model "$route_model"
+    fi
     apply_background_model_overrides "$route_model"
     # Re-insert --model after the subcommand so Claude agent-view defaults to
     # the c-thru route name; the proxy resolves it (e.g. grok → grok-4.5 @ xai).
@@ -1810,7 +1852,9 @@ run_native_claude_subcommand() {
     if [[ -z "${C_THRU_KEEP_PROXY+x}" ]]; then
       export C_THRU_KEEP_PROXY=1
     fi
-    echo "c-thru: ${subcmd} via proxy model=${route_model} base=${ANTHROPIC_BASE_URL} (no fleet inject) — fleet: main cthru chat; status: c-thru list" >&2
+    local model_origin=""
+    [[ "$route_model_auto" -eq 1 ]] && model_origin=" (routes.default)"
+    echo "c-thru: ${subcmd} via proxy model=${route_model}${model_origin} base=${ANTHROPIC_BASE_URL} (no fleet inject) — fleet: main cthru chat; status: c-thru list" >&2
     if [[ "${C_THRU_NO_SESSION_REVIVE:-0}" != "1" ]]; then
       local revive_script=""
       if [[ -f "$CTHRU_SELF_DIR/c-thru-revive-agent-sessions.sh" ]]; then
