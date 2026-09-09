@@ -63,7 +63,7 @@
   },
   "llm_profiles": {
     "planner": {
-      "best-cloud": "claude-fable-5",
+      "best-cloud": "fable",
       "best-cloud-oss": {
         "16gb": "kimi-k3:cloud",
         "32gb": "kimi-k3:cloud",
@@ -96,7 +96,7 @@
       "fallback_to": "planner-hard"
     },
     "planner-hard": {
-      "best-cloud": "grok-4.6",
+      "best-cloud": "grok",
       "best-cloud-oss": {
         "16gb": "deepseek-v4-pro:cloud",
         "32gb": "deepseek-v4-pro:cloud",
@@ -113,11 +113,11 @@
         "128gb": "qwen3.8:27b-mlx"
       },
       "best-cloud-gov": {
-        "16gb": "grok-4.6",
-        "32gb": "grok-4.6",
-        "48gb": "grok-4.6",
-        "64gb": "grok-4.6",
-        "128gb": "grok-4.6"
+        "16gb": "grok",
+        "32gb": "grok",
+        "48gb": "grok",
+        "64gb": "grok",
+        "128gb": "grok"
       },
       "best-local-gov": {
         "16gb": "phi4-reasoning:plus",
@@ -204,8 +204,8 @@
         "128gb": "devstral-2:latest"
       },
       "best-cloud-gov": {
-        "16gb": "claude-haiku-4-5-20251001",
-        "32gb": "claude-haiku-4-5-20251001",
+        "16gb": "haiku",
+        "32gb": "haiku",
         "48gb": "sonnet",
         "64gb": "sonnet",
         "128gb": "sonnet"
@@ -769,7 +769,8 @@
     "codex-luna": "model:gpt-5.6-luna",
     "codex": "model:codex",
     "claude-fable-5": "model:claude-fable-5",
-    "glm-flash": "model:glm-flash"
+    "glm-flash": "model:glm-flash",
+    "claude-fable-5-1": "model:claude-fable-5-1"
   },
   "model_routes": {
     "grok": {
@@ -896,7 +897,7 @@
     "opus": "claude-opus-5",
     "sonnet": "claude-sonnet-5",
     "haiku": "claude-haiku-4-5-20251001",
-    "fable": "claude-fable-5",
+    "fable": "claude-fable-5-1",
     "qwen3:8b": {
       "endpoint": "ollama_local",
       "name": "qwen3:8b"
@@ -952,7 +953,8 @@
     "luna": "gpt-5.6-luna",
     "codex": "gpt-5.6-terra",
     "gemini-3-flash-preview:cloud": "ollama_cloud",
-    "grok-4.6": "xai"
+    "grok-4.6": "xai",
+    "claude-fable-5-1": "anthropic"
   },
   "routes": {
     "default": "generalist",
@@ -1175,6 +1177,7 @@
   },
   "_generated_brand_agents": [
     "claude-fable-5",
+    "claude-fable-5-1",
     "claude-haiku-4-5-20251001",
     "claude-opus-5",
     "claude-sonnet-5",
@@ -1239,7 +1242,7 @@
     "opus": "claude-opus-5",
     "sonnet": "claude-sonnet-5",
     "haiku": "claude-haiku-4-5-20251001",
-    "fable": "claude-fable-5",
+    "fable": "claude-fable-5-1",
     "grok": "grok-4.6",
     "deepseek": "deepseek-v4-pro:cloud",
     "deepseek-flash": "deepseek-v4-flash:0731-cloud",

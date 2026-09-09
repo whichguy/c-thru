@@ -68,6 +68,10 @@
       ],
       "aliases": [
         {
+          "id": "claude-fable-5-1",
+          "pin": "model:claude-fable-5-1"
+        },
+        {
           "id": "claude-fable-5",
           "pin": "model:claude-fable-5"
         }
@@ -122,7 +126,7 @@
       "aliases": [
         {
           "id": "deepseek-v4-flash-cloud",
-          "pin": "model:deepseek-v4-flash:cloud"
+          "pin": "model:deepseek-v4-flash:0731-cloud"
         }
       ]
     },
@@ -137,68 +141,7 @@
         "use qwen",
         "local qwen"
       ],
-      "aliases": [
-        {
-          "id": "qwen3-6-35b",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-6-35b-a3b-coding-nvfp4",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-6-35b-a3b-q8-0",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-6-35b-a3b-coding-mxfp8",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-6-35b-a3b-nvfp4",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-6-27b",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-6-27b-nvfp4",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-6-27b-coding-nvfp4",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-6-27b-coding-mxfp8",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-1-7b",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-4b",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-coder-next-q8-0",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-coder-next-q4-k-m",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-coder-480b-cloud",
-          "pin": "model:qwen3.6:35b"
-        },
-        {
-          "id": "qwen3-vl-8b",
-          "pin": "model:qwen3.6:35b"
-        }
-      ]
+      "aliases": []
     },
     {
       "id": "kimi",
@@ -280,11 +223,11 @@
         },
         {
           "id": "devstral-small-2-24b",
-          "pin": "model:devstral-2:latest"
+          "pin": "model:devstral-small-2:24b"
         },
         {
           "id": "devstral-small-2-24b-cloud",
-          "pin": "model:devstral-2:latest"
+          "pin": "model:devstral-small-2:24b-cloud"
         }
       ]
     },
@@ -299,16 +242,19 @@
         "use glm",
         "thudm glm"
       ],
-      "aliases": [
-        {
-          "id": "glm-5-2-cloud",
-          "pin": "model:glm-5.2:cloud"
-        },
-        {
-          "id": "glm-5-3-cloud",
-          "pin": "model:glm-5.3:cloud"
-        }
-      ]
+      "aliases": []
+    },
+    {
+      "id": "glm-flash",
+      "pin": "model:glm-flash",
+      "family": "glm",
+      "label": "GLM Flash",
+      "triggers": [
+        "ask glm flash",
+        "ask glm-flash",
+        "use glm flash"
+      ],
+      "aliases": []
     },
     {
       "id": "gemma",
@@ -324,15 +270,15 @@
       "aliases": [
         {
           "id": "gemma4-26b",
-          "pin": "model:gemma4:31b"
+          "pin": "model:gemma4:26b"
         },
         {
           "id": "gemma4-e4b",
-          "pin": "model:gemma4:31b"
+          "pin": "model:gemma4:e4b"
         },
         {
           "id": "gemma4-26b-mxfp8",
-          "pin": "model:gemma4:31b"
+          "pin": "model:gemma4:26b-mxfp8"
         },
         {
           "id": "gemma4-31b",
@@ -340,7 +286,7 @@
         },
         {
           "id": "gemma4-31b-mxfp8",
-          "pin": "model:gemma4:31b"
+          "pin": "model:gemma4:31b-mxfp8"
         }
       ]
     },
@@ -358,7 +304,7 @@
       "aliases": [
         {
           "id": "phi4-reasoning-plus",
-          "pin": "model:phi4-mini:3.8b"
+          "pin": "model:phi4-reasoning:plus"
         },
         {
           "id": "phi4-mini-3-8b",
@@ -380,7 +326,7 @@
       "aliases": [
         {
           "id": "gpt-oss-20b",
-          "pin": "model:gpt-oss:120b"
+          "pin": "model:gpt-oss:20b"
         },
         {
           "id": "gpt-oss-120b",
@@ -388,7 +334,7 @@
         },
         {
           "id": "gpt-oss-120b-cloud",
-          "pin": "model:gpt-oss:120b"
+          "pin": "model:gpt-oss:120b-cloud"
         }
       ]
     },

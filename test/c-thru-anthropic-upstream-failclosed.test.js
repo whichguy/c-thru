@@ -103,6 +103,11 @@ function runCthru(sandbox, args, extraEnv = {}) {
     C_THRU_ANTHROPIC_UPSTREAM: '',
     C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT: '',
     ANTHROPIC_BASE_URL: '',
+    // Scrub the launcher session's own auth env: the ambient c-thru session
+    // exports ANTHROPIC_AUTH_TOKEN (OAuth) — L2 must observe only the values the
+    // test injects, or it can't prove "no AUTH_TOKEN invented when API_KEY set".
+    ANTHROPIC_AUTH_TOKEN: '',
+    ANTHROPIC_API_KEY: '',
     ...extraEnv,
   };
   // Empty string still exports; delete true empties
@@ -111,6 +116,8 @@ function runCthru(sandbox, args, extraEnv = {}) {
     'C_THRU_ANTHROPIC_UPSTREAM',
     'C_THRU_ANTHROPIC_UPSTREAM_FINGERPRINT',
     'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_AUTH_TOKEN',
+    'ANTHROPIC_API_KEY',
   ]) {
     if (env[k] === '' || env[k] == null) delete env[k];
   }

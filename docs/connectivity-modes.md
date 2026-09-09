@@ -89,7 +89,7 @@ GLM/Zhipu, MiniMax, and others by family/vendor token) is blocked at both config
 time and runtime, even if a fallback chain would otherwise reach one.
 
 **Commercial US cloud (not FedRAMP ATO by itself).** Selected capabilities (currently
-`generalist` and `writer` at 32gb+) route to **Grok** (`grok-4.5` via `endpoints.xai`,
+`generalist` and `writer` at 32gb+) route to **Grok** (`grok-4.6` via `endpoints.xai`,
 `XAI_API_KEY`) under `best-cloud-gov`. That is **Grok surface B** (silent capability pin) —
 the same Anthropic-to-xAI Responses translation path as surface A, not the subscription-backed
 Grok Build CLI (surface C). See `docs/agent-architecture.md` § Grok surfaces. It is a US commercial path

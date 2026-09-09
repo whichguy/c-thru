@@ -18,11 +18,13 @@ const {
   resolveCapabilityAlias,
   resolveAdvisorPanel,
   resolveModelRoute,
+  expandLatestModel,
   baseModeFor,
   validModes,
   applyModeFilter,
   pickBenchmarkBest,
   isClaude, isCloud, isOpenSource, isChineseOrigin, isGovMode,
+  isVisionCapable,
   MODEL_PIN_PREFIX,
   LLM_MODE_ENUM,
 } = require('./model-map-resolve.js');
@@ -54,12 +56,14 @@ if (args.help || args.h) {
   console.log(`Usage: c-thru explain [--capability <cap>] [--agent <name>] [--model <name>] [--mode <m>] [--tier <t>]
          c-thru explain --panel <role> [--mode <m>] [--tier <t>] [--format json|text]
          c-thru explain --all [--mode <m>] [--tier <t>] [--format json|text]
+         c-thru explain --vision-capable <model>
 
 Prints the model resolution chain for a hypothetical request, without sending one.
 
   --capability <cap>   capability alias (e.g. workhorse, judge, deep-coder)
   --agent <name>       agent name (resolved through agent_to_capability)
   --model <name>       raw model name (resolved through model_routes)
+  --vision-capable <m> print true/false: does this concrete model tag accept image input?
   --panel <role>       advisor panel role (advisor_panels; falls back to "default" for same mode)
   --all                resolve every capability in llm_profiles
   --mode <m>           connectivity / routing mode (default: \$CLAUDE_LLM_MODE or 'best-cloud')
@@ -94,6 +98,23 @@ if (!configPath) {
   process.exit(1);
 }
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+// --vision-capable branch: print whether a concrete model tag accepts image/document
+// input, honoring this config's `vision_capable_models` override. Single source of
+// truth — the validator and proxy import the same isVisionCapable. Used by the
+// c-thru launch system-prompt builder to decide whether to emit the "use the vision
+// agent" image-handling directive.
+if (args['vision-capable'] !== undefined) {
+  const model = args['vision-capable'];
+  if (model === true || typeof model !== 'string' || !model.trim()) {
+    console.error('explain: --vision-capable requires a model argument (try --help)');
+    process.exit(1);
+  }
+  // Output a bare true/false so bash can test it directly: [[ "$(…)" == "true" ]].
+  // Use process.stdout.write(String(...)) to avoid FORCE_COLOR ANSI contamination.
+  process.stdout.write(String(isVisionCapable(model, config)) + '\n');
+  process.exit(0);
+}
 
 // benchmark.json is optional (only needed for ranking modes)
 let benchmark = null;
@@ -209,11 +230,19 @@ if (args.all) {
     const base   = sig ? sig[1] : model;
     const sigilEp = sig ? sig[2] : null;
 
-    // Backend lookup via model_routes
+    // Backend lookup via the same latest_models + model_routes chain as the
+    // live launcher/proxy. JSON output must report a concrete served model.
     let epId = sigilEp;
+    let servedModel = expandLatestModel(base, config.latest_models) || base;
     if (!epId) {
-      const resolvedRoute = resolveModelRoute(base, { routes: config.model_routes || {}, endpoints: epMap, mode: theMode });
+      const resolvedRoute = resolveModelRoute(base, {
+        routes: config.model_routes || {},
+        endpoints: epMap,
+        mode: theMode,
+        latest_models: config.latest_models,
+      });
       epId = resolvedRoute?.endpointId ?? null;
+      servedModel = resolvedRoute?.servedBy || servedModel;
     }
 
     const ep      = epId ? epMap[epId] : null;
@@ -230,7 +259,7 @@ if (args.all) {
 
     results.push({
       capability:        cap,
-      model:             base,
+      model:             servedModel,
       endpoint_id:       epId ?? null,
       endpoint_url:      epUrl,
       endpoint_cli_host: cliHost,
@@ -512,19 +541,27 @@ if (isGovMode(mode, config) && slotPick) {
   }
 }
 
-// 4. Backend
-console.log('');
-header('Final routing');
-line('served_by', final || '(null)',
-  final ? (govFallbackUsed ? 'concrete model the proxy will forward to (primary gov-blocked)'
-                           : 'concrete model the proxy will forward to')
-        : 'concrete model the proxy will forward to');
+// 3/4. Moving alias + backend
 const endpointsMap = config.endpoints || config.backends || {};
 const routeResolution = final ? resolveModelRoute(final, {
   routes: config.model_routes || {},
   endpoints: endpointsMap,
   mode,
+  latest_models: config.latest_models,
 }) : null;
+if (routeResolution?.expandedFromLatest) {
+  const latestStep = (isGovMode(mode, config) && slotPick) ? 3 : 2;
+  line(`${latestStep}. latest_models`, `${final} → ${routeResolution.expandedFromLatest}`,
+    'moving alias expanded before backend lookup');
+}
+const servedBy = final ? (routeResolution?.servedBy || final) : null;
+
+console.log('');
+header('Final routing');
+line('served_by', servedBy || '(null)',
+  servedBy ? (govFallbackUsed ? 'concrete model the proxy will forward to (primary gov-blocked)'
+                              : 'concrete model the proxy will forward to')
+           : 'concrete model the proxy will forward to');
 let realBackendId = routeResolution?.endpointId;
 let backend = realBackendId ? endpointsMap[realBackendId] : null;
 if (realBackendId) line('backend_id', realBackendId);

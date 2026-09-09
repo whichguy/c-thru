@@ -5,12 +5,17 @@
 # only ever reports THIS session's own events, not another session's on a
 # shared proxy).
 #
-# Events reported (priority: brand hard-fail > successful cascade):
+# Events reported (priority: brand hard-fail > successful cascade > vision drop):
 #   1. fallback_suppressed / on_failure=hard_fail with !ok — brand/model pin
 #      failed without substitute (e.g. xAI 403 credits). Message names the
 #      agent and status class (billing/auth vs error), never "primary unreachable".
 #   2. fallback_from set with ok — cascade substitution; does not claim
 #      "unreachable" for every case (primary may have been 403/429).
+#   3. vision_unsupported — image/document input was sent to a text-only final
+#      model and was likely dropped (silent drop on a 2xx success). Names
+#      served_by and directs to the `vision` agent (or flags a text-only
+#      vision/pdf agent as a misconfig). Lowest priority — only fires when no
+#      harder routing event was observed this scan.
 #
 # Always exits 0 — this hook must never interrupt Claude's normal flow.
 set +e
@@ -70,6 +75,18 @@ if [ -z "$event_entry" ] || [ "$event_entry" = "null" ]; then
   ' 2>/dev/null)
   event_kind="fallback"
 fi
+# C39: image/document input sent to a text-only final model (silent drop). Lowest
+# priority — surfaces only when there is no harder routing event (hard_fail /
+# fallback) this scan. Independent of .ok/.status: a 2xx success that dropped an
+# image must surface (the whole point — the model answered around the image).
+if [ -z "$event_entry" ] || [ "$event_entry" = "null" ]; then
+  event_entry=$(printf '%s' "$recent_json" | jq -c '
+    (.requests // [])
+    | map(select(.vision_unsupported == true))
+    | .[0]
+  ' 2>/dev/null)
+  event_kind="vision"
+fi
 [ -n "$event_entry" ] && [ "$event_entry" != "null" ] || exit 0
 
 ts_iso=$(printf '%s' "$event_entry" | jq -r '.ts // empty' 2>/dev/null)
@@ -110,6 +127,18 @@ if [ "$event_kind" = "hard_fail" ]; then
     *)   class="HTTP ${status:-error} — cascade suppressed (brand/model pin hard_fail)" ;;
   esac
   msg="c-thru: brand/model pin '${who}' failed (${class}). No substitute was used. Fix the primary backend; do not invent that brand's answer."
+elif [ "$event_kind" = "vision" ]; then
+  # C39: a text-only model dropped image/document input. If the request was
+  # already to the vision/pdf agent, the agent's own model is text-only
+  # (misconfig — the config-time warn flags it); otherwise the user sent an
+  # image to a non-vision model and should delegate to the vision agent.
+  [ -n "$served_by" ] || exit 0
+  cap=$(printf '%s' "$event_entry" | jq -r '.capability // empty' 2>/dev/null)
+  if [ "$cap" = "vision" ] || [ "$cap" = "pdf" ]; then
+    msg="c-thru: image/document input was sent to the ${cap} agent's text-only model '${served_by}' and was likely dropped. Set a multimodal model for the ${cap} capability (the config-time warn flags this)."
+  else
+    msg="c-thru: image input was sent to text-only model '${served_by}' and was likely dropped. Use the \`vision\` agent for images, screenshots, or diagrams."
+  fi
 else
   [ -n "$served_by" ] || exit 0
   agent_note=""

@@ -11,6 +11,7 @@ const fs   = require('fs');
 const path = require('path');
 const {
   resolveProfileModel,
+  expandLatestModel,
   isChineseOrigin,
   LLM_MODE_ENUM,
 } = require('../tools/model-map-resolve.js');
@@ -37,8 +38,12 @@ console.log('1. best-cloud: planner resolves to claude-* at 64gb+ tiers');
   for (const tier of ['64gb', '128gb']) {
     const entry = profiles.planner;
     const model = resolveProfileModel(entry, tier, 'best-cloud');
-    assert(typeof model === 'string' && /^claude-/.test(model),
-      `planner best-cloud ${tier} → claude-* (got ${model})`);
+    // Cells may hold a moving shorthand (e.g. `fable`) that the proxy expands
+    // through latest_models at request time — mirror that here so the matrix
+    // asserts the concrete model a request would actually be served.
+    const expanded = expandLatestModel(model, shipped.latest_models) || model;
+    assert(typeof expanded === 'string' && /^claude-/.test(expanded),
+      `planner best-cloud ${tier} → claude-* (got ${expanded})`);
   }
 }
 

@@ -39,7 +39,7 @@ catch-all even when a Gemini backend is present).
 | **Anthropic** | `call_style: "anthropic"` (default), `endpoints.anthropic`, OpenRouter, etc. |
 | **Gemini** | `call_style: "gemini"` (Google AI Studio + Vertex). Translated by `forwardGemini`. |
 | **Ollama** | `kind: "ollama"` or `localhost:11434`. Default path is `forwardAnthropic` to Ollama's `/v1/messages` adapter (Ollama 0.4+); `legacy_ollama_chat: true` opts into `forwardOllamaLegacy` (`/api/chat`). |
-| **xAI (Grok)** | `endpoints.xai` — `format: "openai"` routes through the shared Responses translator to `https://api.x.ai/v1/responses`. This replaces xAI's fully deprecated Anthropic-compatible `/v1/messages` surface. Routes `grok`, `grok-4.5`, `grok-build`, and `grok-build-latest` resolve to `grok-4.5`; the latter two name the API model route, not the subscription CLI. xAI's documented nested named-function `tool_choice` is isolated from OpenAI Responses' flat selector. **Canary:** `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js`. Auth: `XAI_API_KEY` only (never Anthropic client keys or cached `grok login`). |
+| **xAI (Grok)** | `endpoints.xai` — `format: "openai"` routes through the shared Responses translator to `https://api.x.ai/v1/responses`. This replaces xAI's fully deprecated Anthropic-compatible `/v1/messages` surface. Moving routes `grok`, `grok-build`, and `grok-build-latest` resolve to `grok-4.6`; the exact `grok-4.5` leaf remains available as 4.5. The build routes name the API model path, not the subscription CLI. xAI's documented nested named-function `tool_choice` is isolated from OpenAI Responses' flat selector. **Canary:** `C_THRU_LIVE_XAI=1 node test/proxy-xai-live.test.js`. Auth: `XAI_API_KEY` only (never Anthropic client keys or cached `grok login`). |
 | **Responses (OpenAI / xAI)** | `call_style: "openai"` — shared Anthropic ↔ OpenAI-compatible Responses translation: typed text/image input, client function declarations and multi-turn `function_call` / `function_call_output`, incremental SSE, reasoning summaries, usage, Anthropic-valid refusal normalization, and explicit translation-gap reporting. |
 
 ---
@@ -194,7 +194,7 @@ is a separate concern handled by the Gemini, Responses, and Ollama adapters.
 | `document` (PDF) | ✅ | ✅ → `inlineData` / `fileData` (PDF mime) | ✅ (forwarded) | ⚠️ flattened | 🚫 dropped; `x-c-thru-translation-gap` |
 | `tool_use` | ✅ | ✅ → `functionCall` (with `thoughtSignature` for Gemini 3+) | ✅ | 🚫 stripped | ✅ assistant history → `function_call`, preserving order and parallel call IDs |
 | `tool_result` | ✅ | ✅ → `functionResponse` (`is_error` wrapped in `.error`) | ✅ | 🚫 stripped | ⚠️ user history → `function_call_output`; text/base64-image content retained, but `is_error` is an explicit gap |
-| `thinking` | ✅ | ✅ → `parts[].thought:true` (+ `thoughtSignature`) | ✅ | 🚫 stripped | ⚠️ `enabled` budget is approximated by low/medium/high effort; `adaptive` maps effort but records its non-equivalence; xAI `disabled` becomes the nearest low-effort setting because Grok 4.5 cannot disable reasoning. Provider encrypted reasoning is replayed from a privacy-scoped cache bounded by TTL, entry count, per-item bytes, and aggregate bytes. |
+| `thinking` | ✅ | ✅ → `parts[].thought:true` (+ `thoughtSignature`) | ✅ | 🚫 stripped | ⚠️ `enabled` budget is approximated by low/medium/high effort; `adaptive` maps effort but records its non-equivalence; xAI `disabled` becomes the nearest low-effort setting because the current xAI Responses surface cannot disable reasoning. Provider encrypted reasoning is replayed from a privacy-scoped cache bounded by TTL, entry count, per-item bytes, and aggregate bytes. |
 | `redacted_thinking` | ✅ | 🚫 dropped (Gemini cannot decrypt; surfaced via `x-c-thru-redacted-thinking-dropped` + `x-c-thru-translation-gap`) | ✅ | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
 | `server_tool_use` | ✅ | 🚫 dropped (Gemini grounding has different lifecycle; gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
 | `web_search_tool_result` | ✅ | 🚫 dropped (gap header) | ⚠️ unknown | 🚫 stripped | 🚫 dropped; `x-c-thru-translation-gap` |
@@ -224,8 +224,8 @@ Client-tool policy remains request-scoped: Anthropic
 records `tool.strict` when Anthropic omits strictness, and records
 `tool.strict:false` for an explicit non-strict request because xAI cannot
 provide either best-effort behavior. Generic Responses preserves all current
-Anthropic effort levels (`low`, `medium`, `high`, `xhigh`, and `max`); Grok 4.5
-accepts only `low`/`medium`/`high`, so xAI clamps higher values to `high` and
+Anthropic effort levels (`low`, `medium`, `high`, `xhigh`, and `max`); the current
+xAI Responses surface accepts only `low`/`medium`/`high`, so xAI clamps higher values to `high` and
 records `output_config.effort`. Gemini 3 maps effort to the closest supported
 `thinkingLevel`; Gemini 2.5 maps it to an approximate numeric `thinkingBudget`
 and records `output_config.effort` because that conversion is not exact.

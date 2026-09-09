@@ -279,8 +279,8 @@ console.log('\n11. Pinned-model regression guard — shipped config key triples'
 
   const pins = [
     // Cloud planner pins intentionally route through the claude-* regex route.
-    { cap: 'planner',      tier: '64gb',  mode: 'best-cloud',     want: 'claude-fable-5' },
-    { cap: 'planner',      tier: '128gb', mode: 'best-cloud',     want: 'claude-fable-5' },
+    { cap: 'planner',      tier: '64gb',  mode: 'best-cloud',     want: 'claude-fable-5-1' },
+    { cap: 'planner',      tier: '128gb', mode: 'best-cloud',     want: 'claude-fable-5-1' },
     { cap: 'planner-hard', tier: '128gb', mode: 'best-cloud',     want: 'grok-4.6' },
     // fast-scout is always the small local model regardless of mode
     { cap: 'fast-scout',   tier: '64gb',  mode: 'best-cloud',     want: 'phi4-mini:3.8b'   },

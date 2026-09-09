@@ -36,7 +36,7 @@ the actual hardware or an explicit override.
 | `x-c-thru-agent-identity` | Every routed Messages request | How agent identity was obtained: `sentinel` (signed prompt marker), `header` (signed c-thru agent headers), or `none` | Yes |
 | `x-c-thru-resolution-chain` | Route resolved through ≥1 hop | ` -> `-joined chain like `req:claude-sonnet-5 -> route(claude-sonnet-5->anthropic)` | Yes |
 | `x-c-thru-resolved-via` | Capability-driven request (e.g. agent uses `model: planner`) | JSON with `capability`, `served_by`, `tier`, `mode`, `latency_ms`, and `local_terminal_appended`; trusted agent requests also include `agent` | Yes |
-| `x-c-thru-fallback-from` | Primary route failed and fallback chain matched | Backend ID that failed before the successful fallback dispatch | Yes |
+| `x-c-thru-fallback-from` | Primary route failed and **any** fallback fired — per-backend `fallback_to` chain, local-terminal, or the system-wide `routes.default` last resort | Backend ID that failed before the successful fallback dispatch | Yes |
 | `x-c-thru-deprecated-model` | Resolved model is in built-in deprecation list or `deprecated_models` config | Migration advice string (e.g. `use gemini-pro-latest (gemini-1.5-* deprecated 2025-09)`) | Yes |
 | `x-c-thru-count-tokens` | `/v1/messages/count_tokens` short-circuited by proxy (Ollama backends) | `estimate` — proxy-side heuristic, not an exact count | No |
 
@@ -57,6 +57,7 @@ the actual hardware or an explicit override.
 | `x-c-thru-beta-dropped` | Request had `anthropic-beta` header tokens that Gemini can't honor | Comma-list of dropped tokens (`prompt-caching-2024-07-31,computer-use-2024-10-22`) | Yes |
 | `x-c-thru-passthrough` | Response was produced by the Anthropic catch-all forwarder (`forwardToAnthropicCatchAll`) — no proxy translation, body piped verbatim from upstream | `1` | Yes |
 | `x-c-thru-passthrough-host` | Set alongside `x-c-thru-passthrough` | Hostname of the upstream the request was forwarded to (e.g. `api.anthropic.com`). Lets clients distinguish proxy-translated from catch-all-forwarded responses without log diving. | Yes |
+| `x-c-thru-vision-unsupported` | The Messages body carried an `image` or `document` content block (anywhere in `messages[].content`, incl. nested `tool_result.content`, or the `system` array) AND the **final** served model is text-only | The concrete text-only model name that served (post-fallback, so the signal keys on the model that actually answered — no false positive on a capable fallback, no false negative on a text-only fallback). The model will have answered around the dropped image; this header + the stop-hook prose are the reactive backstop to the proactive `--append-system-prompt` image-handling directive. Fired for ANY capability: a text-only default/coder dropping a screenshot is the "use the `vision` agent" case; a text-only `vision`/`pdf` agent is a misconfig the config-time warn also flags. See `vision_capable_models` / `isVisionCapable`. | Yes |
 
 ## Thinking observability (Gemini ↔ Anthropic)
 

@@ -44,7 +44,7 @@ CLAUDE_LLM_MEMORY_GB=48 c-thru list
 ```
 coder
   → agent_to_capability["coder"] = "coder"
-  → llm_profiles["coder"]["best-cloud"]["128gb"] = "gemini-pro"
+  → llm_profiles["coder"]["best-cloud-oss"]["128gb"] = "kimi-k3:cloud"
 ```
 
 (Confirmed against the shipped `config/model-map.json`; check README's Agent routing

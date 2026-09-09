@@ -3,8 +3,13 @@
 #
 # Styles (C_THRU_STATUSLINE_STYLE or durable ~/.claude/c-thru-statusline.json):
 #   minimal — model | cwd
-#   default — + last served/tokens + fallback + dash  (GET /c-thru/recent)
-#   stats   — + mode|tier + Σ window totals          (GET /c-thru/statusline)
+#   default — + ctx window + last served/tokens + fallback + dash  (GET /c-thru/recent)
+#   stats   — + ctx window + mode|tier + Σ window totals          (GET /c-thru/statusline)
+#
+# The `ctx` chip renders the prompt model's real context window from the
+# model-map's static `context_windows` map (via CLAUDE_MODEL_MAP_PATH). Claude
+# Code's own .context_window.context_window_size is binary (200k/1M), so it is
+# not used. Omitted for claude-* / unknown models and in minimal style.
 #
 # Dual scope (stats style): last hop / fallback follow the session-scoped base
 # URL (/s/<id>/…) when set; Σ / usage_window is always the machine-wide
@@ -47,6 +52,28 @@ _fmt_tok() {
   else
     printf '%s' "$n"
   fi
+}
+
+# Resolve the prompt model's real context-window token count from the model-map's
+# static `context_windows` map. Claude Code's own .context_window.context_window_size
+# is binary (200000 default / 1000000 "extended context"), so it does not reflect
+# the actual window of a non-Anthropic model — read the real number from config.
+# Prints the token count, or nothing when unknown (claude-* / no config / no entry).
+_resolve_ctx_window() {
+  local m="$1"
+  [[ -n "$m" ]] || return 0
+  m="${m%%@*}"                       # strip a @backend sigil (model@backend → model)
+  [[ "$m" == claude-* ]] && return 0 # Claude Code knows native windows; no chip
+  local cfg=""
+  if [[ -n "${CLAUDE_MODEL_MAP_PATH:-}" && -f "$CLAUDE_MODEL_MAP_PATH" ]]; then
+    cfg="$CLAUDE_MODEL_MAP_PATH"
+  else
+    local prof_dir="${CLAUDE_PROFILE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
+    [[ -f "$prof_dir/model-map.json" ]] && cfg="$prof_dir/model-map.json"
+  fi
+  [[ -n "$cfg" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r --arg m "$m" '(.context_windows // {})[$m] // empty' "$cfg" 2>/dev/null
 }
 
 # Display form for Ollama tags. Keep name:tag, but drop a leading YYYY
@@ -136,6 +163,14 @@ if [[ "${C_THRU_STATUSLINE_OVERLAY:-1}" == "0" ]]; then
 fi
 
 extra=""
+# Context-window chip (real window from the model-map's context_windows) —
+# non-minimal styles only. Omitted when the model is claude-* or has no entry.
+if [[ "$_style" != "minimal" ]]; then
+  ctx="$(_resolve_ctx_window "$model")"
+  if [[ "$ctx" =~ ^[0-9]+$ ]] && (( ctx > 0 )); then
+    extra+=" | ctx $(_fmt_tok "$ctx")"
+  fi
+fi
 if [[ "$_style" != "minimal" ]] && command -v jq >/dev/null 2>&1; then
   BASE_URL=""
   PORT=""

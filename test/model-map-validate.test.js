@@ -8,6 +8,13 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 const { validateConfig } = require('../tools/model-map-validate.js');
 
+// The validator session-dedupes warnings when C_THRU_SESSION_ID is set (c-thru
+// exports it as $$). This test asserts on warning emission, so it must run
+// dedupe-free — otherwise a stamp file accumulated by earlier validator runs in
+// the same session suppresses the very warnings under test (spurious failures
+// when `make test` runs from inside a c-thru session). Unset before any call.
+delete process.env.C_THRU_SESSION_ID;
+
 let passed = 0;
 let failed = 0;
 
@@ -977,6 +984,291 @@ console.log('\nC38: deprecated_models validation');
     });
     assert(errs.some(e => e.includes("'deprecated_models.gemini-1.5-pro' must be a non-empty string")),
       `non-string/non-boolean advice value is rejected (got: ${errs.join('; ') || 'none'})`);
+  }
+}
+
+// ── C39: vision/pdf modality guard (text-only model in a multimodal cell) ────
+// The guard warns when a vision/pdf capability cell routes to a text-only model
+// (image/document input would be silently dropped). Not reachability-scoped
+// (fires for all modes, like the gov-safety block). Skips @backend-sigil cells,
+// :TODO placeholders, strips a `model:` pin and a `model@backend` suffix before
+// consulting isVisionCapable. Coder/generalist text-only cells are SILENT — the
+// guard is vision/pdf-scoped.
+console.log('\nC39: vision/pdf modality guard');
+{
+  // (a) vision cell → text-only concrete model → warns (image modality)
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'glm-5.2:cloud': 'local' },
+      llm_profiles: { vision: { 'best-cloud': { '64gb': 'glm-5.2:cloud' } } },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    const errs = validate(cfg);
+    console.warn = origWarn;
+    assert(errs.length === 0, `text-only vision model → warning, not error (got: ${errs.join('; ') || 'none'})`);
+    assert(warnMessages.some(m => m.includes('llm_profiles.vision.best-cloud') && m.includes("text-only model 'glm-5.2:cloud'") && m.includes('image input will be silently dropped')),
+      `text-only vision cell warns with image modality (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+
+  // (b) vision cell → vision-capable model (qwen3-vl:8b) → silent
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'qwen3-vl:8b': 'local' },
+      llm_profiles: { vision: { 'best-cloud': { '64gb': 'qwen3-vl:8b' } } },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    validate(cfg);
+    console.warn = origWarn;
+    assert(!warnMessages.some(m => m.includes('vision-capable') || m.includes('text-only model')),
+      `vision-capable model in vision cell is silent (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+
+  // (c) coder cell → text-only model → SILENT (guard is vision/pdf-scoped)
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'glm-5.2:cloud': 'local' },
+      llm_profiles: { coder: { 'best-cloud': { '64gb': 'glm-5.2:cloud' } } },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    validate(cfg);
+    console.warn = origWarn;
+    assert(!warnMessages.some(m => m.includes('text-only model')),
+      `text-only model in a coder cell is silent (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+
+  // (d) `model:qwen3-vl:8b` pin → prefix stripped → vision-capable → silent
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'qwen3-vl:8b': 'local' },
+      llm_profiles: { vision: { 'best-cloud': { '64gb': 'model:qwen3-vl:8b' } } },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    validate(cfg);
+    console.warn = origWarn;
+    assert(!warnMessages.some(m => m.includes('text-only model')),
+      `model: pin on a vision-capable model is silent after prefix strip (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+
+  // (e) `qwen3-vl:8b@local` sigil → @backend suffix stripped → model part is vision-capable → silent
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'qwen3-vl:8b': 'local' },
+      llm_profiles: { vision: { 'best-cloud': { '64gb': 'qwen3-vl:8b@local' } } },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    validate(cfg);
+    console.warn = origWarn;
+    assert(!warnMessages.some(m => m.includes('text-only model') && m.includes('qwen3-vl:8b@local')),
+      `model@backend sigil with vision-capable base is silent (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+
+  // (f) bare `@local` sigil → skipped (runtime-determined) → silent
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'qwen3-vl:8b': 'local' },
+      llm_profiles: { vision: { 'best-cloud': { '64gb': '@local' } } },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    validate(cfg);
+    console.warn = origWarn;
+    assert(!warnMessages.some(m => m.includes('text-only model')),
+      `bare @backend sigil is skipped (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+
+  // (g) pdf cell → text-only model → warns (document modality, not image)
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'phi4-mini:3.8b': 'local' },
+      llm_profiles: { pdf: { 'best-cloud': { '64gb': 'phi4-mini:3.8b' } } },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    validate(cfg);
+    console.warn = origWarn;
+    assert(warnMessages.some(m => m.includes('llm_profiles.pdf.best-cloud') && m.includes("text-only model 'phi4-mini:3.8b'") && m.includes('document input will be silently dropped')),
+      `text-only pdf cell warns with document modality (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+
+  // (h) vision_capable_models override { "glm-5.2:cloud": true } → force-adds → silent
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'glm-5.2:cloud': 'local' },
+      llm_profiles: { vision: { 'best-cloud': { '64gb': 'glm-5.2:cloud' } } },
+      vision_capable_models: { 'glm-5.2:cloud': true },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    validate(cfg);
+    console.warn = origWarn;
+    assert(!warnMessages.some(m => m.includes("text-only model 'glm-5.2:cloud'")),
+      `vision_capable_models=true force-adds a text-only-looking tag → silent (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+
+  // (i) vision_capable_models override { "qwen3-vl:8b": false } → force-removes → warns
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: { 'qwen3-vl:8b': 'local' },
+      llm_profiles: { vision: { 'best-cloud': { '64gb': 'qwen3-vl:8b' } } },
+      vision_capable_models: { 'qwen3-vl:8b': false },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    validate(cfg);
+    console.warn = origWarn;
+    assert(warnMessages.some(m => m.includes("text-only model 'qwen3-vl:8b'")),
+      `vision_capable_models=false force-removes a built-in entry → warns (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+
+  // (j) :TODO placeholder → skipped → silent
+  {
+    const cfg = {
+      backends: { local: { kind: 'ollama', url: 'http://localhost:11434' } },
+      model_routes: {},
+      llm_profiles: { vision: { 'best-cloud': { '64gb': 'vl-model:TODO' } } },
+      llm_mode: 'best-cloud',
+    };
+    const warnMessages = [];
+    const origWarn = console.warn;
+    console.warn = msg => warnMessages.push(msg);
+    validate(cfg);
+    console.warn = origWarn;
+    assert(!warnMessages.some(m => m.includes('text-only model') && m.includes(':TODO')),
+      `:TODO placeholder is skipped by the modality guard (got: ${warnMessages.join(' | ') || 'none'})`);
+  }
+}
+
+// ── C39b: vision_capable_models schema (mirror C38 deprecated_models) ──────
+console.log('\nC39b: vision_capable_models schema');
+{
+  // (a) non-object → error
+  {
+    const errs = validate({ llm_mode: 'best-cloud', vision_capable_models: 'not-an-object' });
+    assert(errs.some(e => e.includes("'vision_capable_models' must be an object")),
+      `non-object vision_capable_models is rejected (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (b) boolean true (force-add) → no error
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      vision_capable_models: { 'some-text-only-tag': true },
+    });
+    assert(!errs.some(e => e.includes('vision_capable_models')),
+      `boolean true value passes (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (c) boolean false (force-remove) → no error
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      vision_capable_models: { 'claude-sonnet-5': false },
+    });
+    assert(!errs.some(e => e.includes('vision_capable_models')),
+      `boolean false value passes (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (d) string value → error (must be boolean)
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      vision_capable_models: { 'some-tag': 'true' },
+    });
+    assert(errs.some(e => e.includes("'vision_capable_models.some-tag' must be a boolean")),
+      `string value is rejected (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (e) number value → error
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      vision_capable_models: { 'some-tag': 1 },
+    });
+    assert(errs.some(e => e.includes("'vision_capable_models.some-tag' must be a boolean")),
+      `number value is rejected (got: ${errs.join('; ') || 'none'})`);
+  }
+}
+
+// ── C39c: context_windows schema ───────────────────────────────────────────
+console.log('\nC39c: context_windows schema');
+{
+  // (a) non-object → error
+  {
+    const errs = validate({ llm_mode: 'best-cloud', context_windows: 'not-an-object' });
+    assert(errs.some(e => e.includes("'context_windows' must be an object")),
+      `non-object context_windows is rejected (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (b) positive integer → no error
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      context_windows: { 'deepseek-v4-flash:0731-cloud': 1048576 },
+    });
+    assert(!errs.some(e => e.includes('context_windows')),
+      `positive integer value passes (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (c) zero → error
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      context_windows: { 'some-tag': 0 },
+    });
+    assert(errs.some(e => e.includes("'context_windows.some-tag' must be a positive integer")),
+      `zero value is rejected (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (d) string value → error (must be integer)
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      context_windows: { 'some-tag': '1048576' },
+    });
+    assert(errs.some(e => e.includes("'context_windows.some-tag' must be a positive integer")),
+      `string value is rejected (got: ${errs.join('; ') || 'none'})`);
+  }
+
+  // (e) negative integer → error
+  {
+    const errs = validate({
+      llm_mode: 'best-cloud',
+      context_windows: { 'some-tag': -1 },
+    });
+    assert(errs.some(e => e.includes("'context_windows.some-tag' must be a positive integer")),
+      `negative value is rejected (got: ${errs.join('; ') || 'none'})`);
   }
 }
 

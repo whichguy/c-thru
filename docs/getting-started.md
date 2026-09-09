@@ -20,7 +20,8 @@ c-thru intercepts that conversation, picks a concrete model based on what the
 request is *for* and how much machine you have, translates the wire format
 when the backend isn't Anthropic-native, and forwards everything else
 verbatim. One session can run a planner against cloud Sonnet and a coder
-against a local Qwen3.6, with no change to the `claude` binary.
+against a local Qwen3.8 on a 32 GB-or-larger host (or Qwen3 8B on a 16 GB host),
+with no change to the `claude` binary.
 
 Two components do all the work, and both live in `tools/`:
 
@@ -199,8 +200,8 @@ order:
    API call, the proxy maps the request's logical capability to a concrete
    model. The resolution chain is:
    `agent-name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model`.
-   So a `coder` agent call becomes the `coder` capability, which at
-   `best-cloud` / `64gb` resolves to `gemini-pro` on the `gemini_ai`
+   So a `coder` agent call becomes the `coder` capability, which at the default
+   `best-cloud-oss` / `64gb` resolves to `kimi-k3:cloud` on the `ollama_cloud`
    endpoint (per the generated routing table in the README). The proxy
    rewrites the model field, URL, and auth headers, translates the wire
    format if the backend needs it, and forwards.

@@ -4,7 +4,7 @@ Loaded automatically when working with files under `agents/`. Root `CLAUDE.md` c
 
 ### Pipeline agents (13 + 10 utility + brand leaves from catalog)
 
-The agent fleet uses an identity mapping for most role agents: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. Three role exceptions alias to a different capability: `reviewer-plan` → `code-reviewer`, `plan-scheduler` → `fast-generalist`, `advisors` → `planner-hard`. Generated brand leaves from `config/brand-agents.json` instead pin directly to vendor models through `model:` mappings; primary shorthands include `grok`, `deepseek`, `qwen`, `kimi`, and `gemini` (see `docs/agent-architecture.md`).
+The agent fleet uses an identity mapping for most role agents: each agent's `model` frontmatter field equals its capability key in `agent_to_capability`, which equals its key in `llm_profiles`. Three role exceptions alias to a different capability: `plan-reviewer` → `code-reviewer`, `plan-scheduler` → `fast-generalist`, `advisors` → `planner-hard`. Generated brand leaves from `config/brand-agents.json` instead pin directly to vendor models through `model:` mappings; primary shorthands include `grok`, `deepseek`, `qwen`, `kimi`, and `gemini` (see `docs/agent-architecture.md`).
 
 **Delivery:** fleet definitions are repo `agents/*.md`, runtime-injected each `c-thru` launch as ephemeral `--agents` JSON — never installed into Claude's durable agent store (`~/.claude/agents/`).
 
@@ -24,7 +24,7 @@ tier_budget values are hand-copied from each `agents/*.md` frontmatter — updat
 | `tester` | 10000 |
 | `docs` | 10000 |
 | `code-reviewer` | 50000 |
-| `reviewer-plan` | 50000 |
+| `plan-reviewer` | 50000 |
 | `reviewer-security` | 999999 |
 | `debugger-hypothesis` | 50000 |
 | `debugger-investigate` | 50000 |
@@ -37,7 +37,7 @@ tier_budget values are hand-copied from each `agents/*.md` frontmatter — updat
 | `vision` | Image/screenshot analysis |
 | `pdf` | PDF reading and extraction |
 | `writer` | Long-form prose |
-| `edge` | Minimal-footprint tasks |
+| `microtask` | Minimal-footprint tasks |
 | `generalist` | General-purpose |
 | `fast-generalist` | Fast/cheap background work |
 | `fast-scout` | Latency-optimized search |
@@ -82,5 +82,7 @@ See docs/agent-architecture.md for agent_to_capability traversal and identity ma
 ### Model tags
 
 Current cloud-OSS tags via Ollama Cloud: `deepseek-v4-pro:cloud`,
-`deepseek-v4-flash:cloud`, `kimi-k3:cloud`, and `glm-5.2:cloud`.
+`deepseek-v4-flash:0731-cloud`, `kimi-k3:cloud`, `glm-5.3:cloud`, and `glm-5.3-flash:cloud`.
+The legacy `deepseek-v4-flash:cloud` tag remains available for the explicit
+`deepseek-v4-flash-cloud` leaf and the existing coder-fallback route.
 Local Ollama tags are injected dynamically by the SessionStart hook (`ollama list`).

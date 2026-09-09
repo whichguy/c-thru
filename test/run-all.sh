@@ -858,6 +858,8 @@ run_suite "model-map-config-project-overlay" \
   node "$REPO_DIR/test/model-map-config-project-overlay.test.js"
 run_suite "proxy-runtime-fallback (fallback chains, cycle detection)" \
   node "$REPO_DIR/test/proxy-runtime-fallback.test.js"
+run_suite "background-model-overrides (ANTHROPIC_DEFAULT_* slot pins vs. shipped map)" \
+  node "$REPO_DIR/test/background-model-overrides.test.js"
 run_suite "capability-alias-resolve (2-hop agent→capability)" \
   node "$REPO_DIR/test/capability-alias-resolve.test.js"
 run_suite "gen-brand-agents-ownership (generated-leaf ownership + safe stale pruning)" \
@@ -904,6 +906,8 @@ run_suite "llm-mode-resolution-matrix (16-mode matrix)" \
   node "$REPO_DIR/test/llm-mode-resolution-matrix.test.js"
 run_suite "resolve-capability (capability alias graph)" \
   node "$REPO_DIR/test/resolve-capability.test.js"
+run_suite "context-window-resolve (context_windows lookup + model_overrides)" \
+  node "$REPO_DIR/test/context-window-resolve.test.js"
 run_suite "model-map-filter (mode-based filtering)" \
   node "$REPO_DIR/test/model-map-filter.test.js"
 run_suite "model-map-ranking (quality-score ranking)" \
@@ -1010,6 +1014,8 @@ run_suite "proxy-e2e (end-to-end proxy request flow)" \
   node "$REPO_DIR/test/proxy-e2e.test.js"
 run_suite "proxy-fallback-cascade (fallback chain cascade)" \
   node "$REPO_DIR/test/proxy-fallback-cascade.test.js"
+run_suite "proxy-vision-unsupported (image drop header + ring, post-fallback stamp)" \
+  node "$REPO_DIR/test/proxy-vision-unsupported.test.js"
 run_suite "proxy-form-factor (form factor detection)" \
   node "$REPO_DIR/test/proxy-form-factor.test.js"
 run_suite "proxy-journal (journaling JSONL output)" \

@@ -101,11 +101,12 @@ async function geminiStub() {
   };
 }
 
-function bodyWithAgent(agentName) {
+function bodyWithAgent(agentName, effort) {
   return Object.assign({}, MSG, {
     // Hook injects a Claude-Code-valid alias; proxy must ignore it when sentinel present.
     model: 'sonnet',
     messages: [{ role: 'user', content: `${formatAgentSentinel(agentName, SENTINEL_SECRET)}\nping` }],
+    ...(effort ? { output_config: { effort } } : {}),
   });
 }
 
@@ -115,9 +116,9 @@ async function main() {
   // ── 1. Mixed-format brands (xAI Responses, Ollama Messages) ─────────────
   console.log('1. brand agents reach their concrete model and wire translator');
   {
-    const xai = await stubBackend({ response: responsesOk('grok-4.5') });
+    const xai = await stubBackend({ response: responsesOk('grok-4.6') });
     const ollamaCloud = await stubBackend({ response: anthropicOk('deepseek-v4-pro:cloud') });
-    const ollamaLocal = await stubBackend({ response: anthropicOk('qwen3.6:35b') });
+    const ollamaLocal = await stubBackend({ response: anthropicOk('qwen3.8:27b-mlx') });
     const anthropic = await stubBackend({ responseBody: anthropicOk('claude-sonnet-5') });
 
     const config = {
@@ -145,21 +146,24 @@ async function main() {
         },
       },
       model_routes: {
-        // Mirror shipped brand pins
-        grok: { endpoint: 'xai', name: 'grok-4.5' },
-        'grok-4.5': 'xai',
+        // Mirror shipped concrete endpoints; moving brands expand via latest_models.
+        'grok-4.6': 'xai',
         'deepseek-v4-pro:cloud': 'ollama_cloud',
         'kimi-k3:cloud': 'ollama_cloud',
-        'qwen3.6:35b': 'ollama_local',
-        // sonnet would go anthropic if sentinel lost
-        sonnet: { endpoint: 'anthropic', name: 'claude-sonnet-5' },
+        'qwen3.8:27b-mlx': 'ollama_local',
+        'claude-sonnet-5': 'anthropic',
+      },
+      latest_models: {
+        grok: 'grok-4.6',
+        qwen: 'qwen3.8:27b-mlx',
+        sonnet: 'claude-sonnet-5',
       },
       agent_to_capability: {
-        // Mirror shipped pins: agent name → model:<concrete>
-        grok: 'model:grok-4.5',
+        // Mirror shipped pins: moving agent names stay on their moving aliases.
+        grok: 'model:grok',
         deepseek: 'model:deepseek-v4-pro:cloud',
         kimi: 'model:kimi-k3:cloud',
-        qwen: 'model:qwen3.6:35b',
+        qwen: 'model:qwen',
       },
       llm_profiles: {},
       llm_mode: 'best-cloud-oss',
@@ -167,10 +171,10 @@ async function main() {
     const configPath = writeConfig(tmpDir, config);
 
     const cases = [
-      { agent: 'grok',     stub: xai,         wantModel: 'grok-4.5',               wantPath: '/v1/responses' },
+      { agent: 'grok',     stub: xai,         wantModel: 'grok-4.6',               wantPath: '/v1/responses' },
       { agent: 'deepseek', stub: ollamaCloud, wantModel: 'deepseek-v4-pro:cloud',  wantPath: '/v1/messages' },
       { agent: 'kimi',     stub: ollamaCloud, wantModel: 'kimi-k3:cloud',          wantPath: '/v1/messages' },
-      { agent: 'qwen',     stub: ollamaLocal, wantModel: 'qwen3.6:35b',            wantPath: '/v1/messages' },
+      { agent: 'qwen',     stub: ollamaLocal, wantModel: 'qwen3.8:27b-mlx',        wantPath: '/v1/messages', effort: 'high' },
     ];
 
     await withProxy(
@@ -190,7 +194,7 @@ async function main() {
             port,
             'POST',
             '/v1/messages',
-            bodyWithAgent(c.agent),
+            bodyWithAgent(c.agent, c.effort),
             SUBAGENT_HEADERS,
           );
           assertEq(res.status, 200, `${c.agent}: proxy 200`);
@@ -210,6 +214,12 @@ async function main() {
           // Sentinel stripped so upstream never sees routing metadata
           assert(req && req.body && !JSON.stringify(req.body).includes('[[c-thru-agent:'),
             `${c.agent}: sentinel stripped from upstream body`);
+          if (c.effort) {
+            assertEq(req?.body?.output_config?.effort, c.effort,
+              `${c.agent}: agent effort reaches the selected model over /v1/messages`);
+            assertEq(req?.body?.reasoning_effort, undefined,
+              `${c.agent}: OpenAI-only reasoning_effort is not added to Anthropic Messages`);
+          }
         }
 
         // Negative control: without a sentinel, sonnet must route to the
@@ -315,7 +325,7 @@ async function main() {
   // ── 3. Direct agent-name body.model (frontmatter model: identity) ───────
   console.log('\n3. body.model === agent name (no sentinel) still resolves');
   {
-    const xai = await stubBackend({ response: responsesOk('grok-4.5') });
+    const xai = await stubBackend({ response: responsesOk('grok-4.6') });
     const config = {
       endpoints: {
         xai: {
@@ -325,10 +335,10 @@ async function main() {
         },
       },
       model_routes: {
-        grok: { endpoint: 'xai', name: 'grok-4.5' },
-        'grok-4.5': 'xai',
+        'grok-4.6': 'xai',
       },
-      agent_to_capability: { grok: 'model:grok-4.5' },
+      latest_models: { grok: 'grok-4.6' },
+      agent_to_capability: { grok: 'model:grok' },
       llm_profiles: {},
       llm_mode: 'best-cloud-oss',
     };
@@ -342,9 +352,9 @@ async function main() {
           messages: [{ role: 'user', content: 'ping' }],
         });
         assertEq(res.status, 200, 'direct grok model: 200');
-        assertEq(res.headers['x-c-thru-served-by'], 'grok-4.5', 'direct grok → grok-4.5');
+        assertEq(res.headers['x-c-thru-served-by'], 'grok-4.6', 'direct grok → latest grok-4.6');
         const req = xai.lastRequest();
-        assertEq(req && req.model_used, 'grok-4.5', 'direct: upstream model');
+        assertEq(req && req.model_used, 'grok-4.6', 'direct: upstream model');
         assert(req && String(req.path).startsWith('/v1/responses'), 'direct: /v1/responses');
       }
     );

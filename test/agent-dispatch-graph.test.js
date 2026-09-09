@@ -23,8 +23,8 @@
 // mapping (or vice-versa) fails closed.
 //
 // This is the programmatic "the agents call the right agents which map to
-// models" guard. Reuses the same model-map-resolve.js exports and the
-// routeEndpointId pattern from agent-mapping-complete.test.js.
+// models" guard. Reuses the same model-map-resolve.js exports as the live
+// proxy, including moving `latest_models` aliases.
 //
 // Run: node test/agent-dispatch-graph.test.js
 
@@ -32,6 +32,7 @@ const fs   = require('fs');
 const path = require('path');
 const {
   resolveCapabilityAlias,
+  resolveModelRoute,
   resolveProfileModel,
   MODEL_PIN_PREFIX,
 } = require('../tools/model-map-resolve.js');
@@ -66,26 +67,6 @@ const ROUTES    = CONFIG.model_routes || {};
 const ENDPOINTS = CONFIG.endpoints || CONFIG.backends || {};
 const A2C       = CONFIG.agent_to_capability || {};
 
-// routeEndpointId — model name → endpoint id via model_routes (direct key, then
-// regex `re:` key), honoring an explicit @sigil endpoint pin. Mirrors the proxy
-// resolveBackend route lookup. Identical to agent-mapping-complete.test.js.
-function routeEndpointId(model) {
-  const sig = typeof model === 'string' ? model.match(/^(.+)@([A-Za-z0-9_-]+)$/) : null;
-  const base = sig ? sig[1] : model;
-  if (sig) return { base, endpointId: sig[2] };
-  let route = Object.prototype.hasOwnProperty.call(ROUTES, base) ? ROUTES[base] : undefined;
-  if (route === undefined) {
-    for (const k of Object.keys(ROUTES)) {
-      if (!k.startsWith('re:')) continue;
-      try { if (new RegExp(k.slice(3)).test(base)) { route = ROUTES[k]; break; } } catch {}
-    }
-  }
-  if (route === undefined) return { base, endpointId: null };
-  if (typeof route === 'string') return { base, endpointId: route };
-  if (route && typeof route === 'object') return { base, endpointId: route.endpoint || null };
-  return { base, endpointId: null };
-}
-
 // resolveTarget — full chain for a dispatch target at the reference mode/tier.
 // Returns { model, endpointId } or { error }.
 function resolveTarget(target) {
@@ -98,10 +79,17 @@ function resolveTarget(target) {
     ? cap.slice(MODEL_PIN_PREFIX.length)
     : resolveProfileModel(entry, REF_TIER, REF_MODE);
   if (!model || typeof model !== 'string') return { error: `empty model at ${REF_MODE}/${REF_TIER}` };
-  const { base, endpointId } = routeEndpointId(model);
-  if (!endpointId) return { error: `model '${base}': no model_routes match` };
-  if (!ENDPOINTS[endpointId]) return { error: `model '${base}' endpoint '${endpointId}': not in endpoints` };
-  return { cap, model: base, endpointId };
+  const route = resolveModelRoute(model, {
+    routes: ROUTES,
+    endpoints: ENDPOINTS,
+    mode: REF_MODE,
+    latest_models: CONFIG.latest_models,
+  });
+  if (!route) return { error: `model '${model}': no model_routes match` };
+  if (!ENDPOINTS[route.endpointId]) {
+    return { error: `model '${route.servedBy}' endpoint '${route.endpointId}': not in endpoints` };
+  }
+  return { cap, model: route.servedBy, endpointId: route.endpointId };
 }
 
 // ── Parse every agent body for subagent_type tokens (active AND commented) ────

@@ -26,7 +26,7 @@ Environment variables that affect c-thru routing, proxy behavior, and Ollama int
 | `GOOGLE_API_KEY` | API key for Google AI Studio Gemini endpoint (`endpoints.gemini_ai`). Sent as `x-goog-api-key`. |
 | `OPENAI_API_KEY` | API key for OpenAI Responses endpoint (`call_style: "openai"`). Sent as `Authorization: Bearer`. Missing or invalid key transparently falls back to the configured global default model rather than failing loudly, matching every other backend. |
 | `C_THRU_LIVE_OPENAI=1` | With `OPENAI_API_KEY`, enables `test/proxy-openai-live-shapes.test.js` (non-stream, stream, proxy-side count estimate, and one tool call). Not part of hermetic `make test`. |
-| `XAI_API_KEY` | Metered API key for xAI Responses (`endpoints.xai`; models such as `grok` / `grok-4.5`). Sent as `Authorization: Bearer`; client Anthropic credentials and raw Claude correlation headers are never forwarded to `api.x.ai`. Required for the `grok` brand leaf and any capability cell that resolves to `grok-4.5`. **Not** required for the separate Grok Build CLI path when CLI login has populated local Grok auth; that login cannot be reused as an API credential. |
+| `XAI_API_KEY` | Metered API key for xAI Responses (`endpoints.xai`; the moving `grok` alias currently resolves to `grok-4.6`, while exact Grok leaves remain exact). Sent as `Authorization: Bearer`; client Anthropic credentials and raw Claude correlation headers are never forwarded to `api.x.ai`. Required for the `grok` brand leaf and any capability cell that resolves to Grok. **Not** required for the separate Grok Build CLI path when CLI login has populated local Grok auth; that login cannot be reused as an API credential. |
 | `C_THRU_LAUNCH_DEFAULT_MODEL` | Set automatically by `c-thru --model <X>` / `cthru agents --model <X>` when spawning the proxy (seed). Live value is **in-memory only** inside claude-proxy; keep-alive reuse updates via `POST /c-thru/launch-default`. Used as **`routes.default` last-resort** and **`generalist` capability** target. Not written to config or stamp files. |
 | `C_THRU_LIVE_XAI=1` | When set with `XAI_API_KEY`, enables `test/proxy-xai-live.test.js` (direct Responses non-stream/SSE/tool continuation and proxy xAI identity checks). Not part of hermetic `make test`. |
 | `CLAUDE_PROXY_PING_INTERVAL_MS` | Cadence for proxy-injected `event: ping` SSE frames on translate streams (default `15000`). Keeps intermediate hops alive during long generations. |
@@ -56,6 +56,7 @@ list: [Claude Code env-vars](https://code.claude.com/docs/en/env-vars). Gateway 
 | `C_THRU_PROXY_PLACEHOLDER_KEY` | Opt-in only. Default / unset / `off` / `auto`: **never** invent `ANTHROPIC_API_KEY`. Set to `1` / `true` / `on` to export the legacy `proxied-placeholder` client gate stuffing when neither AUTH_TOKEN nor a real API key is present (local/Ollama-oriented). Do not use for subscription Anthropic traffic. |
 | `C_THRU_ANTHROPIC_AUTH_MODE` | Anthropic credential policy applied before the proxy and Claude launch: `auto` (default) preserves an ambient API key, `subscription` removes `ANTHROPIC_API_KEY`, and `api` removes Bearer/OAuth env signals and requires `ANTHROPIC_API_KEY`. |
 | `C_THRU_NO_OAUTH_INJECT=1` | Skip lifting Claude Code keychain OAuth into `ANTHROPIC_AUTH_TOKEN` (tests / special cases). |
+| `ANTHROPIC_SMALL_FAST_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL` | Model Claude Code uses for each internal background slot (summaries, topic detection, quota probes) and for a session started without an explicit `--model`. In non-Anthropic modes `c-thru` pins these to **capability names** (`fast-generalist`, `fast-generalist`, `generalist`, `planner-hard`) so background traffic resolves through `llm_profiles` instead of leaking to Anthropic via `model_routes`. See the note below. |
 | `ENABLE_TOOL_SEARCH=true` | Re-enables MCP tool search. Off by default on non-first-party base URLs. Safe with c-thru: Anthropic passthrough does not strip `tool_reference` blocks (pinned in `test/proxy-gateway-protocol.test.js`). |
 | `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` | Opt-in: Claude Code GETs the proxy’s `/v1/models` and adds matching IDs to `/model`. Only IDs starting with `claude` or `anthropic` are kept — use `claude-via-*` aliases (default endpoints: `gemini_ai`, `gemini_vertex`, `xai`). |
 | `CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=1` | Opt-in fine-grained tool streaming (off by default on custom base URL). |
@@ -84,6 +85,45 @@ list: [Claude Code env-vars](https://code.claude.com/docs/en/env-vars). Gateway 
 | `C_THRU_AGENT_GATEWAY_DIR` | Override staged gateway profile dir (default `~/.claude/c-thru-agent-gateway`). Shared across brand jobs; `settings.env.ANTHROPIC_BASE_URL` is always **unscoped** (`http://127.0.0.1:<port>`, never `/s/<id>`). |
 | `C_THRU_REVIVE_SKIP_AGENTS_JSON=1` | Skip the budgeted `claude agents --json` live probe (tests / slow CLI). |
 | `C_THRU_CC_DAEMON_DIR` | Override daemon root for rv-sock live detect (default: scan `/tmp/cc-daemon-*`). |
+
+### Background-slot model pins (`apply_background_model_overrides`)
+
+`c-thru` exports `ANTHROPIC_SMALL_FAST_MODEL` and `ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL`
+only in modes that route away from Anthropic. The gate is a **literal** mode list in
+`tools/c-thru`:
+
+`best-local-oss`, `best-local-gov`, `offline`, `local-only`, `best-opensource-local`,
+`best-opensource`, `best-cloud-oss`, `best-cloud-gov`.
+
+Two things to know:
+
+- **`resolve_llm_mode` returns the mode name as written — a custom mode is not matched via its
+  `base`.** A custom mode built on `best-cloud-oss` (e.g. `deepseek-hybrid`) does **not**
+  inherit these pins; add it to the case list explicitly if it needs them.
+- **These are env vars, and that is the point.** The `--model=` launch pin only covers the
+  top-level session argv. Sessions the Claude Code daemon spawns as children (background
+  jobs, launched with just `--session-id`/`--agent` and no `--model`) inherit routing *only*
+  through these variables. If a mode is missing from the gate, those children fall back to a
+  vendor `claude-*` id, which `model_routes` sends straight to the `anthropic` endpoint — the
+  session then runs on Claude while the launch banner advertises the OSS default.
+
+Only slots that are unset or already hold a `claude-*` value are overridden, so an explicit
+non-Claude pin from the caller survives. Each target must name a real `llm_profiles`
+capability; `test/background-model-overrides.test.js` pins that against the shipped map.
+
+**Context-window enforcement.** Claude Code assumes 200k for any model ID it doesn't
+recognize — which is every non-Anthropic model c-thru routes — so proactive auto-compact
+would fire far too early for a 1M-window model. The same function reads the resolved launch
+model against the model-map's `context_windows` map and exports
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS=<tokens>` when the window is declared (suppresses the
+verbose "will keep this session within 200k tokens" warning and sets the real compact
+threshold). A model absent from the map gets the neutral fallback:
+`CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1`, which restores wait-for-the-API
+behavior — safe through the proxy because it passes upstream too-long 400 bodies through
+verbatim. Claude-native models are skipped entirely (Claude Code knows their windows).
+A caller-set value in **either** variable leaves **both** untouched — the launcher never
+clobbers a caller pin and never emits a second, conflicting variable alongside it. See
+`docs/model-map.md` → `context_windows`.
 
 Brand-agent gateway auth: `settings.apiKeyHelper` points at `c-thru-gateway-auth-helper` (install symlink under `~/.claude/tools/`). Claude runs it per request so attach/resume does not depend on a frozen `ANTHROPIC_AUTH_TOKEN=ollama`. The helper never prints placeholders; it prefers process env OAuth, then keychain/`Claude Code-credentials`, then a prior real token in gateway settings.
 

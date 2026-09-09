@@ -21,7 +21,7 @@ request time.
 
 ## Agent roster
 
-The fleet is **101 agents**: 23 pipeline/utility roles plus **brand-name leaves** from
+The fleet is **84 agents**: 23 pipeline/utility roles plus **brand-name leaves** from
 `config/brand-agents.json` (shorthands such as `opus` / `devstral` / `glm` plus Claude-safe
 full-name aliases). Each declares `model: <its-own-name>` in frontmatter. The proxy resolves
 `name → agent_to_capability → llm_profiles[capability][mode][tier] → concrete model` at

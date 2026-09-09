@@ -43,6 +43,7 @@ const INTENTIONALLY_UNSTRUCTURED_AGENTS = Object.freeze([
   'claude-haiku-4-5-20251001',
   'fable',
   'claude-fable-5',
+  'claude-fable-5-1',
   'grok',
   'grok-4-5',
   'deepseek',

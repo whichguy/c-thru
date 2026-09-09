@@ -30,20 +30,20 @@ ok(map.endpoints.xai && map.endpoints.xai.url === 'https://api.x.ai', 'endpoints
 ok(map.endpoints.xai.format === 'openai', 'endpoints.xai uses the Responses API translator');
 ok(map.endpoints.xai.auth && map.endpoints.xai.auth.env === 'XAI_API_KEY', 'endpoints.xai auth env XAI_API_KEY');
 ok(map.model_routes.grok && map.model_routes.grok.endpoint === 'xai', 'model_routes.grok → xai');
-ok(map.model_routes.grok.name === 'grok-4.5', 'model_routes.grok name grok-4.5');
+ok(map.model_routes.grok.name === 'grok-4.6', 'model_routes.grok name grok-4.6');
 ok(map.model_routes['grok-build']?.endpoint === 'xai'
-  && map.model_routes['grok-build']?.name === 'grok-4.5',
-  'model_routes.grok-build → grok-4.5 @ xai');
+  && map.model_routes['grok-build']?.name === 'grok-4.6',
+  'model_routes.grok-build → grok-4.6 @ xai');
 ok(map.model_routes['grok-build-latest']?.endpoint === 'xai'
-  && map.model_routes['grok-build-latest']?.name === 'grok-4.5',
-  'model_routes.grok-build-latest → grok-4.5 @ xai');
+  && map.model_routes['grok-build-latest']?.name === 'grok-4.6',
+  'model_routes.grok-build-latest → grok-4.6 @ xai');
 // Brand leaves pin public shorthands; latest_models expands to concrete ids.
 ok(map.agent_to_capability.grok === 'model:grok', 'agent_to_capability.grok pin');
-ok(map.latest_models?.grok === 'grok-4.5', 'latest_models.grok → grok-4.5');
+ok(map.latest_models?.grok === 'grok-4.6', 'latest_models.grok → grok-4.6');
 ok(map.agent_to_capability.deepseek === 'model:deepseek', 'deepseek pin');
 ok(map.latest_models?.deepseek === 'deepseek-v4-pro:cloud', 'latest_models.deepseek');
 ok(map.agent_to_capability.qwen === 'model:qwen', 'qwen pin');
-ok(map.latest_models?.qwen === 'qwen3.6:35b', 'latest_models.qwen');
+ok(map.latest_models?.qwen === 'qwen3.8:27b-mxfp8', 'latest_models.qwen');
 ok(map.agent_to_capability.kimi === 'model:kimi', 'kimi pin');
 ok(map.latest_models?.kimi === 'kimi-k3:cloud', 'latest_models.kimi');
 ok(map.agent_to_capability.gemini === 'model:gemini', 'gemini pin');
@@ -54,12 +54,12 @@ ok(map.latest_models?.gemini === 'gemini-pro-latest' || map.latest_models?.gemin
 const genGov = map.llm_profiles.generalist['best-cloud-gov'];
 const writerGov = map.llm_profiles.writer['best-cloud-gov'];
 ok(genGov && genGov['16gb'] === 'phi4-mini:3.8b', 'generalist gov 16gb stays phi4-mini');
-ok(genGov && genGov['64gb'] === 'grok-4.5', 'generalist gov 64gb → grok-4.5');
+ok(genGov && genGov['64gb'] === 'grok', 'generalist gov 64gb → moving grok alias');
 ok(writerGov && writerGov['16gb'] === 'phi4-mini:3.8b', 'writer gov 16gb stays phi4-mini');
-ok(writerGov && writerGov['32gb'] === 'grok-4.5', 'writer gov 32gb → grok-4.5');
+ok(writerGov && writerGov['32gb'] === 'grok', 'writer gov 32gb → moving grok alias');
 
 const { isChineseOrigin } = require(path.join(ROOT, 'tools', 'model-map-resolve.js'));
-ok(isChineseOrigin('grok-4.5') === false, 'grok-4.5 is not Chinese-origin');
+ok(isChineseOrigin('grok-4.6') === false, 'grok-4.6 is not Chinese-origin');
 ok(isChineseOrigin('deepseek-v4-pro:cloud') === true, 'deepseek pin is Chinese-origin (gov filter)');
 ok(isChineseOrigin('qwen3.6:35b') === true, 'qwen pin is Chinese-origin');
 ok(isChineseOrigin('kimi-k3:cloud') === true || isChineseOrigin('moonshotai/kimi') === true,
@@ -81,11 +81,11 @@ ok(!explainResult.error && explainResult.status === 0,
   'explain --model grok-build exits 0');
 ok(
   /model=grok-build/.test(explained)
-    && /grok-4\.5/.test(explained)
+    && /grok-4\.6/.test(explained)
     && /endpoint\s+xai/.test(explained)
-    && /served_by\s+grok-4\.5/.test(explained)
+    && /served_by\s+grok-4\.6/.test(explained)
     && /openai/.test(explained),
-  'explain resolves exactly grok-build → grok-4.5 @ xai using openai format',
+  'explain resolves exactly grok-build → grok-4.6 @ xai using openai format',
 );
 
 // ── 3. Proxy path + auth e2e with stub ──────────────────────────────────────
@@ -99,7 +99,7 @@ async function runProxyE2e() {
       '*': {
         id: 'resp_test',
         status: 'completed',
-        model: 'grok-4.5',
+        model: 'grok-4.6',
         output: [{
           type: 'message',
           role: 'assistant',
@@ -121,12 +121,12 @@ async function runProxyE2e() {
         anthropic: { url: 'https://api.anthropic.com', format: 'anthropic' },
       },
       model_routes: {
-        grok: { endpoint: 'xai', name: 'grok-4.5' },
-        'grok-4.5': 'xai',
-        'grok-build': { endpoint: 'xai', name: 'grok-4.5' },
-        'grok-build-latest': { endpoint: 'xai', name: 'grok-4.5' },
+        grok: { endpoint: 'xai', name: 'grok-4.6' },
+        'grok-4.6': 'xai',
+        'grok-build': { endpoint: 'xai', name: 'grok-4.6' },
+        'grok-build-latest': { endpoint: 'xai', name: 'grok-4.6' },
       },
-      agent_to_capability: { grok: 'model:grok-4.5' },
+      agent_to_capability: { grok: 'model:grok-4.6' },
       llm_profiles: {},
       llm_mode: 'best-cloud',
     });
@@ -181,8 +181,8 @@ async function runProxyE2e() {
           `xAI upstream does not receive ${name}`);
       }
       const parsedBody = seen.body;
-      ok(parsedBody && parsedBody.model === 'grok-4.5',
-        'grok-build alias rewritten to grok-4.5: ' + (parsedBody && parsedBody.model));
+      ok(parsedBody && parsedBody.model === 'grok-4.6',
+        'grok-build alias rewritten to grok-4.6: ' + (parsedBody && parsedBody.model));
       ok(parsedBody && parsedBody.store === false
         && parsedBody.input?.[0]?.type === 'message'
         && parsedBody.input?.[0]?.content?.[0]?.type === 'input_text',

@@ -186,7 +186,7 @@ Both, however, implement the same conceptual policy this page documents for Clau
 login genuinely isn't available.**
 
 The similarly named c-thru model route `grok-build` is deliberately different:
-it maps Claude Code's Anthropic Messages traffic to `grok-4.5` on
+it maps Claude Code's Anthropic Messages traffic to the current `grok-4.6` on
 `api.x.ai/v1/responses` and therefore always requires a billable `XAI_API_KEY`.
 Neither route borrows credentials from the other.
 

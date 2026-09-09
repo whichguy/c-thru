@@ -79,18 +79,25 @@ async function main() {
   fs.copyFileSync(LIB_SOURCE, path.join(scratchTools, 'c-thru-lib.sh'));
   fs.chmodSync(scratchHook, 0o755);
 
-  let primary, secondary;
+  let primary, secondary, textOnly;
   try {
     primary = await stubBackend({ failWith: 500 });
     secondary = await stubBackend();
+    // A text-only model served by a healthy backend (200) — used to drive the
+    // C39 vision-drop event WITHOUT a fallback (so the vision event is the
+    // highest-priority event this scan and surfaces in the stop-hook prose).
+    textOnly = await stubBackend();
     const cfg = {
       backends: {
         primary_be:   { kind: 'anthropic', url: `http://127.0.0.1:${primary.port}`, fallback_to: 'secondary-target' },
         secondary_be: { kind: 'anthropic', url: `http://127.0.0.1:${secondary.port}` },
+        text_be:      { kind: 'anthropic', url: `http://127.0.0.1:${textOnly.port}` },
       },
       model_routes: {
         'primary-model':    'primary_be',
         'secondary-target': 'secondary_be',
+        // NOT in VISION_CAPABLE_DEFAULTS — a direct text-only model route.
+        'text-only-solo':   'text_be',
       },
     };
     const configPath = writeConfig(base, cfg);
@@ -138,10 +145,42 @@ async function main() {
       const out4 = await runHook(scratchHook, homeC, null, null);
       assertEq(out4.status, 0, 'no-proxy case exits 0');
       assertEq(out4.stdout, '', 'no-proxy case is silent');
+
+      // ── 5. (C39) Session D sends an image to a text-only model that answers
+      //    200 (the image is silently dropped). No fallback/hard_fail this scan,
+      //    so the vision event surfaces: the hook directs to the `vision` agent.
+      console.log('\n5. Session D: image to a text-only 200 model -> hook directs to the vision agent');
+      const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+      const rD = await httpJson(port, 'POST', '/s/session-d/v1/messages', {
+        model: 'text-only-solo', max_tokens: 10,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG_B64 } },
+            { type: 'text', text: 'describe this' },
+          ],
+        }],
+      }, { 'x-api-key': 'test', 'anthropic-version': '2023-06-01' });
+      assertEq(rD.status, 200, 'session D text-only model answers 200 (around the dropped image)');
+      assertEq(rD.headers['x-c-thru-vision-unsupported'], 'text-only-solo',
+        'runtime header flags the text-only model that dropped the image');
+      const homeD = fs.mkdtempSync(path.join(base, 'home-d-'));
+      fs.mkdirSync(path.join(homeD, '.claude'), { recursive: true });
+      const out5 = await runHook(scratchHook, homeD, port, 'session-d');
+      assertEq(out5.status, 0, 'session D hook exits 0');
+      assert(out5.parsed && typeof out5.parsed.systemMessage === 'string',
+        `hook emits a vision systemMessage (got: ${out5.stdout})`);
+      assert(out5.parsed.systemMessage.includes('text-only-solo') &&
+        /Use the `vision` agent for images/.test(out5.parsed.systemMessage),
+        `vision systemMessage names the text-only model and directs to the vision agent (got: ${out5.parsed.systemMessage})`);
+      // Must NOT misframe as a fallback or hard_fail (no routing event this scan).
+      assert(!/fallback just fired/.test(out5.parsed.systemMessage) && !/brand\/model pin/.test(out5.parsed.systemMessage),
+        `vision event does not borrow the fallback/hard_fail framing (got: ${out5.parsed.systemMessage})`);
     });
   } finally {
     try { await primary.close(); } catch {}
     try { await secondary.close(); } catch {}
+    try { await textOnly.close(); } catch {}
     fs.rmSync(base, { recursive: true, force: true });
   }
 

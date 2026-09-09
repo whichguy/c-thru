@@ -98,6 +98,16 @@ console.log(JSON.stringify({
   c_thru_no_update: process.env.C_THRU_NO_UPDATE || null,
   c_thru_session_id: process.env.C_THRU_SESSION_ID || null,
   c_thru_coordinator_active: process.env.C_THRU_COORDINATOR_ACTIVE || null,
+  claude_code_max_context_tokens: process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS || null,
+  claude_code_disable_unknown_model_window_enforcement:
+    process.env.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT || null,
+  // Background-slot pins (apply_background_model_overrides). These are env, not argv:
+  // the --model= launch pin covers only this process, so daemon-spawned child
+  // sessions inherit routing ONLY through these.
+  anthropic_small_fast_model:    process.env.ANTHROPIC_SMALL_FAST_MODEL    || null,
+  anthropic_default_haiku_model: process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL || null,
+  anthropic_default_sonnet_model: process.env.ANTHROPIC_DEFAULT_SONNET_MODEL || null,
+  anthropic_default_opus_model:  process.env.ANTHROPIC_DEFAULT_OPUS_MODEL  || null,
 }));
 ' -- "$@"
 `;
@@ -119,6 +129,13 @@ function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
     durableSettings = path.join(homeDir, '.claude', 'settings.json');
     fs.writeFileSync(durableSettings, opts.seedSettings);
     seedMtimeMs = fs.statSync(durableSettings).mtimeMs;
+  }
+  if (opts.profileAgents) {
+    const profileAgentsDir = path.join(claudeDir, 'agents');
+    fs.mkdirSync(profileAgentsDir, { recursive: true });
+    for (const [filename, source] of Object.entries(opts.profileAgents)) {
+      fs.writeFileSync(path.join(profileAgentsDir, filename), source);
+    }
   }
   fs.symlinkSync(path.join(__dirname, '..', 'tools'), path.join(claudeDir, 'tools'));
   makeStubClaude(fakeBin);
@@ -144,6 +161,11 @@ function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
   const childEnv = { ...process.env };
   for (const key of [
     'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+    // A c-thru launcher session exports these background-slot pins for its own
+    // mode (e.g. best-cloud-oss). Clearing them here keeps test 29 hermetic:
+    // best-cloud must observe them UNSET so Claude Code uses vendor defaults.
+    'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
     'CLAUDE_BIN', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROFILE_DIR', 'CLAUDE_DIR',
     'CLAUDE_MODEL_MAP_PATH', 'CLAUDE_MODEL_MAP_LAUNCH_CWD',
     'CLAUDE_PROXY_BYPASS', 'CLAUDE_PROXY_PORT', 'CLAUDE_PROXY_JOURNAL',
@@ -153,6 +175,8 @@ function runCthru(args, configOverrides = {}, envOverrides = {}, opts = {}) {
     'CLAUDE_LLM_MODE', 'CLAUDE_LLM_MEMORY_GB', 'CLAUDE_CONNECTIVITY_MODE',
     'C_THRU_DEBUG', 'C_THRU_SESSION_ID', 'C_THRU_LAUNCH_DEFAULT_MODEL',
     'C_THRU_PROXY_ALWAYS', 'C_THRU_COORDINATOR', 'C_THRU_COORDINATOR_ACTIVE',
+    'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
+    'CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT',
   ]) {
     delete childEnv[key];
   }
@@ -610,6 +634,103 @@ console.log('\n18. (C1/C2) ollama-backed run: ephemeral --settings shape + syste
     `two-word --model value remains adjacent, with no injected option between flag and value (got ${JSON.stringify(modelPromptArgs)})`);
 }
 
+// ── Test 18b (C39): image-handling directive in --append-system-prompt ──────
+// get_system_info_summary (c-thru) emits an "Image handling:" directive declaring
+// the `vision` agent and stating whether THIS session's default model accepts
+// image input. The directive is the user's proactive "use the other agent that
+// has image support" case; the runtime x-c-thru-vision-unsupported header is the
+// reactive backstop. Branch 2 (vision agent capable, default text-only) is the
+// primary ask; branch 1 (both capable) is the no-redirect case.
+function directiveFromRun(r) {
+  const args = r.json?.args || [];
+  const ai = args.indexOf('--append-system-prompt');
+  if (ai < 0) return '';
+  return args[ai + 1] || '';
+}
+
+console.log('\n18b. (C39) text-only default + vision agent → directive redirects to the vision agent');
+{
+  const r = runCthru(['--model', 'glm-5.2:cloud'], {
+    routes: { default: 'glm-5.2:cloud' },
+    model_routes: {
+      'glm-5.2:cloud': 'anthropic',
+      'qwen3-vl:8b':   'anthropic',
+      're:^claude-.*$': 'anthropic',
+    },
+    llm_profiles: {
+      // vision agent = a vision-capable model; default = text-only. The directive
+      // must redirect to the vision agent for any image/screenshot/diagram.
+      vision:    { 'best-cloud': { '16gb': 'qwen3-vl:8b' } },
+      workhorse: { 'best-cloud': { '16gb': 'glm-5.2:cloud' } },
+    },
+    llm_mode: 'best-cloud',
+  });
+  assert(r.code === 0, `exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
+  const sysPrompt = directiveFromRun(r);
+  assert(sysPrompt.length > 0, '--append-system-prompt value captured');
+  assert(/Image handling:/.test(sysPrompt),
+    `directive present (got ${JSON.stringify(sysPrompt.slice(0, 160))})`);
+  assert(/the `vision` agent handles screenshots, images, and diagrams/.test(sysPrompt),
+    `directive declares the vision agent (got ${JSON.stringify(sysPrompt.slice(0, 200))})`);
+  assert(/does NOT support image input/.test(sysPrompt) &&
+    /delegate to the `vision` agent/.test(sysPrompt),
+    `directive redirects to the vision agent when default is text-only (got ${JSON.stringify(sysPrompt.slice(0, 260))})`);
+  assert(/glm-5\.2:cloud/.test(sysPrompt),
+    `directive names the text-only default model (got ${JSON.stringify(sysPrompt.slice(0, 200))})`);
+  // Must NOT claim the default supports images (that's branch 1/3 — wrong here).
+  assert(!/also supports image input/.test(sysPrompt) && !/default model.*supports image input/.test(sysPrompt),
+    `no false "default supports image" claim for a text-only model`);
+}
+
+console.log('\n18c. (C39) vision-capable default + vision agent → directive says default also supports images');
+{
+  const r = runCthru(['--model', 'claude-sonnet-5'], {
+    routes: { default: 'claude-sonnet-5' },
+    model_routes: {
+      'claude-sonnet-5': 'anthropic',
+      'qwen3-vl:8b':     'anthropic',
+      're:^claude-.*$':  'anthropic',
+    },
+    llm_profiles: {
+      vision:    { 'best-cloud': { '16gb': 'qwen3-vl:8b' } },
+      workhorse: { 'best-cloud': { '16gb': 'claude-sonnet-5' } },
+    },
+    llm_mode: 'best-cloud',
+  });
+  assert(r.code === 0, `exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
+  const sysPrompt = directiveFromRun(r);
+  assert(sysPrompt.length > 0, '--append-system-prompt value captured');
+  assert(/the `vision` agent handles screenshots, images, and diagrams/.test(sysPrompt),
+    `directive declares the vision agent (got ${JSON.stringify(sysPrompt.slice(0, 200))})`);
+  assert(/also supports image input/.test(sysPrompt),
+    `directive notes the capable default also supports image input (got ${JSON.stringify(sysPrompt.slice(0, 200))})`);
+  // Must NOT emit the redirect (the default CAN handle images inline).
+  assert(!/does NOT support image input/.test(sysPrompt),
+    `no redirect when the default model is vision-capable`);
+}
+
+console.log('\n18d. (C39) text-only default, no vision agent → directive flags no image-capable model');
+{
+  const r = runCthru(['--model', 'glm-5.2:cloud'], {
+    routes: { default: 'glm-5.2:cloud' },
+    model_routes: {
+      'glm-5.2:cloud':  'anthropic',
+      're:^claude-.*$':  'anthropic',
+    },
+    llm_profiles: {
+      workhorse: { 'best-cloud': { '16gb': 'glm-5.2:cloud' } },
+    },
+    llm_mode: 'best-cloud',
+  });
+  assert(r.code === 0, `exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
+  const sysPrompt = directiveFromRun(r);
+  assert(sysPrompt.length > 0, '--append-system-prompt value captured');
+  assert(/no image-capable model is configured/.test(sysPrompt),
+    `directive flags the missing image-capable model (got ${JSON.stringify(sysPrompt.slice(0, 260))})`);
+  assert(!/does NOT support image input/.test(sysPrompt),
+    `no vision-agent redirect when there is no vision agent to redirect to`);
+}
+
 // ── Test 19: inbound OLLAMA_URL is honored (precedence regression) ─────────
 // c-thru:49 must NOT clobber a caller-set OLLAMA_URL. The --router-debug=2 env
 // dump (c-thru:3489) prints "OLLAMA_URL=<value>" to stderr. Pass a distinctive
@@ -915,7 +1036,7 @@ console.log('\n26. opt-in coordinator stays outside routed fleet and preserves p
   '26a explicit brand requests prohibit helper or generic-agent preflight');
   assert(/`tester`: run or write tests; check behavior; verify correctness; cover edge cases/.test(coordinatorText) &&
     /`code-reviewer`: review code, a diff, or a pull request/.test(coordinatorText) &&
-    /`reviewer-plan`: decide whether an existing plan is ready/.test(coordinatorText) &&
+    /`plan-reviewer`: decide whether an existing plan is ready/.test(coordinatorText) &&
     /`docs`: help text, usage blurbs, reference docs, inline comments, doc blocks/.test(coordinatorText),
   '26a task-trigger table covers observed tester, review, plan-review, and docs boundaries');
 
@@ -1064,6 +1185,215 @@ console.log('\n28. explicit CLI tool restrictions disable coordinator when Agent
       assert((result.json?.args || []).includes(arg),
         `28c ${label} preserves caller token ${JSON.stringify(arg)}`);
     }
+  }
+}
+
+// ── Test 29: background-slot model pins per mode ───────────────────────────
+// Regression: best-cloud-oss was missing from apply_background_model_overrides'
+// mode gate, so Claude Code's background slots kept vendor claude-* ids. Those
+// hit model_routes["claude-sonnet-5"]="anthropic", got 429'd, and were masked by
+// the global-default cascade — and any daemon-spawned child session (which
+// inherits env but NOT the --model= argv pin) ran entirely on Anthropic.
+console.log('\n29. background model slots are pinned to capabilities in non-Anthropic modes');
+{
+  const SLOTS = [
+    ['anthropic_small_fast_model',    'fast-generalist'],
+    ['anthropic_default_haiku_model', 'fast-generalist'],
+    ['anthropic_default_sonnet_model', 'generalist'],
+    ['anthropic_default_opus_model',  'planner-hard'],
+  ];
+
+  // Modes that route away from Anthropic must pin every slot.
+  for (const mode of ['best-cloud-oss', 'best-cloud-gov', 'best-local-oss', 'offline']) {
+    const r = runCthru(['--mode', mode, '--model', 'claude-sonnet-5']);
+    assert(r.code === 0, `29a ${mode} launches (exit ${r.code})`);
+    for (const [key, expected] of SLOTS) {
+      assert(r.json?.[key] === expected,
+        `29b ${mode} exports ${key}=${expected} (got ${JSON.stringify(r.json?.[key])})`);
+    }
+  }
+
+  // best-cloud intentionally serves Claude — the slots must stay unpinned so
+  // Claude Code uses its own vendor defaults.
+  {
+    const r = runCthru(['--mode', 'best-cloud', '--model', 'claude-sonnet-5']);
+    assert(r.code === 0, `29c best-cloud launches (exit ${r.code})`);
+    for (const [key] of SLOTS) {
+      assert(r.json?.[key] === null,
+        `29d best-cloud leaves ${key} unset (got ${JSON.stringify(r.json?.[key])})`);
+    }
+  }
+
+  // An explicit non-Claude user pin survives; a vendor claude-* value is replaced.
+  {
+    const r = runCthru(['--mode', 'best-cloud-oss', '--model', 'claude-sonnet-5'], {}, {
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'my-own-model',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5',
+    });
+    assert(r.json?.anthropic_default_sonnet_model === 'my-own-model',
+      `29e explicit non-Claude pin preserved (got ${JSON.stringify(r.json?.anthropic_default_sonnet_model)})`);
+    assert(r.json?.anthropic_default_opus_model === 'planner-hard',
+      `29f vendor claude-* pin overridden (got ${JSON.stringify(r.json?.anthropic_default_opus_model)})`);
+  }
+}
+
+// ── Test 30: latest aliases and agent effort survive the real launcher ─────
+// The proxy's resolver has long expanded latest_models aliases, but the Bash
+// launcher must make the same concrete-model choice before it injects the
+// child argv and applies context-window policy. Otherwise an alias reaches
+// Claude Code, which disables unknown-model window enforcement despite the
+// concrete model having a declared window.
+console.log('\n30. latest aliases resolve before launcher context policy; agent effort reaches --agents');
+{
+  const latestAlias = 'synthetic-latest-model';
+  const concreteModel = 'synthetic-concrete-model:cloud';
+  const concreteWindow = 123456;
+  const aliasRun = runCthru(['--model', latestAlias], {
+    backends: {
+      anthropic: { kind: 'anthropic', url: 'https://anthropic.example' },
+    },
+    model_routes: {
+      [concreteModel]: 'anthropic',
+    },
+    latest_models: {
+      [latestAlias]: concreteModel,
+    },
+    context_windows: {
+      [concreteModel]: concreteWindow,
+    },
+  }, {
+    // Keep this hermetic: the behavior under test is launcher resolution,
+    // not a local proxy listener.
+    C_THRU_PROXY_ALWAYS: '0',
+  });
+  const aliasArgs = aliasRun.json?.args || [];
+  assert(aliasRun.code === 0,
+    `30a latest alias launch exits 0 (got ${aliasRun.code}, stderr: ${aliasRun.stderr.slice(0, 200)})`);
+  assert(aliasArgs.some(arg => arg === concreteModel || arg === `--model=${concreteModel}`),
+    `30a launcher forwards concrete latest model, not alias (got ${formatArgs(aliasArgs)})`);
+  assert(!aliasArgs.includes(latestAlias) && !aliasArgs.includes(`--model=${latestAlias}`),
+    `30a latest alias is absent from forwarded model argv (got ${formatArgs(aliasArgs)})`);
+  assert(aliasRun.json?.claude_code_max_context_tokens === String(concreteWindow),
+    `30a concrete context window is exported (got ${JSON.stringify(aliasRun.json?.claude_code_max_context_tokens)})`);
+  assert(aliasRun.json?.claude_code_disable_unknown_model_window_enforcement === null,
+    `30a known concrete model does not disable unknown-window enforcement (got ${JSON.stringify(aliasRun.json?.claude_code_disable_unknown_model_window_enforcement)})`);
+
+  const highEffortName = 'e2e-profile-effort-high';
+  const highEffortRun = runCthru(['--model', 'claude-sonnet-5'], {}, {
+    C_THRU_PROXY_ALWAYS: '0',
+  }, {
+    profileAgents: {
+      [`${highEffortName}.md`]: [
+        '---',
+        'description: Launcher e2e effort fixture',
+        'model: claude-sonnet-5',
+        'tier_budget: 999999',
+        'effort: high',
+        '---',
+        'Use high effort for this fixture.',
+        '',
+      ].join('\n'),
+    },
+  });
+  const agentPayload = highEffortRun.json?.agents_occurrences?.[0]?.value || '';
+  let injectedAgents = null;
+  try { injectedAgents = JSON.parse(agentPayload); } catch {}
+  assert(highEffortRun.code === 0,
+    `30b high-effort profile agent launch exits 0 (got ${highEffortRun.code}, stderr: ${highEffortRun.stderr.slice(0, 200)})`);
+  assert(injectedAgents?.[highEffortName]?.effort === 'high',
+    `30b effort: high is emitted in injected --agents JSON (got ${JSON.stringify(injectedAgents?.[highEffortName])})`);
+
+  const invalidEffortName = 'e2e-profile-effort-invalid';
+  const invalidEffortRun = runCthru(['--model', 'claude-sonnet-5'], {}, {
+    C_THRU_PROXY_ALWAYS: '0',
+  }, {
+    profileAgents: {
+      [`${invalidEffortName}.md`]: [
+        '---',
+        'description: Launcher e2e invalid effort fixture',
+        'model: claude-sonnet-5',
+        'tier_budget: 999999',
+        'effort: turbo',
+        '---',
+        'This launch must fail before Claude starts.',
+        '',
+      ].join('\n'),
+    },
+  });
+  assert(Number.isInteger(invalidEffortRun.code) && invalidEffortRun.code !== 0,
+    `30c invalid effort rejects the launch (got ${invalidEffortRun.code})`);
+  assert(new RegExp(`invalid effort 'turbo' in ${invalidEffortName}\\.md \\(expected low, medium, high, xhigh, or max\\)`).test(invalidEffortRun.stderr),
+    `30c invalid effort names the file and accepted levels (stderr: ${invalidEffortRun.stderr.slice(0, 260)})`);
+  assert(invalidEffortRun.json === null && invalidEffortRun.stdout.trim() === '',
+    `30c invalid effort fails before the stub Claude launch (stdout: ${invalidEffortRun.stdout.slice(0, 160)})`);
+}
+
+// ── Test 31: context-window coverage for named gaps + caller precedence ─────
+// The named gaps (grok-4.6 / nemotron-3-super:cloud / phi4-reasoning:plus) must
+// export CLAUDE_CODE_MAX_CONTEXT_TOKENS so auto-compact fires at the real window
+// instead of falling back to disable-unknown-window-enforcement. A caller-set
+// value in EITHER context env var must leave BOTH untouched (never clobber, never
+// emit a second, conflicting variable).
+console.log('\n31. context_windows coverage (grok/nemotron/phi4) + caller precedence');
+{
+  const windows = {
+    'grok-4.6': 500000,
+    'nemotron-3-super:cloud': 262144,
+    'phi4-reasoning:plus': 32768,
+  };
+  const config = {
+    backends: { anthropic: { kind: 'anthropic', url: 'https://anthropic.example' } },
+    model_routes: Object.fromEntries(Object.keys(windows).map(m => [m, 'anthropic'])),
+    context_windows: windows,
+  };
+
+  // 31a: each named concrete model exports its declared window.
+  for (const [model, window] of Object.entries(windows)) {
+    const r = runCthru(['--model', model], config, { C_THRU_PROXY_ALWAYS: '0' });
+    assert(r.code === 0, `31a ${model} launches (exit ${r.code}, stderr: ${r.stderr.slice(0, 160)})`);
+    assert(r.json?.claude_code_max_context_tokens === String(window),
+      `31a ${model} exports CLAUDE_CODE_MAX_CONTEXT_TOKENS=${window} (got ${JSON.stringify(r.json?.claude_code_max_context_tokens)})`);
+    assert(r.json?.claude_code_disable_unknown_model_window_enforcement === null,
+      `31a ${model} does not disable unknown-window enforcement (got ${JSON.stringify(r.json?.claude_code_disable_unknown_model_window_enforcement)})`);
+  }
+
+  // 31b: an unknown non-Anthropic model disables enforcement (no window declared).
+  {
+    const r = runCthru(['--model', 'unknown-oss-model'], {
+      ...config,
+      model_routes: { ...config.model_routes, 'unknown-oss-model': 'anthropic' },
+    }, { C_THRU_PROXY_ALWAYS: '0' });
+    assert(r.code === 0, `31b unknown model launches (exit ${r.code}, stderr: ${r.stderr.slice(0, 160)})`);
+    assert(r.json?.claude_code_max_context_tokens === null,
+      `31b unknown model exports no window (got ${JSON.stringify(r.json?.claude_code_max_context_tokens)})`);
+    assert(r.json?.claude_code_disable_unknown_model_window_enforcement === '1',
+      `31b unknown model disables unknown-window enforcement (got ${JSON.stringify(r.json?.claude_code_disable_unknown_model_window_enforcement)})`);
+  }
+
+  // 31c: a caller-set window is preserved and no second var is emitted.
+  {
+    const r = runCthru(['--model', 'grok-4.6'], config, {
+      C_THRU_PROXY_ALWAYS: '0',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '999999',
+    });
+    assert(r.code === 0, `31c caller-set window launches (exit ${r.code})`);
+    assert(r.json?.claude_code_max_context_tokens === '999999',
+      `31c caller-set window preserved (got ${JSON.stringify(r.json?.claude_code_max_context_tokens)})`);
+    assert(r.json?.claude_code_disable_unknown_model_window_enforcement === null,
+      `31c no second var emitted alongside caller-set window (got ${JSON.stringify(r.json?.claude_code_disable_unknown_model_window_enforcement)})`);
+  }
+
+  // 31d: a caller-set disable flag is preserved and no window is emitted.
+  {
+    const r = runCthru(['--model', 'grok-4.6'], config, {
+      C_THRU_PROXY_ALWAYS: '0',
+      CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1',
+    });
+    assert(r.code === 0, `31d caller-set disable launches (exit ${r.code})`);
+    assert(r.json?.claude_code_disable_unknown_model_window_enforcement === '1',
+      `31d caller-set disable preserved (got ${JSON.stringify(r.json?.claude_code_disable_unknown_model_window_enforcement)})`);
+    assert(r.json?.claude_code_max_context_tokens === null,
+      `31d no window emitted alongside caller-set disable (got ${JSON.stringify(r.json?.claude_code_max_context_tokens)})`);
   }
 }
 

@@ -17,10 +17,13 @@ const { assert, assertEq, summary } = require('./helpers');
 const SCRIPT = path.join(__dirname, '..', 'tools', 'c-thru-explain.js');
 
 function run(args, extraEnv = {}) {
-  const r = spawnSync(process.execPath, [SCRIPT, ...args], {
-    encoding: 'utf8',
-    env: { ...process.env, NO_COLOR: '1', ...extraEnv },
-  });
+  // Hermetic: the explain tool resolves config via CLAUDE_MODEL_MAP_PATH first,
+  // and a c-thru session exports that to a launch-time snapshot that can be stale
+  // relative to the shipped config. Clear it unless the caller pins it explicitly
+  // (mirrors test/helpers.js), so assertions run against the shipped config.
+  const env = { ...process.env, NO_COLOR: '1', ...extraEnv };
+  if (!extraEnv.CLAUDE_MODEL_MAP_PATH) delete env.CLAUDE_MODEL_MAP_PATH;
+  const r = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', env });
   return { code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
@@ -65,14 +68,14 @@ console.log('\n3b. --agent brand pin resolves model:<id> through model_routes');
 {
   const r = run(['--agent', 'grok', '--mode', 'best-cloud-oss', '--tier', '64gb']);
   assert(r.code === 0, `brand pin exit 0 (got ${r.code}, stderr: ${r.stderr.slice(0, 200)})`);
-  assert(r.stdout.includes('agent=grok') && /model=grok(?:-4\.5)?\b/.test(r.stdout),
+  assert(r.stdout.includes('agent=grok') && /model=grok(?:-4\.6)?\b/.test(r.stdout),
     `trace names agent and shorthand/direct model pin (got: ${r.stdout.slice(0, 300)})`);
-  assert(r.stdout.includes('grok-4.5'),
+  assert(r.stdout.includes('grok-4.6'),
     `trace expands grok through latest_models (got: ${r.stdout.slice(0, 300)})`);
   assert(r.stdout.includes('endpoint') && r.stdout.includes('xai'),
     `grok brand pin resolves to xai endpoint (got: ${r.stdout.slice(0, 400)})`);
   const servedBy = (r.stdout.match(/served_by\s+(\S+)/) || [])[1];
-  assertEq(servedBy, 'grok-4.5', 'brand pin served_by is grok-4.5');
+  assertEq(servedBy, 'grok-4.6', 'brand pin served_by is latest Grok');
 }
 
 // ── 3c: brand pins obey mode validation and the proxy's gov backstop ─────────
@@ -214,11 +217,11 @@ console.log('\n13. CLAUDE_LLM_PROFILE env var selects tier when --tier omitted')
   assert(r.code === 0, `exit 0 (got ${r.code})`);
   const arr = JSON.parse(r.stdout);
   assert(Array.isArray(arr) && arr.length > 0, 'produces output via env var tier');
-  // planner/best-cloud/64gb = claude-fable-5
+  // planner/best-cloud/64gb = fable → claude-fable-5-1 via latest_models
   const planner = arr.find(e => e.capability === 'planner');
   assert(planner !== undefined, 'planner entry present');
-  assertEq(planner.model, 'claude-fable-5',
-    'planner resolves to claude-fable-5 at 64gb/best-cloud');
+  assertEq(planner.model, 'claude-fable-5-1',
+    'planner resolves to claude-fable-5-1 at 64gb/best-cloud');
 }
 
 // ── 14: --all --format json — ollama flag logic ───────────────────────────

@@ -506,6 +506,18 @@ async function main() {
           assertEq(defaultBackend.requests.length, 1, 'global default served');
           assert(r.json.content && r.json.content.some(b => b.text === 'fallback-served'),
             `served by default backend (got: ${JSON.stringify(r.json.content)})`);
+
+          // Attribution. The global default was the ONLY fallback path that did not
+          // set _fallbackFrom, so a mode-routing leak (request lands on anthropic,
+          // 429s, silently cascades to the OSS default, returns 200) was invisible
+          // in both the response headers and the recent ring.
+          assertEq(r.headers?.['x-c-thru-fallback-from'], 'primary_be',
+            '12 global-default cascade names the backend it fell back FROM');
+
+          const recent = await httpJson(port, 'GET', '/c-thru/recent', null);
+          const rec = (recent.json?.requests || []).find(x => x.endpoint === '/v1/messages');
+          assertEq(rec?.fallback_from, 'primary_be',
+            `12 recent-ring records fallback_from (the field the stop hook filters on; got ${JSON.stringify(rec?.fallback_from)})`);
         });
       } finally {
         await primary.close().catch(() => {});
@@ -658,14 +670,15 @@ async function main() {
       }
     }
 
-    // ── Test 14: Ollama :cloud-suffixed model auth-fail → cloud→local rewrite fires ─
-    console.log('\n14. Ollama :cloud model returns 401 → cloud→local rewrite retries against same backend');
+    // ── Test 14: Ollama cloud-suffixed model auth-fail → cloud→local rewrite fires ─
+    console.log('\n14. Ollama cloud-suffixed models return 401 → cloud→local rewrite retries against same backend');
     {
-      // Custom upstream that mimics Ollama's behaviour for :cloud models
-      // without a subscription: returns 401 if body.model ends in :cloud,
-      // otherwise serves a normal Ollama ndjson response. Verifies that
-      // OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL transparently swaps the model name
-      // and retries against the same backend (no per-model fallback_to wired).
+      // Custom upstream that mimics Ollama's behaviour for cloud-suffixed
+      // models without a subscription: returns 401 if body.model ends in
+      // :cloud or -cloud, otherwise serves a normal Ollama ndjson response.
+      // Verifies that OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL transparently swaps
+      // the model name and retries against the same backend (no per-model
+      // fallback_to wired).
       const http = require('http');
       const requests = [];
       const upstream = await new Promise((resolve, reject) => {
@@ -676,8 +689,8 @@ async function main() {
             let body = null;
             try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
             requests.push({ method: req.method, path: req.url, model_used: body?.model || null });
-            if (typeof body?.model === 'string' && body.model.endsWith(':cloud')) {
-              const errBody = JSON.stringify({ error: 'unauthorized: subscription required for :cloud models' });
+            if (typeof body?.model === 'string' && (body.model.endsWith(':cloud') || body.model.endsWith('-cloud'))) {
+              const errBody = JSON.stringify({ error: 'unauthorized: subscription required for cloud models' });
               res.writeHead(401, { 'Content-Type': 'application/json' });
               res.end(errBody);
               return;
@@ -706,6 +719,7 @@ async function main() {
           },
           model_routes: {
             'deepseek-v4-flash:cloud': 'ollama_local',
+            'deepseek-v4-flash:0731-cloud': 'ollama_local',
           },
           llm_profiles: {
             '128gb': {
@@ -718,16 +732,26 @@ async function main() {
           configPath, profile: '128gb', mode: 'connected',
           env: { OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL: 'local-fallback-model' },
         }, async ({ port }) => {
-          const r = await httpJson(port, 'POST', '/v1/messages', {
+          const legacy = await httpJson(port, 'POST', '/v1/messages', {
             model: 'deepseek-v4-flash:cloud', stream: false,
             messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
           });
-          assertEq(r.status, 200, ':cloud auth-fail → cloud→local rewrite succeeded with 200');
-          assert(r.json.content && r.json.content.some(b => b.text === 'served-by-local-fallback'),
-            `response served by local fallback model (got: ${JSON.stringify(r.json.content)})`);
-          assertEq(requests.length, 2, 'upstream hit twice: once with :cloud (401), once with local fallback (200)');
+          assertEq(legacy.status, 200, ':cloud auth-fail → cloud→local rewrite succeeded with 200');
+          assert(legacy.json.content && legacy.json.content.some(b => b.text === 'served-by-local-fallback'),
+            `legacy response served by local fallback model (got: ${JSON.stringify(legacy.json.content)})`);
           assertEq(requests[0].model_used, 'deepseek-v4-flash:cloud', 'first request used :cloud model');
           assertEq(requests[1].model_used, 'local-fallback-model', 'second request used OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL');
+
+          const current = await httpJson(port, 'POST', '/v1/messages', {
+            model: 'deepseek-v4-flash:0731-cloud', stream: false,
+            messages: [{ role: 'user', content: 'hi' }], max_tokens: 50,
+          });
+          assertEq(current.status, 200, '-cloud auth-fail → cloud→local rewrite succeeded with 200');
+          assert(current.json.content && current.json.content.some(b => b.text === 'served-by-local-fallback'),
+            `0731 response served by local fallback model (got: ${JSON.stringify(current.json.content)})`);
+          assertEq(requests.length, 4, 'two cloud requests each retry once against local fallback');
+          assertEq(requests[2].model_used, 'deepseek-v4-flash:0731-cloud', 'third request used the 0731 -cloud model');
+          assertEq(requests[3].model_used, 'local-fallback-model', 'fourth request used OLLAMA_CLOUD_LOCAL_FALLBACK_MODEL');
         });
       } finally {
         await new Promise(r => upstream.close(r));

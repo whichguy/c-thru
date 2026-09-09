@@ -269,6 +269,22 @@ function resolveActiveTier(config) {
   return tierForGb(totalGb);
 }
 
+// Resolve a concrete model's declared context-window token count, or null when
+// unknown. Single source of truth is config.context_windows (a flat map of
+// concrete model name → positive integer). `model_overrides` is applied first
+// (unconditional name substitution, mirroring c-thru-explain.js) so an override
+// key resolves to its target's window. No hard-coded vendor table here — the
+// launcher skips claude-* models itself, and unknown models fall through to
+// null so the caller can apply its own unknown-model policy.
+function resolveContextWindow(model, config) {
+  if (typeof model !== 'string' || !model) return null;
+  const overrides = (config && config.model_overrides) || {};
+  const working = overrides[model] || model;
+  const windows = (config && config.context_windows) || {};
+  const value = windows[working];
+  return (Number.isInteger(value) && value > 0) ? value : null;
+}
+
 // Resolve a capability alias via 2-hop graph traversal.
 // agent name  → agent_to_capability → capability alias  (e.g. coder → coder)
 // alias name  → identity                                 (e.g. coder → coder)
@@ -490,6 +506,44 @@ function isOpenSource(model) {
   return typeof model === 'string' && !isClaude(model);
 }
 
+// ── Modality predicate ────────────────────────────────────────────────────────
+// isVisionCapable: does a concrete model tag accept image/document input?
+//
+// Vision support is genuinely per-model, not per-family (qwen3.6 is text-only
+// while qwen3-vl is vision-language; glm-5.2 is text-only while GLM-5V/4.6V
+// are multimodal), so this is an exact-match allowlist rather than a name
+// regex. Built-in defaults are the known-multimodal tags in the fleet; the
+// top-level config field `vision_capable_models` ({ "<model>": true|false })
+// extends (true) or removes (false) entries — same override semantics as
+// deprecated_models (cfg override wins by hasOwnProperty; false/null un-sets).
+// No substring matching, to avoid false-positives on aliases/-latest variants
+// (same discipline as GEMINI_DEPRECATED_DEFAULTS in tools/claude-proxy).
+//
+// Keyed on the CONCRETE resolved model (post-route, post-alias), i.e. exactly
+// what `effectiveModel` is at runtime and what vision/pdf cell values resolve
+// to. Callers checking a raw cell value must first strip a `model:` pin prefix
+// (MODEL_PIN_PREFIX) and skip `@backend`-sigil cells (model is runtime-determined).
+const VISION_CAPABLE_DEFAULTS = new Set([
+  'claude-sonnet-5',
+  'claude-opus-5',
+  'claude-fable-5',
+  'claude-fable-5-1',
+  'claude-haiku-4-5-20251001',
+  'gemini-3-flash-preview:cloud',
+  'gemini-pro-latest',
+  'qwen3-vl:8b',
+]);
+
+function isVisionCapable(model, cfg) {
+  if (!model || typeof model !== 'string') return false;
+  // Config override (layered/merged config): true force-adds, false/null force-removes.
+  const overrides = (cfg && typeof cfg === 'object' && cfg.vision_capable_models) || {};
+  if (Object.prototype.hasOwnProperty.call(overrides, model)) {
+    return overrides[model] === true;
+  }
+  return VISION_CAPABLE_DEFAULTS.has(model);
+}
+
 // filterFor — maps mode name to predicate. Returns null for non-filter modes.
 // Gov modes apply the Chinese-origin filter as a hard block.
 // `config` lets a gov-BASED custom mode engage the Chinese-origin filter (isGovMode).
@@ -692,6 +746,7 @@ module.exports = {
   validModes,
   baseModeFor,
   resolveActiveTier,
+  resolveContextWindow,
   resolveCapabilityAlias,
   resolveAdvisorPanel,
   resolveTerminalTarget,
@@ -716,6 +771,9 @@ module.exports = {
   isClaude,
   isCloud,
   isOpenSource,
+  // Modality predicate (vision-capable allowlist + config override)
+  VISION_CAPABLE_DEFAULTS,
+  isVisionCapable,
   // Benchmark-driven ranking library
   rankableScore,
   pickBenchmarkBest,

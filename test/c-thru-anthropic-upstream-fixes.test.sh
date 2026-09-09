@@ -35,8 +35,8 @@ cthru_upstream_fingerprints_equal "deadbeef" "deadbeef" && pass "equal match" ||
 # ── Extract resolve helpers from tools/c-thru (not full-sourceable) ──────────
 # Brace-counting fails on embedded node -e strings; use line markers.
 TMP_EXTRACT="$(mktemp "${TMPDIR:-/tmp}/c-thru-up-extract.XXXXXX")"
-START_LINE="$(rg -n '^_cthru_upstream_url_js\(\)' "$C_THRU" | head -1 | cut -d: -f1)"
-END_LINE="$(rg -n '^anthropic_upstream_override_active\(\)' "$C_THRU" | head -1 | cut -d: -f1)"
+START_LINE="$(grep -n '^_cthru_upstream_url_js()' "$C_THRU" | head -1 | cut -d: -f1)"
+END_LINE="$(grep -n '^anthropic_upstream_override_active()' "$C_THRU" | head -1 | cut -d: -f1)"
 if [[ -n "$START_LINE" && -n "$END_LINE" && "$END_LINE" -gt "$START_LINE" ]]; then
   # The extracted helper normally inherits this from the launched c-thru script.
   export CTHRU_SELF_DIR="$(dirname "$C_THRU")"

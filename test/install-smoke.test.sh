@@ -20,6 +20,11 @@ FAKE_CLAUDE="$FAKE_HOME/.claude"
 mkdir -p "$FAKE_HOME"
 export HOME="$FAKE_HOME"
 export CLAUDE_DIR="$FAKE_CLAUDE"
+# Hermetic under a c-thru session: the launcher exports CLAUDE_PROFILE_DIR /
+# CLAUDE_CONFIG_DIR, and install.sh resolves CLAUDE_DIR as
+# "${CLAUDE_PROFILE_DIR:-$HOME/.claude}" — honoring those FIRST. Without clearing
+# them, install.sh targets the session dir and the fake ~/.claude never fills in.
+unset CLAUDE_PROFILE_DIR CLAUDE_CONFIG_DIR
 
 # (The durable ~/.claude/settings.json byte-identity invariant is asserted
 # hermetically by cli-e2e-flags.test.js; this suite asserts "no persistent

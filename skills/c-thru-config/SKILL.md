@@ -104,9 +104,10 @@ name, expand to the full tag registered in `model_routes`:
 | "deepseek v4", "ds v4" | `deepseek-v4-pro:cloud` |
 | "gemma 4", "gemma" | `gemma4:26b` |
 | "gemma e2b" | `gemma4:e2b` |
-| "sonnet", "claude sonnet" | `claude-sonnet-5` |
-| "opus", "claude opus" | `claude-opus-4-7` |
-| "haiku", "claude haiku" | `claude-haiku-4-5-20251001` |
+| "sonnet", "claude sonnet" | `sonnet` (latest-Sonnet alias) |
+| "opus", "claude opus" | `opus` (latest-Opus alias) |
+| "fable", "claude fable" | `fable` (latest-Fable alias) |
+| "haiku", "claude haiku" | `haiku` (latest-Haiku alias) |
 | "devstral", "devstral small" | `devstral-small-2:24b` |
 | "mistral", "mistral small" | `mistral-small3.1:24b` |
 | "gpt oss" | `gpt-oss:20b` |

@@ -48,6 +48,20 @@ for (const [signal, exitCode] of [
 
 function run(args, env = {}, opts = {}) {
   const childEnv = { ...process.env, ...env };
+  // Hermetic under a c-thru session: clear ambient config selectors the test
+  // didn't explicitly provide. CLAUDE_MODEL_MAP_PATH is the highest-precedence
+  // override, CLAUDE_MODEL_MAP_LAUNCH_CWD skews findParentModelMap project
+  // discovery, and profileClaudeDir() honors CLAUDE_PROFILE_DIR / CLAUDE_DIR /
+  // CLAUDE_CONFIG_DIR before HOME. Leftover values bypass the test fixtures.
+  for (const key of [
+    'CLAUDE_MODEL_MAP_PATH',
+    'CLAUDE_MODEL_MAP_LAUNCH_CWD',
+    'CLAUDE_PROFILE_DIR',
+    'CLAUDE_DIR',
+    'CLAUDE_CONFIG_DIR',
+  ]) {
+    if (!(key in env)) delete childEnv[key];
+  }
   if (!env.TMPDIR && childEnv.CLAUDE_PROFILE_DIR) {
     const isolatedTmp = path.join(childEnv.CLAUDE_PROFILE_DIR, 'tmp');
     fs.mkdirSync(isolatedTmp, { recursive: true });

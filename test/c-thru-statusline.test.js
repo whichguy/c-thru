@@ -472,6 +472,59 @@ s.listen(0, '127.0.0.1', () => {
     fs.rmSync(tagHome, { recursive: true, force: true });
   }
 
+  // ── 10. Context-window chip from the model-map's context_windows ───────────
+  // Claude Code's own .context_window.context_window_size is binary (200k/1M), so
+  // the bar reads the real window from the model-map's static context_windows map
+  // (via CLAUDE_MODEL_MAP_PATH). Renders `ctx <fmt>` in default/stats, omits it
+  // for claude-* / unknown models, and never shows it in minimal style.
+  console.log('\n10. ctx chip from model-map context_windows');
+  const ctxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'c-thru-sl-ctx-'));
+  const ctxTools = path.join(ctxHome, 'tools');
+  fs.mkdirSync(ctxTools, { recursive: true });
+  const ctxHook = path.join(ctxTools, 'c-thru-statusline.sh');
+  fs.copyFileSync(HOOK_SOURCE, ctxHook);
+  fs.copyFileSync(LIB_SOURCE, path.join(ctxTools, 'c-thru-lib.sh'));
+  fs.chmodSync(ctxHook, 0o755);
+  const ctxConfigPath = path.join(ctxHome, 'model-map.json');
+  fs.writeFileSync(ctxConfigPath, JSON.stringify({
+    context_windows: { 'grok-4.6': 500000, 'qwen3:8b': 40960 },
+  }));
+  {
+    const withCtx = runStatusline(ctxHook, ctxHome, null, null, {
+      model: { id: 'grok-4.6' },
+      workspace: { current_dir: '/tmp/ctx' },
+    }, { C_THRU_STATUSLINE_DASH: '0', CLAUDE_MODEL_MAP_PATH: ctxConfigPath });
+    assertEq(withCtx.status, 0, 'ctx chip exits 0');
+    assert(/ctx 500\.0k/.test(withCtx.stdout),
+      `shows ctx chip (got ${JSON.stringify(withCtx.stdout)})`);
+
+    const claudeCtx = runStatusline(ctxHook, ctxHome, null, null, {
+      model: { id: 'claude-sonnet-5' },
+      workspace: { current_dir: '/tmp/ctx' },
+    }, { C_THRU_STATUSLINE_DASH: '0', CLAUDE_MODEL_MAP_PATH: ctxConfigPath });
+    assertEq(claudeCtx.status, 0, 'claude-ctx exits 0');
+    assert(!/ctx /.test(claudeCtx.stdout),
+      `omits ctx chip for claude-* (got ${JSON.stringify(claudeCtx.stdout)})`);
+
+    const unknownCtx = runStatusline(ctxHook, ctxHome, null, null, {
+      model: { id: 'unknown-model' },
+      workspace: { current_dir: '/tmp/ctx' },
+    }, { C_THRU_STATUSLINE_DASH: '0', CLAUDE_MODEL_MAP_PATH: ctxConfigPath });
+    assertEq(unknownCtx.status, 0, 'unknown-ctx exits 0');
+    assert(!/ctx /.test(unknownCtx.stdout),
+      `omits ctx chip for unknown model (got ${JSON.stringify(unknownCtx.stdout)})`);
+
+    const minimalCtx = runStatusline(ctxHook, ctxHome, null, null, {
+      model: { id: 'grok-4.6' },
+      workspace: { current_dir: '/tmp/ctx' },
+    }, { C_THRU_STATUSLINE_STYLE: 'minimal', CLAUDE_MODEL_MAP_PATH: ctxConfigPath });
+    assertEq(minimalCtx.status, 0, 'minimal ctx exits 0');
+    assert(!/ctx /.test(minimalCtx.stdout),
+      `minimal style omits ctx chip (got ${JSON.stringify(minimalCtx.stdout)})`);
+
+    fs.rmSync(ctxHome, { recursive: true, force: true });
+  }
+
   const failed = summary();
   process.exit(failed > 0 ? 1 : 0);
 }

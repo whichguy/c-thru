@@ -53,6 +53,7 @@ function explainPin(capability, mode, config) {
     routes: config.model_routes || {},
     endpoints: config.endpoints || config.backends || {},
     mode,
+    latest_models: config.latest_models || {},
   });
   if (!resolved || !resolved.endpointId) return null;
   return {
